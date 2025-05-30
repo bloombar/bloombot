@@ -1,0 +1,6 @@
+Counter,Campus ID,Last Name,First Name,Pronoun,Name Recording,Email Address,Units Taken,Plan Description,Academic Level,Student Location,Status,Status Notes
+3,N12345678,Smith,John,,,jsmith@myuni.edu,3,UA-Coll of Arts & Sci-Biology,Sophomore,,Enrolled,
+4,N87654321,Doe,Jane,,,jdoe@myuni.edu,4,UA-Coll of Arts & Sci-Psychology,Senior,,Enrolled,
+5,N11223344,Lee,Alex,,,alee@myuni.edu,2,UA-Coll of Arts & Sci-Mathematics,Freshman,,Enrolled,
+6,N99887766,Patel,Samir,,,spatel@myuni.edu,4,UB-Stern Schl Business-Ugrd-Finance,Junior,,Enrolled,
+7,N44556677,Kim,Sarah,,,skim@myuni.edu,3,UA-Coll of Arts & Sci-English,Senior,,Enrolled,

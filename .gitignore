@@ -1,3 +1,8 @@
+questionnaires/*.csv
+results/*.csv
+rosters/*.txt
+!xx-*
+
 # ignore any cloned repos
 repos/
 

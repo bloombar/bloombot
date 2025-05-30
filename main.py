@@ -44,6 +44,27 @@ class GuildFetcher(discord.Client):
         self.delete_category = delete_category
         self.delete_channel = delete_channel
 
+    def fix_ids(self):
+        """
+        Fix any server, category, or channel IDs that were specified as strings.
+        """
+        # get ids from string names, if necessary
+        self.guild_id = (
+            self.guild_id
+            if isinstance(self.guild_id, int) or not self.guild_id
+            else self.get_server_id(self.guild_id)
+        )
+        self.category_id = (
+            self.category_id
+            if isinstance(self.category_id, int) or not self.category_id
+            else self.get_category_id(self.guild_id, self.category_id)
+        )
+        self.channel_id = (
+            self.channel_id
+            if isinstance(self.channel_id, int) or not self.channel_id
+            else self.get_channel_id(self.guild_id, self.channel_id, self.category_id)
+        )
+
     def get_server_id(self, sever_name):
         """
         Get the server ID by name.
@@ -51,6 +72,8 @@ class GuildFetcher(discord.Client):
         for guild in self.guilds:
             if guild.name.lower().strip() == sever_name.lower().strip():
                 return guild.id
+            else:
+                print(f"Server '{sever_name}' not {guild.name}")
         return None
 
     def get_category_id(self, guild_id, category_name):
@@ -208,6 +231,9 @@ class GuildFetcher(discord.Client):
         print(f"Category '{category.name}' (ID: {category.id}) deleted.")
 
     async def on_ready(self):
+        # fix any server, category, or channel IDS that were specified as strings
+        self.fix_ids()
+
         if self.guild_id:
             # if a specific server (a.k.a. guild) has been specified
             guild = self.get_guild(int(self.guild_id))
@@ -240,7 +266,11 @@ class GuildFetcher(discord.Client):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Discord Guild/Category Fetcher")
+    """
+    Parse command line arguments to determine which actions to perform.
+    """
+
+    parser = argparse.ArgumentParser(description="Discord Channel Manager")
     # discord Auth token (created in Discord Developer Portal)... default to token in environment (or .env file) if any
     parser.add_argument(
         "--token",
@@ -254,7 +284,11 @@ def main():
         action="store_true",
         help="Show all available Discord servers (a.k.a. guilds)",
     )
-    parser.add_argument("--server", type=int, help="Discord server (a.k.a. guild) ID")
+    parser.add_argument(
+        "--server",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="Discord server (a.k.a. guild) ID or name",
+    )
 
     # categories
     parser.add_argument(
@@ -262,7 +296,11 @@ def main():
         action="store_true",
         help="Show categories in the specified server.",
     )
-    parser.add_argument("--category", type=int, help="Category ID")
+    parser.add_argument(
+        "--category",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string,
+        help="Category ID",
+    )
 
     # channels
     # categories
@@ -271,7 +309,11 @@ def main():
         action="store_true",
         help="Show channels in the specified server and optional category.",
     )
-    parser.add_argument("--channel", type=int, help="Channel ID")
+    parser.add_argument(
+        "--channel",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="Channel ID",
+    )
 
     # delete category
     parser.add_argument("--delete-category", type=int, help="ID of category to delete")

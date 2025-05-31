@@ -6,5 +6,5 @@ A simple Discord channel manager that allows you to create, delete, and list cha
 
 `BOT_TOKEN` environment variable:
 
--   a Discord bot token with `MANAGE_CHANNELS` permissions....
--   can be loaded from a `.env` file.
+- a Discord bot token with `MANAGE_CHANNELS` permissions....
+- can be loaded from a `.env` file.

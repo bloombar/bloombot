@@ -9,7 +9,13 @@ from dotenv import load_dotenv
 load_dotenv()  # load environment variables from .env file
 
 
-class GuildFetcher(discord.Client):
+class DiscordManager(discord.Client):
+    """
+    A Discord client for managing servers (a.k.a. guilds), categories, and channels.
+    Add, remove, delete, and list Discord servers, categories, and channels.
+    Requires a Discord bot token as an environment variable, .env file, or command line argument.
+    """
+
     def __init__(
         self,
         token=None,
@@ -21,8 +27,13 @@ class GuildFetcher(discord.Client):
         channel_id=None,
         delete_category=None,
         delete_channel=None,
+        create_category=None,
+        create_channel=None,
         **kwargs,
     ):
+        """
+        Instantiate the Discord client.
+        """
 
         # Set intents to allow managing channels
         intents = discord.Intents.default()
@@ -33,7 +44,7 @@ class GuildFetcher(discord.Client):
         # intents.message_content = True
         super().__init__(intents=intents)
 
-        # store instance properties
+        # store instance properties from arguments
         self.token = token
         self.show_guilds = show_guilds
         self.guild_id = guild_id
@@ -43,12 +54,14 @@ class GuildFetcher(discord.Client):
         self.channel_id = channel_id
         self.delete_category = delete_category
         self.delete_channel = delete_channel
+        self.create_category = create_category
+        self.create_channel = create_channel
 
     def fix_ids(self):
         """
-        Fix any server, category, or channel IDs that were specified as strings.
+        Fix any server, category, or channel IDs that were specified as string names for convenience.
         """
-        # get ids from string names, if necessary
+        # get ids from string names, if necessary... ultimately we need ids as integers or NoneTypes.
         self.guild_id = (
             self.guild_id
             if isinstance(self.guild_id, int) or not self.guild_id
@@ -64,16 +77,28 @@ class GuildFetcher(discord.Client):
             if isinstance(self.channel_id, int) or not self.channel_id
             else self.get_channel_id(self.guild_id, self.channel_id, self.category_id)
         )
+        self.delete_category = (
+            self.delete_category
+            if isinstance(self.delete_category, int) or not self.delete_category
+            else self.get_category_id(self.guild_id, self.delete_category)
+        )
+        self.delete_channel = (
+            self.delete_channel
+            if isinstance(self.delete_channel, int) or not self.delete_channel
+            else self.get_channel_id(
+                self.guild_id, self.delete_channel, self.category_id
+            )
+        )
 
-    def get_server_id(self, sever_name):
+    def get_server_id(self, server_name):
         """
         Get the server ID by name.
         """
         for guild in self.guilds:
-            if guild.name.lower().strip() == sever_name.lower().strip():
+            if guild.name.lower().strip() == server_name.lower().strip():
                 return guild.id
             else:
-                print(f"Server '{sever_name}' not {guild.name}")
+                print(f"Server '{server_name}' not {guild.name}")
         return None
 
     def get_category_id(self, guild_id, category_name):
@@ -114,6 +139,42 @@ class GuildFetcher(discord.Client):
                 if channel.name.lower().strip() == channel_name.lower().strip():
                     return channel.id
         return None
+
+    async def add_category(self, guild_id, category_name):
+        """
+        Create a new category in the specified guild.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+        print(f"Creating category '{category_name}' in guild '{guild.name}'...")
+        await guild.create_category(category_name)
+        print(f"Category '{category_name}' created.")
+
+    async def add_channel(self, guild_id, channel_name, category_id=None):
+        """
+        Create a new channel in the specified guild and optional category.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+
+        if category_id:
+            # specific category specified
+            category = guild.get_channel(int(category_id))
+            if not category or not isinstance(category, discord.CategoryChannel):
+                print(f"Category ID {category_id} not found.")
+                return
+            print(f"Creating channel '{channel_name}' in category '{category.name}'...")
+            await category.create_text_channel(channel_name)
+        else:
+            # no category specified
+            print(f"Creating channel '{channel_name}' in guild '{guild.name}'...")
+            await guild.create_text_channel(channel_name)
+
+        print(f"Channel '{channel_name}' created.")
 
     def print_guilds(self):
         """
@@ -205,15 +266,6 @@ class GuildFetcher(discord.Client):
             print(f"Guild ID {guild_id} not found.")
             return
 
-        # Check if the bot has permission to manage channels in this guild
-        # me = guild.me
-        # print(me.guild_permissions)
-        # if not me.guild_permissions.manage_channels:
-        #     print(
-        #         "Error: Bot does not have permission to manage channels in this guild."
-        #     )
-        #     return
-
         category = guild.get_channel(int(category_id))
         if not category or not isinstance(category, discord.CategoryChannel):
             print(f"Category ID {category_id} not found.")
@@ -230,23 +282,37 @@ class GuildFetcher(discord.Client):
         await category.delete()
         print(f"Category '{category.name}' (ID: {category.id}) deleted.")
 
+    async def remove_channel(self, guild_id, channel_id):
+        """
+        Delete a channel in the specified guild and optional category.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+
+        channel = guild.get_channel(int(channel_id))
+        if not channel:
+            print(f"Channel ID {channel_id} not found.")
+            return
+
+        print(f"Deleting channel '{channel.name}'... from guild '{guild.name}'...")
+        await channel.delete()
+        print(f"Channel '{channel.name}' (ID: {channel.id}) deleted.")
+
     async def on_ready(self):
+        """
+        Event handler for when connection is cached and ready.
+        Determine what to do.
+        """
+
         # fix any server, category, or channel IDS that were specified as strings
         self.fix_ids()
 
-        if self.guild_id:
-            # if a specific server (a.k.a. guild) has been specified
-            guild = self.get_guild(int(self.guild_id))
-            print(
-                f"\nLogged into Discord server '{guild.name}' (ID: {guild.id}) as user '{self.user.name}' (ID: {self.user.id})"
-            )
-        else:
-            # if no specific server has been specified
-            print(
-                f"\nLogged into Discord as user '{self.user.name}' (ID: {self.user.id})"
-            )
-        print()
+        # print welcome message
+        print(f"\nLogged in as user '{self.user.name}' (ID: {self.user.id})\n")
 
+        # determine which actions to take
         if self.show_guilds:
             # print the available guilds (a.k.a. servers)
             self.print_guilds()
@@ -259,6 +325,15 @@ class GuildFetcher(discord.Client):
         if self.delete_category and self.guild_id:
             # delete the specified category in the specified guild, including all channels
             await self.remove_category(self.guild_id, self.delete_category)
+        if self.delete_channel and self.guild_id:
+            # delete the specified channel in the specified guild
+            await self.remove_channel(self.guild_id, self.delete_channel)
+        if self.create_category and self.guild_id:
+            # create a new category in the specified guild
+            await self.add_category(self.guild_id, self.create_category)
+        if self.create_channel and self.guild_id:
+            # create a new channel in the specified guild and optional category
+            await self.add_channel(self.guild_id, self.create_channel, self.category_id)
 
         # close bot nicely
         await self.http.close()  # avoid warning about unclosed connections
@@ -271,56 +346,88 @@ def main():
     """
 
     parser = argparse.ArgumentParser(description="Discord Channel Manager")
+
     # discord Auth token (created in Discord Developer Portal)... default to token in environment (or .env file) if any
     parser.add_argument(
         "--token",
         required=False,
-        help="Discord bot token (created in Discord Developer Portal - https://discord.com/developers/)",
+        help="Discord bot token; otherwise looks for BOT_TOKEN environment variable or .env file.",
         default=os.getenv("BOT_TOKEN"),
     )
-    # servers
+
+    # list servers
     parser.add_argument(
         "--show-servers",
         action="store_true",
         help="Show all available Discord servers (a.k.a. guilds)",
     )
-    parser.add_argument(
-        "--server",
-        type=lambda x: int(x) if x.isdigit() else x,  # int or string
-        help="Discord server (a.k.a. guild) ID or name",
-    )
 
-    # categories
+    # list categories
     parser.add_argument(
         "--show-categories",
         action="store_true",
         help="Show categories in the specified server.",
     )
-    parser.add_argument(
-        "--category",
-        type=lambda x: int(x) if x.isdigit() else x,  # int or string,
-        help="Category ID",
-    )
 
-    # channels
-    # categories
+    # list channels
     parser.add_argument(
         "--show-channels",
         action="store_true",
         help="Show channels in the specified server and optional category.",
     )
+
+    # select specific server
+    parser.add_argument(
+        "--server",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="Select specific Discord server (a.k.a. guild) by ID or name",
+    )
+
+    # select specific category
+    parser.add_argument(
+        "--category",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string,
+        help="Select specific category by ID or name",
+    )
+
+    # select specific channel
     parser.add_argument(
         "--channel",
         type=lambda x: int(x) if x.isdigit() else x,  # int or string
-        help="Channel ID",
+        help="Select specific channel by ID or name",
     )
 
-    # delete category
-    parser.add_argument("--delete-category", type=int, help="ID of category to delete")
-    parser.add_argument("--delete-channel", type=int, help="ID of channel to delete")
+    # delete specific category
+    parser.add_argument(
+        "--delete-category",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="ID of category to delete",
+    )
 
+    # delete specific channel
+    parser.add_argument(
+        "--delete-channel",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="ID of channel to delete",
+    )
+
+    # create specific category
+    parser.add_argument(
+        "--create-category",
+        type=str,
+        help="Name of category to create in the specified server.",
+    )
+    # create specific channel
+    parser.add_argument(
+        "--create-channel",
+        type=str,
+        help="Name of channel to create in the specified server and optional category.",
+    )
+
+    # parse the command-line arguments
     args = parser.parse_args()
 
+    # check correct command-line argument usage
     if not args.show_servers and not args.server:
         # can't do anything if not listing available servers or selecting a server
         parser.error("No action specified.  Add --show-servers or --server [server_id]")
@@ -330,7 +437,8 @@ def main():
         # can't show categories or channels without a server
         parser.error("No server specified.  Add --server [server_id]")
 
-    client = GuildFetcher(
+    # instantate the Discord client
+    client = DiscordManager(
         token=args.token,
         show_guilds=args.show_servers,
         guild_id=args.server,
@@ -340,6 +448,8 @@ def main():
         channel_id=args.channel,
         delete_category=args.delete_category,
         delete_channel=args.delete_channel,
+        create_category=args.create_category,
+        create_channel=args.create_channel,
     )
     # start the bot
     asyncio.run(client.start(args.token))

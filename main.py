@@ -20,11 +20,14 @@ class DiscordManager(discord.Client):
         self,
         token=None,
         show_guilds=False,
-        guild_id=None,
         show_categories=False,
-        category_id=None,
         show_channels=False,
+        show_users=False,
+        guild_id=None,
+        category_id=None,
         channel_id=None,
+        user_id=None,
+        role_id=None,
         delete_category=None,
         delete_channel=None,
         create_category=None,
@@ -40,18 +43,21 @@ class DiscordManager(discord.Client):
         intents.guilds = True
         # intents.guild_messages = True
         # intents.guild_reactions = True
-        # intents.members = True
-        # intents.message_content = True
+        intents.members = True  # requires SERVER MEMBERS INTENT permission in Discord Developer Portalf
+        intents.message_content = True  # requires MESSAGE CONTENT INTENT permission in Discord Developer Portalf
         super().__init__(intents=intents)
 
         # store instance properties from arguments
         self.token = token
         self.show_guilds = show_guilds
-        self.guild_id = guild_id
-        self.category_id = category_id
         self.show_categories = show_categories
         self.show_channels = show_channels
+        self.show_users = show_users
+        self.guild_id = guild_id
+        self.category_id = category_id
         self.channel_id = channel_id
+        self.user_id = user_id
+        self.role_id = role_id
         self.delete_category = delete_category
         self.delete_channel = delete_channel
         self.create_category = create_category
@@ -88,6 +94,16 @@ class DiscordManager(discord.Client):
             else self.get_channel_id(
                 self.guild_id, self.delete_channel, self.category_id
             )
+        )
+        self.user_id = (
+            self.user_id
+            if isinstance(self.user_id, int) or not self.user_id
+            else self.get_user_id(self.guild_id, self.user_id)
+        )
+        self.role_id = (
+            self.role_id
+            if isinstance(self.role_id, int) or not self.role_id
+            else self.get_role_id(self.guild_id, self.role_id)
         )
 
     def get_server_id(self, server_name):
@@ -140,6 +156,31 @@ class DiscordManager(discord.Client):
                     return channel.id
         return None
 
+    def get_user_id(self, guild_id, user_name):
+        """
+        Get the user ID by name.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return None
+        for member in guild.members:
+            if member.name.lower().strip() == user_name.lower().strip():
+                return member.id
+        return None
+
+    def get_role_id(self, guild_id, role_name):
+        """
+        Get the role ID by name in a specific server/guild.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            return None
+        for role in guild.roles:
+            if role.name.lower().strip() == role_name.lower().strip():
+                return role.id
+        return None
+
     async def add_category(self, guild_id, category_name):
         """
         Create a new category in the specified guild.
@@ -175,6 +216,78 @@ class DiscordManager(discord.Client):
             await guild.create_text_channel(channel_name)
 
         print(f"Channel '{channel_name}' created.")
+
+    async def add_user_to_category(
+        self, guild_id, user_id, category_id, permissions=None
+    ):
+        """
+        Add a user to a category with the specified permissions.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+
+        category = guild.get_channel(int(category_id))
+        if not category or not isinstance(category, discord.CategoryChannel):
+            print(f"Category ID {category_id} not found.")
+            return
+
+        user = guild.get_member(int(user_id))
+        if not user:
+            print(f"User ID {user_id} not found.")
+            return
+
+        # create permission "overwrite"
+        if not permissions:
+            # default read-only permissions, if none specified
+            permissions = discord.PermissionOverwrite(
+                view_channel=True,
+                read_messages=True,
+                send_messages=False,
+                manage_messages=False,
+            )
+
+        # add user to the category
+        print(f"Adding user '{user.name}' to category '{category.name}'...")
+        await category.set_permissions(user, overwrite=permissions)
+        print(f"User '{user.name}' added to category '{category.name}'.")
+
+    async def add_user_to_channel(
+        self, guild_id, user_id, channel_id, permissions=None
+    ):
+        """
+        Add a user to a channel with the specified permissions.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+
+        channel = guild.get_channel(int(channel_id))
+        if not channel:
+            print(f"Channel ID {channel_id} not found.")
+            return
+
+        user = guild.get_member(int(user_id))
+        if not user:
+            print(f"User ID {user_id} not found.")
+            return
+
+        # create permission "overwrite"
+        if not permissions:
+            # default read-only permissions, if none specified
+            permissions = discord.PermissionOverwrite(
+                view_channel=True,
+                read_messages=True,
+                send_messages=False,
+                manage_messages=False,
+            )
+
+        # add user to the channel
+        print(f"Adding user '{user.name}' to channel '{channel.name}'...")
+        await channel.set_permissions(user, overwrite=permissions)
+        print(f"User '{user.name}' added to channel '{channel.name}'.")
 
     def print_guilds(self):
         """
@@ -257,6 +370,71 @@ class DiscordManager(discord.Client):
         print(f"{'':-^67}")
         print()
 
+    def print_users(self, guild_id, category_id=None, channel_id=None):
+        """
+        Print a list of users in the specified guild, optionally filtered by category or channel.
+        """
+        guild = self.get_guild(int(guild_id))
+        if not guild:
+            print(f"Guild ID {guild_id} not found.")
+            return
+
+        subheading = f"{guild.name.upper()}"
+        if category_id:
+            category = guild.get_channel(int(category_id))
+            if category and isinstance(category, discord.CategoryChannel):
+                subheading += f" / '{category.name.upper()}'"
+        if channel_id:
+            channel = guild.get_channel(int(channel_id))
+            if channel:
+                subheading += f" / '{channel.name.upper()}'"
+
+        print(f"{subheading:^100}")
+        print(f"{'':-^100}")
+        print(f"| {'User Name':<30} | {'ID':<30} | {'Roles':<30} |")
+        print(f"| {'':-^30} | {'':-^30} | {'':-^30} |")
+
+        if channel_id:
+            # users in channel
+            channel = guild.get_channel(int(channel_id))
+            if channel:
+                for member in channel.members:
+                    # determine this user's roles
+                    roles = ", ".join(
+                        role.name for role in member.roles if role.name != "@everyone"
+                    )
+                    print(f"| {member.name:<30} | {member.id:<30} | {roles:<30} |")
+                print(f"{'':-^100}")
+                print()
+                return
+        if category_id:
+            # users in category
+            category = guild.get_channel(int(category_id))
+            if category and isinstance(category, discord.CategoryChannel):
+                user_ids = set()
+                for member in guild.members:
+                    # determine this user's roles
+                    roles = ", ".join(
+                        role.name for role in member.roles if role.name != "@everyone"
+                    )
+                    perms = category.permissions_for(member)
+                    if perms.view_channel and member.id not in user_ids:
+                        print(f"| {member.name:<30} | {member.id:<30} | {roles:<30} |")
+                        user_ids.add(member.id)
+                print(f"{'':-^100}")
+                print()
+                return
+        else:
+            # iterate through all members in the guild
+            for member in guild.members:
+                roles = ", ".join(
+                    role.name for role in member.roles if role.name != "@everyone"
+                )
+                print(f"| {member.name:<30} | {member.id:<30} | {roles:<30} |")
+
+        print(f"{'':-^100}")
+        print()
+
     async def remove_category(self, guild_id, category_id, delete_channels=True):
         """
         Delete a category in the specified guild, optionally deleting its channels.
@@ -322,6 +500,9 @@ class DiscordManager(discord.Client):
         if self.show_channels and self.guild_id:
             # print the available channels in the specified guild
             self.print_channels(self.guild_id, self.category_id)
+        if self.show_users and self.guild_id:
+            # print the available users in the specified guild and optional category or channel
+            self.print_users(self.guild_id, self.category_id, self.channel_id)
         if self.delete_category and self.guild_id:
             # delete the specified category in the specified guild, including all channels
             await self.remove_category(self.guild_id, self.delete_category)
@@ -376,6 +557,13 @@ def main():
         help="Show channels in the specified server and optional category.",
     )
 
+    # list users
+    parser.add_argument(
+        "--show-users",
+        action="store_true",
+        help="Show users in the specified server and optional category or channel.",
+    )
+
     # select specific server
     parser.add_argument(
         "--server",
@@ -395,6 +583,20 @@ def main():
         "--channel",
         type=lambda x: int(x) if x.isdigit() else x,  # int or string
         help="Select specific channel by ID or name",
+    )
+
+    # select specific user
+    parser.add_argument(
+        "--user",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="Select specific user by ID or name",
+    )
+
+    # select specific role
+    parser.add_argument(
+        "--role",
+        type=lambda x: int(x) if x.isdigit() else x,  # int or string
+        help="Select specific role by ID or name",
     )
 
     # delete specific category
@@ -441,11 +643,14 @@ def main():
     client = DiscordManager(
         token=args.token,
         show_guilds=args.show_servers,
-        guild_id=args.server,
         show_categories=args.show_categories,
-        category_id=args.category,
         show_channels=args.show_channels,
+        show_users=args.show_users,
+        guild_id=args.server,
+        category_id=args.category,
         channel_id=args.channel,
+        user_id=args.user,
+        role_id=args.role,
         delete_category=args.delete_category,
         delete_channel=args.delete_channel,
         create_category=args.create_category,

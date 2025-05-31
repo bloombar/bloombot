@@ -50,6 +50,25 @@ class DiscordManager(discord.Client):
     ):
         """
         Instantiate the Discord client with the dinges.
+
+        Args:
+            token (str): The bot token to use for authentication. Defaults to the environment variable BOT_TOKEN.
+            event_loop (bool): Whether to use an event loop. If False, the bot will close the connection nicely after initial actions.
+            show_guilds (bool): Whether to show the available guilds (servers).
+            show_categories (bool): Whether to show the available categories in the specified guild.
+            show_channels (bool): Whether to show the available channels in the specified guild and optional category.
+            show_users (bool): Whether to show the available users in the specified guild and optional category or channel.
+            guild_id (int or str): The ID or name of the guild to operate on.
+            category_id (int or str): The ID or name of the category to operate on. If None, no specific category is targeted.
+            channel_id (int or str): The ID or name of the channel to operate on. If None, no specific channel is targeted.
+            user_id (int or str): The ID or name of the user to operate on. If None, no specific user is targeted.
+            role_id (int or str): The ID or name of the role to operate on. If None, no specific role is targeted.
+            delete_category (int or str): The ID or name of the category to delete. If None, no category is deleted.
+            delete_channel (int or str): The ID or name of the channel to delete. If None, no channel is deleted.
+            create_category (str): The name of the category to create. If None, no category is created.
+            create_channel (str): The name of the channel to create. If None, no channel is created.
+
+
         """
 
         # Set intents to allow managing channels

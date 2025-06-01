@@ -15,12 +15,12 @@ load_dotenv()  # load environment variables from .env file
 
 # SETTINGS
 ROSTER_FILE = "results/py-result.csv"  # path to the CSV file containing student data
-ROSTER_START_ROW = 51  # row number to start reading from in the CSV file (1-indexed)
-ROSTER_END_ROW = 60  # row number to stop reading from in the CSV file (1-indexed)
+ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
+ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)
 ADMINS_ROLE = "admins-py-su25"
 STUDENTS_ROLE = "students-py-su25"  # role for students, if you want to use it
 SERVER_NAME = "Knowledge Kitchen"  # change to whatever your server name or ID is
-CATEGORY_NAME = "PYTHON - STUDENTS 02"  # change to whatever your category name is
+CATEGORY_NAME = "PYTHON - STUDENTS 01"  # change to whatever your category name is
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 
 
@@ -76,7 +76,7 @@ async def create_channels():
     # open the roster file
     with open(ROSTER_FILE, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
-        for idx, row in enumerate(reader, start=1):
+        for idx, row in enumerate(reader, start=0):
             # start reading from the specified row
             if idx < ROSTER_START_ROW - 1 or idx > ROSTER_END_ROW - 1:  # 1-indexed
                 # skip over rows outside our desired range

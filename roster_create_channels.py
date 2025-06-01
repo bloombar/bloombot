@@ -14,13 +14,13 @@ import csv
 load_dotenv()  # load environment variables from .env file
 
 # SETTINGS
-ROSTER_FILE = "results/wd-result.csv"  # path to the CSV file containing student data
-ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
-ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)
-ADMINS_ROLE = "admins-wd-su25"
-STUDENTS_ROLE = "students-wd-su25"  # role for students, if you want to use it
+ROSTER_FILE = "results/py-result.csv"  # path to the CSV file containing student data
+ROSTER_START_ROW = 51  # row number to start reading from in the CSV file (1-indexed)
+ROSTER_END_ROW = 60  # row number to stop reading from in the CSV file (1-indexed)
+ADMINS_ROLE = "admins-py-su25"
+STUDENTS_ROLE = "students-py-su25"  # role for students, if you want to use it
 SERVER_NAME = "Knowledge Kitchen"  # change to whatever your server name or ID is
-CATEGORY_NAME = "WEB DESIGN - STUDENTS 01"  # change to whatever your category name is
+CATEGORY_NAME = "PYTHON - STUDENTS 02"  # change to whatever your category name is
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 
 
@@ -138,8 +138,8 @@ async def create_channels():
                         await channel.edit(overwrites=overwrites)
 
                     # Compose the message
-                    first_name = row.get("First name", "")
-                    last_name = row.get("Last name", "")
+                    first_name = row.get("First", "")
+                    last_name = row.get("Last", "")
                     discord_name = row.get("Discord", "")
                     github = row.get("GitHub", "")
 
@@ -147,7 +147,7 @@ async def create_channels():
                     # was not found and they are not added
                     if member_id:
                         # member exists
-                        welcome_message = f"@{discord_name}, this channel is for conversation between you and <@&{admins_role_id}>."
+                        welcome_message = f"{first_name}, this channel is for conversation between you and <@&{admins_role_id}>."
                     else:
                         welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
                     message = f"""

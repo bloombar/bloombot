@@ -16,6 +16,7 @@ load_dotenv()  # load environment variables from .env file
 # SETTINGS
 ROSTER_FILE = "results/wd-result.csv"  # path to the CSV file containing student data
 ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
+ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)
 ADMINS_ROLE = "admins-wd-su25"
 STUDENTS_ROLE = "students-wd-su25"  # role for students, if you want to use it
 SERVER_NAME = "Knowledge Kitchen"  # change to whatever your server name or ID is
@@ -77,7 +78,8 @@ async def create_channels():
         reader = csv.DictReader(csvfile)
         for idx, row in enumerate(reader, start=1):
             # start reading from the specified row
-            if idx < ROSTER_START_ROW - 1:  # 1-indexed
+            if idx < ROSTER_START_ROW - 1 or idx > ROSTER_END_ROW - 1:  # 1-indexed
+                # skip over rows outside our desired range
                 continue
             email = row.get("Email", "")
             if "@" in email:
@@ -150,12 +152,12 @@ async def create_channels():
                         welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
                     message = f"""
                         {welcome_message}
-                        Student details:
-                        - **First:** {first_name}
-                        - **Last Name:** {last_name}
-                        - **Email:** {email}
-                        - **Discord:** {discord_name}
-                        - **GitHub:** {github}
+Student details:
+- **First:** {first_name}
+- **Last Name:** {last_name}
+- **Email:** {email}
+- **Discord:** {discord_name}
+- **GitHub:** {github}
                     """
 
                     if channel:

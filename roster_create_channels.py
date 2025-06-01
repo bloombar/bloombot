@@ -147,7 +147,7 @@ async def create_channels():
                     # was not found and they are not added
                     if member_id:
                         # member exists
-                        welcome_message = f"{first_name}, this channel is for conversation between you and <@&{admins_role_id}>."
+                        welcome_message = f"<@&{member.name}>, this channel is for conversation between you and <@&{admins_role_id}>."
                     else:
                         welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
                     message = f"""

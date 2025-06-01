@@ -1,5 +1,6 @@
 import os
 import discord
+from discord import app_commands
 from dotenv import load_dotenv
 
 load_dotenv()  # load environment variables from .env file
@@ -158,7 +159,10 @@ class DiscordManager(discord.Client):
             ):
                 # the category ids match
                 return guild.id
-            elif guild.name.lower().strip() == server_name.lower().strip():
+            elif (
+                isinstance(server_name, str)
+                and guild.name.lower().strip() == server_name.lower().strip()
+            ):
                 # the category names match
                 return guild.id
         return None
@@ -181,11 +185,13 @@ class DiscordManager(discord.Client):
             if (
                 isinstance(category_name, int)
                 or (isinstance(category_name, str) and category_name.isnumeric())
-                and category.id == int(category_name)
-            ):
+            ) and category.id == int(category_name):
                 # the category ids match
                 return category.id
-            elif category.name.lower().strip() == category_name.lower().strip():
+            elif (
+                isinstance(category_name, str)
+                and category.name.lower().strip() == category_name.lower().strip()
+            ):
                 # the category names match
                 return category.id
         return None
@@ -219,11 +225,13 @@ class DiscordManager(discord.Client):
                 if (
                     isinstance(channel_name, int)
                     or (isinstance(channel_name, str) and channel_name.isnumeric())
-                    and channel.id == int(channel_name)
-                ):
+                ) and channel.id == int(channel_name):
                     # the channel ids match
                     return channel.id
-                elif channel.name.lower().strip() == channel_name.lower().strip():
+                elif (
+                    isinstance(channel_name, str)
+                    and channel.name.lower().strip() == channel_name.lower().strip()
+                ):
                     # the channel names match
                     return channel.id
         else:
@@ -237,12 +245,15 @@ class DiscordManager(discord.Client):
                 ):
                     # the channel ids match
                     return channel.id
-                elif channel.name.lower().strip() == channel_name.lower().strip():
+                elif (
+                    isinstance(channel_name, str)
+                    and channel.name.lower().strip() == channel_name.lower().strip()
+                ):
                     # the channel names match
                     return channel.id
         return None
 
-    def get_user_id(self, guild_id, user_name, match_display_names=False):
+    def get_user_id(self, guild_id, user_name, match_display_names=True):
         """
         Get the user ID by name or ID.
 
@@ -273,11 +284,15 @@ class DiscordManager(discord.Client):
             ):
                 # the user ids match
                 return member.id
-            elif member.name.lower().strip() == user_name.lower().strip():
+            elif (
+                isinstance(user_name, str)
+                and member.name.lower().strip() == user_name.lower().strip()
+            ):
                 # the user names match
                 return member.id
             elif (
                 match_display_names
+                and isinstance(user_name, str)
                 and member.display_name.lower().strip() == user_name.lower().strip()
             ):
                 # the display names match
@@ -307,7 +322,10 @@ class DiscordManager(discord.Client):
             ):
                 # the role ids match
                 return role.id
-            elif role.name.lower().strip() == role_name.lower().strip():
+            elif (
+                isinstance(role_name, str)
+                and role.name.lower().strip() == role_name.lower().strip()
+            ):
                 # the role names match
                 return role.id
         return None
@@ -351,8 +369,9 @@ class DiscordManager(discord.Client):
 
         # create channel
         if category_id:
+            category_id = self.get_category_id(guild_id, category_id)  # ensure int
             # specific category specified
-            category = guild.get_channel(int(category_id))
+            category = guild.get_channel(category_id)
             if not category or not isinstance(category, discord.CategoryChannel):
                 print(f"Category ID {category_id} not found.")
                 return
@@ -376,7 +395,8 @@ class DiscordManager(discord.Client):
             print(f"Guild ID {guild_id} not found.")
             return
 
-        category = guild.get_channel(int(category_id))
+        category_id = self.get_category_id(guild_id, category_id)  # ensure int
+        category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
             print(f"Category ID {category_id} not found.")
             return
@@ -503,10 +523,9 @@ class DiscordManager(discord.Client):
             return
 
         if category_id:
+            category_id = self.get_category_id(guild_id, category_id)  # ensure int
             # specific category specified
-            category = guild.get_channel(
-                int(category_id)
-            )  # get category details, if any
+            category = guild.get_channel(category_id)  # get category details, if any
 
             subheading = f"{guild.name.upper()} / '{category.name.upper()}'"
             print(f"{subheading:^67}")
@@ -548,7 +567,8 @@ class DiscordManager(discord.Client):
 
         subheading = f"{guild.name.upper()}"
         if category_id:
-            category = guild.get_channel(int(category_id))
+            category_id = self.get_category_id(guild_id, category_id)  # ensure int
+            category = guild.get_channel(category_id)
             if category and isinstance(category, discord.CategoryChannel):
                 subheading += f" / '{category.name.upper()}'"
         if channel_id:
@@ -576,7 +596,7 @@ class DiscordManager(discord.Client):
                 return
         if category_id:
             # users in category
-            category = guild.get_channel(int(category_id))
+            category = guild.get_channel(category_id)
             if category and isinstance(category, discord.CategoryChannel):
                 user_ids = set()
                 for member in guild.members:
@@ -611,7 +631,8 @@ class DiscordManager(discord.Client):
             print(f"Guild ID {guild_id} not found.")
             return
 
-        category = guild.get_channel(int(category_id))
+        category_id = self.get_category_id(guild_id, category_id)  # ensure int
+        category = guild.get_channel(category_id)
         if not category or not isinstance(category, discord.CategoryChannel):
             print(f"Category ID {category_id} not found.")
             return

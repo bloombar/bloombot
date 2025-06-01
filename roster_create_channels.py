@@ -151,14 +151,14 @@ async def create_channels():
                     else:
                         welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
                     message = f"""
-                        {welcome_message}
+{welcome_message}
 Student details:
 - **First:** {first_name}
 - **Last Name:** {last_name}
 - **Email:** {email}
 - **Discord:** {discord_name}
 - **GitHub:** {github}
-                    """
+"""
 
                     if channel:
                         sent_message = await channel.send(message)

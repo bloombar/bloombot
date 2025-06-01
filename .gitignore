@@ -1,6 +1,6 @@
 questionnaires/*.csv
 results/*.csv
-rosters/*.txt
+rosters/*.csv
 !xx-*
 
 # ignore any cloned repos

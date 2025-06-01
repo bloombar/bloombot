@@ -135,6 +135,33 @@ async def create_channels():
                         )
                         await channel.edit(overwrites=overwrites)
 
+                    # Compose the message
+                    first_name = row.get("First name", "")
+                    last_name = row.get("Last name", "")
+                    discord_name = row.get("Discord", "")
+                    github = row.get("GitHub", "")
+
+                    # send different welcome messages if the Discord user for this student
+                    # was not found and they are not added
+                    if member_id:
+                        # member exists
+                        welcome_message = f"@{discord_name}, this channel is for conversation between you and <@&{admins_role_id}>."
+                    else:
+                        welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
+                    message = f"""
+                        {welcome_message}
+                        Student details:
+                        - **First:** {first_name}
+                        - **Last Name:** {last_name}
+                        - **Email:** {email}
+                        - **Discord:** {discord_name}
+                        - **GitHub:** {github}
+                    """
+
+                    if channel:
+                        sent_message = await channel.send(message)
+                        await sent_message.pin()
+
                 except Exception as e:
                     print(f"Failed to create channel {channel_name}: {e}")
 

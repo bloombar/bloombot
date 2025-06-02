@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Create Discord channels for each student in the roster CSV file.
+Create Discord channels for each student in a roster CSV file.
 """
 
 import os

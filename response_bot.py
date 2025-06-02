@@ -26,6 +26,9 @@ if OPENAI_ASSISTANT_ID:
     openai_assistant = openai_client.beta.assistants.retrieve(
         assistant_id=OPENAI_ASSISTANT_ID
     )
+    print(
+        f"Using existing assistant: {openai_assistant.name} (ID: {openai_assistant.id})"
+    )
 else:
     openai_assistant = openai_client.beta.assistants.create(
         name="Assistant to the Professor",
@@ -33,7 +36,7 @@ else:
         tools=[{"type": "code_interpreter"}],
         model="gpt-4o",
     )
-
+    print(f"Created new assistant: {openai_assistant.name} (ID: {openai_assistant.id})")
 
 # start up bot set to create a category, if not yet exists
 client = DiscordManager(guild_id=SERVER_NAME, event_loop=True)

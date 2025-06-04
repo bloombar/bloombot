@@ -19,6 +19,8 @@ Three useful files... make them executable with `chmod u+x *.py *.ipynb`:
 
 - `main.py`: can be used as a sort of command-line utility to list, create, and delete Discord servers, categories, channels, and roles. Run it to see options, e.g. `./main.py -h`.
 
-- `response_bot.py`: a classic chatbot that handles incoming messages from Discord, fetches appropriate responses from OpenAI's Assistant API, then sends back the response to the user on Discord.... _still under development_ to make it more general-purpose and extensible. To start the bot, run `./response_bot.py`.
+- `response_bot.py`: a chatbot that handles incoming messages from Discord, fetches appropriate responses from OpenAI's Assistant API, then sends back the response to the user on Discord. To start the bot, run `./response_bot.py`. Configuration options specific this use of the bot intelligently across several different categories of channels in a Discord server used for teaching courses at a university are available in the `bot_config.yml` file. Different courses can be set to use different OpenAI Assistants, each with their own course notes files uploaded through OpenAI's Assistants settings dashboard.
+
+---
 
 The main functionality of these scripts takes place in `discord_manager.py`, which contains the `DiscordManager` class that interacts with the Discord API. But you will likely not need to modify this file directly.

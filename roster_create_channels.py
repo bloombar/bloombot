@@ -6,6 +6,7 @@ Create Discord channels for each student in a roster CSV file.
 
 import os
 import asyncio
+import yaml
 from dotenv import load_dotenv
 import discord
 from discord_manager import DiscordManager
@@ -14,19 +15,54 @@ import csv
 load_dotenv()  # load environment variables from .env file
 
 # SETTINGS
-ROSTER_FILE = "results/py-result.csv"  # path to the CSV file containing student data
+COURSE_TITLE = "Introduction to Programming"
+STUDENT_CATEGORY_NAME = "PYTHON - STUDENTS 01"
+CONFIG_FILE = "bot_config.yml"  # path to the configuration file
 ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
 ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)
-ADMINS_ROLE = "admins-py-su25"
-STUDENTS_ROLE = "students-py-su25"  # role for students, if you want to use it
-SERVER_NAME = "Knowledge Kitchen"  # change to whatever your server name or ID is
-CATEGORY_NAME = "PYTHON - STUDENTS 01"  # change to whatever your category name is
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
+
+# load the data in bot_config.yml into a Dictionary
+with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
+    config = yaml.safe_load(f)
+    # get server name
+    SERVER_NAME = config["server"]["name"]
+    # select the desired course based on its title
+    matching_courses = [
+        course
+        for course in config["server"]["courses"]
+        if course["title"] == COURSE_TITLE
+    ]
+    if not matching_courses:
+        raise RuntimeError(f"Course with title '{COURSE_TITLE}' not found in config.")
+    else:
+        # assuming we have a matching course, get it from the list
+        course = matching_courses[0]
+
+    # determine the roster file name based on the course file prefix in the config
+    roster_files = [f"{course['file_prefix']}-result.csv"]
+    admins_roles = [course["roles"]["admins"]]
+    students_roles = [course["roles"]["students"]]
+
+    if not roster_files or not admins_roles or not students_roles:
+        raise RuntimeError("Error loading data from config file.")
+
+ROSTER_FILE = roster_files[0]
+ADMINS_ROLE = admins_roles[0]
+STUDENTS_ROLE = students_roles[0]
+print(
+    f"""
+Config:
+    ROSTER_FILE: {ROSTER_FILE}
+    ADMINS_ROLE: {ADMINS_ROLE}
+    STUDENTS_ROLE: {STUDENTS_ROLE}
+"""
+)
 
 
 # start up bot set to create a category, if not yet exists
 client = DiscordManager(
-    guild_id=SERVER_NAME, event_loop=True, create_category=CATEGORY_NAME
+    guild_id=SERVER_NAME, event_loop=True, create_category=STUDENT_CATEGORY_NAME
 )
 
 
@@ -55,8 +91,8 @@ async def create_category():
         return
     print(f"Got the server ID {guild_id} for {SERVER_NAME}")
     # Create the category
-    await client.add_category(guild_id=guild_id, category_name=CATEGORY_NAME)
-    print(f"Created category: {CATEGORY_NAME}")
+    await client.add_category(guild_id=guild_id, category_name=STUDENT_CATEGORY_NAME)
+    print(f"Created category: {STUDENT_CATEGORY_NAME}")
 
 
 async def create_channels():
@@ -86,7 +122,7 @@ async def create_channels():
                 channel_name = email.split("@")[0]
                 try:
                     category_id = client.get_category_id(
-                        guild_id=guild_id, category_name=CATEGORY_NAME
+                        guild_id=guild_id, category_name=STUDENT_CATEGORY_NAME
                     )
                     member_name = row.get("Discord", channel_name)
                     member_id = client.get_user_id(

@@ -8,9 +8,12 @@ server:
         # OpenAI assistant id is created in the OpenAI "Playground"
         id: 'asst_SehX9LvEX2APgnCbvSzeIdN0'
         name: 'Bloombot (Python)'
-        instructions: 'You are a personal assistant to Amos Bloomberg, a professor of Computer Science at New York University teaching an Intro to Programming course. The course uses Python.  Help answer questions about course material and the schedule and syllabus.'
-        tools: [{ 'type': 'code_interpreter' }]
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Introduction to Computer Programming course in Python. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+        # tools: [{ 'type': 'code_interpreter' }]
+        tools: []
         model: 'gpt-4o'
+        limits:
+          max_requests_per_day: 20
       roles:
         admins: 'admins-py-su25'
         students: 'students-py-su25'
@@ -24,9 +27,12 @@ server:
         # OpenAI assistant id is created in the OpenAI "Playground"
         id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x'
         name: 'Bloombot'
-        instructions: 'You are a personal assistant to Amos Bloomberg, a professor of Computer Science at New York University teaching Web Design. Help answer questions about course material and the schedule and syllabus.'
-        tools: [{ 'type': 'code_interpreter' }]
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Web Design course. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+        # tools: [{ 'type': 'code_interpreter' }]
+        tools: []
         model: 'gpt-4o'
+        limits:
+          max_requests_per_day: 20
       roles:
         admins: 'admins-wd-su25'
         students: 'students-wd-su25'

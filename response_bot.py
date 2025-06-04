@@ -11,17 +11,20 @@ from dotenv import load_dotenv
 from discord_manager import DiscordManager
 from openai import OpenAI
 import re
+from datetime import datetime
 
 load_dotenv()  # load environment variables from .env file
 
 CONFIG_FILE = "bot_config.yml"  # path to the configuration file
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # from .env file
-OPEN_AI_DEFAULT_MODEL = "gpt-4o"
+OPENAI_DEFAULT_MODEL = "gpt-4o"
+OPENAI_DEFAULT_MAX_REQUEST_PER_DAY = 10  # default max requests per day
 
 # create OpenAI client
 openai_client = OpenAI()
 openai_threads = {}  # will hold separate threads keyed by username
+openai_num_requests = {}
 
 # load the config data from file
 with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
@@ -45,7 +48,7 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
                     f"You are a professor's assistant in {course['title']}.  Help answer any student questions about the topic of study.",
                 ),
                 tools=oa_config.get("tools", []),
-                model=oa_config.get("model", OPEN_AI_DEFAULT_MODEL),
+                model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
             )
         )
 
@@ -124,6 +127,26 @@ async def on_message(message):
         )
         return
 
+    # check the user's stats to ensure they have not exceeded the limit of requests
+    user_stats = openai_num_requests.get(
+        message.author,
+        {
+            "num_requests": 0,
+            "last_response_date": None,
+        },
+    )
+    # if the user has made more than 10 requests today, ignore the message
+    # get the request limit for this course from config
+    request_limit = oa_config.get("limits", {}).get(
+        "max_requests_per_day", OPENAI_DEFAULT_MAX_REQUEST_PER_DAY
+    )
+    rate_limit_message = ""
+    if user_stats["num_requests"] == request_limit:
+        rate_limit_message = "I'm afraid you have reached the maximum number of responses from me for today."
+    if user_stats["num_requests"] > request_limit:
+        print(f"{message.author.name} has exceeded the request limit.")
+        return
+
     # the message is directed to the bot
     print(
         f"Message about {course_name} course in {category_name} / {channel_name} from {message.author.name}"
@@ -155,9 +178,24 @@ async def on_message(message):
         # get the first message's content... this is the most recentresponse from OpenAI
         openai_response = openai_messages[0].content[0].text.value
         openai_response = re.sub(r"【.*?】", "", openai_response)
+        # if we have a rate limit message, prepend it to the response
+        if rate_limit_message:
+            openai_response = f"{rate_limit_message} {openai_response}"
         print(f"Response: {openai_response}")
         # Send the last response back to the Discord channel
         await message.channel.send(openai_response)
+
+        # update the user's stats to reflect this new request
+        today = datetime.now().strftime("%Y-%m-%d")
+        if user_stats["last_response_date"] != today:
+            user_stats["num_requests"] = 1
+        else:
+            user_stats["num_requests"] += 1
+        user_stats["last_response_date"] = today
+        openai_num_requests[message.author] = user_stats
+
+        # log
+        print(f"{message.author.name} has made {user_stats['num_requests']} requests.")
     else:
         print(openai_run.status)
 

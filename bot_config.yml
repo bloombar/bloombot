@@ -1,41 +1,41 @@
 server:
   name: 'Knowledge Kitchen'
-  term: 'Summer 2025'
   courses:
     - title: 'Introduction to Programming'
-      file_prefix: 'py'
+      file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
-        # OpenAI assistant id is created in the OpenAI "Playground"
-        id: 'asst_SehX9LvEX2APgnCbvSzeIdN0'
+        id: 'asst_SehX9LvEX2APgnCbvSzeIdN0' # created in the OpenAI "Playground"
         name: 'Bloombot (Python)'
-        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Introduction to Computer Programming course in Python. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-        # tools: [{ 'type': 'code_interpreter' }]
-        tools: []
+        instructions: 'You are a personal assistant to a Professor of Computer Science, teaching an Introduction to Computer Programming course for beginners in Python. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+        tools: [] #[{ 'type': 'code_interpreter' }]
         model: 'gpt-4o'
         limits:
-          max_requests_per_day: 20
+          max_requests_per_day: 20 # per user
       roles:
+        # roles in our Discord server that we recognize as dedicated to this course
         admins: 'admins-py-su25'
         students: 'students-py-su25'
       categories:
+        # categories in our Discord server that we recognize as dedicated to this course
         - 'PYTHON - SUMMER 2025'
         - 'PYTHON - STUDENTS 01'
         - 'PYTHON - STUDENTS 02'
     - title: 'Web Design'
-      file_prefix: 'wd'
+      file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
-        # OpenAI assistant id is created in the OpenAI "Playground"
-        id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x'
-        name: 'Bloombot'
-        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Web Design course. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-        # tools: [{ 'type': 'code_interpreter' }]
-        tools: []
+        id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x' # created in the OpenAI "Playground"
+        name: 'Bloombot (Web Design)'
+        instructions: 'You are a personal assistant to a Professor of Computer Science, teaching a Web Design course for beginners. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+        tools: [] #[{ 'type': 'code_interpreter' }]
         model: 'gpt-4o'
         limits:
-          max_requests_per_day: 20
+          max_requests_per_day: 20 # per user
       roles:
+        # roles in our Discord server that we recognize as dedicated to this course
         admins: 'admins-wd-su25'
         students: 'students-wd-su25'
       categories:
+        # categories in our Discord server that we recognize as dedicated to this course
         - 'WEB DESIGN - SUMMER 2025'
         - 'WEB DESIGN - STUDENTS 01'
+        - 'WEB DESIGN - STUDENTS 02'

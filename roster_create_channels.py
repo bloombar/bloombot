@@ -2,6 +2,7 @@
 
 """
 Create Discord channels for each student in a roster CSV file.
+Creates a category to house the student channels.
 """
 
 import os
@@ -18,9 +19,11 @@ load_dotenv()  # load environment variables from .env file
 COURSE_TITLE = "Introduction to Programming"
 STUDENT_CATEGORY_NAME = "PYTHON - STUDENTS 01"
 CONFIG_FILE = "bot_config.yml"  # path to the configuration file
-ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
-ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
+
+# Discord can only do up to 50 channels per category, adjust the STUDENT_CATEGORY_NAME above and the following row nums as necessary to create more than 50 student channels.
+ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
+ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)...
 
 # load the data in bot_config.yml into a Dictionary
 with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:

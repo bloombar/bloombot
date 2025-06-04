@@ -15,16 +15,16 @@ from datetime import datetime
 
 load_dotenv()  # load environment variables from .env file
 
-CONFIG_FILE = "bot_config.yml"  # path to the configuration file
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # from .env file
-OPENAI_DEFAULT_MODEL = "gpt-4o"
-OPENAI_DEFAULT_MAX_REQUEST_PER_DAY = 10  # default max requests per day
+CONFIG_FILE = "bot_config.yml"  # path to the configuration file
+OPENAI_DEFAULT_MODEL = "gpt-4o"  # can be overriden in config file
+OPENAI_DEFAULT_MAX_REQUEST_PER_DAY = 10  # can be overriden in config file
 
 # create OpenAI client
 openai_client = OpenAI()
 openai_threads = {}  # will hold separate threads keyed by username
-openai_num_requests = {}
+openai_num_requests = {}  # will track # requests from each user per day
 
 # load the config data from file
 with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
@@ -37,15 +37,16 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
     for course in courses:
         # get existing or create new OpenAI assistant
         oa_config = course.get("openai_assistant", {})
-        oa_id = oa_config.get("id", None)
+        oa_id = oa_config.get("id", None)  # openai assistant id
+        # retrieve or create the assistant object
         oa_config["instance"] = openai_assistant = (
             (openai_client.beta.assistants.retrieve(assistant_id=oa_id))
             if oa_id
             else openai_client.beta.assistants.create(
-                name=oa_config.get("name", f"Teaching Assistant in {course['title']}"),
+                name=oa_config.get("name", f"Assistant in {course['title']}"),
                 instructions=oa_config.get(
                     "instructions",
-                    f"You are a professor's assistant in {course['title']}.  Help answer any student questions about the topic of study.",
+                    f"Help answer any questions about {course['title']}.",
                 ),
                 tools=oa_config.get("tools", []),
                 model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
@@ -200,6 +201,10 @@ async def on_message(message):
         print(openai_run.status)
 
 
+def main():
+    asyncio.run(client.start(BOT_TOKEN))
+
+
 # Run the main function if running this file directly.
 if __name__ == "__main__":
-    asyncio.run(client.start(BOT_TOKEN))
+    main()

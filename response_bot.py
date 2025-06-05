@@ -201,10 +201,6 @@ async def on_message(message):
         print(openai_run.status)
 
 
-def main():
-    asyncio.run(client.start(BOT_TOKEN))
-
-
 # Run the main function if running this file directly.
 if __name__ == "__main__":
-    main()
+    asyncio.run(client.start(BOT_TOKEN))

@@ -8,7 +8,6 @@ python-dotenv = "*"
 discord = "*"
 openai = "*"
 pyyaml = "*"
-gunicorn = "*"
 
 [dev-packages]
 ipykernel = "*"

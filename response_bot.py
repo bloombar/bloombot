@@ -5,19 +5,22 @@ Discord bot that responds to incoming messages.
 """
 
 import os
+import re
 import asyncio
+from datetime import datetime
+from pathlib import Path
 import yaml
 from dotenv import load_dotenv
-from discord_manager import DiscordManager
 from openai import OpenAI
-import re
-from datetime import datetime
+from discord_manager import DiscordManager
+from models.message import Message
+from models.user import User
 
 load_dotenv()  # load environment variables from .env file
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # from .env file
-CONFIG_FILE = "bot_config.yml"  # path to the configuration file
+CONFIG_FILE = Path("bot_config.yml").resolve()  # path to the configuration file
 OPENAI_DEFAULT_MODEL = "gpt-4o"  # can be overriden in config file
 OPENAI_DEFAULT_MAX_REQUEST_PER_DAY = 10  # can be overriden in config file
 
@@ -153,6 +156,24 @@ async def on_message(message):
         f"Message about {course_name} course in {category_name} / {channel_name} from {message.author.name}"
     )
 
+    # log incoming message into database
+    try:
+        # get the user with this message.author.id from the User model
+        user, created = User.get_or_create(
+            discord_id=message.author.id,
+            discord_username=message.author.name,
+        )
+        # store this message in database
+        message_record = Message.create(
+            content=message.content,
+            category=category_name,
+            channel=channel_name,
+            direction="from",
+            user=user,
+        )
+    except Exception as e:
+        print(f"Failed to log message: {e}")
+
     # Create a new thread for the user if it doesn't exist
     if openai_threads.get(message.author) is None:
         openai_threads[message.author] = openai_client.beta.threads.create()
@@ -185,6 +206,24 @@ async def on_message(message):
         print(f"Response: {openai_response}")
         # Send the last response back to the Discord channel
         await message.channel.send(openai_response)
+
+        # log outgoing message into database
+        try:
+            # get the user with this message.author.id from the User model
+            user, created = User.get_or_create(
+                discord_id=message.author.id,
+                discord_username=message.author.name,
+            )
+            # store this message in database
+            message_record = Message.create(
+                content=openai_response,
+                category=category_name,
+                channel=channel_name,
+                direction="to",
+                user=user,
+            )
+        except Exception as e:
+            print(f"Failed to log message: {e}")
 
         # update the user's stats to reflect this new request
         today = datetime.now().strftime("%Y-%m-%d")

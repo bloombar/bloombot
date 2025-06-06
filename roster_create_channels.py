@@ -6,22 +6,24 @@ Creates a category to house the student channels.
 """
 
 import os
+import csv
 import asyncio
+from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 import discord
 from discord_manager import DiscordManager
-import csv
 
 load_dotenv()  # load environment variables from .env file
 
 # SETTINGS
 COURSE_TITLE = "Introduction to Programming"
 STUDENT_CATEGORY_NAME = "PYTHON - STUDENTS 01"
-CONFIG_FILE = "bot_config.yml"  # path to the configuration file
+CONFIG_FILE = Path("bot_config.yml").resolve()  # path to the configuration file
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 
-# Discord can only do up to 50 channels per category, adjust the STUDENT_CATEGORY_NAME above and the following row nums as necessary to create more than 50 student channels.
+# Discord can only do up to 50 channels per category, adjust the STUDENT_CATEGORY_NAME above
+# and the following row nums as necessary to create more than 50 student channels.
 ROSTER_START_ROW = 1  # row number to start reading from in the CSV file (1-indexed)
 ROSTER_END_ROW = 50  # row number to stop reading from in the CSV file (1-indexed)...
 
@@ -50,7 +52,7 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
     if not roster_files or not admins_roles or not students_roles:
         raise RuntimeError("Error loading data from config file.")
 
-ROSTER_FILE = roster_files[0]
+ROSTER_FILE = Path(roster_files[0]).resolve()  # path to the roster CSV file
 ADMINS_ROLE = admins_roles[0]
 STUDENTS_ROLE = students_roles[0]
 print(

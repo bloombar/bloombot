@@ -8,10 +8,10 @@ python-dotenv = "*"
 discord = "*"
 openai = "*"
 pyyaml = "*"
+peewee = "*"
 
 [dev-packages]
 ipykernel = "*"
 
 [requires]
 python_version = "3.12"
-

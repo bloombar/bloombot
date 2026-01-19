@@ -13,8 +13,8 @@ server:
           max_requests_per_day: 20 # per user
       roles:
         # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-se-f25'
-        students: 'students-se-f25'
+        admins: 'admins-se-s26'
+        students: 'students-se-s26'
       categories:
         # categories in our Discord server that we recognize as dedicated to this course
         - 'Software Engineering - GLOBAL'
@@ -22,6 +22,7 @@ server:
         - 'Software Engineering - STUDENTS 02'
         - 'Software Engineering - STUDENTS 03'
         - 'Software Engineering - STUDENTS 04'
+        - 'Software Engineering - STUDENTS 05'
         - 'Software Engineering - TEAMS 01'
         - 'Software Engineering - TEAMS 02'
         - 'Software Engineering - TEAMS 03'
@@ -39,8 +40,8 @@ server:
           max_requests_per_day: 20 # per user
       roles:
         # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-ad-f25'
-        students: 'students-ad-f25'
+        admins: 'admins-ad-s26'
+        students: 'students-ad-s26'
       categories:
         # categories in our Discord server that we recognize as dedicated to this course
         - 'Agile Dev - GLOBAL'
@@ -48,46 +49,47 @@ server:
         - 'Agile Dev - STUDENTS 02'
         - 'Agile Dev - STUDENTS 03'
         - 'Agile Dev - STUDENTS 04'
+        - 'Agile Dev - STUDENTS 05'
         - 'Agile Dev - TEAMS 01'
         - 'Agile Dev - TEAMS 02'
         - 'Agile Dev - TEAMS 03'
         - 'Agile Dev - TEAMS 04'
         - 'Agile Dev - TEAMS 05'
-    - title: 'Introduction to Programming'
-      file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
-      openai_assistant:
-        id: 'asst_SehX9LvEX2APgnCbvSzeIdN0' # created in the OpenAI "Playground"
-        name: 'Bloombot (Python)'
-        instructions: 'You are a personal assistant to a Professor of Computer Science, teaching an Introduction to Computer Programming course for beginners in Python. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-        tools: [] #[{ 'type': 'code_interpreter' }]
-        model: 'gpt-4o'
-        limits:
-          max_requests_per_day: 20 # per user
-      roles:
-        # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-py-su25'
-        students: 'students-py-su25'
-      categories:
-        # categories in our Discord server that we recognize as dedicated to this course
-        - 'PYTHON - SUMMER 2025'
-        - 'PYTHON - STUDENTS 01'
-        - 'PYTHON - STUDENTS 02'
-    - title: 'Web Design'
-      file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
-      openai_assistant:
-        id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x' # created in the OpenAI "Playground"
-        name: 'Bloombot (Web Design)'
-        instructions: 'You are a personal assistant to a Professor of Computer Science, teaching a Web Design course for beginners. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-        tools: [] #[{ 'type': 'code_interpreter' }]
-        model: 'gpt-4o'
-        limits:
-          max_requests_per_day: 20 # per user
-      roles:
-        # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-wd-su25'
-        students: 'students-wd-su25'
-      categories:
-        # categories in our Discord server that we recognize as dedicated to this course
-        - 'WEB DESIGN - SUMMER 2025'
-        - 'WEB DESIGN - STUDENTS 01'
-        - 'WEB DESIGN - STUDENTS 02'
+    # - title: 'Introduction to Programming'
+    #   file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
+    #   openai_assistant:
+    #     id: 'asst_SehX9LvEX2APgnCbvSzeIdN0' # created in the OpenAI "Playground"
+    #     name: 'Bloombot (Python)'
+    #     instructions: 'You are a personal assistant to a Professor of Computer Science, teaching an Introduction to Computer Programming course for beginners in Python. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+    #     tools: [] #[{ 'type': 'code_interpreter' }]
+    #     model: 'gpt-4o'
+    #     limits:
+    #       max_requests_per_day: 20 # per user
+    #   roles:
+    #     # roles in our Discord server that we recognize as dedicated to this course
+    #     admins: 'admins-py-su25'
+    #     students: 'students-py-su25'
+    #   categories:
+    #     # categories in our Discord server that we recognize as dedicated to this course
+    #     - 'PYTHON - SUMMER 2025'
+    #     - 'PYTHON - STUDENTS 01'
+    #     - 'PYTHON - STUDENTS 02'
+    # - title: 'Web Design'
+    #   file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
+    #   openai_assistant:
+    #     id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x' # created in the OpenAI "Playground"
+    #     name: 'Bloombot (Web Design)'
+    #     instructions: 'You are a personal assistant to a Professor of Computer Science, teaching a Web Design course for beginners. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
+    #     tools: [] #[{ 'type': 'code_interpreter' }]
+    #     model: 'gpt-4o'
+    #     limits:
+    #       max_requests_per_day: 20 # per user
+    #   roles:
+    #     # roles in our Discord server that we recognize as dedicated to this course
+    #     admins: 'admins-wd-su25'
+    #     students: 'students-wd-su25'
+    #   categories:
+    #     # categories in our Discord server that we recognize as dedicated to this course
+    #     - 'WEB DESIGN - SUMMER 2025'
+    #     - 'WEB DESIGN - STUDENTS 01'
+    #     - 'WEB DESIGN - STUDENTS 02'

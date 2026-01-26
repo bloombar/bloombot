@@ -27,6 +27,10 @@ program_file = os.path.basename(__file__)  # the name of this python script
 program_file_base = os.path.splitext(program_file)[0]  # remove extension
 logs_dir = os.getenv("LOGS_DIR", "./logs")
 logs_level = os.getenv("LOGS_LEVEL", "INFO").upper()
+# Ensure logs directory exists
+logs_path = Path(logs_dir).expanduser()
+logs_path.mkdir(parents=True, exist_ok=True)
+logs_dir = str(logs_path)
 # logging.basicConfig(level=logging.INFO)  # set up logging
 logging.basicConfig(
     filename=f"{logs_dir}/{program_file_base}.log",

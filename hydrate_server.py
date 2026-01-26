@@ -39,7 +39,7 @@ async def on_ready():
     """
     What to do when bot is connected and ready to use.
     """
-    print(f"Logged in as: {client.user.name} (ID: {client.user.id})")
+    print(f"Logged into Discord as: @{client.user.name} (ID: {client.user.id})")
 
     # get array of courses from config data
     courses = config["server"]["courses"]

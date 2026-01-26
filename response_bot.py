@@ -11,12 +11,29 @@ from datetime import datetime
 from pathlib import Path
 import yaml
 from dotenv import load_dotenv
+import logging
+
+import openai
 from openai import OpenAI
+
 from discord_manager import DiscordManager
 from models.message import Message
 from models.user import User
 
 load_dotenv()  # load environment variables from .env file
+
+logger = logging.getLogger(__name__)
+program_file = os.path.basename(__file__)  # the name of this python script
+program_file_base = os.path.splitext(program_file)[0]  # remove extension
+logs_dir = os.getenv("LOGS_DIR", "./logs")
+logs_level = os.getenv("LOGS_LEVEL", "INFO").upper()
+# logging.basicConfig(level=logging.INFO)  # set up logging
+logging.basicConfig(
+    filename=f"{logs_dir}/{program_file_base}.log",
+    encoding="utf-8",
+    level=logs_level,
+    format="%(asctime)s %(levelname)s:%(message)s",
+)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # from .env file
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # from .env file
@@ -26,7 +43,7 @@ OPENAI_DEFAULT_MAX_REQUEST_PER_DAY = 10  # can be overriden in config file
 
 # create OpenAI client
 openai_client = OpenAI()
-openai_threads = {}  # will hold separate threads keyed by username
+openai_conversations = {}  # will hold separate threads keyed by username
 openai_num_requests = {}  # will track # requests from each user per day
 
 # load the config data from file
@@ -36,25 +53,30 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
     SERVER_NAME = config["server"]["name"]
     courses = config["server"]["courses"]
 
-    # get an OpenAI Assistant for each course
-    for course in courses:
-        # get existing or create new OpenAI assistant
-        oa_config = course.get("openai_assistant", {})
-        oa_id = oa_config.get("id", None)  # openai assistant id
-        # retrieve or create the assistant object
-        oa_config["instance"] = openai_assistant = (
-            (openai_client.beta.assistants.retrieve(assistant_id=oa_id))
-            if oa_id
-            else openai_client.beta.assistants.create(
-                name=oa_config.get("name", f"Assistant in {course['title']}"),
-                instructions=oa_config.get(
-                    "instructions",
-                    f"Help answer any questions about {course['title']}.",
-                ),
-                tools=oa_config.get("tools", []),
-                model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
-            )
-        )
+    # get an OpenAI Responses Prompt for each course
+    # for course in courses:
+    #     # get existing OpenAI responses prompt... this must have been set up in OpenAI dev portal
+    #     oa_config = course.get("openai_assistant", {})
+    #     # retrieve or create the response object
+    #     oa_config["instance"] = openai_client.responses.create(
+    #         model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
+    #         prompt={
+    #             "id": oa_config.get("prompt_id", None),  # get prompt ID from config
+    #         },
+    #         input=[],
+    #         tools=[
+    #             {
+    #                 "type": "file_search",
+    #                 "vector_store_ids": [oa_config.get("vector_store_id", None)],
+    #             }
+    #         ],
+    #         max_output_tokens=2048,
+    #         store=True,
+    #     )
+    #     logger.info(
+    #         f"Loaded OpenAI Prompt ID {oa_config['instance'].id} for course '{course['title']}'"
+    #     )
+    #     logger.debug(oa_config)
 
 
 # start up bot set to create a category, if not yet exists
@@ -67,7 +89,7 @@ async def on_ready():
     """
     Bot is connected to Discord and ready to use.
     """
-    print(f"Logged in as: {client.user.name} (ID: {client.user.id})")
+    logger.info(f"Logged into Discord as: @{client.user.name} (ID: {client.user.id})")
 
 
 @client.event
@@ -114,20 +136,23 @@ async def on_message(message):
 
     # ignore messages that do not fall into any course
     if not course_name:
-        print(
-            f"Message from {message.author.name} in {category_name} / {channel_name} does not match any course."
+        logger.info(
+            f"Message from @{message.author.name} ({message.author.id}) in '{category_name}'#{channel_name} does not match any course."
         )
         return
 
-    # get the OpenAI assistant for this course
-    oa_id = None
+    # get the OpenAI Responses API Prompt for this course
+    oa_prompt_id = None
     for course in courses:
         if course["title"] == course_name:
             oa_config = course.get("openai_assistant", {})
-            oa_id = oa_config.get("id", None)
-    if not oa_id:
-        print(
-            f"No OpenAI assistant configured for {course_name} course in {category_name} / {channel_name}."
+            oa_prompt_id = oa_config.get("prompt_id", None)
+            logger.info(
+                f"Using OpenAI Prompt ID: {oa_prompt_id} for course '{course_name}'"
+            )
+    if not oa_prompt_id:
+        logger.warning(
+            f"No OpenAI Prompt configured for '{course_name}' course in '{category_name}'#{channel_name}."
         )
         return
 
@@ -144,16 +169,23 @@ async def on_message(message):
     request_limit = oa_config.get("limits", {}).get(
         "max_requests_per_day", OPENAI_DEFAULT_MAX_REQUEST_PER_DAY
     )
+    logger.info(
+        f"User @{message.author.name} ({message.author.id}) has made {user_stats['num_requests']} requests today (limit: {request_limit})."
+    )
     rate_limit_message = ""
     if user_stats["num_requests"] == request_limit:
-        rate_limit_message = "I'm afraid you have reached the maximum number of responses from me for today."
+        rate_limit_message = (
+            "You have reached the maximum number of responses for today."
+        )
     if user_stats["num_requests"] > request_limit:
-        print(f"{message.author.name} has exceeded the request limit.")
+        logger.warning(
+            f"User @{message.author.name} ({message.author.id}) has exceeded the daily request limit ({request_limit})."
+        )
         return
 
     # the message is directed to the bot
-    print(
-        f"Message about {course_name} course in {category_name} / {channel_name} from {message.author.name}"
+    logger.info(
+        f"Message about '{course_name}' course in '{category_name}'#{channel_name} from @{message.author.name} ({message.author.id})"
     )
 
     # log incoming message into database
@@ -172,72 +204,108 @@ async def on_message(message):
             user=user,
         )
     except Exception as e:
-        print(f"Failed to log message: {e}")
+        logger.error(f"Failed to log message: {e}")
 
-    # Create a new thread for the user if it doesn't exist
-    if openai_threads.get(message.author) is None:
-        openai_threads[message.author] = openai_client.beta.threads.create()
-    openai_thread_id = openai_threads.get(message.author).id
+    # Create a new Conversation for the user if it doesn't exist
+    if openai_conversations.get(message.author) is None:
+        # create new conversation
+        openai_conversations[message.author] = openai_client.conversations.create(
+            items=[
+                {
+                    "role": "user",
+                    "content": f"My name is {message.author.name} (user id <@{message.author.id}>) and I am a student in the {course_name} course.",
+                }
+            ],
+            metadata={"user_id": f"<@{message.author.id}>"},
+        )
+        logger.debug(
+            f"Creating new OpenAI Conversation ID {openai_conversations.get(message.author).id} for user @{message.author.name} ({message.author.id})"
+        )
+    else:
+        # found existing conversation
+        logger.debug(
+            f"Reusing existing OpenAI Conversation ID {openai_conversations.get(message.author).id} for user @{message.author.name} ({message.author.id})"
+        )
+    # stablish the id of the conversation
+    openai_conversation_id = openai_conversations.get(message.author).id
+    logger.info(
+        f"Using OpenAI Conversation ID: {openai_conversation_id} for user @{message.author.name} ({message.author.id})"
+    )
 
     # add message to the thread
-    print(f"Prompt: {message.content}")
-    openai_prompt = openai_client.beta.threads.messages.create(
-        thread_id=openai_thread_id,  # this user's thread
-        role="user",
-        content=message.content,  # what the user wrote
+    logger.info(
+        f"Prompt from @{message.author.name} ({message.author.id}): {message.content}"
     )
-    openai_run = openai_client.beta.threads.runs.create_and_poll(
-        thread_id=openai_thread_id,
-        assistant_id=oa_id,
-        instructions=f"Be respectful to this user and address them as exactly the name, '<@{message.author.id}>'.",
+
+    # replace the bot's id with username in the message to help the model understand
+    message_content = re.sub(f"<@!?{client.user.id}>", "@Bloombot", message.content)
+
+    openai_response = openai_client.responses.create(
+        model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
+        prompt={
+            "id": oa_config.get("prompt_id", None),  # get prompt ID from config
+        },
+        input=[{"role": "user", "content": message_content}],
+        conversation=openai_conversation_id,
+        tools=[
+            {
+                "type": "file_search",
+                "vector_store_ids": [oa_config.get("vector_store_id", None)],
+            }
+        ],
+        max_output_tokens=2048,
+        store=True,
     )
-    if openai_run.status == "completed":
-        openai_messages = list(
-            openai_client.beta.threads.messages.list(
-                thread_id=openai_thread_id, run_id=openai_run.id
-            )
+
+    # extract the text from the response
+    openai_response = openai_response.output_text.strip()
+
+    # get first output response
+    logger.info(
+        f"OpenAI response to @{message.author.name} (ID: {message.author.id}): {openai_response}"
+    )
+
+    # clean up the response by removing any 【source】 references
+    openai_response = re.sub(r"【.*?】", "", openai_response)
+
+    # if we have a rate limit message, prepend it to the response
+    if rate_limit_message:
+        openai_response = f"{rate_limit_message} {openai_response}"
+    logger.info(f"Response to @{message.author.id}: {openai_response}")
+    # Send the last response back to the Discord channel
+    await message.channel.send(openai_response)
+
+    # log outgoing message into database
+    try:
+        # get the user with this message.author.id from the User model
+        user, created = User.get_or_create(
+            discord_id=message.author.id,
+            discord_username=message.author.name,
         )
-        # get the first message's content... this is the most recentresponse from OpenAI
-        openai_response = openai_messages[0].content[0].text.value
-        openai_response = re.sub(r"【.*?】", "", openai_response)
-        # if we have a rate limit message, prepend it to the response
-        if rate_limit_message:
-            openai_response = f"{rate_limit_message} {openai_response}"
-        print(f"Response: {openai_response}")
-        # Send the last response back to the Discord channel
-        await message.channel.send(openai_response)
+        # store this message in database
+        message_record = Message.create(
+            content=openai_response,
+            category=category_name,
+            channel=channel_name,
+            direction="to",
+            user=user,
+        )
+    except Exception as e:
+        logger.error(f"Failed to log message: {e}")
 
-        # log outgoing message into database
-        try:
-            # get the user with this message.author.id from the User model
-            user, created = User.get_or_create(
-                discord_id=message.author.id,
-                discord_username=message.author.name,
-            )
-            # store this message in database
-            message_record = Message.create(
-                content=openai_response,
-                category=category_name,
-                channel=channel_name,
-                direction="to",
-                user=user,
-            )
-        except Exception as e:
-            print(f"Failed to log message: {e}")
-
-        # update the user's stats to reflect this new request
-        today = datetime.now().strftime("%Y-%m-%d")
-        if user_stats["last_response_date"] != today:
-            user_stats["num_requests"] = 1
-        else:
-            user_stats["num_requests"] += 1
-        user_stats["last_response_date"] = today
-        openai_num_requests[message.author] = user_stats
-
-        # log
-        print(f"{message.author.name} has made {user_stats['num_requests']} requests.")
+    # update the user's stats to reflect this new request
+    today = datetime.now().strftime("%Y-%m-%d")
+    if user_stats["last_response_date"] != today:
+        user_stats["num_requests"] = 1
     else:
-        print(openai_run.status)
+        user_stats["num_requests"] += 1
+    user_stats["last_response_date"] = today
+    openai_num_requests[message.author] = user_stats
+
+    # log
+    logger.info(
+        f"{message.author.name} ({message.author.id}) has made {user_stats['num_requests']} requests."
+    )
 
 
 # Run the main function if running this file directly.

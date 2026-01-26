@@ -22,7 +22,7 @@ load_dotenv()  # load environment variables from .env file
 db_path = Path(os.getenv("SQL_LITE_DB_PATH", "./data/data.db")).resolve()
 db = SqliteDatabase(db_path)
 db.execute_sql("SELECT 1;")
-print("- Database connection established.")
+print(f"Database connection established to {db_path}.")
 
 
 # Define the Base model all other models are based on

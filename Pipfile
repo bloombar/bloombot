@@ -9,6 +9,7 @@ discord = "*"
 openai = "*"
 pyyaml = "*"
 peewee = "*"
+logging = "*"
 
 [dev-packages]
 ipykernel = "*"

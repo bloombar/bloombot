@@ -4,11 +4,13 @@ server:
     - title: 'Software Engineering'
       file_prefix: 'se' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
-        id: 'asst_v3LwgUI88xJVA8gAVb72auPV' # created in the OpenAI "Playground"
         name: 'Bloombot (Software Engineering)'
-        instructions: 'Act as a dedicated personal assistant to Amos Bloomberg, Clinical Professor of Computer Science at New York University, who teaches a Software Engineering course primarily focused on Python. Your responsibilities include answering student questions specifically about course material, schedule, and syllabus, primarily using information from the uploaded files. Do not invent responses. Give clear, concise answers and maintain a helpful and professional tone.'
+        id: 'asst_w1rnOluuQUZoBxBZAJjcLXKs' # created in the OpenAI "Playground"
+        prompt_id: 'pmpt_6977b4344a1c8196bbd4de834aaaed70051d9a22b178c19d' # Chat Prompts API
+        vector_store_id: 'vs_6977d1ddf0148191b0a320b9d9be1e69'
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Software Engineering course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
         tools: [] #[{ 'type': 'code_interpreter' }]
-        model: 'gpt-4o'
+        model: 'gpt-4.1'
         limits:
           max_requests_per_day: 20 # per user
       roles:
@@ -31,11 +33,13 @@ server:
     - title: 'Agile Software Development & DevOps'
       file_prefix: 'ad' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
-        id: 'asst_ba9KVJqEx54KUAFzrlzfETfg' # created in the OpenAI "Playground"
         name: 'Bloombot (Agile Software Dev & DevOps)'
-        instructions: 'You are a personal assistant to Amos Bloomberg, Clinical Professor of Computer Science at New York University, who teaches an Agile Software Development & DevOps course focused on Scrum and the Javascript MERN stack. Your primary responsibility is to support students by answering questions about the course material, schedule, syllabus, or related administrative topics.'
+        id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
+        prompt_id: 'pmpt_6977b30f868081938fcedd3a2f662b480cb807fae8a5c7b8' # Chat Prompts API
+        vector_store_id: 'vs_6977d2f688088191bfeb7112216f0379'
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Agile Software Development & DevOps course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
         tools: [] #[{ 'type': 'code_interpreter' }]
-        model: 'gpt-4o'
+        model: 'gpt-4.1'
         limits:
           max_requests_per_day: 20 # per user
       roles:

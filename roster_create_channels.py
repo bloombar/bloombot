@@ -77,7 +77,7 @@ async def on_ready():
     """
     What to do when bot is connected and ready to use.
     """
-    print(f"Logged in as: {client.user.name} (ID: {client.user.id})")
+    print(f"Logged into Discord as: @{client.user.name} (ID: {client.user.id})")
     await create_category()
     await create_channels()
     await client.stop()

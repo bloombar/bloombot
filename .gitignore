@@ -3,6 +3,10 @@ results/*.csv
 rosters/*.csv
 !xx-*
 
+# ignore the database and logging
+data/*.db
+logs/*.log
+
 # ignore any cloned repos
 repos/
 

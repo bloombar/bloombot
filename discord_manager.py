@@ -692,7 +692,7 @@ class DiscordManager(discord.Client):
         self.fix_ids()
 
         # print welcome message
-        print(f"\nLogged in as user '{self.user.name}' (ID: {self.user.id})\n")
+        print(f"\nLogged into Discord as '@{self.user.name}' (ID: {self.user.id})\n")
 
         # determine which actions to take
         if self.show_guilds:

@@ -13,6 +13,8 @@ import yaml
 from dotenv import load_dotenv
 import logging
 
+import discord
+
 import openai
 from openai import OpenAI
 
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
 program_file = os.path.basename(__file__)  # the name of this python script
 program_file_base = os.path.splitext(program_file)[0]  # remove extension
 logs_dir = os.getenv("LOGS_DIR", "./logs")
-logs_level = os.getenv("LOGS_LEVEL", "INFO").upper()
+logs_level = os.getenv("LOG_LEVEL", "INFO").upper()
 # Ensure logs directory exists
 logs_path = Path(logs_dir).expanduser()
 logs_path.mkdir(parents=True, exist_ok=True)
@@ -118,24 +120,33 @@ async def on_message(message):
 
     # determine which course this message is related to, based on the category_name
     course_name = None
+    admins_role = None
+    # in case of error, we may message the admins for their attention
+
     for course in courses:
         # if the category name matches the course's category, we have a match
         if "categories" in course and category_name in course["categories"]:
             course_name = course["title"]
+            admins_role = course.get("roles", {}).get("admins")
             break
     # if no course name yet, try to determine it based on the user's role in Discord
     if not course_name:
         user_roles = [role.name for role in getattr(message.author, "roles", [])]
         for course in courses:
             # get our config settings for roles
-            student_role = course.get("roles", {}).get("student")
-            admins_role = course.get("roles", {}).get("admins")
+            this_course_student_role = course.get("roles", {}).get("student")
+            this_course_admins_role = course.get("roles", {}).get("admins")
             # see whether our config roles match the user's roles
-            student_role_match = student_role and student_role in user_roles
-            admin_role_match = admins_role and admins_role in user_roles
+            student_role_match = (
+                this_course_student_role and this_course_student_role in user_roles
+            )
+            admin_role_match = (
+                this_course_admins_role and this_course_admins_role in user_roles
+            )
             # there's a match?
             if student_role_match or admin_role_match:
                 course_name = course["title"]
+                admins_role = course.get("roles", {}).get("admins")
                 break
 
     # ignore messages that do not fall into any course
@@ -178,11 +189,9 @@ async def on_message(message):
     )
     rate_limit_message = ""
     if user_stats["num_requests"] == request_limit:
-        rate_limit_message = (
-            "You have reached the maximum number of responses for today."
-        )
+        rate_limit_message = f"You have reached the maximum number of responses for today. See {course_name} admins for help."
     if user_stats["num_requests"] > request_limit:
-        logger.warning(
+        logger.info(
             f"User @{message.author.name} ({message.author.id}) has exceeded the daily request limit ({request_limit})."
         )
         return
@@ -244,25 +253,33 @@ async def on_message(message):
     # replace the bot's id with username in the message to help the model understand
     message_content = re.sub(f"<@!?{client.user.id}>", "@Bloombot", message.content)
 
-    openai_response = openai_client.responses.create(
-        model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
-        prompt={
-            "id": oa_config.get("prompt_id", None),  # get prompt ID from config
-        },
-        input=[{"role": "user", "content": message_content}],
-        conversation=openai_conversation_id,
-        tools=[
-            {
-                "type": "file_search",
-                "vector_store_ids": [oa_config.get("vector_store_id", None)],
-            }
-        ],
-        max_output_tokens=2048,
-        store=True,
-    )
+    is_response = False  # assume the worst
+    try:
+        # try to get response from OpenAI API
+        openai_response = openai_client.responses.create(
+            model=oa_config.get("model", OPENAI_DEFAULT_MODEL),
+            prompt={
+                "id": oa_config.get("prompt_id", None),  # get prompt ID from config
+            },
+            input=[{"role": "user", "content": message_content}],
+            conversation=openai_conversation_id,
+            tools=[
+                {
+                    "type": "file_search",
+                    "vector_store_ids": [oa_config.get("vector_store_id", None)],
+                }
+            ],
+            max_output_tokens=2048,
+            store=True,
+        )
 
-    # extract the text from the response
-    openai_response = openai_response.output_text.strip()
+        # extract the text from the response
+        openai_response = openai_response.output_text.strip()
+        is_response = True  # flag it for later
+
+    except Exception as e:
+        logger.error(f"Error from OpenAI API: {e}")
+        openai_response = f"Sorry, I can't respond intelligently right now. Please see {course_name} admins for help."
 
     # get first output response
     logger.info(

@@ -1,6 +1,8 @@
-# Discord Channel Manager
+# Bloombot
 
-A simple Discord channel manager that allows you to create, delete, and list channels in a Discord server using the Discord API.
+A simple Discord channel/category manager that allows you to create, delete, and list channels in a Discord server using the Discord API. Intended for use by instructors with students in a course.
+
+Includes a bot setup as a Discord App that responds to messages by proxying them to the OpenAI API with a bit of extra prompt engineering to tailor the responses.
 
 ## Requirements
 
@@ -19,7 +21,7 @@ Four useful files... make them executable with `chmod u+x *.py *.ipynb`:
 
 - `main.py`: can be used as a sort of command-line utility to list, create, and delete Discord servers, categories, channels, and roles. Run it to see options, e.g. `./main.py -h`.
 
-- `response_bot.py`: a chatbot that handles incoming messages from Discord, fetches appropriate responses from OpenAI's Assistant API, then sends back the response to the user on Discord. To start the bot, run `./response_bot.py`. Configuration options specific this use of the bot intelligently across several different categories of channels in a Discord server used for teaching courses at a university are available in the `bot_config.yml` file. Different courses can be set to use different OpenAI Assistants, each with their own course notes files uploaded through OpenAI's Assistants settings dashboard.
+- `response_bot.py`: a chatbot that handles incoming messages from Discord, fetches appropriate responses from OpenAI's API, then sends back the response to the user on Discord. To start the bot, run `./response_bot.py`. Configuration options specific this use of the bot intelligently across several different categories of channels in a Discord server used for teaching courses at a university are available in the `bot_config.yml` file. Different courses can be set to use different OpenAI Assistants, each with their own course notes files uploaded through OpenAI's Assistants settings dashboard.
 
 ---
 

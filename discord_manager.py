@@ -679,7 +679,6 @@ class DiscordManager(discord.Client):
         """
         Close the bot connection nicely.
         """
-        await self.http.close()  # avoid warning about unclosed connections
         await self.close()
 
     async def on_ready(self):

@@ -1,99 +1,109 @@
 server:
   name: 'Knowledge Kitchen'
   courses:
-    - title: 'Software Engineering'
-      file_prefix: 'se' # used to recognize any roster or other CSV files releated to this course
+    # - title: 'Software Engineering'
+    #   file_prefix: 'se' # used to recognize any roster or other CSV files releated to this course
+    #   openai_assistant:
+    #     name: 'Bloombot (Software Engineering)'
+    #     id: 'asst_w1rnOluuQUZoBxBZAJjcLXKs' # created in the OpenAI "Playground"
+    #     prompt_id: 'pmpt_6977b4344a1c8196bbd4de834aaaed70051d9a22b178c19d' # Chat Prompts API
+    #     vector_store_id: 'vs_6977d1ddf0148191b0a320b9d9be1e69'
+    #     instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Software Engineering course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
+    #     tools: [] #[{ 'type': 'code_interpreter' }]
+    #     model: 'gpt-4.1'
+    #     limits:
+    #       max_requests_per_day: 20 # per user
+    #   roles:
+    #     # roles in our Discord server that we recognize as dedicated to this course
+    #     admins: 'admins-se-s26'
+    #     students: 'students-se-s26'
+    #   categories:
+    #     # categories in our Discord server that we recognize as dedicated to this course
+    #     - 'Software Engineering - GLOBAL'
+    #     - 'Software Engineering - STUDENTS 01'
+    #     - 'Software Engineering - STUDENTS 02'
+    #     - 'Software Engineering - STUDENTS 03'
+    #     - 'Software Engineering - STUDENTS 04'
+    #     - 'Software Engineering - STUDENTS 05'
+    #     - 'Software Engineering - TEAMS 01'
+    #     - 'Software Engineering - TEAMS 02'
+    #     - 'Software Engineering - TEAMS 03'
+    #     - 'Software Engineering - TEAMS 04'
+    #     - 'Software Engineering - TEAMS 05'
+    # - title: 'Agile Software Development & DevOps'
+    #   file_prefix: 'ad' # used to recognize any roster or other CSV files releated to this course
+    #   openai_assistant:
+    #     name: 'Bloombot (Agile Software Dev & DevOps)'
+    #     id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
+    #     prompt_id: 'pmpt_6977b30f868081938fcedd3a2f662b480cb807fae8a5c7b8' # Chat Prompts API
+    #     vector_store_id: 'vs_6977d2f688088191bfeb7112216f0379'
+    #     instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Agile Software Development & DevOps course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
+    #     tools: [] #[{ 'type': 'code_interpreter' }]
+    #     model: 'gpt-4.1'
+    #     limits:
+    #       max_requests_per_day: 20 # per user
+    #   roles:
+    #     # roles in our Discord server that we recognize as dedicated to this course
+    #     admins: 'admins-ad-s26'
+    #     students: 'students-ad-s26'
+    #   categories:
+    #     # categories in our Discord server that we recognize as dedicated to this course
+    #     - 'Agile Dev - GLOBAL'
+    #     - 'Agile Dev - STUDENTS 01'
+    #     - 'Agile Dev - STUDENTS 02'
+    #     - 'Agile Dev - STUDENTS 03'
+    #     - 'Agile Dev - STUDENTS 04'
+    #     - 'Agile Dev - STUDENTS 05'
+    #     - 'Agile Dev - TEAMS 01'
+    #     - 'Agile Dev - TEAMS 02'
+    #     - 'Agile Dev - TEAMS 03'
+    #     - 'Agile Dev - TEAMS 04'
+    #     - 'Agile Dev - TEAMS 05'
+    - title: 'Web Design'
+      file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
-        name: 'Bloombot (Software Engineering)'
-        id: 'asst_w1rnOluuQUZoBxBZAJjcLXKs' # created in the OpenAI "Playground"
-        prompt_id: 'pmpt_6977b4344a1c8196bbd4de834aaaed70051d9a22b178c19d' # Chat Prompts API
-        vector_store_id: 'vs_6977d1ddf0148191b0a320b9d9be1e69'
-        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Software Engineering course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
-        tools: [] #[{ 'type': 'code_interpreter' }]
-        model: 'gpt-4.1'
-        limits:
-          max_requests_per_day: 20 # per user
-      roles:
-        # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-se-s26'
-        students: 'students-se-s26'
-      categories:
-        # categories in our Discord server that we recognize as dedicated to this course
-        - 'Software Engineering - GLOBAL'
-        - 'Software Engineering - STUDENTS 01'
-        - 'Software Engineering - STUDENTS 02'
-        - 'Software Engineering - STUDENTS 03'
-        - 'Software Engineering - STUDENTS 04'
-        - 'Software Engineering - STUDENTS 05'
-        - 'Software Engineering - TEAMS 01'
-        - 'Software Engineering - TEAMS 02'
-        - 'Software Engineering - TEAMS 03'
-        - 'Software Engineering - TEAMS 04'
-        - 'Software Engineering - TEAMS 05'
-    - title: 'Agile Software Development & DevOps'
-      file_prefix: 'ad' # used to recognize any roster or other CSV files releated to this course
-      openai_assistant:
-        name: 'Bloombot (Agile Software Dev & DevOps)'
+        name: 'Bloombot (Web Design)'
         id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
         prompt_id: 'pmpt_6977b30f868081938fcedd3a2f662b480cb807fae8a5c7b8' # Chat Prompts API
-        vector_store_id: 'vs_6977d2f688088191bfeb7112216f0379'
-        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Agile Software Development & DevOps course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
+        vector_store_id: 'vs_6a0a23c0289c81918d2ac1afb00633cc'
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Web Design & Computer Principles course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
         tools: [] #[{ 'type': 'code_interpreter' }]
         model: 'gpt-4.1'
         limits:
           max_requests_per_day: 20 # per user
       roles:
         # roles in our Discord server that we recognize as dedicated to this course
-        admins: 'admins-ad-s26'
-        students: 'students-ad-s26'
+        admins: 'admins-wd-su26'
+        students: 'students-wd-su26'
       categories:
         # categories in our Discord server that we recognize as dedicated to this course
-        - 'Agile Dev - GLOBAL'
-        - 'Agile Dev - STUDENTS 01'
-        - 'Agile Dev - STUDENTS 02'
-        - 'Agile Dev - STUDENTS 03'
-        - 'Agile Dev - STUDENTS 04'
-        - 'Agile Dev - STUDENTS 05'
-        - 'Agile Dev - TEAMS 01'
-        - 'Agile Dev - TEAMS 02'
-        - 'Agile Dev - TEAMS 03'
-        - 'Agile Dev - TEAMS 04'
-        - 'Agile Dev - TEAMS 05'
-    # - title: 'Introduction to Programming'
-    #   file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
-    #   openai_assistant:
-    #     id: 'asst_SehX9LvEX2APgnCbvSzeIdN0' # created in the OpenAI "Playground"
-    #     name: 'Bloombot (Python)'
-    #     instructions: 'You are a personal assistant to a Professor of Computer Science, teaching an Introduction to Computer Programming course for beginners in Python. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-    #     tools: [] #[{ 'type': 'code_interpreter' }]
-    #     model: 'gpt-4o'
-    #     limits:
-    #       max_requests_per_day: 20 # per user
-    #   roles:
-    #     # roles in our Discord server that we recognize as dedicated to this course
-    #     admins: 'admins-py-su25'
-    #     students: 'students-py-su25'
-    #   categories:
-    #     # categories in our Discord server that we recognize as dedicated to this course
-    #     - 'PYTHON - SUMMER 2025'
-    #     - 'PYTHON - STUDENTS 01'
-    #     - 'PYTHON - STUDENTS 02'
-    # - title: 'Web Design'
-    #   file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
-    #   openai_assistant:
-    #     id: 'asst_RoBzgGD96GKn8HTnPyxRLc2x' # created in the OpenAI "Playground"
-    #     name: 'Bloombot (Web Design)'
-    #     instructions: 'You are a personal assistant to a Professor of Computer Science, teaching a Web Design course for beginners. You were created by the Professor. Help answer questions about course material and the schedule and syllabus. Prioritize answers based on the uploaded files.'
-    #     tools: [] #[{ 'type': 'code_interpreter' }]
-    #     model: 'gpt-4o'
-    #     limits:
-    #       max_requests_per_day: 20 # per user
-    #   roles:
-    #     # roles in our Discord server that we recognize as dedicated to this course
-    #     admins: 'admins-wd-su25'
-    #     students: 'students-wd-su25'
-    #   categories:
-    #     # categories in our Discord server that we recognize as dedicated to this course
-    #     - 'WEB DESIGN - SUMMER 2025'
-    #     - 'WEB DESIGN - STUDENTS 01'
-    #     - 'WEB DESIGN - STUDENTS 02'
+        - 'Web Design - GLOBAL'
+        - 'Web Design - STUDENTS 01'
+        - 'Web Design - STUDENTS 02'
+        - 'Web Design - STUDENTS 03'
+        - 'Web Design - STUDENTS 04'
+        - 'Web Design - STUDENTS 05'
+    - title: 'Introduction to Programming'
+      file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
+      openai_assistant:
+        name: 'Bloombot (Python)'
+        # id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
+        prompt_id: 'pmpt_6a0a22ea535c819080f8939d082d64f807893869fb23150c' # Chat Prompts API
+        vector_store_id: 'vs_6a0a2dbb0ff881919076a7d2eb9f49bc'
+        instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Introduction to Computer Programming (in Python) course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
+        tools: [] #[{ 'type': 'code_interpreter' }]
+        model: 'gpt-4.1'
+        limits:
+          max_requests_per_day: 20 # per user
+      roles:
+        # roles in our Discord server that we recognize as dedicated to this course
+        admins: 'admins-py-su26'
+        students: 'students-py-su26'
+      categories:
+        # categories in our Discord server that we recognize as dedicated to this course
+        - 'Python - GLOBAL'
+        - 'Python - STUDENTS 01'
+        - 'Python - STUDENTS 02'
+        - 'Python - STUDENTS 03'
+        - 'Python - STUDENTS 04'
+        - 'Python - STUDENTS 05'

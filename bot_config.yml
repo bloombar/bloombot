@@ -19,17 +19,17 @@ server:
     #     students: 'students-se-s26'
     #   categories:
     #     # categories in our Discord server that we recognize as dedicated to this course
-    #     - 'Software Engineering - GLOBAL'
-    #     - 'Software Engineering - STUDENTS 01'
-    #     - 'Software Engineering - STUDENTS 02'
-    #     - 'Software Engineering - STUDENTS 03'
-    #     - 'Software Engineering - STUDENTS 04'
-    #     - 'Software Engineering - STUDENTS 05'
-    #     - 'Software Engineering - TEAMS 01'
-    #     - 'Software Engineering - TEAMS 02'
-    #     - 'Software Engineering - TEAMS 03'
-    #     - 'Software Engineering - TEAMS 04'
-    #     - 'Software Engineering - TEAMS 05'
+    #     - name: 'Software Engineering - GLOBAL'
+    #     - name: 'Software Engineering - STUDENTS 01'
+    #     - name: 'Software Engineering - STUDENTS 02'
+    #     - name: 'Software Engineering - STUDENTS 03'
+    #     - name: 'Software Engineering - STUDENTS 04'
+    #     - name: 'Software Engineering - STUDENTS 05'
+    #     - name: 'Software Engineering - TEAMS 01'
+    #     - name: 'Software Engineering - TEAMS 02'
+    #     - name: 'Software Engineering - TEAMS 03'
+    #     - name: 'Software Engineering - TEAMS 04'
+    #     - name: 'Software Engineering - TEAMS 05'
     # - title: 'Agile Software Development & DevOps'
     #   file_prefix: 'ad' # used to recognize any roster or other CSV files releated to this course
     #   openai_assistant:
@@ -48,17 +48,17 @@ server:
     #     students: 'students-ad-s26'
     #   categories:
     #     # categories in our Discord server that we recognize as dedicated to this course
-    #     - 'Agile Dev - GLOBAL'
-    #     - 'Agile Dev - STUDENTS 01'
-    #     - 'Agile Dev - STUDENTS 02'
-    #     - 'Agile Dev - STUDENTS 03'
-    #     - 'Agile Dev - STUDENTS 04'
-    #     - 'Agile Dev - STUDENTS 05'
-    #     - 'Agile Dev - TEAMS 01'
-    #     - 'Agile Dev - TEAMS 02'
-    #     - 'Agile Dev - TEAMS 03'
-    #     - 'Agile Dev - TEAMS 04'
-    #     - 'Agile Dev - TEAMS 05'
+    #     - name: 'Agile Dev - GLOBAL'
+    #     - name: 'Agile Dev - STUDENTS 01'
+    #     - name: 'Agile Dev - STUDENTS 02'
+    #     - name: 'Agile Dev - STUDENTS 03'
+    #     - name: 'Agile Dev - STUDENTS 04'
+    #     - name: 'Agile Dev - STUDENTS 05'
+    #     - name: 'Agile Dev - TEAMS 01'
+    #     - name: 'Agile Dev - TEAMS 02'
+    #     - name: 'Agile Dev - TEAMS 03'
+    #     - name: 'Agile Dev - TEAMS 04'
+    #     - name: 'Agile Dev - TEAMS 05'
     - title: 'Web Design'
       file_prefix: 'wd' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
@@ -77,12 +77,32 @@ server:
         students: 'students-wd-su26'
       categories:
         # categories in our Discord server that we recognize as dedicated to this course
-        - 'Web Design - GLOBAL'
-        - 'Web Design - STUDENTS 01'
-        - 'Web Design - STUDENTS 02'
-        - 'Web Design - STUDENTS 03'
-        - 'Web Design - STUDENTS 04'
-        - 'Web Design - STUDENTS 05'
+        #
+        # Plain string — creates the category with a placeholder channel (existing behavior):
+        #   - 'Category Name'
+        #
+        # Dict format — creates the category and named channels within it:
+        #   - name: 'Category Name'
+        #     channels:
+        #       - name: 'channel-name'       # accessible by admins + students (default)
+        #       - name: 'admin-channel'
+        #         admins_only: true          # accessible by admins role only
+        #
+        - name: 'Web Design - GLOBAL'
+          channels:
+            - name: 'admins'
+              admins_only: true
+            - name: pronouncements
+            - name: general
+            - name: grading
+            - name: tutoring
+            - name: quizzes
+            - name: exams
+        - name: 'Web Design - STUDENTS 01'
+        - name: 'Web Design - STUDENTS 02'
+        - name: 'Web Design - STUDENTS 03'
+        - name: 'Web Design - STUDENTS 04'
+        - name: 'Web Design - STUDENTS 05'
     - title: 'Introduction to Programming'
       file_prefix: 'py' # used to recognize any roster or other CSV files releated to this course
       openai_assistant:
@@ -101,9 +121,18 @@ server:
         students: 'students-py-su26'
       categories:
         # categories in our Discord server that we recognize as dedicated to this course
-        - 'Python - GLOBAL'
-        - 'Python - STUDENTS 01'
-        - 'Python - STUDENTS 02'
-        - 'Python - STUDENTS 03'
-        - 'Python - STUDENTS 04'
-        - 'Python - STUDENTS 05'
+        - name: 'Python - GLOBAL'
+          channels:
+            - name: 'admins'
+              admins_only: true
+            - name: pronouncements
+            - name: general
+            - name: grading
+            - name: tutoring
+            - name: quizzes
+            - name: exams
+        - name: 'Python - STUDENTS 01'
+        - name: 'Python - STUDENTS 02'
+        - name: 'Python - STUDENTS 03'
+        - name: 'Python - STUDENTS 04'
+        - name: 'Python - STUDENTS 05'

@@ -72,7 +72,15 @@ async def on_ready():
         )
 
         # iterate through each category and create it and its child channels
-        for category_name in course.get("categories", []):
+        for category_config in course.get("categories", []):
+            # support both plain strings and dicts with an optional channels list
+            if isinstance(category_config, str):
+                category_name = category_config
+                channels_config = []
+            else:
+                category_name = category_config["name"]
+                channels_config = category_config.get("channels", [])
+
             print(
                 f"Processing category '{category_name}' for course '{course_title}'..."
             )
@@ -87,6 +95,14 @@ async def on_ready():
                 SERVER_NAME, category_name, admins_role, students_role
             )
 
+            # create channels after permissions are set so they inherit correctly
+            if channels_config:
+                await create_category_channels(
+                    SERVER_NAME, category_name, channels_config, admins_role, students_role
+                )
+            else:
+                await create_temp_channel(SERVER_NAME, category_name)
+
     # done!
     await client.stop()
 
@@ -95,65 +111,60 @@ async def create_category(server_name, category_name, admins_role, students_role
     """
     Create a category in the server if it does not already exist.
     """
-    print(f"Creating category '{category_name}' in server '{server_name}...")
-    # await client.wait_until_ready()  # Ensure the client is ready before proceeding
+    print(f"Creating category '{category_name}' in server '{server_name}'...")
     guild_id = client.get_server_id(server_name=server_name)
     if not guild_id:
         print("Server not found.")
         await client.stop()
         return
     print(f"Got the server ID {guild_id} for {server_name}")
-    # Create the category
     await client.add_category(guild_id=guild_id, category_name=category_name)
     print(f"Created category: {category_name}")
 
-    # create a channel named 'temp' within this category and post a message in it that says f"Category {category_name} auto-created."
+
+async def create_temp_channel(server_name, category_name):
+    """
+    Create a placeholder 'temp' channel so the category is visible to users.
+    No explicit permissions are set — the channel inherits from the category
+    automatically via Discord's default sync behavior.
+    """
+    guild_id = client.get_server_id(server_name=server_name)
+    if not guild_id:
+        print("Server not found.")
+        return
     category_id = client.get_category_id(guild_id=guild_id, category_name=category_name)
-    if category_id:
-        channel_name = "temp"
-        print(f"Creating channel '{channel_name}' in category '{category_name}'...")
+    if not category_id:
+        print(f"Category '{category_name}' not found.")
+        return
+
+    channel_name = "temp"
+    is_new = client.get_channel_id(
+        guild_id=guild_id, channel_name=channel_name, category_id=category_id
+    ) is None
+
+    if is_new:
+        print(f"Creating placeholder channel '{channel_name}' in category '{category_name}'...")
         await client.add_channel(
             guild_id=guild_id, channel_name=channel_name, category_id=category_id
         )
-        # determine the channel id of the newly created channel
-        channel_id = client.get_channel_id(
-            guild_id=guild_id, channel_name=channel_name, category_id=category_id
-        )
+    else:
+        print(f"Placeholder channel '{channel_name}' already exists in '{category_name}', skipping.")
 
-        # copy category permission overwrites to the new channel
-        guild = client.get_guild(guild_id)
-        category = guild.get_channel(category_id) if guild else None
-        if category:
-            channel_obj = client.get_channel(channel_id)
-            if channel_obj:
-                try:
-                    await channel_obj.edit(overwrites=category.overwrites)
-                    print(
-                        f"Set permissions for channel '{channel_name}' to match category '{category_name}'."
-                    )
-                except Exception as e:
-                    print(f"Failed to set permissions on channel '{channel_name}': {e}")
-                else:
-                    print(
-                        f"Channel object not found for id {channel_id} when setting permissions."
-                    )
-        else:
-            print(
-                f"Category object not found for id {category_id} when setting channel permissions."
-            )
-
-        # post a message in this channel so the category is visible to users if otherwise empty
-        if channel_id:
-            print(f"Posting message in channel '{channel_name}'...")
-            channel = client.get_channel(channel_id)
-            if channel:
+    channel_id = client.get_channel_id(
+        guild_id=guild_id, channel_name=channel_name, category_id=category_id
+    )
+    if channel_id:
+        channel = client.get_channel(channel_id)
+        if channel:
+            await channel.edit(sync_permissions=True)
+            print(f"Synced permissions on '{channel_name}' with category '{category_name}'.")
+            if is_new:
                 await channel.send(f"Category '{category_name}' auto-created.")
                 print(f"Posted auto-create message in '{channel_name}'.")
-            else:
-                print(f"Channel object not found for id {channel_id}.")
-
         else:
-            print(f"No channel id found for '{channel_name}'.")
+            print(f"Channel object not found for id {channel_id}.")
+    else:
+        print(f"No channel id found for '{channel_name}'.")
 
 
 async def set_category_permissions(
@@ -197,6 +208,64 @@ async def set_category_permissions(
 
     print(f"Modifying permissions on category '{category_name}'...")
     await category.edit(overwrites=overwrites)
+
+
+async def create_category_channels(
+    server_name, category_name, channels_config, admins_role, students_role
+):
+    """
+    Create named channels within a category with per-channel permission overrides.
+    Default channels sync permissions from the category (both roles can access).
+    Channels with admins_only: true are restricted to the admins role only.
+    """
+    print(
+        f"Creating {len(channels_config)} channel(s) in category '{category_name}'..."
+    )
+    guild_id = client.get_server_id(server_name=server_name)
+    if not guild_id:
+        print("Server not found.")
+        return
+    guild = client.get_guild(guild_id)
+    category_id = client.get_category_id(guild_id=guild_id, category_name=category_name)
+    admins_role_id = client.get_role_id(guild_id=guild_id, role_name=admins_role)
+    admins_role_obj = guild.get_role(admins_role_id) if admins_role_id else None
+
+    for channel_config in channels_config:
+        channel_name = channel_config["name"]
+        admins_only = channel_config.get("admins_only", False)
+
+        is_new = client.get_channel_id(
+            guild_id=guild_id, channel_name=channel_name, category_id=category_id
+        ) is None
+
+        if is_new:
+            await client.add_channel(
+                guild_id=guild_id, channel_name=channel_name, category_id=category_id
+            )
+            print(f"Created channel: {channel_name}")
+        else:
+            print(f"Channel '{channel_name}' already exists, updating permissions.")
+
+        if admins_only:
+            channel_id = client.get_channel_id(
+                guild_id=guild_id, channel_name=channel_name, category_id=category_id
+            )
+            channel = client.get_channel(channel_id)
+            if channel:
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                }
+                if admins_role_obj:
+                    overwrites[admins_role_obj] = discord.PermissionOverwrite(
+                        read_messages=True, send_messages=True
+                    )
+                try:
+                    await channel.edit(overwrites=overwrites)
+                    print(f"Set admins-only permissions on channel '{channel_name}'.")
+                    if not is_new:
+                        await channel.send("Permissions on this channel have been updated.")
+                except Exception as e:
+                    print(f"Failed to set permissions on channel '{channel_name}': {e}")
 
 
 # Run the main function if running this file directly.

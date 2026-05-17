@@ -160,12 +160,20 @@ async def create_channels():
                     else:
                         print(f"Role @{ADMINS_ROLE} not found, no permissions set.")
 
-                    await client.add_channel(
+                    is_new = client.get_channel_id(
                         guild_id=guild_id,
                         channel_name=channel_name,
                         category_id=category_id,
-                    )
-                    print(f"Created channel: {channel_name}")
+                    ) is None
+                    if is_new:
+                        await client.add_channel(
+                            guild_id=guild_id,
+                            channel_name=channel_name,
+                            category_id=category_id,
+                        )
+                        print(f"Created channel: {channel_name}")
+                    else:
+                        print(f"Channel '{channel_name}' already exists, updating permissions.")
                     channel_id = client.get_channel_id(
                         guild_id=guild_id,
                         channel_name=channel_name,
@@ -177,6 +185,8 @@ async def create_channels():
                             f"Modifying permissions on #{channel_name} (ID: {channel.id})..."
                         )
                         await channel.edit(overwrites=overwrites)
+                        if not is_new:
+                            await channel.send("Permissions on this channel have been updated.")
 
                     # Compose the message
                     first_name = row.get("First", "")
@@ -201,7 +211,7 @@ Student details:
 - **GitHub:** {github}
 """
 
-                    if channel:
+                    if channel and is_new:
                         sent_message = await channel.send(message)
                         await sent_message.pin()
 

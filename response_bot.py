@@ -85,6 +85,15 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
     #     logger.debug(oa_config)
 
 
+def get_category_names(course):
+    """Return a flat list of category name strings from a course config entry,
+    handling both plain-string and dict (with optional channels) formats."""
+    return [
+        c if isinstance(c, str) else c["name"]
+        for c in course.get("categories", [])
+    ]
+
+
 # start up bot set to create a category, if not yet exists
 client = DiscordManager(guild_id=config["server"]["name"], event_loop=True)
 
@@ -125,7 +134,7 @@ async def on_message(message):
 
     for course in courses:
         # if the category name matches the course's category, we have a match
-        if "categories" in course and category_name in course["categories"]:
+        if category_name in get_category_names(course):
             course_name = course["title"]
             admins_role = course.get("roles", {}).get("admins")
             break

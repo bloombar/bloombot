@@ -211,4 +211,4 @@ Student details:
 
 # Run the main function if running this file directly.
 if __name__ == "__main__":
-    asyncio.run(client.start(BOT_TOKEN))
+    client.run(BOT_TOKEN)

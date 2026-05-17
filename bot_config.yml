@@ -64,7 +64,7 @@ server:
       openai_assistant:
         name: 'Bloombot (Web Design)'
         id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
-        prompt_id: 'pmpt_6977b30f868081938fcedd3a2f662b480cb807fae8a5c7b8' # Chat Prompts API
+        prompt_id: 'pmpt_6a0a22ea535c819080f8939d082d64f807893869fb23150c' # Chat Prompts API
         vector_store_id: 'vs_6a0a23c0289c81918d2ac1afb00633cc'
         instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching a Web Design & Computer Principles course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
         tools: [] #[{ 'type': 'code_interpreter' }]
@@ -108,7 +108,7 @@ server:
       openai_assistant:
         name: 'Bloombot (Python)'
         # id: 'asst_ERFCwMxCyc2kFljY1NQ70ZtU' # created in the OpenAI "Playground"
-        prompt_id: 'pmpt_6a0a22ea535c819080f8939d082d64f807893869fb23150c' # Chat Prompts API
+        prompt_id: 'pmpt_6a0a461f53b88196a6aed3b35ecc9a910fb0bc78805fe9da' # Chat Prompts API
         vector_store_id: 'vs_6a0a2dbb0ff881919076a7d2eb9f49bc'
         instructions: 'You are a personal assistant to Clinical Professor of Computer Science, Amos Bloomberg, at New York University teaching an Introduction to Computer Programming (in Python) course. Help answer questions about course material and the schedule and syllabus. Answer questions based on the information in the uploaded files.  Keep responses to 1 paragraph at most.'
         tools: [] #[{ 'type': 'code_interpreter' }]

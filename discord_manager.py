@@ -666,14 +666,14 @@ class DiscordManager(discord.Client):
         await channel.delete()
         print(f"Channel '{channel.name}' (ID: {channel.id}) deleted.")
 
-    async def start(self, token=None):
+    async def start(self, token=None, **kwargs):
         """
         Open the connection to Discord and start the bot.
 
         Args:
             token (str): The bot token to use for authentication. Defaults to the environment variable BOT_TOKEN.
         """
-        await super().start(token or self.token)
+        await super().start(token or self.token, **kwargs)
 
     async def stop(self):
         """

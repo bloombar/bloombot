@@ -173,3 +173,8 @@ node_modules/
 
 # SQLite message log — contains real student conversations, never commit it
 data/*.db
+
+# TypeScript build output and incremental state
+*.tsbuildinfo
+.tsbuild/
+coverage/

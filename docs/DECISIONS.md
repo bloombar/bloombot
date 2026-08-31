@@ -170,3 +170,52 @@ the thing actually worth blocking was a path, not a command.
 **Limits.** The deny list is pattern-matched on the command string and can be evaded by an agent that wants
 to (a differently-spelled `rm`, a script that force-pushes). It is a guard against accident, not against a
 hostile agent. The same is true of the path hook: it guards modification, not exfiltration.
+
+---
+
+## D-9 — `DATABASE_PATH` and `SQL_LITE_DB_PATH` coexist during the migration
+
+**Problem.** `packages/config`'s zod schema names the SQLite file `DATABASE_PATH`. The live Python bot reads
+the same file through `SQL_LITE_DB_PATH` (`models/base.py`, `migrate.py`, `tests/conftest.py`), a name chosen
+years before this package existed. `env.example` originally documented only the new name.
+
+**Choice.** Keep `DATABASE_PATH` as the name in the TypeScript schema — it is the name every future
+TypeScript process will read — but add `SQL_LITE_DB_PATH` to `env.example` too, as a plain documented
+variable the zod schema does not know about, with a comment that both must point at the same file for as long
+as the Python bot and the TypeScript platform are both writing to it.
+
+**Why not rename one to match the other.** Renaming the Python side mid-migration touches
+`response_bot.py`/`migrate.py`/`models/base.py` for no behavioural gain and widens a config-only slice into a
+bot change. Renaming the TypeScript schema to the legacy name would carry the old name's awkwardness
+(`SQL_LITE_DB_PATH`, not `SQLITE_DB_PATH`) into the code that has no history obligating it to.
+
+**Limits.** Two variables naming one file is a trap for exactly the deployment this note is trying to
+prevent: setting one and not the other silently forks the bot and the platform onto two different databases,
+with no error until the data has already diverged. It should be deleted the moment the Python bot is retired
+(D-1) and only `DATABASE_PATH` remains.
+
+---
+
+## D-10 — The legacy YAML schema mirrors the Python reader's optionality, not the ideal shape
+
+**Problem.** `packages/schemas/legacy-yaml.ts` originally required `openai_assistant.name`, `instructions`,
+`vector_store_id`, `model` and `limits.max_requests_per_day`. `response_bot.py` never reads `name` or
+`instructions` at all, and reads `model`, `vector_store_id` and `limits.max_requests_per_day` with
+`oa_config.get(key, default)` — so a course that has never set one of those keys runs today, and the stricter
+schema would have rejected its own config file the moment it was pointed at a course omitting one.
+
+**Choice.** Make those fields `optional()` rather than required, and leave their defaults where the bot
+applies them (`OPENAI_DEFAULT_MODEL`, `OPENAI_DEFAULT_MAX_REQUEST_PER_DAY`, `None`) instead of duplicating the
+default value inside the schema. `prompt_id` stays required: without it the bot logs a warning and never
+answers in that course (`response_bot.py:208`), so a course missing it cannot function even though the
+reader does not crash on the missing key.
+
+**Why not tighten instead of loosen.** A schema stricter than the code it models reads like a specification
+of how `bot_config.yml` _should_ look, but its job here is narrower: catch a typo before the bot silently
+answers nobody, without also rejecting a file the bot itself accepts. Tightening these fields is a legitimate
+future change — once the schema is the thing authors are told to satisfy, rather than a check against a
+reader nobody has changed yet — but it is a decision about the format, not a bug in this slice.
+
+**Limits.** Because the schema now permits what the reader tolerates, a course silently missing a field
+(nobody ever set `model`) parses identically to one that intentionally omitted it. If that distinction ever
+matters, it needs the config format to say so explicitly, not a stricter schema.

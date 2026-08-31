@@ -38,7 +38,13 @@ bloombot/
 │   └── message.py            # Message model (content, category, channel, direction)
 ├── questionnaires/           # Input: intake questionnaire CSV files (one per course)
 ├── rosters/                  # Input: student roster CSV files (one per course)
-└── results/                  # Output: merged roster+questionnaire CSV files
+├── results/                  # Output: merged roster+questionnaire CSV files
+├── tests/                    # pytest suite (see "Tests" below)
+├── docs/
+│   ├── SPEC.md               # Requirements — the source the project board is built from
+│   └── ROADMAP.md            # Delivery phases and current status
+├── scripts/board/            # Derives and syncs the GitHub project board from the SPEC
+└── .github/workflows/ci.yml  # Continuous integration
 ```
 
 ---
@@ -201,6 +207,53 @@ Reads `data/data.db` and produces a full analytics report across five sections:
 5. **Summary Table** — Pivot table of conversations, unique users, average messages per conversation, and average duration by course, semester, and topic.
 
 **Note:** Section 4 requires `OPENAI_API_KEY` in `.env`. All other sections work without an API key.
+
+---
+
+## Tests
+
+The project has two independent suites, both run by CI on every push and pull request
+(see `.github/workflows/ci.yml`).
+
+**Python** — covers the chatbot's course routing and rate-limit accounting, the
+`DiscordManager` lookup helpers, roster path and welcome-message formatting, and the
+database migration:
+
+```bash
+pipenv install --dev
+pipenv run pytest tests/ -v
+```
+
+Tests never touch real credentials or `data/data.db`: `tests/conftest.py` overrides
+`OPENAI_API_KEY`, `BOT_TOKEN`, `SQL_LITE_DB_PATH` and `LOGS_DIR` with throwaway values
+before any module is imported, overriding your `.env`. No test makes a network call.
+
+**Node** — covers the project-board tooling and the `docs/SPEC.md` format contract that
+the board is generated from:
+
+```bash
+npm install
+npm test
+```
+
+---
+
+## Project board
+
+Requirements live in [`docs/SPEC.md`](docs/SPEC.md) and are delivered in phases defined
+in [`docs/ROADMAP.md`](docs/ROADMAP.md). The
+[project board](https://github.com/users/bloombar/projects/2) is generated from those two
+documents — never by hand:
+
+```bash
+npm run board:derive     # SPEC + ROADMAP -> scripts/board/manifest.yaml
+npm run board:sync:dry   # preview the changes
+npm run board:sync       # push issues, milestones and cards to GitHub
+```
+
+`board:sync` needs the `gh` CLI authenticated with the `project` scope. Both scripts are
+idempotent: re-running them updates in place rather than creating duplicates. Requirement
+ids key the issues, so an existing id must never be renamed or renumbered.
 
 ---
 

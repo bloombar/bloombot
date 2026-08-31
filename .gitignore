@@ -164,3 +164,9 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# node tooling (scripts/board)
+node_modules/
+
+# SQLite message log — contains real student conversations, never commit it
+data/*.db

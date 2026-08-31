@@ -94,6 +94,54 @@ def get_category_names(course):
     ]
 
 
+def find_course_by_category(courses, category_name):
+    """Find the course that owns a Discord category.
+
+    This is the primary course-routing signal: a message belongs to the course
+    whose configured `categories` list contains the category its channel sits in.
+    Returns the course config dict, or None when the category belongs to no course.
+    """
+    if not category_name:
+        return None
+    for course in courses:
+        if category_name in get_category_names(course):
+            return course
+    return None
+
+
+def find_course_by_roles(courses, user_role_names):
+    """Find the course a user belongs to, based on their Discord roles.
+
+    The fallback used when a message's category matches no course — for example
+    in a direct message or an uncategorized channel. A course claims the user if
+    they hold either of the two role names it declares under `roles`: `students`
+    or `admins`. Returns the course config dict, or None when no role matches.
+    """
+    role_names = set(user_role_names or [])
+    for course in courses:
+        roles = course.get("roles", {})
+        # Both keys are plural in bot_config.yml — matching a different key name
+        # here would silently disable this half of the routing fallback.
+        for key in ("students", "admins"):
+            name = roles.get(key)
+            if name and name in role_names:
+                return course
+    return None
+
+
+def requests_used_today(user_stats, today):
+    """Return how many requests a user has already made *today*.
+
+    The per-user counters live in memory and carry the date they were last
+    written. A count stamped with an earlier date has expired, so it reads as
+    zero — this is what makes the daily limit reset at the day boundary rather
+    than only when a user next receives a successful response.
+    """
+    if not user_stats or user_stats.get("last_response_date") != today:
+        return 0
+    return user_stats.get("num_requests", 0)
+
+
 # start up bot set to create a category, if not yet exists
 client = DiscordManager(guild_id=config["server"]["name"], event_loop=True)
 
@@ -132,31 +180,14 @@ async def on_message(message):
     admins_role = None
     # in case of error, we may message the admins for their attention
 
-    for course in courses:
-        # if the category name matches the course's category, we have a match
-        if category_name in get_category_names(course):
-            course_name = course["title"]
-            admins_role = course.get("roles", {}).get("admins")
-            break
-    # if no course name yet, try to determine it based on the user's role in Discord
-    if not course_name:
+    matched_course = find_course_by_category(courses, category_name)
+    # if no course matched the category, fall back to the author's Discord roles
+    if not matched_course:
         user_roles = [role.name for role in getattr(message.author, "roles", [])]
-        for course in courses:
-            # get our config settings for roles
-            this_course_student_role = course.get("roles", {}).get("student")
-            this_course_admins_role = course.get("roles", {}).get("admins")
-            # see whether our config roles match the user's roles
-            student_role_match = (
-                this_course_student_role and this_course_student_role in user_roles
-            )
-            admin_role_match = (
-                this_course_admins_role and this_course_admins_role in user_roles
-            )
-            # there's a match?
-            if student_role_match or admin_role_match:
-                course_name = course["title"]
-                admins_role = course.get("roles", {}).get("admins")
-                break
+        matched_course = find_course_by_roles(courses, user_roles)
+    if matched_course:
+        course_name = matched_course["title"]
+        admins_role = matched_course.get("roles", {}).get("admins")
 
     # ignore messages that do not fall into any course
     if not course_name:
@@ -180,26 +211,23 @@ async def on_message(message):
         )
         return
 
-    # check the user's stats to ensure they have not exceeded the limit of requests
-    user_stats = openai_num_requests.get(
-        message.author,
-        {
-            "num_requests": 0,
-            "last_response_date": None,
-        },
-    )
-    # if the user has made more than 10 requests today, ignore the message
+    # check the user's stats to ensure they have not exceeded the limit of requests.
+    # `today` is resolved once here and reused when the count is written back, so a
+    # count left over from a previous day expires instead of locking the user out.
+    today = datetime.now().strftime("%Y-%m-%d")
+    user_stats = openai_num_requests.get(message.author)
+    num_requests_today = requests_used_today(user_stats, today)
     # get the request limit for this course from config
     request_limit = oa_config.get("limits", {}).get(
         "max_requests_per_day", OPENAI_DEFAULT_MAX_REQUEST_PER_DAY
     )
     logger.info(
-        f"User @{message.author.name} ({message.author.id}) has made {user_stats['num_requests']} requests today (limit: {request_limit})."
+        f"User @{message.author.name} ({message.author.id}) has made {num_requests_today} requests today (limit: {request_limit})."
     )
     rate_limit_message = ""
-    if user_stats["num_requests"] == request_limit:
+    if num_requests_today == request_limit:
         rate_limit_message = f"You have reached the maximum number of responses for today. See {course_name} admins for help."
-    if user_stats["num_requests"] > request_limit:
+    if num_requests_today > request_limit:
         logger.info(
             f"User @{message.author.name} ({message.author.id}) has exceeded the daily request limit ({request_limit})."
         )
@@ -323,18 +351,17 @@ async def on_message(message):
     except Exception as e:
         logger.error(f"Failed to log message: {e}")
 
-    # update the user's stats to reflect this new request
-    today = datetime.now().strftime("%Y-%m-%d")
-    if user_stats["last_response_date"] != today:
-        user_stats["num_requests"] = 1
-    else:
-        user_stats["num_requests"] += 1
-    user_stats["last_response_date"] = today
-    openai_num_requests[message.author] = user_stats
+    # update the user's stats to reflect this new request, stamped with the same
+    # date the limit was checked against
+    num_requests_today += 1
+    openai_num_requests[message.author] = {
+        "num_requests": num_requests_today,
+        "last_response_date": today,
+    }
 
     # log
     logger.info(
-        f"{message.author.name} ({message.author.id}) has made {user_stats['num_requests']} requests."
+        f"{message.author.name} ({message.author.id}) has made {num_requests_today} requests."
     )
 
 

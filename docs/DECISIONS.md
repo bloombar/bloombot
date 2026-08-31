@@ -104,21 +104,34 @@ the two-round cap exist to stop that becoming defensive scaffolding and tests fo
 
 ---
 
-## D-6 — Auto-merge stops at the integration branch
+## D-6 — Everything auto-merges on green, including promotion to master
 
 **Problem.** Slices should merge on green and move on, without waiting on a human.
 
-**Choice.** Slice and phase PRs targeting `feat/PLAT-1-multi-surface-platform` auto-merge on green
-(`gh pr merge --auto --squash --delete-branch`). Promotion from the integration branch to `master` stays
-manual.
+**Choice.** All PRs auto-merge on green (`gh pr merge --auto --squash --delete-branch`), including promotion
+from the integration branch to `master`.
 
-**Why not auto-merge to master too.** `.github/workflows/ci.yml` gates its deploy job on `refs/heads/master`
-and pushes to the droplet running the live bot for real students. Auto-merging there is auto-deploying to
-production, which is a different category of action — and Phase 4 _is_ the production cutover.
+**Why not gate the promotion to master.** It was gated initially, because `.github/workflows/ci.yml` fires
+its deploy job on `refs/heads/master` and pushes to the droplet running the live bot for real students — so
+auto-merging there is auto-deploying to production. The concern was raised and the operator reaffirmed the
+requirement to self-approve, so **the risk is managed technically rather than by asking**:
+
+- `scripts/deploy.sh` health-checks after reload and **rolls back to the previous SHA** on failure, and
+  refuses to deploy over local modifications.
+- Migrations are additive-only by rule (D-2), because that rollback reverts the checkout, not the database.
+- Phases 3 and 5–15 are additive; production keeps running the Python bot until Phase 4 explicitly cuts over.
+- Phase 4 is the one genuinely irreversible step, and its ship criteria include exercising the rollback path
+  and a side-by-side comparison against a scratch guild before promoting.
 
 **Limits.** Auto-merge is only meaningful once required status checks are configured on the integration
-branch; without them `--auto` has nothing to wait for and merges immediately. Listed on the handover
-checklist.
+branch; without them `--auto` has nothing to wait for and merges immediately.
+
+**Confirmed the hard way, 2026-08-31.** The first PR (#74) did exactly that — it merged before CI finished,
+because nothing was required. The checks passed afterwards, so nothing was lost, but the gate was decorative.
+Branch protection is now applied to `feat/PLAT-1-multi-surface-platform` requiring **Python tests**, **Board
+tooling tests** and **Shell script lint**, with `strict: true` so a branch must be up to date with its base
+before merging, and force-pushes and deletions disabled. Adding a CI job means adding its name to that
+protection, or the gate silently stops covering it.
 
 ---
 
@@ -138,3 +151,24 @@ file; a hook is deterministic and cannot be forgotten mid-session.
 write throwaway databases under `tmp/` and blocking those would break the build instead of protecting
 anything. It guards modification, not inspection: reads are allowed, so it is not a defence against
 exfiltration by a hostile agent — it is a defence against accident.
+
+---
+
+## D-8 — Permissions are permissive; the hook is the safety net
+
+**Problem.** A narrowed permission allowlist was interrupting the operator with approval prompts on routine
+commands, which defeats the requirement to run unattended.
+
+**Choice.** Broad tool permissions (`Bash`, `Edit`, `Write`) with a short deny list for the genuinely
+irreversible: force-push, direct push to `master`, `git reset --hard`, `git clean -fd`, `rm -rf /` or `~`,
+`ssh`/`scp`, `pm2`, and piping anything into a shell.
+
+**Why this is not a loosening.** The real protection moved from permission prompts to
+`.claude/hooks/guard-paths.sh` (D-7), which is deterministic, tested, and blocks the specific paths that
+matter regardless of which tool tries to touch them. A prompt asks a human to notice; a hook does not need
+anyone to be watching. Prompts were catching the wrong things anyway — `npm ls`, `git for-each-ref` — while
+the thing actually worth blocking was a path, not a command.
+
+**Limits.** The deny list is pattern-matched on the command string and can be evaded by an agent that wants
+to (a differently-spelled `rm`, a script that force-pushes). It is a guard against accident, not against a
+hostile agent. The same is true of the path hook: it guards modification, not exfiltration.

@@ -39,8 +39,10 @@ rot as the fixes land.
 
 ### Current status
 
-- Done: every Phase 0 requirement — the shipped baseline.
-- Outstanding: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6
+- Done: every Phase 0 requirement — the shipped baseline — and every defect in this
+  phase: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6, all shipped to `master`.
+- Outstanding: none here. Phase 2 shipped as well; the JavaScript migration, phases 3
+  onward, is in flight on `feat/PLAT-1-multi-surface-platform`.
 
 ## Phase 2 — Continuous deployment
 

@@ -81,7 +81,7 @@ jobs:
           git diff --exit-code scripts/board/manifest.yaml
 
   shellcheck:
-    name: Deploy script lint
+    name: Shell script lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -89,6 +89,12 @@ jobs:
       # shellcheck ships with the GitHub runner image — no action to install.
       - name: Lint scripts/deploy.sh
         run: shellcheck scripts/deploy.sh
+
+      # The agent guardrail hooks are the only thing standing between an agent
+      # and the live student database or a committed secret, so they are linted
+      # like the deploy script rather than treated as local tooling.
+      - name: Lint .claude/hooks
+        run: shellcheck .claude/hooks/*.sh
 
   deploy:
     name: Deploy to droplet

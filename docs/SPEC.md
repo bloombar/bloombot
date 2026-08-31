@@ -599,3 +599,235 @@ next heading; sections must be three-hash headings whose text is a number, a per
 title; and an existing id must never be changed, since renaming or
 renumbering orphans the issue it keys and creates a duplicate. The contract is restated
 in `.claude/CLAUDE.md` so it survives contributor turnover.
+
+### 12. Platform Architecture
+
+#### PLAT-1 Monorepo layout
+
+The system is one npm-workspaces monorepo on Node 22, TypeScript throughout, ESM
+throughout. `packages/` holds libraries with no process of their own — configuration,
+logging, shared zod schemas, data access, the answering core, the action layer, the
+Discord and OpenAI clients, provisioning, background jobs, the MCP server, and the OAuth
+authorization server. `apps/` holds the four processes: the Express API, the Discord bot,
+the background worker, and the React control panel. `e2e/` holds Playwright specs and the
+fake upstreams they run against. Nothing in `packages/` imports from `apps/`.
+
+#### PLAT-2 Package boundaries
+
+Dependencies between packages are acyclic and enforced by lint rule rather than
+convention. `packages/schemas` depends on nothing but zod, because it is the contract
+shared by web forms, API validation and bot runtime, and a dependency there would pull the
+server into the browser bundle. `apps/web` may import `packages/schemas` and nothing else
+from the workspace: importing the data, configuration, Discord or OpenAI packages into a
+browser bundle would ship secrets to every visitor, so that specific import is blocked by
+an ESLint `no-restricted-imports` rule rather than left to review.
+
+#### PLAT-3 One gateway connection
+
+`apps/bot` holds the only Discord gateway connection. The API and the worker reach Discord
+over REST with the same token, so there is no inter-process coordination to get wrong;
+Discord enforces the shared rate-limit buckets server-side. Each REST client is
+configured below the global request ceiling so the two processes together stay under it.
+
+#### PLAT-4 Process topology
+
+Four processes, each single-instance: API, bot, worker, and a static build served by
+nginx. Never clustered — multiple API workers would multiply writers against a
+single-writer database for no gain, and two gateway connections on one token is an error
+rather than redundancy.
+
+#### PLAT-5 No import-time side effects
+
+Modules do not open connections, read configuration files, construct API clients or write
+to stdout when they are imported. The current system does all four, which is why its
+configuration cannot be reloaded, scoped per tenant, or tested without a live database.
+Connections and clients are created lazily and explicitly.
+
+### 13. Action & Authorization Layer
+
+#### ACT-1 Every operation is an action
+
+Everything the platform can do on a user's behalf is an action: a dotted name, a zod input
+schema, a declared access policy, an optional metering hook, and an execute function.
+Actions are the single write path. The web control panel and the MCP server both reach
+them through the same dispatcher, so an assistant's call is an ordinary call by the
+account that authorized it rather than a parallel implementation with its own rules.
+
+#### ACT-2 Declared authorization
+
+An action declares how it is authorized rather than checking inside its body, and an
+action with no declaration does not compile. A policy pairs a machine-readable descriptor
+— the resource it protects and the level of access required — with a function that
+resolves and returns the entity it authorized. Because the policy hands the resolved,
+tenant-scoped entity to the execute function, an action cannot reach a record without
+having been given one that was already checked.
+
+Policies read the database and nothing else. Authorization runs outside the usage
+attribution context, so a policy that called a paid provider would spend money nobody is
+attributed for.
+
+#### ACT-3 Refusals reveal nothing
+
+Every refusal is the same error whether the record does not exist or the caller has no
+access to it, so an identifier cannot be probed to learn which. The error carries no
+detail about the record it protected.
+
+#### ACT-4 Dispatch pipeline
+
+Dispatch validates the input against the action's schema, authorizes, meters, then
+executes — in that order, in one place. Authorization precedes metering so an unauthorized
+call never consumes an allowance. Typed errors are mapped to HTTP statuses by one
+middleware; no route maps its own, so the same failure looks the same everywhere.
+
+#### ACT-5 Access audit index
+
+A test table pins every registered action to its declared access descriptor. Weakening a
+guard still type-checks, so the table is what makes the change visible: it appears as a
+one-line diff in a file a reviewer reads. An action may authorize itself by an explicit
+exception only if its reason is recorded in the same test.
+
+#### ACT-6 Machine-readable catalog
+
+The registry derives a JSON-Schema catalog of every action — name, description, input
+schema and access descriptor — for AI channels to consume. The catalog is machinery, not
+itself a tool list: what an assistant may reach is decided by the MCP tool surface, not by
+what the catalog contains.
+
+### 14. Accounts & Authentication
+
+#### AUTH-1 Passwordless email sign-in
+
+An account is created and accessed by a link sent to an email address. Tokens are stored
+as hashes, expire within minutes, and are single-use — consumed in the same transaction
+that creates the session, so a link cannot be replayed.
+
+#### AUTH-2 Google sign-in
+
+Google OAuth 2.0 with PKCE is offered alongside email. A Google identity links to an
+existing account only when the provider asserts the email is verified and it matches;
+otherwise a new account is created. Linking on an unverified email is account takeover.
+
+#### AUTH-3 Sessions
+
+Sessions are opaque random tokens stored as hashes, carried in an HttpOnly, Secure,
+SameSite cookie, and rotated on sign-in. Storing hashes rather than the tokens themselves
+is what makes administrative session revocation possible. Non-GET requests are checked
+against their origin.
+
+#### AUTH-4 Platform administrators
+
+Administrators are identified by an email allowlist in the environment, read on every
+check rather than captured at startup, so adding or removing one takes effect without a
+deployment. It is never a self-granted role or a database flag.
+
+### 15. Tenancy & Server Registration
+
+#### TEN-1 The tenant is an organization
+
+Every scoped record carries an organization id. An account gets a personal organization on
+sign-up; membership is a separate record so a second instructor or a teaching assistant
+can be added without restructuring anything.
+
+#### TEN-2 Repository-level scoping
+
+Every data-access function takes the organization id as its first parameter and includes
+it in the query. There is no function that fetches a scoped record by id alone, and route
+handlers do not reach the database directly. Tenant isolation is therefore a property of
+the data layer rather than a rule each handler must remember.
+
+#### TEN-3 One organization per Discord server
+
+A Discord server is bound to exactly one organization, structurally: the server's
+snowflake is the primary key of the binding record, so a second claim cannot be inserted.
+An attempt to register a server already registered elsewhere is refused, and a server
+whose bot was removed may be re-claimed.
+
+#### TEN-4 Installation
+
+The bot is installed through Discord's OAuth flow, initiated from a signed-in session.
+The platform verifies that the installing account actually administers the server before
+binding it, and discards the user access token afterwards: nothing needs it, and storing
+it is a liability.
+
+#### TEN-5 Cross-tenant access is indistinguishable from absence
+
+A request for another organization's record is refused as not-found rather than
+forbidden, so the existence of a record is never disclosed. This is verified by a test
+matrix covering every route against another organization's session, an absent session, and
+a disabled account.
+
+#### TEN-6 Removal preserves data
+
+Removing the bot from a server marks the binding inactive; it never deletes the
+organization's courses, rosters or transcripts. A re-installation restores a working
+setup, and transcripts are records an instructor may be required to retain. Deleting that
+data is a separate, explicitly confirmed, audited action.
+
+### 16. Projects
+
+#### PROJ-1 Courses are grouped into projects
+
+Course configurations belong to a project — typically a term, such as "Fall 2026". An
+organization may have any number of projects and a project any number of courses. This
+replaces the convention of encoding the term in Discord role names.
+
+#### PROJ-2 Archiving a project
+
+Archiving a project stops its courses routing without deleting anything. This is the
+first-class form of the existing practice of commenting a course out of the configuration
+file, and it is reversible.
+
+#### PROJ-3 Names must not collide within a server
+
+A course is matched to an incoming message by the name of the Discord category it arrived
+in, and secondarily by the author's roles. One server may host several projects at once,
+so category and role names must be unique across every enabled course in that server,
+regardless of project. A save that would collide is refused, naming the project and course
+it conflicts with. Archived projects are excluded, so a term may reuse the previous term's
+names once that term is archived.
+
+#### PROJ-4 Duplicating a project
+
+A project can be copied into a new one, bringing its courses, categories, channels,
+instructions and knowledge-file attachments, and leaving rosters empty. Rolling a course
+forward to the next term is the largest piece of recurring manual work in the current
+system.
+
+### 17. Quality, Types & Tooling
+
+#### QA-1 Tests fail before they pass
+
+New behaviour is covered by a test that fails without the change. A test that passes
+before the code is written proves nothing about the code.
+
+#### QA-2 No live services in tests
+
+Unit and integration tests never reach a real network. External services are replaced by
+adapters pinned in the test configuration, each with a comment naming the leak it
+prevents. End-to-end tests run the real API, the real production web build and the real
+worker against fake upstreams and a throwaway database.
+
+#### QA-3 Test data is synthetic
+
+No test, fixture or continuous-integration job reads the live database. It holds real
+students' names, email addresses and conversations.
+
+#### QA-4 Coverage floor where it matters
+
+Coverage is enforced as a floor on the answering core, the action layer and the data
+access layer, rather than as a blanket percentage across the whole tree. A uniform target
+across a user interface buys assertions about markup at the cost of attention to logic.
+
+#### QA-5 Agent guardrails are executable
+
+The constraints that protect student data and credentials from automated tooling are
+implemented as blocking hooks with their own regression tests, not as prose instructions.
+A prose rule competes for attention; a hook does not need anyone to be watching. A silent
+regression in such a hook simply stops blocking, which is why it is tested like production
+code.
+
+#### QA-6 Environment template cannot drift
+
+Every environment variable the configuration schema requires appears in the tracked
+example file, verified by a test. A missing variable otherwise surfaces as a failure hours
+into a deployment.

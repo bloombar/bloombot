@@ -20,11 +20,25 @@ export const REPO = 'bloombar/bloombot'
 // lands in one by being claimed on that phase's "**In scope:**" line in
 // docs/ROADMAP.md. Adding a phase to the roadmap means adding it here too, so
 // sync.mjs creates its milestone.
-export const PHASES = [0, 1, 2]
+export const PHASES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 export const MILESTONE_TITLE = {
   0: 'Phase 0 — Shipped baseline',
-  1: 'Phase 1 — Future work',
+  // Corrected: this read 'Future work', which never matched the ROADMAP heading.
+  1: 'Phase 1 — Defect fixes & test coverage',
   2: 'Phase 2 — Continuous deployment',
+  3: 'Phase 3 — Monorepo & data layer',
+  4: 'Phase 4 — Conversation core & Discord surface',
+  5: 'Phase 5 — API, action layer & authentication',
+  6: 'Phase 6 — Web shell & server registration',
+  7: 'Phase 7 — Projects & course configuration',
+  8: 'Phase 8 — Job runner, throttling & server scaffolding',
+  9: 'Phase 9 — Roster import & student channels',
+  10: 'Phase 10 — Knowledge files & instructions',
+  11: 'Phase 11 — Cost ledger, usage caps & monitoring',
+  12: 'Phase 12 — Web student chat surface',
+  13: 'Phase 13 — MCP server & agent access',
+  14: 'Phase 14 — Admin console, transcripts, audit & export',
+  15: 'Phase 15 — Production hardening',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}
@@ -92,8 +106,79 @@ export const FAMILY_LABEL = {
     color: 'ededed',
     description: 'Spec & project-board tooling',
   },
+  // Families added by the JavaScript migration (docs/ROADMAP.md phases 3-15).
+  PLAT: {
+    name: 'area:platform',
+    color: '0052cc',
+    description: 'Monorepo, packages & shared contracts',
+  },
+  ACT: {
+    name: 'area:actions',
+    color: '5319e7',
+    description: 'Action registry & declared authorization',
+  },
+  AUTH: {
+    name: 'area:auth',
+    color: '6f42c1',
+    description: 'Accounts, sessions & OAuth',
+  },
+  TEN: {
+    name: 'area:tenancy',
+    color: '116329',
+    description: 'Organizations & Discord server registration',
+  },
+  PROJ: {
+    name: 'area:projects',
+    color: '1a7f37',
+    description: 'Projects: the per-term grouping of courses',
+  },
+  SURF: {
+    name: 'area:surfaces',
+    color: 'd93f0b',
+    description: 'Conversation surfaces: Discord, web chat, MCP',
+  },
+  WEB: {
+    name: 'area:web',
+    color: '0aa2c0',
+    description: 'React control panel',
+  },
+  API: {
+    name: 'area:api',
+    color: 'a2eeef',
+    description: 'Express control-plane API',
+  },
+  JOB: {
+    name: 'area:jobs',
+    color: 'e4b429',
+    description: 'Background jobs, queueing & throttling',
+  },
+  FILE: {
+    name: 'area:files',
+    color: '7057ff',
+    description: 'Vector stores & course knowledge files',
+  },
+  COST: {
+    name: 'area:cost',
+    color: 'b60205',
+    description: 'Usage metering, plan caps & the cost ledger',
+  },
+  MCP: {
+    name: 'area:mcp',
+    color: '004b6b',
+    description: 'MCP server & agent access',
+  },
+  ADMIN: {
+    name: 'area:admin',
+    color: '8b0000',
+    description: 'Platform administration, audit & export',
+  },
+  QA: {
+    name: 'area:quality',
+    color: '2ea043',
+    description: 'Tests, types & developer tooling',
+  },
 }
-export const familyLabel = family =>
+export const familyLabel = (family) =>
   FAMILY_LABEL[family] || {
     name: `area:${family.toLowerCase()}`,
     color: 'ededed',
@@ -103,11 +188,11 @@ export const familyLabel = family =>
 // Hidden marker that keys an issue to a requirement id — the idempotency
 // anchor. Kept as `sm-req` (the marker string documented in PROJECT_BOARD.md);
 // the literal is opaque, and changing it would orphan every synced issue.
-export const marker = id => `<!-- sm-req: ${id} -->`
+export const marker = (id) => `<!-- sm-req: ${id} -->`
 export const MARKER_RE = /<!--\s*sm-req:\s*([A-Za-z0-9.-]+)\s*-->/
 
 /** GitHub heading-anchor slug (matches GitHub's own algorithm closely enough). */
-export const anchorSlug = text =>
+export const anchorSlug = (text) =>
   text
     .toLowerCase()
     .replace(/[^\w\s-]/g, '')

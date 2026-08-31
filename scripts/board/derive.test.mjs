@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { parseSpec, expandIds, buildEntries } from './derive.mjs'
+import { MILESTONE_TITLE } from './config.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const specText = readFileSync(join(root, 'docs', 'SPEC.md'), 'utf8')
@@ -119,8 +120,14 @@ test('the SPEC and ROADMAP derive a manifest with no entry needing review', () =
     entries.filter(e => e.review).map(e => e.id),
     [],
   )
-  // Every entry must land on a phase the board has a milestone for.
-  for (const e of entries) assert.ok(e.phase === 0 || e.phase === 1, e.id)
+  // Every entry must land on a phase the board has a milestone for. Adding a
+  // phase to the ROADMAP without adding it to config.mjs fails here rather than
+  // producing issues with no milestone.
+  for (const e of entries)
+    assert.ok(
+      Object.hasOwn(MILESTONE_TITLE, e.phase),
+      `${e.id}: phase ${e.phase} has no milestone in config.mjs`,
+    )
 })
 
 test('every ROADMAP-claimed id exists in the SPEC', () => {

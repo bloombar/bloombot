@@ -16,12 +16,15 @@ export const REPO = 'bloombar/bloombot'
 // Phases are carried by repo Milestones; the project's built-in Milestone
 // field is what each phase tab filters on. Titles must match the milestones.
 // Phase 0 is the shipped baseline — the functionality documented in docs/SPEC.md
-// that already works today. Phase 1 is anything not yet built; a requirement
-// lands there by being claimed on an "**In scope:**" line in docs/ROADMAP.md.
-export const PHASES = [0, 1]
+// that already works today. Later phases are work not yet built; a requirement
+// lands in one by being claimed on that phase's "**In scope:**" line in
+// docs/ROADMAP.md. Adding a phase to the roadmap means adding it here too, so
+// sync.mjs creates its milestone.
+export const PHASES = [0, 1, 2]
 export const MILESTONE_TITLE = {
   0: 'Phase 0 — Shipped baseline',
   1: 'Phase 1 — Future work',
+  2: 'Phase 2 — Continuous deployment',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

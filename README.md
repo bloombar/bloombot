@@ -25,7 +25,7 @@ bloombot/
 ├── analytics.ipynb           # Conversation analytics notebook
 ├── roster_setup.ipynb        # Merges roster CSV + questionnaire CSV into a results CSV
 ├── bot_config.yml            # Per-course configuration (Assistant IDs, roles, categories)
-├── ecosystem.config.js       # pm2 process config
+├── ecosystem.config.cjs       # pm2 process config
 ├── Pipfile / Pipfile.lock    # Python dependencies (managed by pipenv)
 ├── requirements.txt          # Flat requirements list (alternative to Pipfile)
 ├── env.example               # Template for required environment variables
@@ -44,7 +44,8 @@ bloombot/
 │   ├── SPEC.md               # Requirements — the source the project board is built from
 │   └── ROADMAP.md            # Delivery phases and current status
 ├── scripts/board/            # Derives and syncs the GitHub project board from the SPEC
-└── .github/workflows/ci.yml  # Continuous integration
+├── scripts/deploy.sh         # Server-side deploy, run on the droplet by CI
+└── .github/workflows/ci.yml  # Tests and continuous deployment
 ```
 
 ---
@@ -212,12 +213,14 @@ Reads `data/data.db` and produces a full analytics report across five sections:
 
 ## Tests
 
-The project has two independent suites, both run by CI on every push and pull request
-(see `.github/workflows/ci.yml`).
+The project has two independent suites, both run by CI on every push and pull request,
+alongside a `shellcheck` pass over `scripts/deploy.sh` (see `.github/workflows/ci.yml`).
+All three must pass before a merge to `master` is deployed.
 
 **Python** — covers the chatbot's course routing and rate-limit accounting, the
-`DiscordManager` lookup helpers, roster path and welcome-message formatting, and the
-database migration:
+`DiscordManager` lookup helpers, roster path and welcome-message formatting, the database
+migration, and `scripts/deploy.sh` (run for real against throwaway git repositories, with
+`pm2` and `pipenv` replaced by stubs):
 
 ```bash
 pipenv install --dev
@@ -272,13 +275,16 @@ npm install -g pm2
 **Quick start:**
 
 ```bash
-pm2 start response_bot.py --interpreter python3 --name bloombot
+pm2 start pipenv --name bloombot -- run ./response_bot.py
 ```
+
+The bot must run through `pipenv`: its dependencies live in the project's virtualenv, and
+the system `python3` generally cannot import `discord.py` at all.
 
 **Recommended — using the ecosystem config:**
 
 ```bash
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 ```
 
 Environment variables are loaded from `.env` automatically by the bot.
@@ -300,4 +306,104 @@ pm2 logs bloombot           # stream live logs
 pm2 restart bloombot        # restart the bot
 pm2 stop bloombot           # stop the bot
 pm2 delete bloombot         # remove from pm2's process list
+```
+
+---
+
+## Continuous deployment
+
+Merging to `master` deploys the bot. GitHub Actions runs the full test suite and, only if
+it passes, connects to the droplet over SSH and updates it to that exact commit
+(`.github/workflows/ci.yml` → `scripts/deploy.sh`).
+
+### What a deploy does
+
+1. **Refuses to overwrite hand edits.** If a tracked file — `bot_config.yml`, say — was
+   edited directly on the server, the deploy aborts and prints the diff. Commit the change
+   or revert it, then re-run.
+2. **Updates the checkout** to the deployed commit with `git fetch` + `git reset --hard`.
+   Untracked files are never touched: `.env`, `data/*.db` and `logs/` come through
+   unchanged, and `git clean` is deliberately never run.
+3. **Installs dependencies only if they changed** — that is, if `Pipfile.lock` or
+   `requirements.txt` differ between the old and new commit. It uses pipenv if the droplet
+   has a pipenv virtualenv, and pip otherwise.
+4. **Checks the interpreter pm2 uses can import the bot's dependencies** *before*
+   restarting, so a broken environment fails while the old process is still serving.
+5. **Reloads pm2** (`pm2 reload bloombot --update-env`, or `pm2 start ecosystem.config.cjs`
+   the first time), then `pm2 save`.
+6. **Watches the process for 15 seconds.** If it is not `online`, or pm2 had to restart it
+   again in that window — a crash loop — the deploy **rolls back** to the previous commit,
+   restarts it, and fails the workflow run.
+
+`migrate.py` is never run by a deploy: it drops and recreates tables. Run schema changes by
+hand.
+
+### One-time setup
+
+The commands below use shell variables so nothing about a particular server is written
+down here. Set them for your droplet first — they are the same three values you will put
+into the repository's GitHub variables:
+
+```bash
+export DEPLOY_HOST=<droplet ip or hostname>
+export DEPLOY_USER=<the unix user the bot runs as>
+export DEPLOY_PATH=/home/$DEPLOY_USER/discord-channel-manager
+```
+
+On your machine, create a deploy key and register it with the droplet:
+
+```bash
+ssh-keygen -t ed25519 -f bloombot_deploy -C "github-actions-bloombot" -N ""
+ssh-copy-id -i bloombot_deploy.pub $DEPLOY_USER@$DEPLOY_HOST
+
+# The droplet's host keys, for DEPLOY_KNOWN_HOSTS. 2>/dev/null drops the `#`
+# banner lines, leaving just the three key lines to paste — all of them.
+ssh-keyscan -t rsa,ecdsa,ed25519 $DEPLOY_HOST 2>/dev/null
+```
+
+`ssh-keyscan` trusts whatever answers on port 22, so confirm the keys are really the
+droplet's before pinning them. On the droplet (through the DigitalOcean web console, not
+over SSH) run `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done`, and
+compare against
+`ssh-keyscan -t rsa,ecdsa,ed25519 $DEPLOY_HOST 2>/dev/null | ssh-keygen -lf -`.
+
+Then in the repository's GitHub settings:
+
+| Where | Name | Value |
+| --- | --- | --- |
+| Variables | `DEPLOY_HOST` | the droplet's IP or hostname |
+| Variables | `DEPLOY_USER` | the unix user the bot runs as |
+| Variables | `DEPLOY_PATH` | the checkout's absolute path, if it is not `$HOME/discord-channel-manager` |
+| Environment `production` → secrets | `DEPLOY_SSH_KEY` | contents of `bloombot_deploy` (the private key) |
+| Environment `production` → variables | `DEPLOY_KNOWN_HOSTS` | the `ssh-keyscan` output — a variable, not a secret: host keys are public, and an unmasked value keeps a fingerprint mismatch readable in the log |
+
+The host key is pinned through `DEPLOY_KNOWN_HOSTS` rather than trusted on first sight. The
+secrets belong to the `production` environment, and the deploy job only runs on pushes to
+`master`, so a pull request — including one from a fork of this public repo — can never
+reach the key. Adding required reviewers to the `production` environment turns every deploy
+into an approval click.
+
+Finally, confirm the droplet's checkout is clean and points at this repo:
+
+```bash
+ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git remote -v && git status --porcelain'
+```
+
+### Rolling back
+
+Run the **CI** workflow manually (Actions → CI → Run workflow) on `master` with
+**deploy_sha** set to the full SHA of the last good commit. The same script deploys it and
+the same health check guards it.
+
+To deploy or roll back without GitHub, pipe the script in yourself:
+
+```bash
+ssh $DEPLOY_USER@$DEPLOY_HOST 'bash -s -- <commit-sha>' < scripts/deploy.sh
+```
+
+### Checking a deploy
+
+```bash
+ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git rev-parse HEAD'
+ssh $DEPLOY_USER@$DEPLOY_HOST 'pm2 status && pm2 logs bloombot --lines 50 --nostream'
 ```

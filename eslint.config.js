@@ -80,6 +80,46 @@ export default tseslint.config(
     },
   },
 
+  // PLAT-2 — `packages/schemas` depends on nothing but zod, enforced rather
+  // than reviewed.
+  //
+  // The rule above stops `apps/web` importing another workspace package
+  // directly, but `apps/web` is allowed to import `@bloombot/schemas` itself
+  // (PLAT-2 names it the one exception). Without this rule, `schemas` could
+  // import `@bloombot/config` — which holds `BOT_TOKEN` and `OPENAI_API_KEY`
+  // — and the credential would still reach the browser bundle, just one hop
+  // removed from the import the first rule was written to catch. Reuses
+  // BROWSER_FORBIDDEN_PACKAGES rather than banning every `@bloombot/*`
+  // import: `packages/schemas/tests` legitimately imports `@bloombot/schemas`
+  // itself, through the workspace alias, to exercise its own public API —
+  // that is a self-import, not a dependency on another package, and a
+  // wildcard rule would have blocked it along with everything else. Applied
+  // to both `src` and `tests`: a test that needed a *different* workspace
+  // package would itself be evidence the boundary is wrong, not a reason to
+  // exempt tests from checking it.
+  {
+    files: ['packages/schemas/**/*.{ts,tsx,js,jsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: BROWSER_FORBIDDEN_PACKAGES.map((name) => ({
+            name,
+            message:
+              'packages/schemas depends on nothing but zod (PLAT-2). It must not import another workspace package.',
+          })),
+          patterns: [
+            {
+              group: BROWSER_FORBIDDEN_PACKAGES.map((name) => `${name}/*`),
+              message:
+                'packages/schemas depends on nothing but zod (PLAT-2). It must not import another workspace package.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Tests may reach for `any` when building deliberately malformed fixtures.
   {
     files: ['packages/*/tests/**/*.ts'],

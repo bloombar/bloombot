@@ -24,43 +24,21 @@ function loadRealConfig(): unknown {
 }
 
 describe('legacyBotConfigSchema against the real bot_config.yml', () => {
-  const config = legacyBotConfigSchema.parse(loadRealConfig())
-
-  it('parses the server name', () => {
-    expect(config.server.name).toBe('Knowledge Kitchen')
+  // Deliberately the only assertions here (CFG-1 … CFG-4). Course titles,
+  // role names, model names and channel lists all change with an ordinary
+  // config edit — uncommenting one of the courses already in the file, say —
+  // and none of that is what this test exists to catch. Pinning the roster
+  // would turn a config-only change into a red build. What must never
+  // regress is that the file the production bot actually runs on keeps
+  // parsing at all, and each `it` below parses it itself rather than sharing
+  // a `parse` run at `describe`-body (collection) time, so a real schema
+  // mismatch fails one named test instead of aborting the whole suite.
+  it('parses without throwing', () => {
+    expect(() => legacyBotConfigSchema.parse(loadRealConfig())).not.toThrow()
   })
 
-  it('yields exactly 2 active courses', () => {
-    // The other courses are commented out in the YAML, so they never reach the
-    // parser. "Active" is precisely "not commented out".
-    expect(config.server.courses).toHaveLength(2)
-    expect(config.server.courses.map((course) => course.title)).toEqual([
-      'Web Design',
-      'Introduction to Programming',
-    ])
-  })
-
-  it('parses each course down to its OpenAI settings and roles', () => {
-    const webDesign = config.server.courses[0]
-
-    expect(webDesign?.file_prefix).toBe('wd')
-    expect(webDesign?.roles).toEqual({
-      admins: 'admins-wd-su26',
-      students: 'students-wd-su26',
-    })
-    expect(webDesign?.openai_assistant.model).toBe('gpt-4.1')
-    expect(webDesign?.openai_assistant.limits.max_requests_per_day).toBe(20)
-  })
-
-  it('tolerates a course whose assistant id has been retired', () => {
-    // The Python course runs on the Prompts API alone; its `id` is commented out.
-    const python = config.server.courses[1]
-
-    expect(python?.openai_assistant.id).toBeUndefined()
-    expect(python?.openai_assistant.prompt_id).toMatch(/^pmpt_/)
-  })
-
-  it('normalizes every category to { name, channels }', () => {
+  it('normalizes every category in the real file to { name, channels }', () => {
+    const config = legacyBotConfigSchema.parse(loadRealConfig())
     for (const course of config.server.courses) {
       for (const category of course.categories) {
         expect(typeof category.name).toBe('string')
@@ -69,31 +47,22 @@ describe('legacyBotConfigSchema against the real bot_config.yml', () => {
     }
   })
 
-  it('reads the admin-only flag on the channels that carry it', () => {
-    const global = config.server.courses[0]?.categories[0]
-
-    expect(global?.name).toBe('Web Design - GLOBAL')
-    expect(global?.channels.map((channel) => channel.name)).toEqual([
-      'admins',
-      'pronouncements',
-      'general',
-      'grading',
-      'tutoring',
-      'quizzes',
-      'exams',
-    ])
-    expect(
-      global?.channels.find((channel) => channel.name === 'admins')?.admins_only
-    ).toBe(true)
-    // Everything else defaults to visible to students.
-    expect(
-      global?.channels.find((channel) => channel.name === 'general')
-        ?.admins_only
-    ).toBe(false)
+  // Structural, not a roster pin: this holds for any course anyone adds to
+  // the file, so it stays green across the config-only edits the tests above
+  // it were written to survive.
+  it('gives every active course a title, a file_prefix and a prompt_id', () => {
+    const config = legacyBotConfigSchema.parse(loadRealConfig())
+    for (const course of config.server.courses) {
+      expect(course.title.length).toBeGreaterThan(0)
+      expect(course.file_prefix.length).toBeGreaterThan(0)
+      expect(course.openai_assistant.prompt_id.length).toBeGreaterThan(0)
+    }
   })
 })
 
 describe('legacyCategorySchema normalization', () => {
+  // Fixture literals, not the live file — this is the behaviour the schema
+  // itself is responsible for, so it should not move when the roster does.
   it('normalizes the string and object forms identically', () => {
     const fromString = legacyCategorySchema.parse('Web Design - STUDENTS 01')
     const fromObject = legacyCategorySchema.parse({
@@ -200,9 +169,55 @@ describe('malformed configuration', () => {
     expect(legacyBotConfigSchema.safeParse({}).success).toBe(false)
   })
 
+  // Unlike name/instructions/vector_store_id/model/limits, prompt_id has no
+  // default anywhere — without it the bot warns and never answers in that
+  // course (response_bot.py:208) — so it alone stays required.
+  it('rejects a course whose assistant has no prompt_id', () => {
+    const broken = course()
+    delete broken.openai_assistant.prompt_id
+
+    const result = legacyBotConfigSchema.safeParse(wrap([broken]))
+
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.path).toEqual([
+      'server',
+      'courses',
+      0,
+      'openai_assistant',
+      'prompt_id',
+    ])
+  })
+
   it('accepts a server with no courses yet', () => {
     const parsed = legacyBotConfigSchema.parse({ server: { name: 'Empty' } })
 
     expect(parsed.server.courses).toEqual([])
+  })
+
+  // CFG-2: response_bot.py reads name, instructions, vector_store_id, model
+  // and limits.max_requests_per_day with `.get(key, default)` and never
+  // reads them at all in the case of `name`/`instructions` — so a course
+  // that never set them must still parse. Only `prompt_id` is required: the
+  // bot cannot answer in a course without one (response_bot.py:208).
+  it('parses a minimal course that omits every optional field', () => {
+    const minimal = wrap([
+      {
+        title: 'Minimal Course',
+        file_prefix: 'min',
+        openai_assistant: { prompt_id: 'pmpt_minimal' },
+        roles: { admins: 'admins-min', students: 'students-min' },
+      },
+    ])
+
+    const parsed = legacyBotConfigSchema.parse(minimal)
+    const assistant = parsed.server.courses[0]?.openai_assistant
+
+    expect(assistant?.prompt_id).toBe('pmpt_minimal')
+    expect(assistant?.name).toBeUndefined()
+    expect(assistant?.instructions).toBeUndefined()
+    expect(assistant?.vector_store_id).toBeUndefined()
+    expect(assistant?.model).toBeUndefined()
+    expect(assistant?.limits.max_requests_per_day).toBeUndefined()
+    expect(parsed.server.courses[0]?.categories).toEqual([])
   })
 })

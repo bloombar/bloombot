@@ -139,6 +139,51 @@ describe('CONFIG', () => {
 
     expect(() => CONFIG.API_PORT).toThrow(EnvValidationError)
   })
+
+  // A write must be rejected outright, not silently accepted onto the Proxy's
+  // empty target — that would leave the key permanently unreadable, in a way
+  // resetConfigCache() cannot undo (see the comment on rejectWrite in env.ts).
+  it('rejects an assignment to a property rather than poisoning it', () => {
+    resetConfigCache()
+    process.env.NODE_ENV = 'test'
+    process.env.PUBLIC_APP_URL = 'https://bloombot.example.edu'
+
+    expect(() => {
+      // The `Env` type does not mark its fields readonly — the write is
+      // rejected at runtime, by the Proxy trap this test exists to cover —
+      // so this assignment type-checks and is exactly the misuse under test.
+      CONFIG.LOG_LEVEL = 'debug'
+    }).toThrow(/read-only/)
+
+    // A read of the same key afterwards must still succeed — the rejected
+    // write must not have reached the underlying cache.
+    expect(CONFIG.LOG_LEVEL).toBe('info')
+  })
+
+  // `set` is the trap an ordinary `CONFIG.KEY = value` hits, but
+  // `Object.defineProperty` and `delete` reach the Proxy through separate
+  // traps and would otherwise poison the same way.
+  it('rejects Object.defineProperty on a CONFIG property', () => {
+    resetConfigCache()
+    process.env.NODE_ENV = 'test'
+    process.env.PUBLIC_APP_URL = 'https://bloombot.example.edu'
+
+    expect(() =>
+      Object.defineProperty(CONFIG, 'LOG_LEVEL', { value: 'debug' })
+    ).toThrow(/read-only/)
+    expect(CONFIG.LOG_LEVEL).toBe('info')
+  })
+
+  it('rejects deleting a CONFIG property', () => {
+    resetConfigCache()
+    process.env.NODE_ENV = 'test'
+    process.env.PUBLIC_APP_URL = 'https://bloombot.example.edu'
+
+    expect(() => {
+      delete (CONFIG as Record<string, unknown>).LOG_LEVEL
+    }).toThrow(/read-only/)
+    expect(CONFIG.LOG_LEVEL).toBe('info')
+  })
 })
 
 describe('envSchema', () => {

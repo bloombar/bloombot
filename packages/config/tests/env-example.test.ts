@@ -42,8 +42,30 @@ describe('env.example (QA-6)', () => {
     expect(missing).toEqual([])
   })
 
-  it('holds no real credential, only placeholders', () => {
+  it('leaves every credential-shaped variable empty, not merely placeholder-shaped', () => {
+    // A pasted real credential looks exactly like a placeholder to a pattern
+    // list keyed on known vendor prefixes (sk-…, xox[baprs]-) — that check
+    // only catches secrets whose shape someone thought to enumerate in
+    // advance, and it would have said nothing about a live Discord bot token
+    // sitting in BOT_TOKEN=. The stronger, shape-independent invariant: any
+    // key whose *name* looks like a credential must carry no value at all.
+    const CREDENTIAL_NAME = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL/
+    const nonEmpty: string[] = []
+    for (const line of contents.split('\n')) {
+      const match = /^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\S.*)$/.exec(line)
+      if (match?.[1] && CREDENTIAL_NAME.test(match[1])) {
+        nonEmpty.push(match[1])
+      }
+    }
+
+    expect(nonEmpty).toEqual([])
+  })
+
+  it('holds no known vendor credential prefix, as a second, independent check', () => {
     // A tracked template that ever contains a live value is a leaked secret.
+    // Kept alongside the name-based check above: this one catches a real
+    // credential pasted into a variable whose name does not happen to
+    // contain TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL.
     expect(contents).not.toMatch(/\b(sk-[A-Za-z0-9]{16,}|xox[baprs]-)/)
   })
 })

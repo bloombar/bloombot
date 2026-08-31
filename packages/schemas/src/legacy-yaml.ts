@@ -57,21 +57,40 @@ export const legacyCategorySchema: z.ZodType<LegacyCategory> = z.union([
     })),
 ])
 
-/** Per-course OpenAI assistant settings (CFG-2). */
+/**
+ * Per-course OpenAI assistant settings (CFG-2).
+ *
+ * `prompt_id` is the only field the schema requires: without it
+ * `response_bot.py` logs a warning and refuses to answer in that course
+ * (`response_bot.py:208`), so a course missing it cannot function even
+ * though the reader does not crash on the missing key. Every other field
+ * below is read with `oa_config.get(key, default)` in the Python bot and
+ * never crashes if absent — so the schema leaves them `optional()` rather
+ * than required, and does not invent its own default for them. The default
+ * stays where the bot reads it (`OPENAI_DEFAULT_MODEL`,
+ * `OPENAI_DEFAULT_MAX_REQUEST_PER_DAY`, `None`), so this schema cannot drift
+ * from that default by being edited on its own.
+ */
 export const legacyOpenAiAssistantSchema = z.object({
-  name: z.string().min(1),
+  // Never read by response_bot.py; kept optional so a course that has never
+  // set it still parses.
+  name: z.string().min(1).optional(),
   // Optional: courses migrated to the Prompts API no longer carry an assistant id.
   id: z.string().min(1).optional(),
   prompt_id: z.string().min(1),
-  vector_store_id: z.string().min(1),
-  instructions: z.string().min(1),
+  vector_store_id: z.string().min(1).optional(),
+  // Never read by response_bot.py; kept optional so a course that has never
+  // set it still parses.
+  instructions: z.string().min(1).optional(),
   // Assistant tool declarations are passed through to OpenAI untouched.
   tools: z.array(z.unknown()).default([]),
-  model: z.string().min(1),
-  limits: z.object({
-    // Per user, per day (BOT-5).
-    max_requests_per_day: z.number().int().positive(),
-  }),
+  model: z.string().min(1).optional(),
+  limits: z
+    .object({
+      // Per user, per day (BOT-5).
+      max_requests_per_day: z.number().int().positive().optional(),
+    })
+    .default({}),
 })
 
 /** The Discord roles a course is taught through (CFG-3). */

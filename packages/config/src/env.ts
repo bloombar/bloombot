@@ -24,9 +24,12 @@ export const envSchema = z.object({
   // safer to refuse to start than to default to something plausible.
   NODE_ENV: z.enum(['development', 'test', 'production']),
 
-  // Minimum severity written to the logs.
+  // Minimum severity written to the logs. No `trace`: response_bot.py
+  // uppercases this straight into `logging.basicConfig(level=…)`, and
+  // Python's `logging` module has no TRACE level — `logging._checkLevel`
+  // raises `ValueError` on it, crashing the live bot on startup.
   LOG_LEVEL: z
-    .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
+    .enum(['debug', 'info', 'warn', 'error', 'fatal'])
     .default('info'),
 
   // Directory the per-process JSONL log files are written into.
@@ -115,6 +118,24 @@ export function resetConfigCache(): void {
 }
 
 /**
+ * Refuses a write to `CONFIG`. Without this, an assignment like
+ * `CONFIG.LOG_LEVEL = 'debug'` would silently write to the Proxy's empty
+ * target instead of the cached environment, turning that key into a
+ * read-only, non-configurable data property. Every later read of it then
+ * throws from inside the `get` trap — a `TypeError` `resetConfigCache()`
+ * cannot clear, because the broken property lives on the target, not the
+ * cache.
+ */
+function rejectWrite(property: string | symbol): never {
+  throw new Error(
+    `CONFIG.${String(property)} is read-only. CONFIG reflects the process ` +
+      'environment; it cannot be assigned to. To run against a different ' +
+      'environment, call parseEnv() with the values you want, or change ' +
+      'process.env and call resetConfigCache() before the next read.'
+  )
+}
+
+/**
  * The validated environment, as an ordinary object.
  *
  * It is a proxy rather than a parsed constant so that *importing* this module
@@ -129,4 +150,7 @@ export const CONFIG: Env = new Proxy({} as Env, {
   ownKeys: () => Reflect.ownKeys(loadConfig()),
   getOwnPropertyDescriptor: (_target, property: string | symbol) =>
     Reflect.getOwnPropertyDescriptor(loadConfig(), property),
+  set: (_target, property) => rejectWrite(property),
+  defineProperty: (_target, property) => rejectWrite(property),
+  deleteProperty: (_target, property) => rejectWrite(property),
 })

@@ -629,12 +629,14 @@
   note: baseline (not claimed by a roadmap phase)
 - id: OPS-2
   title: Process supervision with pm2
-  full: The bot runs under pm2 in production, configured by ecosystem.config.js,
-    which names the process bloombot, runs response_bot.py under python3, and
-    directs pm2's own stdout and stderr to timestamped files in logs/. pm2
-    restarts the bot on crash, and pm2 save plus pm2 startup make it survive a
-    host reboot. No secrets are placed in the pm2 config; the bot loads .env
-    itself.
+  full: "The bot runs under pm2 in production, configured by ecosystem.config.cjs,
+    which names the process bloombot, runs response_bot.py through pipenv so it
+    executes inside the project's virtualenv, and directs pm2's own stdout and
+    stderr to timestamped files in logs/. pm2 restarts the bot on crash, and pm2
+    save plus pm2 startup make it survive a host reboot. No secrets are placed
+    in the pm2 config; the bot loads .env itself. The config file carries the
+    .cjs extension because package.json declares type: module, under which a .js
+    config would be parsed as an ES module and expose no apps to pm2."
   section: §10 Operations & Deployment
   family: OPS
   phase: 0
@@ -932,5 +934,22 @@
   section: §4 Roster Ingestion & Student Channels
   family: ROST
   phase: 1
+  status: Backlog
+  review: false
+- id: OPS-7
+  title: Continuous deployment
+  full: "A commit merged to the default branch is deployed to the production
+    droplet automatically, and only after the full test suite has passed.
+    Deployment updates the droplet's existing git checkout to that exact commit
+    over SSH, so the running version is always identifiable on both ends; it
+    installs dependencies only when the pinned dependency files changed, and
+    reloads the pm2 process. It must never disturb untracked files — the .env,
+    the SQLite message log and the logs directory — and must never run the
+    destructive migrate.py. The deploy refuses to overwrite hand edits: if a
+    tracked file has been modified directly on the server it aborts and reports
+    the diff rather than discarding the change.…"
+  section: §10 Operations & Deployment
+  family: OPS
+  phase: 2
   status: Backlog
   review: false

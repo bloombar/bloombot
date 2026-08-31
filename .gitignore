@@ -133,7 +133,10 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# Every .env variant, not just bare `.env` — .env.production and friends hold
+# real credentials and this repo is public. env.example is the tracked template.
 .env
+.env.*
 .venv
 env/
 venv/

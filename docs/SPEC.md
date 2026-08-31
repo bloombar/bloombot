@@ -510,11 +510,13 @@ the dev extras add `ipykernel` for the notebooks.
 
 #### OPS-2 Process supervision with pm2
 
-The bot runs under pm2 in production, configured by `ecosystem.config.js`, which names
-the process `bloombot`, runs `response_bot.py` under `python3`, and directs pm2's own
-stdout and stderr to timestamped files in `logs/`. pm2 restarts the bot on crash, and
-`pm2 save` plus `pm2 startup` make it survive a host reboot. No secrets are placed in the
-pm2 config; the bot loads `.env` itself.
+The bot runs under pm2 in production, configured by `ecosystem.config.cjs`, which names
+the process `bloombot`, runs `response_bot.py` through `pipenv` so it executes inside the
+project's virtualenv, and directs pm2's own stdout and stderr to timestamped files in
+`logs/`. pm2 restarts the bot on crash, and `pm2 save` plus `pm2 startup` make it survive
+a host reboot. No secrets are placed in the pm2 config; the bot loads `.env` itself. The
+config file carries the `.cjs` extension because `package.json` declares `type: module`,
+under which a `.js` config would be parsed as an ES module and expose no apps to pm2.
 
 #### OPS-3 Configurable logging
 
@@ -547,6 +549,25 @@ message formatting, and the board scripts' SPEC parser. Network calls to Discord
 OpenAI are stubbed rather than exercised. A GitHub Actions workflow runs the suite on the
 project's supported Python version so a pull request cannot be merged on unverified
 changes.
+
+#### OPS-7 Continuous deployment
+
+A commit merged to the default branch is deployed to the production droplet automatically,
+and only after the full test suite has passed. Deployment updates the droplet's existing
+git checkout to that exact commit over SSH, so the running version is always identifiable
+on both ends; it installs dependencies only when the pinned dependency files changed, and
+reloads the pm2 process. It must never disturb untracked files — the `.env`, the SQLite
+message log and the logs directory — and must never run the destructive `migrate.py`.
+
+The deploy refuses to overwrite hand edits: if a tracked file has been modified directly on
+the server it aborts and reports the diff rather than discarding the change. It verifies
+before restarting that the interpreter pm2 uses can import the bot's dependencies, and
+after restarting that the process is online and has not been restarted again by pm2 —
+a crash-looping deploy is rolled back to the previous commit automatically. A manual run
+can deploy any earlier commit, which is the rollback path.
+
+The deploy key and host fingerprint are held as environment-scoped repository secrets, the
+host key is pinned, and no pull request event can reach the deployment job.
 
 ### 11. Specification & Project Board Tooling
 

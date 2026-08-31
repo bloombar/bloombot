@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Solution file. It compiles nothing itself; `tsc --build` walks these references in dependency order (PLAT-1).",
+  "files": [],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/schemas" },
+    { "path": "./tsconfig.tests.json" }
+  ]
+}

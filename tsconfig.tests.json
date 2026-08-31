@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Typechecks the test suites. They are kept out of the packages' own build so that vitest globals and test-only imports never reach a published `dist`, but they still have to compile — an untypechecked test is a test that can quietly stop asserting.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./.tsbuild/tests",
+    "emitDeclarationOnly": true
+  },
+  "include": ["packages/*/tests/**/*.ts", "vitest.config.ts"],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/schemas" }
+  ]
+}

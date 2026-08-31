@@ -1,16 +1,38 @@
 {
-  "name": "bloombot-tooling",
+  "name": "bloombot",
   "version": "1.0.0",
   "private": true,
-  "description": "Node tooling for Bloombot: derives the GitHub project board from docs/SPEC.md and syncs it.",
+  "description": "Bloombot monorepo: TypeScript packages and apps, plus the tooling that derives the GitHub project board from docs/SPEC.md.",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "board:derive": "node scripts/board/derive.mjs",
     "board:sync": "node scripts/board/sync.mjs",
     "board:sync:dry": "node scripts/board/sync.mjs --dry-run",
-    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\""
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --build",
+    "build": "tsc --build",
+    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run"
   },
   "dependencies": {
     "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "eslint": "^10.0.1",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^4.1.11"
   }
 }

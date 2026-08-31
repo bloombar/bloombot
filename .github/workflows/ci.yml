@@ -1,0 +1,67 @@
+# Continuous integration for Bloombot (OPS-6).
+#
+# Two independent jobs: the Python suite covering the bot and the management
+# scripts, and the Node suite covering the project-board tooling and the
+# docs/SPEC.md format contract that the board is generated from.
+#
+# No secrets are used. The Python suite runs with dummy credentials supplied by
+# tests/conftest.py and a throwaway SQLite database, so it never touches real
+# Discord, OpenAI or student data.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pipenv
+        run: pipx install pipenv
+
+      - name: Install dependencies
+        # --dev brings in pytest; --deploy fails fast if Pipfile.lock is stale.
+        run: pipenv install --dev --deploy
+
+      - name: Run tests
+        run: pipenv run pytest tests/ -v
+
+  node:
+    name: Board tooling tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check the board manifest is up to date with the SPEC
+        # derive is deterministic: if re-running it changes manifest.yaml, the
+        # SPEC or ROADMAP was edited without regenerating the manifest.
+        run: |
+          npm run board:derive
+          git diff --exit-code scripts/board/manifest.yaml

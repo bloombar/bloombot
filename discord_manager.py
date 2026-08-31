@@ -152,11 +152,13 @@ class DiscordManager(discord.Client):
         """
         for guild in self.guilds:
             # check if server_name is an integer ID or a string name
+            # NOTE the grouping: the id comparison must apply to BOTH the int and
+            # the numeric-string cases. Without the outer parentheses, `or`/`and`
+            # precedence makes any integer argument match the first guild in the list.
             if (
                 isinstance(server_name, int)
                 or (isinstance(server_name, str) and server_name.isnumeric())
-                and guild.id == int(server_name)
-            ):
+            ) and guild.id == int(server_name):
                 # the category ids match
                 return guild.id
             elif (

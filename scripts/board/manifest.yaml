@@ -851,7 +851,7 @@
   section: §5 AI Chatbot
   family: BOT
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: BOT-12
   title: Role fallback matches the configured student role
@@ -864,7 +864,7 @@
   section: §5 AI Chatbot
   family: BOT
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: DATA-6
   title: Migration seed data matches the models
@@ -876,7 +876,7 @@
   section: §7 Persistence & Data Model
   family: DATA
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: DSC-7
   title: Server lookup by numeric id
@@ -892,7 +892,7 @@
   section: §2 Discord Client Library
   family: DSC
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-6
   title: Automated tests and continuous integration
@@ -908,33 +908,7 @@
   section: §10 Operations & Deployment
   family: OPS
   phase: 1
-  status: Backlog
-  review: false
-- id: ROST-7
-  title: Roster path resolved from the results directory
-  full: roster_create_channels.py must read its merged roster from the results/
-    directory, the same location roster_setup.ipynb writes to and
-    hydrate_server.py reads from. It currently builds the bare filename without
-    the directory, so the path resolves against the repository root and the
-    script fails to find a roster that is present.
-  section: §4 Roster Ingestion & Student Channels
-  family: ROST
-  phase: 1
-  status: Backlog
-  review: false
-- id: ROST-8
-  title: Welcome message mentions the student
-  full: The pinned welcome message in a per-student channel must mention the
-    student so they are notified when the channel appears. It currently
-    interpolates the member's username into Discord's role-mention syntax, which
-    Discord cannot resolve, so the mention renders as literal text and the
-    student is never pinged. A user mention takes the member's numeric id, and
-    the admins-role mention alongside it is already correct and shows the right
-    form.
-  section: §4 Roster Ingestion & Student Channels
-  family: ROST
-  phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-7
   title: Continuous deployment
@@ -950,6 +924,32 @@
     the diff rather than discarding the change.…"
   section: §10 Operations & Deployment
   family: OPS
-  phase: 2
-  status: Backlog
+  phase: 1
+  status: Done
+  review: false
+- id: ROST-7
+  title: Roster path resolved from the results directory
+  full: roster_create_channels.py must read its merged roster from the results/
+    directory, the same location roster_setup.ipynb writes to and
+    hydrate_server.py reads from. It currently builds the bare filename without
+    the directory, so the path resolves against the repository root and the
+    script fails to find a roster that is present.
+  section: §4 Roster Ingestion & Student Channels
+  family: ROST
+  phase: 1
+  status: Done
+  review: false
+- id: ROST-8
+  title: Welcome message mentions the student
+  full: The pinned welcome message in a per-student channel must mention the
+    student so they are notified when the channel appears. It currently
+    interpolates the member's username into Discord's role-mention syntax, which
+    Discord cannot resolve, so the mention renders as literal text and the
+    student is never pinged. A user mention takes the member's numeric id, and
+    the admins-role mention alongside it is already correct and shows the right
+    form.
+  section: §4 Roster Ingestion & Student Channels
+  family: ROST
+  phase: 1
+  status: Done
   review: false

@@ -28,24 +28,24 @@ notebook (`ANLY`), deployment and logging (`OPS`), and the spec/board tooling (`
 
 **In scope:** claimed implicitly — every SPEC id not listed under a later phase.
 
-## Phase 1 — Defect fixes & test coverage
+## Phase 1 — Continuous deployment
 
-Six defects found while writing the initial SPEC, plus the automated test suite and CI
-that would have caught them. Each defect is specified as the behavior that must hold, in
-the section of the SPEC that owns it, rather than in a separate "bugs" section that would
-rot as the fixes land.
+Everything the shipped baseline needed in order to change safely: the six defects found
+while writing the initial SPEC, the automated test suite and CI that would have caught
+them, and the deployment loop that carries a green commit to the droplet. Each defect is
+specified as the behavior that must hold, in the section of the SPEC that owns it, rather
+than in a separate "bugs" section that would rot as the fixes land.
 
-**In scope:** BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6
+CI proves a commit is good; deployment ships it. Together they close the loop so a merge
+to `master` updates the droplet automatically, with the deployed commit visible on both
+ends and an automatic rollback when the bot fails to come back up. This is also the phase
+that holds the work still to come — new requirements land on the `**In scope:**` line
+below in the same pull request that adds them to the SPEC.
+
+**In scope:** BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6, OPS-7
 
 ### Current status
 
-- Done: every Phase 0 requirement — the shipped baseline.
-- Outstanding: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6
-
-## Phase 2 — Continuous deployment
-
-CI proves a commit is good; nothing yet ships it. This phase closes the loop so a merge to
-`master` updates the droplet automatically, with the deployed commit visible on both ends
-and an automatic rollback when the bot fails to come back up.
-
-**In scope:** OPS-7
+- Done: every Phase 0 requirement — the shipped baseline; BOT-11/12, DSC-7, ROST-7/8,
+  DATA-6, OPS-6, OPS-7.
+- Outstanding: none — new work is added here as it enters the SPEC.

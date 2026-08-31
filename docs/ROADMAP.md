@@ -49,3 +49,77 @@ CI proves a commit is good; nothing yet ships it. This phase closes the loop so 
 and an automatic rollback when the bot fails to come back up.
 
 **In scope:** OPS-7
+
+## Phase 3 — Monorepo & data layer
+
+The JavaScript migration starts by building the ground everything else stands on: npm
+workspaces, the shared zod contract, the tenant-scoped data layer, and a real migration
+tool. Production is untouched — it keeps running the Python bot, and the legacy import
+runs against a copy of the live database rather than the database itself.
+
+**In scope:** PLAT-1..5, QA-1..6
+
+## Phase 4 — Conversation core & Discord surface
+
+The bot is rewritten in TypeScript and cut over. This is the highest-risk work in the
+programme and the only component already serving real students, so it happens before any
+web work rather than after: the behaviour it must preserve is easiest to verify while it
+is still the only thing running. Requirement ids land with this phase's SPEC sections.
+
+**In scope:**
+
+## Phase 5 — API, action layer & authentication
+
+The action layer lands with the API rather than after it. Retrofitting declared
+authorization underneath routes that already exist means rewriting every route twice.
+
+**In scope:** ACT-1..6, AUTH-1..4
+
+## Phase 6 — Web shell & server registration
+
+Sign-in, the control panel shell, and the Discord installation flow end to end.
+
+**In scope:** TEN-1..6
+
+## Phase 7 — Projects & course configuration
+
+The point at which the product exists: a second tenant creates a project, defines a course
+in it, and the bot answers in their server without anyone editing a file in this
+repository.
+
+**In scope:** PROJ-1..4
+
+## Phase 8 — Job runner, throttling & server scaffolding
+
+Background jobs, and the foreground admission layer that stops thirty students at the
+start of a lecture becoming thirty concurrent model calls.
+
+**In scope:**
+
+## Phase 9 — Roster import & student channels
+
+**In scope:**
+
+## Phase 10 — Knowledge files & instructions
+
+**In scope:**
+
+## Phase 11 — Cost ledger, usage caps & monitoring
+
+**In scope:**
+
+## Phase 12 — Web student chat surface
+
+**In scope:**
+
+## Phase 13 — MCP server & agent access
+
+**In scope:**
+
+## Phase 14 — Admin console, transcripts, audit & export
+
+**In scope:**
+
+## Phase 15 — Production hardening
+
+**In scope:**

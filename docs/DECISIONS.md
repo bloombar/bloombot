@@ -104,24 +104,22 @@ the two-round cap exist to stop that becoming defensive scaffolding and tests fo
 
 ---
 
-## D-6 — Everything auto-merges on green, including promotion to master
+## D-6 — Auto-merge everything into the migration branch; `master` needs approval
 
-**Problem.** Slices should merge on green and move on, without waiting on a human.
+**Problem.** Slices should merge on green and move on, without waiting on a human — but a merge to `master`
+is not the same kind of event as a merge into a feature branch.
 
-**Choice.** All PRs auto-merge on green (`gh pr merge --auto --squash --delete-branch`), including promotion
-from the integration branch to `master`.
+**Choice.** Every slice and phase PR targets `feat/PLAT-1-multi-surface-platform` and auto-merges on green
+(`gh pr merge --auto --squash --delete-branch`), self-approved. **Promotion from that branch to `master` is
+the operator's decision and is never automatic.** Direct pushes to `master` are in the permission deny list.
 
-**Why not gate the promotion to master.** It was gated initially, because `.github/workflows/ci.yml` fires
-its deploy job on `refs/heads/master` and pushes to the droplet running the live bot for real students — so
-auto-merging there is auto-deploying to production. The concern was raised and the operator reaffirmed the
-requirement to self-approve, so **the risk is managed technically rather than by asking**:
+**Why the exception.** `.github/workflows/ci.yml` fires its deploy job on `refs/heads/master` and ships to
+the droplet running the live bot for real students, so a `master` merge is a production deployment. The whole
+JavaScript migration therefore lands on one long-lived branch and is promoted deliberately, not incidentally.
 
-- `scripts/deploy.sh` health-checks after reload and **rolls back to the previous SHA** on failure, and
-  refuses to deploy over local modifications.
-- Migrations are additive-only by rule (D-2), because that rollback reverts the checkout, not the database.
-- Phases 3 and 5–15 are additive; production keeps running the Python bot until Phase 4 explicitly cuts over.
-- Phase 4 is the one genuinely irreversible step, and its ship criteria include exercising the rollback path
-  and a side-by-side comparison against a scratch guild before promoting.
+**Limits.** A long-lived branch accumulates divergence from `master`. Anything shipped to `master` in the
+meantime — a hotfix to the Python bot — must be merged _into_ the migration branch promptly, or the promotion
+becomes a conflict resolution nobody wants to review.
 
 **Limits.** Auto-merge is only meaningful once required status checks are configured on the integration
 branch; without them `--auto` has nothing to wait for and merges immediately.

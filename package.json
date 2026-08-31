@@ -8,7 +8,7 @@
     "board:derive": "node scripts/board/derive.mjs",
     "board:sync": "node scripts/board/sync.mjs",
     "board:sync:dry": "node scripts/board/sync.mjs --dry-run",
-    "test": "node --test \"scripts/board/*.test.mjs\""
+    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\""
   },
   "dependencies": {
     "yaml": "^2.5.0"

@@ -2,7 +2,15 @@
 
 ## Testing
 
-Before finalizing major changes to code, do thorough 100% code coverage unit tests, integration tests. For changes that affect both front- and back-end, add e2e tests using Playwright with live front- and back-ends with live test db to ensure correct functionality. All passing passing tests should be reproducible during regression testing as we develop new code.
+New behaviour needs a test that **fails without the change** — a test that passes before the code is written
+is not a test of that code. Unit and integration tests throughout; for changes spanning front- and back-end,
+Playwright e2e against live front- and back-ends with a live test database. All passing tests must stay
+reproducible as regression tests.
+
+Coverage is enforced as a floor on the logic that matters — `packages/core`, `packages/actions`,
+`packages/db/repos` — rather than a blanket percentage across the whole tree (see `docs/DECISIONS.md`).
+
+Never point a test suite at `data/data.db`; test databases live under `tmp/`.
 
 ## Code conventions
 
@@ -16,7 +24,8 @@ Leave comments explaining any large block of complicated code. Include function-
 
 ### Check for staleness
 
-Always check for stale branches and PRs before starting new tasks.
+Always check for stale branches and PRs before starting a new task — run the `stale-check` skill. An open PR
+touching your files means coordinate, not proceed.
 
 ### Workflow
 
@@ -37,3 +46,18 @@ Changes are tracked on the GitHub project board and follow a branch → PR flow 
 - **Do not hand-create board issues.** The board is generated from the SPEC via `npm run board:derive` then `npm run board:sync` (see docs/PROJECT_BOARD.md).
 
 If asked to use a different workflow (e.g. commit straight to the default branch), **remind the user that it diverges from this flow and confirm before proceeding** — then honor the confirmed request.
+
+## Protected paths
+
+**IMPORTANT:** `data/*.db`, `.env*`, `logs/*.log` and `results/*.csv` hold real student names, emails and
+conversation transcripts, or live credentials on a public repository. A `PreToolUse` hook
+(`.claude/hooks/guard-paths.sh`, tested in `npm test`) blocks writes to them. A block is a signal to stop and
+report — never route around it.
+
+## Agent workflow
+
+Implementation runs as a supervisor/developer split: `.claude/agents/developer-agent.md` implements a scoped
+slice against a brief, `.claude/agents/spec-reviewer.md` reviews the diff in fresh context, and the agent
+doing the work is never the one grading it. The brief template and definition of done are in the
+`phase-handoff` skill. The plan being built is summarised in `docs/SPEC.md` and `docs/ROADMAP.md`; decisions
+made along the way are in `docs/DECISIONS.md`.

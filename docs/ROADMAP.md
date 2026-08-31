@@ -41,3 +41,11 @@ rot as the fixes land.
 
 - Done: every Phase 0 requirement — the shipped baseline.
 - Outstanding: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6
+
+## Phase 2 — Continuous deployment
+
+CI proves a commit is good; nothing yet ships it. This phase closes the loop so a merge to
+`master` updates the droplet automatically, with the deployed commit visible on both ends
+and an automatic rollback when the bot fails to come back up.
+
+**In scope:** OPS-7

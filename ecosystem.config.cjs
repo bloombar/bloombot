@@ -2,8 +2,13 @@ module.exports = {
   apps: [
     {
       name: "bloombot",
-      script: "response_bot.py",
-      interpreter: "python3",
+      // Run through pipenv, matching how the bot is actually started in
+      // production. `interpreter: "python3"` would use the system python, which
+      // has none of the project's dependencies installed — the bot would crash
+      // on start. `interpreter: "none"` stops pm2 wrapping this in node.
+      script: "pipenv",
+      args: "run ./response_bot.py",
+      interpreter: "none",
       // Env vars are loaded from .env by python-dotenv — no secrets needed here.
       // Override LOG_LEVEL or LOGS_DIR here if needed, e.g.:
       // env: { LOG_LEVEL: "INFO", LOGS_DIR: "./logs" },

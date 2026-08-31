@@ -20,7 +20,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --build",
     "build": "tsc --build",
-    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run"
+    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "yaml": "^2.5.0"
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.0.1",
     "globals": "^17.11.0",
     "prettier": "^3.9.6",

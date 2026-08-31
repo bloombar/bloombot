@@ -59,7 +59,7 @@ workspaces, the shared zod contract, the tenant-scoped data layer, and a real mi
 tool. Production is untouched — it keeps running the Python bot, and the legacy import
 runs against a copy of the live database rather than the database itself.
 
-**In scope:** PLAT-1..5, QA-1..6
+**In scope:** PLAT-1..5, QA-1..6, TEN-1..3
 
 ## Phase 4 — Conversation core & Discord surface
 
@@ -81,7 +81,7 @@ authorization underneath routes that already exist means rewriting every route t
 
 Sign-in, the control panel shell, and the Discord installation flow end to end.
 
-**In scope:** TEN-1..6
+**In scope:** TEN-4..6
 
 ## Phase 7 — Projects & course configuration
 

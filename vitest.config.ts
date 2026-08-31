@@ -17,9 +17,24 @@ export default defineConfig({
       '@bloombot/config': sourceEntry('config'),
       '@bloombot/logger': sourceEntry('logger'),
       '@bloombot/schemas': sourceEntry('schemas'),
+      '@bloombot/db': sourceEntry('db'),
     },
   },
   test: {
+    // QA-4: the coverage floor sits over the data-access layer, not a blanket
+    // percentage across the tree — a package like `db` has plenty of code
+    // (schema definitions, the migration runner) that is exercised end-to-end
+    // by every other test rather than meaningfully unit-testable on its own.
+    coverage: {
+      provider: 'v8',
+      include: ['packages/db/src/repos/**/*.ts'],
+      thresholds: {
+        lines: 90,
+        functions: 90,
+        branches: 85,
+        statements: 90,
+      },
+    },
     projects: [
       {
         extends: true,
@@ -44,6 +59,15 @@ export default defineConfig({
         test: {
           name: 'schemas',
           root: './packages/schemas',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'db',
+          root: './packages/db',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

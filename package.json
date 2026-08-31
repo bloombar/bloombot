@@ -1,0 +1,16 @@
+{
+  "name": "bloombot-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node tooling for Bloombot: derives the GitHub project board from docs/SPEC.md and syncs it.",
+  "type": "module",
+  "scripts": {
+    "board:derive": "node scripts/board/derive.mjs",
+    "board:sync": "node scripts/board/sync.mjs",
+    "board:sync:dry": "node scripts/board/sync.mjs --dry-run",
+    "test": "node --test \"scripts/board/*.test.mjs\""
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}

@@ -45,7 +45,9 @@ with open(CONFIG_FILE, encoding="utf-8", mode="r") as f:
         course = matching_courses[0]
 
     # determine the roster file name based on the course file prefix in the config
-    roster_files = [f"{course['file_prefix']}-result.csv"]
+    # merged rosters are written to results/ by roster_setup.ipynb — the path must
+    # include that directory or it resolves against the repository root instead
+    roster_files = [f"results/{course['file_prefix']}-result.csv"]
     admins_roles = [course["roles"]["admins"]]
     students_roles = [course["roles"]["students"]]
 
@@ -63,6 +65,47 @@ Config:
     STUDENTS_ROLE: {STUDENTS_ROLE}
 """
 )
+
+
+def format_welcome_message(row, email, admins_role_id, member):
+    """Build the message pinned at the top of a student's private channel.
+
+    `row` is a record from the merged results CSV; `member` is the resolved
+    Discord member, or None when the Discord username the student supplied in
+    the intake questionnaire could not be found on the server. In that case the
+    message says so explicitly, so staff can correct the handle by hand.
+
+    Note the two mention forms: <@id> mentions a user and <@&id> mentions a
+    role. Both take a numeric id — passing a username to either renders as
+    literal text and does not notify anyone.
+    """
+    first_name = row.get("First", "")
+    last_name = row.get("Last", "")
+    discord_name = row.get("Discord", "")
+    github = row.get("GitHub", "")
+
+    if member is not None:
+        welcome_message = (
+            f"<@{member.id}>, this channel is for conversation between you "
+            f"and <@&{admins_role_id}>."
+        )
+    else:
+        welcome_message = (
+            f"This channel is for conversation between {first_name} {last_name} "
+            f"and <@&{admins_role_id}>. However, the Discord username "
+            f"{first_name} entered into the intake questionnaire is incorrect... "
+            "we need to manually correct it."
+        )
+
+    return f"""
+{welcome_message}
+Student details:
+- **First:** {first_name}
+- **Last Name:** {last_name}
+- **Email:** {email}
+- **Discord:** {discord_name}
+- **GitHub:** {github}
+"""
 
 
 # start up bot set to create a category, if not yet exists
@@ -189,27 +232,9 @@ async def create_channels():
                             await channel.send("Permissions on this channel have been updated.")
 
                     # Compose the message
-                    first_name = row.get("First", "")
-                    last_name = row.get("Last", "")
-                    discord_name = row.get("Discord", "")
-                    github = row.get("GitHub", "")
-
-                    # send different welcome messages if the Discord user for this student
-                    # was not found and they are not added
-                    if member_id:
-                        # member exists
-                        welcome_message = f"<@&{member.name}>, this channel is for conversation between you and <@&{admins_role_id}>."
-                    else:
-                        welcome_message = f"This channel is for conversation between {first_name} {last_name} and <@&{admins_role_id}>. However, the Discord username {first_name} entered into the intake questionnaire is incorrect... we need to manually correct it."
-                    message = f"""
-{welcome_message}
-Student details:
-- **First:** {first_name}
-- **Last Name:** {last_name}
-- **Email:** {email}
-- **Discord:** {discord_name}
-- **GitHub:** {github}
-"""
+                    message = format_welcome_message(
+                        row, email, admins_role_id, member
+                    )
 
                     if channel and is_new:
                         sent_message = await channel.send(message)

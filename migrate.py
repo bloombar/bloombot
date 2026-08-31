@@ -51,38 +51,57 @@ def populate():
     # Connect to the database
     db.connect()
 
-    # Create example User objects
+    # Create example User objects. These fields must match the User model — mock
+    # data that drifts from the models makes --populate fail at insert time.
     users = [
-        {"phone": "1234567890", "first_name": "Alice", "last_name": "Smith"},
-        {"phone": "9876543210", "first_name": "Bob", "last_name": "Johnson"},
+        {
+            "discord_id": 100000000000000001,
+            "discord_username": "alice_smith",
+            "email": "asmith@myuni.edu",
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "github_username": "alicesmith",
+        },
+        {
+            "discord_id": 100000000000000002,
+            "discord_username": "bob_johnson",
+            "email": "bjohnson@myuni.edu",
+            "first_name": "Bob",
+            "last_name": "Johnson",
+            "github_username": "bobjohnson",
+        },
     ]
 
     # Insert users into the database in bulk
     User.insert_many(users).execute(db)
 
-    # Iterate through all users and create 2 mock messages for each
+    # Iterate through all users and create a short mock exchange for each,
+    # alternating direction the way a real conversation with the bot does.
     messages = []
-    for i, user in enumerate(User.select()):
+    for user in User.select():
 
         # create mock messages
         new_messages = [
             {
                 "user": user,
-                "from_phone": user.phone,
-                "to_phone": "5551234567",
-                "body": f"Hello from {user.first_name}!",
+                "content": f"Hello from {user.first_name}!",
+                "category": "Web Design - STUDENTS 01",
+                "channel": user.email.split("@")[0],
+                "direction": "from",
             },
             {
                 "user": user,
-                "from_phone": "5551234567",
-                "to_phone": user.phone,
-                "body": f"Reply to {user.first_name}.",
+                "content": f"Hello {user.first_name}, how can I help?",
+                "category": "Web Design - STUDENTS 01",
+                "channel": user.email.split("@")[0],
+                "direction": "to",
             },
             {
                 "user": user,
-                "from_phone": user.phone,
-                "to_phone": "5559876543",
-                "body": f"Reminder for {user.first_name}.",
+                "content": "When is the next assignment due?",
+                "category": "Web Design - GLOBAL",
+                "channel": "general",
+                "direction": "from",
             },
         ]
         messages.extend(new_messages)  # add to greater list
@@ -92,12 +111,12 @@ def populate():
     # Insert messages into the database in bulk
     Message.insert_many(messages).execute(db)
 
-    # Commit the changes
-    db.commit()
+    # No explicit commit: peewee runs in autocommit mode here, and calling
+    # commit() with no transaction open raises OperationalError.
 
     # Close the connection
     db.close()
-    print(f"- Database tables populated.")
+    print("- Database tables populated.")
 
 
 # Create the table if it doesn't exist

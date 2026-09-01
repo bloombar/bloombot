@@ -374,3 +374,65 @@ Two further deviations from PROJ-3's literal wording, both narrowing rather than
   treated as different names. This matches the legacy exact-match router and Discord's own tolerance of
   duplicate channel/category names, so it is deliberate, not an oversight — `accounts.email`'s repo-layer
   lowercasing (`schema.ts`) is the precedent for closing this later if a phase wants names case-insensitive too.
+
+---
+
+## D-13 — `packages/db`: `people`/`conversations`/`usage_counters` rename D-4's sketch, and a scope change never merges or splits a conversation
+
+**Problem.** D-4 sketched `bot_conversations` and `usage_counters` keyed on `(course_id, end_user_id)`. PPL-1..3
+and CONV-1..3 (`docs/SPEC.md` §18) needed a concrete table and column shape for that sketch, plus a person
+table D-4 did not name at all, and a decision about what happens to an existing conversation when a course's
+`conversationScope` changes later — neither of which D-4 settled.
+
+**Naming, differing from D-4's sketch on purpose.**
+
+- **`people` / `person_identities`, not `end_user_id`.** D-4's `end_user_id` names a column, not a person; PPL-1
+  needed an actual row a course's roster fields, conversations, transcript and usage counters could all key on,
+  and PPL-2 needed a place to hold one identity per surface without repeating a person's roster fields once per
+  surface. Splitting the two mirrors `accounts`/`memberships` (an identity, and a separate binding of it), rather
+  than folding "who this is" and "how this surface reaches them" into one row.
+- **`conversations`, not `bot_conversations`.** The `bot_` prefix named the thing that used to be the only
+  surface talking to a student; PPL-1 and SURF (`docs/SPEC.md`) are explicit that a person is reached through
+  several surfaces, of which Discord is one, so a table this platform-wide should not carry one surface's name.
+  Every other tenant-scoped table in this package (`courses`, `projects`, `memberships`) is named for what it
+  _is_, not for the component that currently happens to write it.
+- **`usage_counters` keeps its name.** D-4's sketch used this name and nothing about PPL/CONV gave a reason to
+  change it; what differs from the sketch is the key, `(organizationId, courseId, personId, day)` rather than
+  `(course_id, end_user_id)` — `organizationId` for TEN-2 (every table in this package carries it), and an
+  explicit `day` string rather than deriving "today" from `end_user_id`'s activity, which is CONV-3's point and
+  BOT-11's fix, one layer down (`repos/usage.ts`'s module comment).
+
+**`conversations`'s nullable `surface` needs two partial unique indexes, not one plain unique index.** SQL
+treats every `NULL` in a unique index as distinct from every other `NULL` — standard behaviour, not a SQLite
+quirk, Postgres does the same — so a single `UNIQUE (organizationId, courseId, personId, surface)` index would
+let an unbounded number of `course`-scoped (`surface: null`) rows through for the same person and course, which
+is exactly the single row CONV-1 requires. `schema.ts`'s `conversations` table instead has two partial unique
+indexes, split on `surface IS NULL`, the same device `projects_org_name_active_unique` already uses for PROJ-2.
+Verified by `tests/conversations.test.ts` and, for the underlying SQL behaviour, by temporarily removing both
+indexes from the generated migration and confirming the structural-uniqueness test fails (see the slice's PR
+description for the exact revert used).
+
+**A course's `conversationScope` changing does not merge or split existing conversations — there is no such
+path in this package.** `getOrCreateConversation` (`repos/conversations.ts`) reads the course's _current_
+`conversationScope` on every call and looks for a row keyed accordingly (`surface: null` for `course`, `surface:
+<arrival surface>` for `course_surface`). An existing conversation's own `surface` value is fixed at the moment
+it was created and is never rewritten. So switching a course from `course` to `course_surface` (or back) does
+not touch any row already on disk; the next `getOrCreateConversation` call simply looks for a differently-keyed
+row than any that exist, finds none, and creates a new one — leaving the old conversation's history in place,
+unmerged, and no longer matched by future lookups under the new scope. This was a judgment call, not specified
+by CONV-1: a migration that reconciled scope changes (merging every `course_surface` conversation for a person
+back into one `course`-scoped row, say) is possible but was out of this slice's scope and has real questions
+attached — which surface's `upstreamThreadId` wins, whether merged transcripts need re-ordering — that belong to
+whichever later slice actually needs scope changes to be a live, user-facing operation rather than a database
+column nobody flips yet. `tests/conversations.test.ts` asserts the behaviour above explicitly, so a future slice
+that adds a real merge path will see this test start failing rather than silently no longer describing the
+system.
+
+**`resolvePersonByIdentity`'s "merge" fills gaps, it does not overwrite.** PPL-3 says roster fields are "merged
+onto the person" without specifying a direction; `mergeRosterFields` (`repos/people.ts`) only ever fills a field
+that is currently `null` on the person, never replaces one already set. The alternative — a roster import always
+wins — was not chosen because a person's `displayName` may already have been set from something a surface
+supplied (a Discord display name) before any roster exists for them, and there is no reason to treat a later
+roster import as more authoritative for that field than the identity the student is actually using. Revisit if
+a future import needs the opposite (a roster's `firstName`/`lastName` should always overwrite whatever was there,
+say) — `mergeRosterFields`'s all-or-nothing "only if null" rule would need a per-field policy at that point.

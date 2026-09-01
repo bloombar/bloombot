@@ -45,13 +45,18 @@ describe('runMigrations', () => {
     expect(Object.keys(schema).sort()).toEqual([
       '__drizzle_migrations',
       'accounts',
+      'conversations',
       'course_categories',
       'course_channels',
       'courses',
       'discord_server_bindings',
       'memberships',
+      'messages',
       'organizations',
+      'people',
+      'person_identities',
       'projects',
+      'usage_counters',
     ])
     expect(schema.organizations).toEqual([
       'created_at',
@@ -88,6 +93,7 @@ describe('runMigrations', () => {
     ])
     expect(schema.courses).toEqual([
       'admins_role',
+      'conversation_scope',
       'created_at',
       'enabled',
       'file_prefix',
@@ -118,6 +124,54 @@ describe('runMigrations', () => {
       'name',
       'ordering',
       'organization_id',
+    ])
+    expect(schema.people).toEqual([
+      'created_at',
+      'display_name',
+      'email',
+      'first_name',
+      'github_handle',
+      'id',
+      'last_name',
+      'organization_id',
+    ])
+    expect(schema.person_identities).toEqual([
+      'created_at',
+      'external_id',
+      'id',
+      'organization_id',
+      'person_id',
+      'surface',
+    ])
+    expect(schema.conversations).toEqual([
+      'course_id',
+      'created_at',
+      'id',
+      'last_message_at',
+      'organization_id',
+      'person_id',
+      'surface',
+      'upstream_thread_id',
+    ])
+    expect(schema.messages).toEqual([
+      'category_ref',
+      'channel_ref',
+      'content',
+      'conversation_id',
+      'course_id',
+      'created_at',
+      'direction',
+      'id',
+      'organization_id',
+      'person_id',
+      'surface',
+    ])
+    expect(schema.usage_counters).toEqual([
+      'count',
+      'course_id',
+      'day',
+      'organization_id',
+      'person_id',
     ])
   })
 

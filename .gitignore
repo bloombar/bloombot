@@ -177,7 +177,10 @@ node_modules/
 data/*.db
 
 # Throwaway SQLite files test suites create and clean up (packages/db/tests)
-tmp/
+# — anchored to the repo root, the same reasoning as /repos/ above: an
+# unanchored pattern here would also ignore any nested tmp/ a later package
+# creates.
+/tmp/
 
 # TypeScript build output and incremental state
 *.tsbuildinfo

@@ -28,32 +28,68 @@ const ALLOWLIST: Record<string, string[]> = {
 interface ExportedFunction {
   name: string
   firstParamName: string | undefined
+  /** Index in `source` where this function's `export` keyword starts — used
+   *  to find where the *next* export begins, so a function's body can be
+   *  sliced out without a full parser. */
+  index: number
+  /** Index in `source` right after the matched signature — where the
+   *  function body (or, for an arrow function, the expression after `=>`)
+   *  begins. */
+  bodyStart: number
 }
 
-/** Every top-level `export function` declaration in a TS source file. */
+/** The first parameter's name, or `undefined` for a no-argument function. */
+function firstParamName(rawParams: string): string | undefined {
+  const params = rawParams.trim()
+  return params.length === 0
+    ? undefined
+    : (params.split(',')[0] ?? '')
+        .trim()
+        .split(':')[0]
+        ?.trim()
+        .replace(/\?$/, '')
+}
+
+/**
+ * Every top-level exported function in a TS source file, in both the
+ * `export function foo(...)` and `export const foo = (...) => ...` shapes —
+ * a repo function can legitimately be written either way, and a check that
+ * only recognised the first shape would silently skip every arrow-const
+ * export while still reporting `fns.length > 0` from whatever it *did* find.
+ */
 function exportedFunctions(source: string): ExportedFunction[] {
   const found: ExportedFunction[] = []
   // `[^)]*` deliberately spans newlines (it excludes only `)`, not `\n`), so
-  // this matches a parameter list formatted across multiple lines just as
-  // well as one written on a single line.
-  const pattern = /export function (\w+)\(([^)]*)\)/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(source))) {
-    // Both groups always capture when the pattern matches at all — the
-    // `?? ''` fallbacks are here only to satisfy `noUncheckedIndexedAccess`.
-    const name = match[1] ?? ''
-    const params = (match[2] ?? '').trim()
-    const firstParamName =
-      params.length === 0
-        ? undefined
-        : (params.split(',')[0] ?? '')
-            .trim()
-            .split(':')[0]
-            ?.trim()
-            .replace(/\?$/, '')
-    found.push({ name, firstParamName })
+  // each pattern matches a parameter list formatted across multiple lines
+  // just as well as one written on a single line. The arrow-const pattern
+  // also tolerates an optional return type between the parameter list and
+  // `=>` (e.g. `(organizationId: string): number =>`), since that is common
+  // enough in this codebase that not matching it would reopen the same gap
+  // this widening is meant to close.
+  const patterns = [
+    /export (?:async )?function (\w+)\(([^)]*)\)/g,
+    /export const (\w+) = (?:async )?\(([^)]*)\)(?:\s*:\s*[^=]+)?\s*=>/g,
+  ]
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(source))) {
+      // Both groups always capture when the pattern matches at all — the
+      // `?? ''` fallbacks are here only to satisfy `noUncheckedIndexedAccess`.
+      const name = match[1] ?? ''
+      found.push({
+        name,
+        firstParamName: firstParamName(match[2] ?? ''),
+        index: match.index,
+        bodyStart: match.index + match[0].length,
+      })
+    }
   }
-  return found
+
+  // Both patterns are run over the same source independently; sort by
+  // position so `bodyStart`/`index` pairs line up in file order regardless
+  // of which pattern found which function.
+  return found.sort((a, b) => a.index - b.index)
 }
 
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
@@ -86,6 +122,32 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
       for (const fn of fns) {
         if (allowedInThisFile.includes(fn.name)) continue
         expect(fn.firstParamName, `${file}#${fn.name}`).toBe('organizationId')
+      }
+    })
+  }
+
+  // The check above only looks at a parameter *name* in the signature, not
+  // at what the function actually does with it — a function that takes
+  // `organizationId` and never mentions it again would still pass. That gap
+  // is exactly how `disableAccountInOrganization` slipped through: it took
+  // `organizationId` as its first parameter (satisfying the check above),
+  // used it only to look up a membership as a pre-check, and then issued its
+  // `UPDATE` with no organization id in the `WHERE` clause at all — a global
+  // write reachable from any organization. This second assertion is a
+  // heuristic, not a proof (it cannot tell "used to scope a query" from
+  // "used for something unrelated"), but it does fail a function that takes
+  // the parameter and never uses it at all.
+  for (const file of files) {
+    it(`${file}: every scoped exported function's body references organizationId after its signature`, () => {
+      const source = readFileSync(`${REPOS_DIR}/${file}`, 'utf8')
+      const fns = exportedFunctions(source)
+      const allowedInThisFile = ALLOWLIST[file] ?? []
+
+      for (const [i, fn] of fns.entries()) {
+        if (allowedInThisFile.includes(fn.name)) continue
+        const nextExportStart = fns[i + 1]?.index ?? source.length
+        const body = source.slice(fn.bodyStart, nextExportStart)
+        expect(body, `${file}#${fn.name}`).toContain('organizationId')
       }
     })
   }

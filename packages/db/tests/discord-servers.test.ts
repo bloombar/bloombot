@@ -1,8 +1,17 @@
 import { randomUUID } from 'node:crypto'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { eq } from 'drizzle-orm'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { accounts, discordServers, organizations, schema } from '@bloombot/db'
+import {
+  accounts,
+  closeDatabase,
+  discordServers,
+  openDatabase,
+  organizations,
+  schema,
+  type Database,
+} from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -11,6 +20,36 @@ let testDb: TestDatabase
 afterEach(() => {
   testDb.cleanup()
 })
+
+/**
+ * Stubs a connection's *second* `db.select(...)` call to return `staleResult`
+ * instead of querying the table — every other call (including the first,
+ * `claimDiscordServerBinding`'s membership check) still hits the real
+ * database. This is how the TEN-3 race tests below put a connection into the
+ * exact window a genuinely concurrent process can land in — its own read
+ * happened before another connection's write committed — which a
+ * single-threaded test cannot reach naturally, because better-sqlite3's
+ * calls are synchronous and independent (no transaction holds a snapshot
+ * across them), so nothing else can run between one connection's own read
+ * and its own write. Only the read is faked; the write that follows runs for
+ * real, against the real database, through the real exported function — so
+ * it is that write's own guard (the fix under test) that decides the
+ * outcome.
+ */
+function stubSecondReadAsStale(
+  db: Database,
+  staleResult: discordServers.DiscordServerBinding | undefined
+): void {
+  const realSelect = db.select.bind(db)
+  vi.spyOn(db, 'select')
+    .mockImplementationOnce(realSelect as never)
+    .mockImplementationOnce(
+      () =>
+        ({
+          from: () => ({ where: () => ({ get: () => staleResult }) }),
+        }) as never
+    )
+}
 
 /** Seeds two organizations, each with one account to install the bot. */
 function seedTwoOrganizationsWithInstallers(testDatabase: TestDatabase) {
@@ -53,6 +92,27 @@ describe('discord-servers repo', () => {
 
     expect(binding).toMatchObject({ serverId, organizationId: orgA })
     expect(binding?.removedAt).toBeNull()
+  })
+
+  // TEN-4 (data-layer half): the foreign key on `installed_by_account_id`
+  // only proves the account exists *somewhere* — it says nothing about
+  // whether that account belongs to the organization doing the claiming. A
+  // foreign tenant's account must not be recordable as the installer.
+  it('refuses to claim when the installing account is not a member of the claiming organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, installerB } = seedTwoOrganizationsWithInstallers(testDb)
+    const serverId = '110110110110110110'
+
+    const blocked = discordServers.claimDiscordServerBinding(
+      orgA,
+      { serverId, installedByAccountId: installerB.id }, // a member of Org B, not Org A
+      testDb.db
+    )
+
+    expect(blocked).toBeUndefined()
+    expect(
+      discordServers.resolveDiscordServerBinding(serverId, testDb.db)
+    ).toBeUndefined()
   })
 
   it('resolves a bound snowflake to its organization, unscoped (TEN-2 exception #2)', () => {
@@ -109,6 +169,44 @@ describe('discord-servers repo', () => {
         })
         .run()
     ).toThrow()
+  })
+
+  // TEN-3: the insert branch must report "already claimed elsewhere" the
+  // same way the other two branches do — `undefined`, not SQLite's raw
+  // constraint error escaping for a caller to pattern-match on.
+  it('returns undefined, not a thrown error, when a concurrent connection already claimed a never-bound snowflake', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB, installerA, installerB } =
+      seedTwoOrganizationsWithInstallers(testDb)
+    const serverId = '101101101101101101'
+
+    // Connection 1 claims the never-bound snowflake for real — wins.
+    const winner = discordServers.claimDiscordServerBinding(
+      orgA,
+      { serverId, installedByAccountId: installerA.id },
+      testDb.db
+    )
+    expect(winner).toMatchObject({ organizationId: orgA })
+
+    // Connection 2's own lookup is stubbed stale — as it would have seen
+    // this snowflake had it looked before connection 1's insert committed —
+    // so it still believes the snowflake is free and attempts the real
+    // INSERT below, which hits the real primary key SQLite already enforces.
+    const db2 = openDatabase(testDb.path)
+    stubSecondReadAsStale(db2, undefined)
+
+    const loser = discordServers.claimDiscordServerBinding(
+      orgB,
+      { serverId, installedByAccountId: installerB.id },
+      db2
+    )
+
+    expect(loser).toBeUndefined()
+    closeDatabase(db2)
+    // Untouched: still connection 1's claim.
+    expect(
+      discordServers.resolveDiscordServerBinding(serverId, testDb.db)
+    ).toMatchObject({ organizationId: orgA })
   })
 
   // TEN-3: the repo's claim function refuses a server actively bound to a
@@ -187,6 +285,69 @@ describe('discord-servers repo', () => {
     )
 
     expect(reclaimed).toMatchObject({ serverId, organizationId: orgB })
+    expect(
+      discordServers.resolveDiscordServerBinding(serverId, testDb.db)
+    ).toMatchObject({ organizationId: orgB })
+  })
+
+  // TEN-3: the re-claim UPDATE must be a single conditional statement — a
+  // concurrent connection whose own read is stale must not be able to
+  // silently overwrite the winner's claim.
+  it('refuses a re-claim whose own read is stale — the write loses the race', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB, installerA, installerB } =
+      seedTwoOrganizationsWithInstallers(testDb)
+    const orgC = randomUUID()
+    organizations.createOrganization(
+      orgC,
+      { name: 'Org C', isPersonal: false },
+      testDb.db
+    )
+    const installerC = accounts.createAccount(
+      orgC,
+      { email: 'c@example.edu', displayName: 'C', role: 'owner' },
+      testDb.db
+    )
+    const serverId = '202202202202202202'
+
+    discordServers.claimDiscordServerBinding(
+      orgA,
+      { serverId, installedByAccountId: installerA.id },
+      testDb.db
+    )
+    discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+
+    // The released binding, as connection 2 would have seen it had it
+    // looked before connection 1's re-claim below committed.
+    const staleRelease = testDb.db
+      .select()
+      .from(schema.discordServerBindings)
+      .where(eq(schema.discordServerBindings.serverId, serverId))
+      .get()
+
+    // Connection 1 re-claims for Org B, through the repo function — wins.
+    const winner = discordServers.claimDiscordServerBinding(
+      orgB,
+      { serverId, installedByAccountId: installerB.id },
+      testDb.db
+    )
+    expect(winner).toMatchObject({ organizationId: orgB })
+
+    // Connection 2's own lookup is stubbed to return that stale, released
+    // snapshot, so it still believes the snowflake is free to re-claim and
+    // attempts the real UPDATE below, for Org C.
+    const db2 = openDatabase(testDb.path)
+    stubSecondReadAsStale(db2, staleRelease)
+
+    const loser = discordServers.claimDiscordServerBinding(
+      orgC,
+      { serverId, installedByAccountId: installerC.id },
+      db2
+    )
+
+    expect(loser).toBeUndefined()
+    closeDatabase(db2)
+    // Untouched: still connection 1's claim.
     expect(
       discordServers.resolveDiscordServerBinding(serverId, testDb.db)
     ).toMatchObject({ organizationId: orgB })

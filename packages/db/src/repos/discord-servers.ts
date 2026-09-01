@@ -8,10 +8,12 @@
  * functions and writes to the table directly.
  */
 
-import { and, eq, isNull } from 'drizzle-orm'
+import BetterSqlite3 from 'better-sqlite3'
+import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { discordServerBindings } from '../schema.js'
+import { getMembership } from './memberships.js'
 
 export type DiscordServerBinding = typeof discordServerBindings.$inferSelect
 
@@ -50,11 +52,27 @@ export interface ClaimDiscordServer {
 /**
  * Claim a Discord server for an organization.
  *
- * Three outcomes, in order:
- *  - the snowflake has never been bound: insert a fresh binding.
+ * Refused, up front: `installedByAccountId` is not a member of
+ * `organizationId` — the foreign key only proves the account exists
+ * *somewhere*, not that it administers *this* organization, and a foreign
+ * tenant's account must not be recordable as the installer. (This is only
+ * the data-layer half of TEN-4's fuller "verify the account actually
+ * administers the Discord server" check, which belongs to the phase with
+ * the OAuth flow.)
+ *
+ * Otherwise, three outcomes:
+ *  - the snowflake has never been bound: insert a fresh binding. If a
+ *    concurrent claim wins the race, SQLite's primary key refuses the second
+ *    insert; that failure is caught here and reported the same way as any
+ *    other "already claimed elsewhere" outcome — `undefined`, not a thrown
+ *    driver error a caller would have to pattern-match on.
  *  - it was bound and later removed (TEN-6, `removed_at` set): re-bind it to
  *    `organizationId`, which may or may not be who held it before (TEN-3
- *    explicitly allows re-claiming a released server).
+ *    explicitly allows re-claiming a released server). The `UPDATE` repeats
+ *    `removed_at IS NULL` — the same condition that qualified `existing` — so
+ *    a concurrent claim that re-binds the row first makes this one a no-op
+ *    rather than a silent second write to a binding that is actively bound
+ *    again by the time this statement runs; the loser gets `undefined`.
  *  - it is actively bound (`removed_at` is null) to a *different*
  *    organization: refused — returns `undefined` rather than throwing,
  *    because "already claimed elsewhere" is a routine outcome an installer
@@ -67,6 +85,12 @@ export function claimDiscordServerBinding(
   input: ClaimDiscordServer,
   db: Database
 ): DiscordServerBinding | undefined {
+  // TEN-4 (data-layer half): the installer must actually belong to the
+  // organization claiming the server.
+  if (!getMembership(organizationId, input.installedByAccountId, db)) {
+    return undefined
+  }
+
   const existing = db
     .select()
     .from(discordServerBindings)
@@ -74,16 +98,30 @@ export function claimDiscordServerBinding(
     .get()
 
   if (!existing) {
-    return db
-      .insert(discordServerBindings)
-      .values({
-        serverId: input.serverId,
-        organizationId,
-        installedByAccountId: input.installedByAccountId,
-        installedAt: Date.now(),
-      })
-      .returning()
-      .get()
+    try {
+      return db
+        .insert(discordServerBindings)
+        .values({
+          serverId: input.serverId,
+          organizationId,
+          installedByAccountId: input.installedByAccountId,
+          installedAt: Date.now(),
+        })
+        .returning()
+        .get()
+    } catch (error) {
+      // A concurrent insert claimed this snowflake first: SQLite's primary
+      // key on `server_id` refuses the second insert. Report it the same way
+      // as every other "already claimed elsewhere" outcome, not as a thrown
+      // driver error the caller has to recognise by string.
+      if (
+        error instanceof BetterSqlite3.SqliteError &&
+        error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+      ) {
+        return undefined
+      }
+      throw error
+    }
   }
 
   if (existing.removedAt === null) {
@@ -91,6 +129,11 @@ export function claimDiscordServerBinding(
   }
 
   // TEN-3 / TEN-6: a released binding can be re-claimed by any organization.
+  // `removed_at IS NULL` here — not just `server_id = ?` — makes this a
+  // single conditional write: a concurrent claim that re-binds the row
+  // between the `SELECT` above and this `UPDATE` makes the row no longer
+  // match, so `.get()` returns no row and this caller is refused rather than
+  // silently overwriting the winner's binding.
   return db
     .update(discordServerBindings)
     .set({
@@ -99,7 +142,12 @@ export function claimDiscordServerBinding(
       installedAt: Date.now(),
       removedAt: null,
     })
-    .where(eq(discordServerBindings.serverId, input.serverId))
+    .where(
+      and(
+        eq(discordServerBindings.serverId, input.serverId),
+        isNotNull(discordServerBindings.removedAt)
+      )
+    )
     .returning()
     .get()
 }

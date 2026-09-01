@@ -235,8 +235,8 @@ comment nobody re-reads):
 - `accounts.getAccountByEmail(email, db)` — an account is a sign-in identity, not something scoped to one
   organization (the same account can belong to several, through `memberships`), and it has to be found by
   email _before_ sign-in knows which organization is relevant. Every other function in `accounts.ts` reaches
-  the account through an organization's membership instead (`getAccountInOrganization`,
-  `disableAccountInOrganization`), so a cross-tenant read still looks like absence (TEN-5).
+  the account through an organization's membership instead (`getAccountInOrganization`), so a cross-tenant
+  read still looks like absence (TEN-5).
 - `discord-servers.resolveDiscordServerBinding(serverId, db)` — this _is_ the lookup that establishes which
   organization an incoming Discord message belongs to; it cannot itself take an organization id as input
   without begging the question. It returns `undefined` for both an unbound server and a released one
@@ -261,9 +261,21 @@ the engine changes.
 application code, not an `INSERT ... ON CONFLICT DO UPDATE ... WHERE`. The latter is still portable SQL (D-2
 allows it), but the explicit select-then-write reads plainly as the three cases TEN-3 actually describes
 (never bound / released and re-claimable / actively bound elsewhere) without leaning on `ON CONFLICT`'s
-less-obvious "conditional no-op" semantics — worth it here since better-sqlite3 is synchronous and
-single-threaded, so there is no other code that can run between the `SELECT` and the following write.
+less-obvious "conditional no-op" semantics. What protects each branch from a second, genuinely concurrent
+writer process is _not_ that better-sqlite3 is single-threaded — D-2 and PLAT-4 both describe several
+processes (bot, API, worker) writing this one database, so "nothing else can run between this call's own
+`SELECT` and its own write" is a per-process property, not a guarantee about a _different_ process racing it.
+What actually holds, per branch: the never-bound insert is backstopped structurally by the primary key on
+`server_id`, so a losing concurrent insert fails at the database level regardless of what its own `SELECT`
+believed, and the failure is caught and reported as `undefined` rather than left to escape as a raw driver
+error; the re-claim update repeats `removed_at IS NOT NULL` in its own `WHERE`, making it a single conditional
+statement the database itself refuses once the row no longer matches, rather than a blind write based on an
+earlier read. Any future two-step read-then-write added to this package needs the same shape — a write whose
+own `WHERE` (or a structural constraint) re-checks the condition its read relied on — not an assumption that
+nothing else can have changed the row in between.
 
-**Limits.** The two-step claim is not safe against a second, *concurrent* writer process racing the same
-snowflake — fine for a single SQLite connection today, but something to revisit if `packages/db` ever gains a
-second writer to this table before the Postgres migration D-2 leaves open.
+**Limits.** The specific two-step claim above is now safe against a second, concurrent writer process racing
+the same snowflake, for the reason above — but that safety is a property of _this_ function's two branches,
+not of read-then-write in general. A future two-step operation in this package that reads one thing and writes
+based on it needs to be checked against the same question this one now answers, rather than assumed safe by
+analogy.

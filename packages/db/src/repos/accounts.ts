@@ -115,36 +115,3 @@ export function getAccountInOrganization(
     .where(eq(accounts.id, accountId))
     .get()
 }
-
-/**
- * Disable an account, scoped to a membership in `organizationId`.
- *
- * Returns the number of rows changed: `1` on success, `0` both when the
- * account does not exist and when it is not a member of this organization —
- * an organization can never disable an account it has no relationship to,
- * and it cannot tell the difference between those two cases either (TEN-5).
- */
-export function disableAccountInOrganization(
-  organizationId: string,
-  accountId: string,
-  db: Database
-): number {
-  const member = db
-    .select({ accountId: memberships.accountId })
-    .from(memberships)
-    .where(
-      and(
-        eq(memberships.organizationId, organizationId),
-        eq(memberships.accountId, accountId)
-      )
-    )
-    .get()
-  if (!member) return 0
-
-  const result = db
-    .update(accounts)
-    .set({ disabledAt: Date.now() })
-    .where(eq(accounts.id, accountId))
-    .run()
-  return result.changes
-}

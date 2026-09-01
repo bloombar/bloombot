@@ -103,49 +103,23 @@ describe('accounts repo', () => {
     ).toBeUndefined()
   })
 
-  it('disables an account scoped to the organization it belongs to', () => {
+  // Proves `createAccount`'s `db.transaction(...)` wrapper is real: the
+  // membership insert fails its foreign key (no such organization), and
+  // without the transaction the preceding account insert would survive it,
+  // leaving an orphan row holding the email hostage.
+  it('leaves no orphan account row when the membership insert fails', () => {
     testDb = createTestDatabase()
-    const { orgA } = seedTwoOrganizations(testDb)
 
-    const account = accounts.createAccount(
-      orgA,
-      { email: 'to-disable@example.edu', displayName: 'X', role: 'owner' },
-      testDb.db
-    )
+    expect(() =>
+      accounts.createAccount(
+        randomUUID(), // no organization with this id exists
+        { email: 'orphan@example.edu', displayName: 'Orphan', role: 'owner' },
+        testDb.db
+      )
+    ).toThrow()
 
-    const changed = accounts.disableAccountInOrganization(
-      orgA,
-      account.id,
-      testDb.db
-    )
-
-    expect(changed).toBe(1)
     expect(
-      accounts.getAccountInOrganization(orgA, account.id, testDb.db)?.disabledAt
-    ).not.toBeNull()
-  })
-
-  // TEN-2: a write through the wrong organization id affects zero rows,
-  // not the other tenant's row.
-  it('disabling through the wrong organization affects zero rows', () => {
-    testDb = createTestDatabase()
-    const { orgA, orgB } = seedTwoOrganizations(testDb)
-
-    const account = accounts.createAccount(
-      orgA,
-      { email: 'protected@example.edu', displayName: 'X', role: 'owner' },
-      testDb.db
-    )
-
-    const changed = accounts.disableAccountInOrganization(
-      orgB,
-      account.id,
-      testDb.db
-    )
-
-    expect(changed).toBe(0)
-    expect(
-      accounts.getAccountInOrganization(orgA, account.id, testDb.db)?.disabledAt
-    ).toBeNull()
+      accounts.getAccountByEmail('orphan@example.edu', testDb.db)
+    ).toBeUndefined()
   })
 })

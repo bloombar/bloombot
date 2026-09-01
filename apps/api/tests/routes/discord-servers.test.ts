@@ -45,7 +45,7 @@ const BOT_MEMBER_GUILD = { id: 'guild-1', name: 'Admin Guild' }
 
 /** Begins an install over HTTP and pulls the `state` value back out of the returned authorization URL — the same value a real front end would get back from Discord's own redirect. */
 async function beginInstall(
-  app: import('express').Express,
+  app: import('node:http').Server,
   organizationId: string,
   cookieHeader: string
 ): Promise<{ state: string; authorizationUrl: string; expiresAt: number }> {
@@ -69,7 +69,7 @@ describe('POST /organizations/:organizationId/discord-servers/install/begin', ()
   it('returns an authorization URL carrying client_id, redirect_uri, state and a PKCE code_challenge', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const { authorizationUrl, expiresAt } = await beginInstall(
       app,
@@ -96,7 +96,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       userGuilds: [NON_ADMIN_GUILD],
       botGuilds: [BOT_MEMBER_GUILD],
     })
-    const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
     const { state } = await beginInstall(
       app,
       caller.organizationId,
@@ -124,7 +126,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       userGuilds: [ADMIN_GUILD],
       botGuilds: [BOT_MEMBER_GUILD],
     })
-    const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
     const { state } = await beginInstall(
       app,
       caller.organizationId,
@@ -158,7 +162,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       ],
       botGuilds: [BOT_MEMBER_GUILD],
     })
-    const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
     const { state } = await beginInstall(
       app,
       caller.organizationId,
@@ -183,7 +189,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       userGuilds: [ADMIN_GUILD],
       botGuilds: [], // the bot is not a member of guild-1
     })
-    const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
     const { state } = await beginInstall(
       app,
       caller.organizationId,
@@ -214,7 +222,7 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       botGuilds: [BOT_MEMBER_GUILD],
     })
     const logger = createFakeLogger()
-    const app = buildTestApp(testDb.db, {
+    const app = await buildTestApp(testDb.db, {
       discordRestClient: fakeDiscord,
       logger,
     })
@@ -270,7 +278,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
           error: 'invalid_grant',
         }),
       })
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       const { state } = await beginInstall(
         app,
         caller.organizationId,
@@ -304,7 +314,7 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         }),
       })
       const logger = createFakeLogger()
-      const app = buildTestApp(testDb.db, {
+      const app = await buildTestApp(testDb.db, {
         discordRestClient: fakeDiscord,
         logger,
       })
@@ -344,7 +354,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       // A non-2xx from the *guild list* read, not the token exchange.
       fakeDiscord.getUserGuilds = () =>
         Promise.reject(new DiscordRequestError(503, { error: 'unavailable' }))
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       const { state } = await beginInstall(
         app,
         caller.organizationId,
@@ -367,7 +379,7 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
     it('refuses a callback with an unknown state', async () => {
       testDb = createTestDatabase()
       const caller = seedSignedInCaller(testDb.db)
-      const app = buildTestApp(testDb.db)
+      const app = await buildTestApp(testDb.db)
 
       const response = await request(app)
         .post(
@@ -387,7 +399,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         userGuilds: [ADMIN_GUILD],
         botGuilds: [BOT_MEMBER_GUILD],
       })
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       const { state } = await beginInstall(
         app,
         caller.organizationId,
@@ -416,7 +430,7 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
     it('refuses an expired state', async () => {
       testDb = createTestDatabase()
       const caller = seedSignedInCaller(testDb.db)
-      const app = buildTestApp(testDb.db)
+      const app = await buildTestApp(testDb.db)
       const { state } = await beginInstall(
         app,
         caller.organizationId,
@@ -459,7 +473,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         userGuilds: [ADMIN_GUILD],
         botGuilds: [BOT_MEMBER_GUILD],
       })
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       // The owner begins the install — this is the state that would leak.
       const { state } = await beginInstall(
         app,
@@ -523,7 +539,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         userGuilds: [ADMIN_GUILD],
         botGuilds: [BOT_MEMBER_GUILD],
       })
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       // Begun against the caller's home organization — the state is scoped
       // to it.
       const { state } = await beginInstall(
@@ -556,7 +574,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         userGuilds: [ADMIN_GUILD],
         botGuilds: [BOT_MEMBER_GUILD],
       })
-      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const app = await buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+      })
       const { state } = await beginInstall(
         app,
         caller.organizationId,
@@ -602,7 +622,9 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
       userGuilds: [ADMIN_GUILD],
       botGuilds: [BOT_MEMBER_GUILD],
     })
-    const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
     const { state } = await beginInstall(
       app,
       caller.organizationId,
@@ -634,7 +656,7 @@ describe('discordServers.remove over HTTP (TEN-6)', () => {
       { serverId: 'guild-1', installedByAccountId: caller.accountId },
       testDb.db
     )
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const removeResponse = await request(app)
       .post(

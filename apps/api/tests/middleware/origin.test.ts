@@ -49,7 +49,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { registry, execute } = buildRecordingRegistry()
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -65,7 +65,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { registry, execute } = buildRecordingRegistry()
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -81,7 +81,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { registry, execute } = buildRecordingRegistry()
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -97,7 +97,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { registry, execute } = buildRecordingRegistry()
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -115,7 +115,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { registry, execute } = buildRecordingRegistry()
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -128,7 +128,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
 
   it('a GET is unaffected by a foreign Origin', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .get('/health')
@@ -154,7 +154,7 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
   it('refuses a foreign Origin on /auth/sign-out too, not only the actions router', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post('/auth/sign-out')

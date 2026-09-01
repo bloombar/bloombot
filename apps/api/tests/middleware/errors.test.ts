@@ -35,7 +35,7 @@ describe('API-4 — one middleware maps every action error to a status', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const otherOrgCaller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     // Give the *other* organization a real project, so this is genuinely
     // "belongs to someone else," not merely "never existed."
@@ -71,7 +71,7 @@ describe('API-4 — one middleware maps every action error to a status', () => {
   it('a validation failure is a 400 carrying the field errors', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/projects.create`)
@@ -116,7 +116,7 @@ describe('API-4 — one middleware maps every action error to a status', () => {
     const registry = new ActionRegistry()
     registry.register(explodingAction)
     const logger = createFakeLogger()
-    const app = buildTestApp(testDb.db, { registry, logger })
+    const app = await buildTestApp(testDb.db, { registry, logger })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.explode`)
@@ -154,7 +154,7 @@ describe('API-4 — one middleware maps every action error to a status', () => {
   it('malformed JSON is a 400, not a 500, and logs nothing at error level', async () => {
     testDb = createTestDatabase()
     const logger = createFakeLogger()
-    const app = buildTestApp(testDb.db, { logger })
+    const app = await buildTestApp(testDb.db, { logger })
 
     const response = await request(app)
       .post('/auth/sign-out')
@@ -172,7 +172,7 @@ describe('API-4 — one middleware maps every action error to a status', () => {
   it('an over-limit body is a 413, not a 500, and logs nothing at error level', async () => {
     testDb = createTestDatabase()
     const logger = createFakeLogger()
-    const app = buildTestApp(testDb.db, { logger })
+    const app = await buildTestApp(testDb.db, { logger })
 
     // `express.json()` defaults to a 100kb limit (`server.ts`); comfortably
     // over it without relying on any non-default configuration.

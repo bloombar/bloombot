@@ -784,12 +784,17 @@ is exactly the state this endpoint exists to catch. `apps/bot/src/gateway-health
 also clears the flag on `Events.ShardDisconnect`/`Events.ShardReconnecting` and sets it again on
 `Events.ShardResume`, and binds to `127.0.0.1` only rather than every interface (finding 8) — this endpoint has
 no reason to be reachable from outside the machine the process runs on. It deliberately says nothing about the
-database connection, the OpenAI adapter, or any per-request state: every one of those already degrades to a
-logged error and a reply rather than taking the whole process down (CORE-5's "a model failure degrades to an
-apology, never ... a stack trace" — the same discipline one level up), so there is nothing about them a
-process-level check could report that would not just restate what the logs already say better, and a health
-check that pings the database or the model on every probe would give a supervisor a reason to restart a
-process that is otherwise serving students fine.
+database connection or any per-request state: every one of those already degrades to a logged error and a
+reply rather than taking the whole process down (CORE-5's "a model failure degrades to an apology, never ... a
+stack trace" — the same discipline one level up), so there is nothing about them a process-level check could
+report that would not just restate what the logs already say better, and a health check that pings the
+database on every probe would give a supervisor a reason to restart a process that is otherwise serving
+students fine. **Updated by D-33:** the OpenAI adapter is the one exception this paragraph's own "nothing
+else" no longer holds — `COST-5` added a second field, `model` (the running call/error count from
+`@bloombot/core`'s `createCountingModelClient`), for the reason D-33's own "Choice, on `COST-5`'s monitoring
+read" paragraph gives: the provider's error rate has to be observed by the one process that actually calls it.
+This paragraph's "gateway connectivity and nothing else" is therefore its own heading, not its own body, as of
+that slice — corrected here rather than left to silently disagree with the code.
 
 **Why not a richer health payload.** A deeper check — `SELECT 1` against the database, a no-op OpenAI call —
 was considered and rejected for this slice: `apps/bot` has one gateway connection and one database handle it
@@ -2499,10 +2504,48 @@ entry in `rates` is priced against `defaultRate` instead of `0` — `COST-6`'s o
 zero" — and flagged `measurement: 'estimated'` (`packages/core/src/pricing.ts#computeCost`), since the number is
 a documented guess at what this model probably costs, not what the provider actually billed this specific model
 at. A call whose provider reported no usage at all (`@bloombot/openai`'s own `extractUsage`, MDL-5, returning
-`undefined` rather than inventing zeros) is priced the same way as the unpriced-model case structurally — no
-tokens to multiply, so `costMicros: 0`, `inputTokens`/`outputTokens: null`, `measurement: 'estimated'` — two
-different reasons for the same flag, both closed by the same `computeCost` branch rather than two separate
+`undefined` rather than inventing zeros) is priced against a character-based token estimate of the request and
+answer text instead (finding 2 of this rework, below), `measurement: 'estimated'` — the same flag an unpriced
+model already gets, two different reasons closed by the same `computeCost` branch rather than two separate
 un-flagged shortcuts a future change could diverge on.
+
+**Finding 2 of this rework — an unmetered call used to cost `0`, and the cap silently stopped counting it.**
+The first version of this slice recorded `costMicros: 0`, `inputTokens`/`outputTokens: null` for a call the
+provider reported no usage for — reasoned, at the time, as "there is nothing to multiply." That reasoning
+missed what the cap actually does with the number: `hasReachedSpendingCap` sums `cost_micros` with no
+exception for how a row got its value, so an organization whose provider kept returning no usage (a proxy that
+strips it, a model that never reports it) kept being answered indefinitely — the cap, a safety control, was
+being silently defeated by the one case it exists to catch a runaway bill from. Two fixes were considered:
+estimate a real number, or make the cap treat an unmetered call as something other than free. This slice takes
+the first: `packages/core/src/pricing.ts#computeCost` now estimates both token counts from the request and
+answer text's own length — `ESTIMATED_CHARACTERS_PER_TOKEN = 4`, OpenAI's own documented rule of thumb for
+English text — and prices that estimate exactly the way a measured call is priced, through the same arithmetic,
+flagged `measurement: 'estimated'` rather than `'measured'`. `inputTokens`/`outputTokens` hold that estimate
+too, not `null` — `null` was chosen when there was truly nothing to report; there is something now, and hiding
+a nonzero `costMicros` behind a `null` token count would be its own kind of misleading. The type stays
+`number | null` (`repos/cost-ledger.ts#NewCostLedgerEntry`) for a caller with genuinely nothing to estimate
+from, not because this path still produces one. The other half of the same finding: neither COST-4 read used
+to carry the `measurement` flag at all, so an instructor or a platform administrator could not tell a total
+made partly (or entirely) of estimates apart from one that was fully measured — the exact thing COST-6's own
+text says an estimate must never do. `getOrganizationUsageSummary` and `listOrganizationTotals`
+(`repos/cost-ledger.ts`) now both report `estimatedCostMicros` alongside `costMicros`/`totalCostMicros` — the
+portion of the total that came from an `'estimated'` row, summed in the same query rather than a second pass.
+
+**Finding 3 of this rework — a missing pricing table prices every call at zero, and nothing said so.**
+`AnswerDependencies.pricing` is optional, defaulting to `NO_PRICING_CONFIGURED` — an empty `rates` table and a
+`0`/`0` `defaultRate` — when a caller omits it. Only `apps/bot` calls `answerQuestion` today, and it always
+wires the real table, so this default is unreached in production; but `answer.ts`'s own module comment already
+names the web chat and MCP surfaces as future callers, and `@bloombot/discord`'s own `HandleMentionDependencies.
+pricing` is optional too, so a surface that simply forgets to wire it would silently price every call at zero
+and disable that organization's own cap for every call it makes — indistinguishable, from the ledger alone,
+from a healthy, well-priced surface that genuinely costs nothing. Requiring `pricing` outright was considered
+and rejected for this slice: it would touch every existing caller of `answerQuestion`/`handleMention` (over
+seventy call sites across `packages/core`'s and `packages/discord`'s own test suites alone) to satisfy a
+signature change for a gap no caller has hit yet. Instead, `answer.ts` now logs a `warn` every time
+`NO_PRICING_CONFIGURED` is actually reached — cheap, and it means a surface running unconfigured shows up in
+its own logs immediately rather than waiting for a cap that will never fire to be noticed at all.
+`NO_PRICING_CONFIGURED`'s own `defaultRate` stays `0`/`0` on purpose, not a guessed nonzero number: the point of
+this seam is to be caught, not quietly papered over with a value that would look like a real estimate.
 
 **Why `packages/core` restates `ModelRate`/`PricingTable` instead of importing `@bloombot/config`'s own types.**
 `D-29` already settled this for `AdmissionGate`: `packages/core` depends on `@bloombot/config` not at all, even
@@ -2585,3 +2628,23 @@ from `CONFIG` itself — the same "packages/core/packages/actions never read CON
 holds `packages/core` to, extended here to `packages/actions`, so whichever surface eventually calls this
 (an admin console route, `ADMIN-4`'s own phase) is the one place that has to know the three ports are
 `CONFIG.BOT_HEALTH_PORT`/`WORKER_HEALTH_PORT`/`API_PORT` on `127.0.0.1`.
+
+The cap check itself (`hasReachedSpendingCap`) is a plain read against the sum of rows already written, not a
+reservation — stated above, and worth stating the bound this actually produces explicitly: an organization can
+be overshot by up to `JOB-4`'s own admission limit (`MODEL_ADMISSION_LIMIT`, default 5). Every request already
+admitted checks the cap before it was exceeded, then proceeds to call the model and write its own ledger row —
+so up to that many concurrent requests can each pass the same "not yet over" read before any of their own
+writes lands, and the organization's true spend settles somewhat above its configured cap once all of them
+finish. Bounded, not unbounded — the same trade `D-29` already accepts for the daily allowance's own admission
+ordering — but explicit here because nothing before this paragraph said the bound had a size.
+
+`organizations.ts#setSpendingCap` is repo-only, wired to no `Action` and no route: an organization that reaches
+its own cap answers nothing further until somebody edits `spending_cap_micros` by hand against the database —
+a real operational trap for whichever operator hits it first, not merely a missing feature. No phase in
+`docs/ROADMAP.md` yet owns wiring an action for it; `ADMIN-4`'s own admin console phase is the natural owner,
+the same phase already named above as the one that must authorize `listOrganizationTotals`'s own caller.
+Likewise, `listOrganizationTotals` and `checkPlatformHealth` are both plain functions outside `dispatch.ts`
+(this file's own paragraphs above have why), which means they sit outside `ACT-5`'s own audit log and
+`TEN-5`'s own access matrix entirely — harmless while nothing calls them, but the surface that eventually wires
+either one (again, `ADMIN-4`'s own phase) must add its own administrator check and its own audit trail rather
+than assuming either already exists, the same way `dispatch.ts` would have given it for free.

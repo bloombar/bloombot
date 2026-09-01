@@ -786,13 +786,17 @@ export type CostMeasurement = (typeof COST_MEASUREMENTS)[number]
 // takes for TEN-3, rather than trusted to an application check alone:
 // nothing can construct a row with any of the three missing, not even a
 // future direct writer that skips `repos/cost-ledger.ts` entirely.
-// `inputTokens`/`outputTokens` are nullable — COST-6's "an estimate is never
-// presented as a measurement" extends to the token counts themselves: when
-// the provider reported none at all, there are no counts to record, and `0`
-// would read as a fact ("this call used zero tokens") rather than what it
-// actually is ("nobody knows"). `costMicros` is always set, integer micros
-// (D-2), never a float — a ledger a float can silently drift is not a
-// ledger.
+// `inputTokens`/`outputTokens` are nullable, for a caller with genuinely
+// nothing to report — `0` would read as a fact ("this call used zero
+// tokens") rather than what it actually is. In practice
+// `@bloombot/core`'s own `computeCost` (finding 2 of the COST-1 rework)
+// fills both even when the provider reported no usage at all, from a
+// character-based estimate of the request and answer text, rather than
+// leaving them `null` while `costMicros` is priced from them anyway —
+// `measurement` (below), not nullness, is what tells a reader the count is
+// an estimate rather than what the provider actually reported. `costMicros`
+// is always set, integer micros (D-2), never a float — a ledger a float can
+// silently drift is not a ledger.
 export const costLedgerEntries = sqliteTable(
   'cost_ledger_entries',
   {

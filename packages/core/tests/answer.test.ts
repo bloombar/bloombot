@@ -249,6 +249,18 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
     )
     expect(result.kind).toBe('answered')
 
+    // Finding 4 of this rework — this test's own name promises "model and
+    // tokens", which the per-course summary alone cannot prove (it has
+    // neither field). Read the raw row `answerQuestion` actually wrote.
+    const rows = testDb.db.select().from(schema.costLedgerEntries).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.organizationId).toBe(organizationId)
+    expect(rows[0]?.courseId).toBe(courseId)
+    expect(rows[0]?.personId).toBe(personId)
+    expect(rows[0]?.model).toBe('gpt-4o')
+    expect(rows[0]?.inputTokens).toBe(100)
+    expect(rows[0]?.outputTokens).toBe(50)
+
     const summary = costLedger.getOrganizationUsageSummary(
       organizationId,
       testDb.db
@@ -261,6 +273,7 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
         // `NO_PRICING_CONFIGURED`): 0 micros, but still a real, attributed
         // row — proven by `callCount` below, not by `costMicros` alone.
         costMicros: 0,
+        estimatedCostMicros: 0,
         callCount: 1,
       },
     ])
@@ -304,7 +317,7 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
 })
 
 describe('answerQuestion (COST-6): usage the provider never reported is recorded as an estimate, never a measurement', () => {
-  it('records tokens and cost as null/zero, flagged estimated, when the model reports no usage', async () => {
+  it('estimates tokens and cost from the request/answer text, flagged estimated, when the model reports no usage — never a flat zero (finding 2 of this rework)', async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId, personId } = seedCourseAndPerson(
       testDb.db
@@ -314,6 +327,13 @@ describe('answerQuestion (COST-6): usage the provider never reported is recorded
     // reports none (MDL-5).
     const model = new FakeModelClient({ model: 'gpt-4o' })
     const logger = createFakeLogger()
+    const pricing = {
+      rates: {},
+      defaultRate: {
+        inputMicrosPerMillionTokens: 1_000_000,
+        outputMicrosPerMillionTokens: 1_000_000,
+      },
+    }
 
     await answerQuestion(
       {
@@ -324,14 +344,20 @@ describe('answerQuestion (COST-6): usage the provider never reported is recorded
         text: 'q1',
         day: '2026-01-01',
       },
-      { db: testDb.db, model, logger }
+      { db: testDb.db, model, logger, pricing }
     )
 
     const rows = testDb.db.select().from(schema.costLedgerEntries).all()
     expect(rows).toHaveLength(1)
     expect(rows[0]?.measurement).toBe('estimated')
-    expect(rows[0]?.inputTokens).toBeNull()
-    expect(rows[0]?.outputTokens).toBeNull()
+    // No usage reported, but the question ('q1') and answer
+    // (`FakeModelClient`'s own default text) are still in hand —
+    // `pricing.ts#computeCost`'s own character-based estimate, not `null`.
+    expect(rows[0]?.inputTokens).toBeGreaterThan(0)
+    expect(rows[0]?.outputTokens).toBeGreaterThan(0)
+    // Priced against that estimate, not the flat `costMicros: 0` this used
+    // to record — a cap that sums this column can actually see it.
+    expect(rows[0]?.costMicros).toBeGreaterThan(0)
   })
 
   it('prices an unpriced model against the configured default rate, flagged estimated — not silently zero', async () => {
@@ -497,6 +523,55 @@ describe('answerQuestion (COST-3): an organization at its spending cap is refuse
     expect(
       usage.getUsageCount(organizationId, courseId, personId, day, testDb.db)
     ).toBe(0)
+
+    // Finding 4 of this rework — the other half of this test's own name: a
+    // refusal for the daily allowance must not touch the cap either. A
+    // fresh organization, well under its own cap, whose daily allowance is
+    // exhausted by the one call above — `declined-over-limit` is returned
+    // before `hasReachedSpendingCap` is even read (this file's own module
+    // comment: the cap check runs *before* the allowance, so a request that
+    // never reaches the allowance check never reaches the cap check either
+    // — and, symmetrically, a decline that never ran a model call writes no
+    // ledger row for the cap to sum).
+    const other = seedCourseAndPerson(testDb.db, { maxRequestsPerDay: 1 })
+    organizations.setSpendingCap(other.organizationId, 1_000_000, testDb.db)
+    const first = await answerQuestion(
+      {
+        organizationId: other.organizationId,
+        courseId: other.courseId,
+        personId: other.personId,
+        surface: 'discord',
+        text: 'q1',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(first.kind).toBe('answered-last-request')
+    const spentAfterFirst = costLedger.getOrganizationSpentMicros(
+      other.organizationId,
+      testDb.db
+    )
+
+    const second = await answerQuestion(
+      {
+        organizationId: other.organizationId,
+        courseId: other.courseId,
+        personId: other.personId,
+        surface: 'discord',
+        text: 'q2',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(second).toEqual({ kind: 'declined-over-limit' })
+    // The refusal itself charged nothing beyond what the one answered call
+    // above already recorded — untouched by the decline.
+    expect(
+      costLedger.getOrganizationSpentMicros(other.organizationId, testDb.db)
+    ).toBe(spentAfterFirst)
+    expect(
+      costLedger.hasReachedSpendingCap(other.organizationId, testDb.db)
+    ).toBe(false)
   })
 })
 

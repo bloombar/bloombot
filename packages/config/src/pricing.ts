@@ -84,13 +84,25 @@ export function getModelPricingTable(json?: string): PricingTable {
   // A dynamic `import` would be circular (`env.ts` imports this module for
   // its own default); `process.env` is read directly instead, mirroring the
   // split `admin.ts` already takes between its own env-reading and
-  // `env.ts`'s schema. An empty string (`env.example`'s own documented,
-  // deliberately blank value for this variable) is treated the same as
-  // unset — `env.ts`'s own `.default(...)` only ever applies when the
-  // variable is missing entirely, never when it is present but blank.
-  const envValue = process.env.MODEL_PRICING_JSON
-  const raw =
-    json ?? (envValue && envValue.length > 0 ? envValue : DEFAULT_PRICING_JSON)
+  // `env.ts`'s schema. An empty string is treated the same as unset —
+  // `env.example`'s own documented, deliberately blank value for this
+  // variable — for *both* `json` and `process.env.MODEL_PRICING_JSON`, not
+  // only the latter: `apps/bot`'s own `main()` calls this with
+  // `CONFIG.MODEL_PRICING_JSON` explicitly, and zod's `.default(...)` only
+  // ever applies when a key is *absent* from the environment, never when it
+  // is present but blank — so `env.example`'s own blank line reaches this
+  // function as `json: ''`, not `json: undefined`, and `json ?? …` alone
+  // would let that empty string through to `JSON.parse` unchanged (a crash
+  // before the gateway ever connects, the exact deployment our own
+  // `docs/RUNNING_LOCALLY.md` walks an operator into). Guarding the
+  // argument the same way as the environment variable closes that gap.
+  const isBlank = (value: string | undefined): value is undefined =>
+    value === undefined || value.length === 0
+  const raw = !isBlank(json)
+    ? json
+    : !isBlank(process.env.MODEL_PRICING_JSON)
+      ? process.env.MODEL_PRICING_JSON
+      : DEFAULT_PRICING_JSON
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)

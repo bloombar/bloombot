@@ -27,11 +27,18 @@ export type CostLedgerEntry = typeof costLedgerEntries.$inferSelect
 
 /**
  * What a caller supplies to record one model call's cost. `inputTokens`/
- * `outputTokens` are `null` exactly when the provider reported no usage at
- * all (COST-6) — `undefined` would be indistinguishable from "forgot to
- * pass it" once this crosses a JSON boundary, the same reasoning
+ * `outputTokens` stay typed `number | null` for a caller with truly nothing
+ * to report — `undefined` would be indistinguishable from "forgot to pass
+ * it" once this crosses a JSON boundary, the same reasoning
  * `actions/jobs.ts#JobStatus.result`'s own comment already gives for the
- * same choice.
+ * same choice — but `@bloombot/core`'s own `computeCost` (COST-6, finding 2
+ * of the COST-1 rework) no longer passes `null` when the provider reported
+ * no usage: the request and answer text are still in hand even then, so it
+ * estimates token counts from their own length rather than leaving the
+ * count blank while `costMicros` is priced from it anyway. `measurement`
+ * (below) is what tells a reader whether a call's `inputTokens`/
+ * `outputTokens` came from the provider or from that estimate — not
+ * whether the column itself is `null`.
  */
 export interface NewCostLedgerEntry {
   courseId: string
@@ -159,11 +166,24 @@ export function hasReachedSpendingCap(
   return spent >= organization.spendingCapMicros
 }
 
-/** One course's usage, as `getOrganizationUsageSummary` reports it. */
+/**
+ * One course's usage, as `getOrganizationUsageSummary` reports it.
+ *
+ * `estimatedCostMicros` — the portion of `costMicros` that came from a row
+ * flagged `measurement: 'estimated'` rather than `'measured'` (finding 2 of
+ * the COST-1 rework) — is what keeps this read honest to COST-6's own
+ * "never presented as a measurement": without it, a course whose total is
+ * entirely a guess (a run of provider outages, say, or a model this
+ * platform has no rate for) looks identical to one whose total was priced
+ * against real token counts. `estimatedCostMicros === costMicros` is "take
+ * this number with a grain of salt"; `0` is "every micro of this was
+ * priced against a real measurement."
+ */
 export interface CourseUsageSummary {
   courseId: string
   courseTitle: string
   costMicros: number
+  estimatedCostMicros: number
   callCount: number
 }
 
@@ -172,6 +192,8 @@ export interface OrganizationUsageSummary {
   organizationId: string
   spendingCapMicros: number | null
   totalCostMicros: number
+  /** The sum of every course's own `estimatedCostMicros` — see `CourseUsageSummary`'s own comment for why this exists at all. */
+  totalEstimatedCostMicros: number
   courses: CourseUsageSummary[]
 }
 
@@ -202,6 +224,12 @@ export function getOrganizationUsageSummary(
     .select({
       courseId: costLedgerEntries.courseId,
       costMicros: sum(costLedgerEntries.costMicros),
+      // Finding 2 of the COST-1 rework — the estimated portion of
+      // `costMicros`, summed in the same query rather than a second pass
+      // over the rows: a `CASE` inside the aggregate costs nothing extra a
+      // second `SELECT` grouped by `measurement` wouldn't, and keeps one row
+      // per course instead of two.
+      estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
       callCount: sql<number>`count(*)`,
     })
     .from(costLedgerEntries)
@@ -213,6 +241,7 @@ export function getOrganizationUsageSummary(
       row.courseId,
       {
         costMicros: Number(row.costMicros ?? 0),
+        estimatedCostMicros: Number(row.estimatedCostMicros ?? 0),
         callCount: Number(row.callCount),
       },
     ])
@@ -224,6 +253,7 @@ export function getOrganizationUsageSummary(
       courseId: row.id,
       courseTitle: row.title,
       costMicros: totalsForCourse?.costMicros ?? 0,
+      estimatedCostMicros: totalsForCourse?.estimatedCostMicros ?? 0,
       callCount: totalsForCourse?.callCount ?? 0,
     }
   })
@@ -235,16 +265,22 @@ export function getOrganizationUsageSummary(
       (sumSoFar, course) => sumSoFar + course.costMicros,
       0
     ),
+    totalEstimatedCostMicros: coursesSummary.reduce(
+      (sumSoFar, course) => sumSoFar + course.estimatedCostMicros,
+      0
+    ),
     courses: coursesSummary,
   }
 }
 
 /**
  * COST-4 — "a platform administrator sees usage per organization": every
- * organization's own total spend and call count, and nothing else. No
- * course, no person, no message content reaches this — it reads only
- * `cost_ledger_entries.cost_micros`/`organization_id` and `organizations.name`,
- * so there is no column here for a conversation to leak through even by
+ * organization's own total spend, call count and how much of that spend is
+ * an estimate rather than a measurement (finding 2 of the COST-1 rework,
+ * `estimatedCostMicros`), and nothing else. No course, no person, no
+ * message content reaches this — it reads only `cost_ledger_entries.
+ * cost_micros`/`measurement`/`organization_id` and `organizations.name`, so
+ * there is no column here for a conversation to leak through even by
  * accident (ADMIN-4's "sees tenants, not conversations", applied one slice
  * early).
  *
@@ -259,6 +295,8 @@ export interface OrganizationTotal {
   organizationId: string
   organizationName: string
   totalCostMicros: number
+  /** The portion of `totalCostMicros` that came from an `estimated` row rather than a `measured` one — see `CourseUsageSummary`'s own comment (`getOrganizationUsageSummary`, above) for why this exists at all. */
+  estimatedCostMicros: number
   callCount: number
 }
 
@@ -267,6 +305,7 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
     .select({
       organizationId: costLedgerEntries.organizationId,
       costMicros: sum(costLedgerEntries.costMicros),
+      estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
       callCount: sql<number>`count(*)`,
     })
     .from(costLedgerEntries)
@@ -277,6 +316,7 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
       row.organizationId,
       {
         costMicros: Number(row.costMicros ?? 0),
+        estimatedCostMicros: Number(row.estimatedCostMicros ?? 0),
         callCount: Number(row.callCount),
       },
     ])
@@ -293,6 +333,7 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
       organizationId: row.id,
       organizationName: row.name,
       totalCostMicros: totalsForOrganization?.costMicros ?? 0,
+      estimatedCostMicros: totalsForOrganization?.estimatedCostMicros ?? 0,
       callCount: totalsForOrganization?.callCount ?? 0,
     }
   })

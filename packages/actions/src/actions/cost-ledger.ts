@@ -33,6 +33,8 @@ export interface OrganizationUsageReport {
   organizationId: string
   spendingCapMicros: number | null
   totalCostMicros: number
+  /** The portion of `totalCostMicros` that came from an estimate rather than a measurement (`@bloombot/db`'s own `costLedger.getOrganizationUsageSummary`, finding 2 of the COST-1 rework) — see its own comment for why an instructor's read needs to say this at all. */
+  totalEstimatedCostMicros: number
   courses: costLedger.CourseUsageSummary[]
   studentsNearLimit: usage.UsageNearLimit[]
 }
@@ -73,6 +75,7 @@ export const organizationUsageAction: Action<
       organizationId: summary.organizationId,
       spendingCapMicros: summary.spendingCapMicros,
       totalCostMicros: summary.totalCostMicros,
+      totalEstimatedCostMicros: summary.totalEstimatedCostMicros,
       courses: summary.courses,
       studentsNearLimit,
     }

@@ -107,6 +107,15 @@ const NO_ADMISSION_LIMIT: AdmissionGate = {
  * "read `CONFIG` once at startup, thread it through" discipline `model`
  * and `admission` already follow there — `packages/core` itself never
  * reads `@bloombot/config` at all (D-29).
+ *
+ * `defaultRate` is `0`/`0` on purpose, not a guessed nonzero rate (finding 3
+ * of this rework): the seam this constant exposes is meant to be caught by
+ * an operator, not papered over with a number that would look like a real
+ * estimate. Silent, this default already once meant a whole surface's own
+ * spending cap could never fire (`hasReachedSpendingCap` sums exactly the
+ * column this default zeroes) — the call site below logs a `warn` every
+ * time this default is actually reached, so a caller that forgot to wire
+ * `deps.pricing` finds out from its own logs, not from an invoice.
  */
 const NO_PRICING_CONFIGURED: PricingTable = {
   rates: {},
@@ -459,10 +468,30 @@ export async function answerQuestion(
       // other write in this function (CORE-6): a broken ledger write
       // degrades to a log line, never a lost answer.
       try {
+        // Finding 3 of this rework — a caller that never wires `deps.pricing`
+        // at all gets `NO_PRICING_CONFIGURED` (this file's own module
+        // comment), which prices every call at zero and — because
+        // `hasReachedSpendingCap` sums exactly that column — quietly
+        // disables the organization's own spending cap for every call this
+        // surface makes. `apps/bot` always wires the real table today, so
+        // this branch does not fire in production yet, but the web chat and
+        // MCP surfaces this file's own module comment already names as
+        // future callers are not required to, and nothing before this log
+        // line would have told an operator that. Logged once per call
+        // rather than once per process: cheap, and a busy surface running
+        // unconfigured makes that plain in the logs immediately rather than
+        // waiting on a cap that will never fire to be noticed at all.
+        if (!deps.pricing) {
+          logger.warn(
+            { organizationId, courseId, personId },
+            'answerQuestion: no pricing table configured — every call is being priced at zero and this organization’s spending cap will never fire until one is wired through (see deps.pricing)'
+          )
+        }
         const priced = computeCost(
           modelAnswer.model,
           modelAnswer.usage,
-          deps.pricing ?? NO_PRICING_CONFIGURED
+          deps.pricing ?? NO_PRICING_CONFIGURED,
+          { question: modelText, answer: modelAnswer.text }
         )
         costLedger.recordCostLedgerEntry(
           organizationId,

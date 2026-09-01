@@ -89,11 +89,15 @@ describe('costLedger.organizationUsage', () => {
 
     expect(result.organizationId).toBe(organizationId)
     expect(result.totalCostMicros).toBe(500)
+    // Recorded `measurement: 'measured'` above — none of this total is an
+    // estimate.
+    expect(result.totalEstimatedCostMicros).toBe(0)
     expect(result.courses).toEqual([
       {
         courseId: course.id,
         courseTitle: 'Test Course',
         costMicros: 500,
+        estimatedCostMicros: 0,
         callCount: 1,
       },
     ])

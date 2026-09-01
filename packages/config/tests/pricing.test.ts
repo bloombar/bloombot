@@ -20,10 +20,23 @@ describe('getModelPricingTable (COST-1/COST-6)', () => {
     expect(table.defaultRate.inputMicrosPerMillionTokens).toBeGreaterThan(0)
   })
 
-  it('treats an empty value the same as unset — the same shape env.example documents', () => {
+  it('treats an empty environment value the same as unset — the same shape env.example documents', () => {
     process.env.MODEL_PRICING_JSON = ''
 
     const table = getModelPricingTable()
+
+    expect(table.rates['gpt-4o']).toBeDefined()
+  })
+
+  it('treats an empty argument the same as unset — the path `apps/bot` actually calls, passing `CONFIG.MODEL_PRICING_JSON` explicitly rather than omitting it', () => {
+    // `env.example` ships this variable blank, and `CONFIG.MODEL_PRICING_JSON`
+    // (`env.ts`'s own `.default(...)`) only ever substitutes its default
+    // when the key is *absent*, never when it is present but empty — so a
+    // deployment that follows `env.example` hands this function `''`, not
+    // `undefined`. Calling with no argument at all (as the test above does)
+    // never exercises this branch, because `apps/bot`'s own `main()` never
+    // calls it that way.
+    const table = getModelPricingTable('')
 
     expect(table.rates['gpt-4o']).toBeDefined()
   })

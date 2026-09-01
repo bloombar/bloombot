@@ -237,14 +237,48 @@ describe('cost-ledger repo', () => {
 
     expect(summary.organizationId).toBe(orgA)
     expect(summary.totalCostMicros).toBe(700)
+    // Both rows above were recorded `measurement: 'measured'` (`ledgerEntry`'s
+    // own default) — nothing here is an estimate.
+    expect(summary.totalEstimatedCostMicros).toBe(0)
     expect(summary.courses).toEqual([
       {
         courseId: courseA.id,
         courseTitle: 'Web Design',
         costMicros: 700,
+        estimatedCostMicros: 0,
         callCount: 1,
       },
     ])
+  })
+
+  it('splits a course`s own total into what is measured and what is estimated', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 700,
+        measurement: 'measured',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 300,
+        measurement: 'estimated',
+      }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db)
+
+    // COST-6 — a total made partly of estimates must say so, not present
+    // itself identically to a total that is entirely measured.
+    expect(summary.totalCostMicros).toBe(1_000)
+    expect(summary.totalEstimatedCostMicros).toBe(300)
+    expect(summary.courses[0]?.costMicros).toBe(1_000)
+    expect(summary.courses[0]?.estimatedCostMicros).toBe(300)
   })
 
   it('reports totals per organization, and nothing about a conversation', () => {
@@ -269,12 +303,14 @@ describe('cost-ledger repo', () => {
       organizationId: orgA,
       organizationName: 'Org A',
       totalCostMicros: 500,
+      estimatedCostMicros: 0,
       callCount: 1,
     })
     expect(byId.get(orgB)).toEqual({
       organizationId: orgB,
       organizationName: 'Org B',
       totalCostMicros: 250,
+      estimatedCostMicros: 0,
       callCount: 1,
     })
     // COST-4/ADMIN-4 — every field here is a name or a number; there is no
@@ -283,6 +319,7 @@ describe('cost-ledger repo', () => {
       expect(Object.keys(row).sort()).toEqual(
         [
           'callCount',
+          'estimatedCostMicros',
           'organizationId',
           'organizationName',
           'totalCostMicros',

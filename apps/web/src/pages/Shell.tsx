@@ -1,7 +1,12 @@
 /**
- * The signed-in shell: which organization the panel is acting in (WEB-3)
- * and the Discord install button (WEB-4). Projects and courses are phase 7
- * (out of this slice's scope) — this is deliberately just the shell.
+ * The signed-in shell: which organization the panel is acting in (WEB-3),
+ * the Discord install button (WEB-4), and — this slice — the projects and
+ * courses screens (WEB-7, WEB-8, WEB-9). The two live behind a tab rather
+ * than both rendering at once: `ProjectsPanel` fetches on mount
+ * (`projects.list`), and there is no reason to pay that request, or show
+ * that much screen, before an instructor actually wants to manage a
+ * project — the install button stays the thing every visitor sees first,
+ * unchanged from before this slice.
  */
 
 import { useState } from 'react'
@@ -11,6 +16,7 @@ import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
+import { ProjectsPanel } from './ProjectsPanel.js'
 
 export interface ShellProps {
   account: AccountSummary
@@ -51,6 +57,7 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [signingOut, setSigningOut] = useState(false)
+  const [activeTab, setActiveTab] = useState<'discord' | 'projects'>('discord')
 
   const installedServerId =
     justInstalled?.organizationId === activeOrganizationId &&
@@ -121,14 +128,36 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
           {signingOut ? 'Signing out…' : 'Sign out'}
         </button>
       </header>
+      <nav>
+        <button
+          type="button"
+          onClick={() => setActiveTab('discord')}
+          aria-current={activeTab === 'discord'}
+        >
+          Discord
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('projects')}
+          aria-current={activeTab === 'projects'}
+        >
+          Projects
+        </button>
+      </nav>
       <main>
-        <InstallButton
-          organizationId={activeOrganizationId}
-          {...(installedServerId ? { installedServerId } : {})}
-          onRemove={() => void handleRemove()}
-          removing={removing}
-        />
-        {error && <ErrorMessage error={error} />}
+        {activeTab === 'discord' ? (
+          <>
+            <InstallButton
+              organizationId={activeOrganizationId}
+              {...(installedServerId ? { installedServerId } : {})}
+              onRemove={() => void handleRemove()}
+              removing={removing}
+            />
+            {error && <ErrorMessage error={error} />}
+          </>
+        ) : (
+          <ProjectsPanel organizationId={activeOrganizationId} />
+        )}
       </main>
     </div>
   )

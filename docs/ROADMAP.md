@@ -132,4 +132,4 @@ Discord. That is why the identity rules land here rather than being invented per
 
 ## Phase 15 — Production hardening
 
-**In scope:** OPS-8..13
+**In scope:** OPS-8..14

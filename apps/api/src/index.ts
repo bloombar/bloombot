@@ -25,7 +25,7 @@ import {
 import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createLogger, type Logger } from '@bloombot/logger'
 
-import { buildLoggingEmailSender } from './logging-email-sender.js'
+import { buildEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
 
 const PROCESS_NAME = 'api'
@@ -85,7 +85,7 @@ async function main(): Promise<void> {
     // Must-fix 1 of the API-1..6 rework: refuses outright rather than
     // silently logging sign-in links in production — see
     // `logging-email-sender.ts`.
-    emailSender: buildLoggingEmailSender(nodeEnv, logger),
+    emailSender: buildEmailSender(nodeEnv, process.env['MAIL_FILE'], logger),
     buildSignInLink: (token) => `${publicAppUrl}/sign-in/${token}`,
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.

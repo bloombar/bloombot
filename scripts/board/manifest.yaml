@@ -1017,7 +1017,7 @@
   section: §19 Legacy Import
   family: MIG
   phase: 3
-  status: Backlog
+  status: In review
   review: false
 - id: MIG-2
   title: Course configuration is imported from the YAML
@@ -1029,7 +1029,7 @@
   section: §19 Legacy Import
   family: MIG
   phase: 3
-  status: Backlog
+  status: In review
   review: false
 - id: MIG-3
   title: Students and transcripts are imported with their history intact
@@ -1041,7 +1041,7 @@
   section: §19 Legacy Import
   family: MIG
   phase: 3
-  status: Backlog
+  status: In review
   review: false
 - id: MIG-4
   title: Importing twice changes nothing the second time
@@ -1053,7 +1053,7 @@
   section: §19 Legacy Import
   family: MIG
   phase: 3
-  status: Backlog
+  status: In review
   review: false
 - id: PLAT-1
   title: Monorepo layout

@@ -666,12 +666,12 @@ resolve, that is a new discriminated outcome to add, not a reason to swallow the
 
 ---
 
-## D-16 — `packages/openai`: raw `fetch` over the SDK, retry-per-attempt, a forgotten conversation id, and a port gap this slice did not close
+## D-16 — `packages/openai`: raw `fetch` over the SDK, retry-per-attempt, a forgotten conversation id, and a port gap closed in a later rework
 
 **Problem.** MDL-1..7 need an adapter that talks the Responses and Conversations APIs, bounds and retries a
 request (MDL-5), survives the provider forgetting a conversation id (MDL-4), and is provably reachable by no
 test over the real network (MDL-7). Three judgment calls fell out of building it, plus one the brief asked to
-be reported rather than guessed at.
+be reported rather than guessed at — closed in this package's first rework, below.
 
 **Choice, `fetch` over the `openai` package.** The adapter is raw HTTP (`src/http.ts`'s `postJson`) rather than
 the official SDK. The SDK is a large, in this repo entirely unaudited dependency for what this slice actually
@@ -703,23 +703,42 @@ from MDL-5's transient-failure retry (`askOnceWithTransientRetry`), not a specia
 transient failure retries the _same_ call; a forgotten conversation id changes the call (a new `conversation`
 field) before retrying it, and conflating the two would make either one harder to reason about in isolation.
 
-**Reported, not guessed: `ModelRequest` cannot express MDL-4's own opening item.** `response_bot.py` seeds a
-new conversation with the student's Discord name, their Discord id and the course name
-(`response_bot.py:264-273`); MDL-4 asks for the same. `ModelRequest` (`packages/core/src/ports.ts`) carries
-`promptId`, `instructions`, `vectorStoreId`, `model`, `upstreamThreadId` and `question` — no person id, no
-display name, no course title — and `answer.ts` does not pass any of the three to `model.ask` either. This
-slice's own brief says not to widen the port for a gap like this without reporting it first, so
-`conversations.ts`'s `createUpstreamConversation`/`buildSeedText` are written and unit-tested to seed a real
-name and course title when given them, but `client.ts`'s call to it — constrained to what `ModelRequest`
-actually carries — falls back to a generic opening item (`buildSeedText(null, null)`, "Starting a new
-conversation.") every time, today. Closing this properly means widening `ModelRequest` (and `answer.ts`'s call
-into it) with whatever of `personId`/a resolved display name/`course.title` CORE-1's own pipeline already has
-in hand at the point it calls `model.ask` — a `packages/core` change, out of this slice's own scope, and a
-decision for whoever picks it up next rather than one this slice made unilaterally.
+**Closed in the MDL-1 rework: `ModelRequest` now expresses MDL-4's own opening item.** `response_bot.py` seeds
+a new conversation with the student's Discord name, their Discord id and the course name
+(`response_bot.py:262-269`); MDL-4 asks for the same. At the time this slice first shipped, `ModelRequest`
+(`packages/core/src/ports.ts`) carried `promptId`, `instructions`, `vectorStoreId`, `model`, `upstreamThreadId`
+and `question` — no person id, no display name, no course title — and this section originally reported that
+gap rather than guessing at a fix, per that slice's own brief ("do not widen the port for a gap like this
+without reporting it first"). Finding 1 of this package's first rework picked it up: `ModelRequest` gained
+`displayName`, `courseTitle` and `personRef`, populated at `answer.ts`'s one `model.ask` call site from
+`people.getPerson` (a roster-merged display name, or `null`) and a new `people.getPersonIdentity` (the
+identity on the request's own surface, formatted as `<@id>` the way `response_bot.py`'s own
+`metadata={"user_id": ...}` does) — `course.title` was already in hand there for the apology text. `client.ts`
+now threads all three straight into `createUpstreamConversation` on every path that creates a conversation, and
+`conversations.ts`'s `buildSeedText` still degrades gracefully (a course title with no name, a name with no
+course, neither) for whichever of the three a future caller genuinely lacks.
 
-**Limits.** The per-attempt timeout (above) means a caller budgeting "this request will return within
-`timeoutMs`" is wrong by up to 2x on the retry path; a future slice that needs a hard wall-clock bound across
-the whole call (not just each attempt) will need to thread a deadline through instead of a duration. The
-generic conversation seed (above) is a real behavioural gap against `response_bot.py`, not a cosmetic one —
-every conversation this adapter starts is less personalized than the one it replaces until `ModelRequest` is
-widened.
+**Closed in the MDL-1 rework: a transient failure creating a conversation is retried, and a conversation minted
+just before a failure is not orphaned.** Two further findings from the same rework: (1) `createUpstreamConversation`
+now goes through the same `withTransientRetry` helper as the answer call (MDL-5's "every request", not just the
+answer request) — a 429 or 5xx creating the conversation is retried once, the same as one on `POST /responses`.
+(2) A call that successfully creates a new conversation and then fails to answer with it no longer loses that
+id: the failure is thrown as `ModelAskError` (`packages/core/src/ports.ts` — defined there, not in this
+package, because `answer.ts` must never import a vendor type per CORE-4) carrying the id, and `answer.ts`
+persists it before taking the apology path. Without this, each failing turn after a recreate orphaned another
+upstream conversation the platform could never resume.
+
+**Limits.** The per-attempt timeout means a caller budgeting "this request will return within `timeoutMs`" is
+wrong by more than 2x now that creating the conversation shares the same retry policy: the worst case for a
+first turn is _create_ (one attempt, one retry) _then_ _answer_ (one attempt, one retry) — up to roughly 3x
+`timeoutMs`, wall-clock, not 2x. A surface wiring this in (the Discord bot, when it lands) should budget for
+that 3x, not the answer call's own `timeoutMs` alone, when it decides how long it is willing to leave a student
+waiting on a reply; a future slice that needs a hard bound across the whole call (not just each attempt) will
+need to thread a deadline through instead of a duration.
+
+MDL-6's citation stripping is not quite byte-for-byte with `response_bot.py`'s own `re.sub(r"【.*?】", "", …)`
+either, and this is the one place that says so precisely: `responses.ts`'s `CITATION_MARKER_RE` adds the `s`
+flag, so a `【…】` pair whose content spans a newline is still removed here, where Python's `re.sub` (no
+`re.DOTALL`) would leave it — and the newline inside it — untouched. Realistic only for an answer that discusses
+the bracket syntax itself, and worth keeping regardless: MDL-6's own requirement is "never reach a student," not
+matching a regex that happens not to use `re.DOTALL`.

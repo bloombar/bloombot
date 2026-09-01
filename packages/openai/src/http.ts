@@ -24,6 +24,11 @@ export interface JsonResponse {
   body: unknown
 }
 
+/** Finding 7 of the MDL-1 rework — a `baseUrl` with a trailing slash (`OPENAI_BASE_URL`'s real-world default plus a trailing `/`, valid per the config schema's `z.url()` and the form half the world writes) naively concatenated with a leading-slash `path` produces a doubled slash the API 404s on. One or more trailing slashes are stripped so every call lands on the right path regardless of which spelling the caller configured. */
+function stripTrailingSlashes(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '')
+}
+
 /**
  * POST a JSON body to `${baseUrl}${path}` with the OpenAI bearer header,
  * and parse whatever comes back as JSON.
@@ -40,31 +45,53 @@ export async function postJson(
 ): Promise<JsonResponse> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeoutMs)
-  let response: Response
+  // Finding 2 of the MDL-1 rework — the timer stays armed across the body
+  // read too, not just the initial `fetch`: headers arriving is not the
+  // whole response, and a body that stalls after them must still be bound
+  // by `timeoutMs`, not by whatever default the runtime's own `fetch`
+  // falls back to once nothing here is watching (undici's own default is
+  // five minutes). `clearTimeout` only runs once, in this `finally`, after
+  // both steps have either succeeded or thrown.
   try {
-    response = await options.fetchFn(`${options.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
-  } catch (error) {
-    // An abort we asked for ourselves is a timeout (MDL-5); any other
-    // rejection (DNS failure, connection refused, …) is a genuine
-    // transport error and is rethrown as-is rather than misclassified.
-    if (controller.signal.aborted) {
-      throw timeoutError(options.timeoutMs, error)
+    let response: Response
+    try {
+      response = await options.fetchFn(
+        `${stripTrailingSlashes(options.baseUrl)}${path}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${options.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        }
+      )
+    } catch (error) {
+      // An abort we asked for ourselves is a timeout (MDL-5); any other
+      // rejection (DNS failure, connection refused, …) is a genuine
+      // transport error and is rethrown as-is rather than misclassified.
+      if (controller.signal.aborted) {
+        throw timeoutError(options.timeoutMs, error)
+      }
+      throw error
     }
-    throw error
+
+    let body: unknown
+    try {
+      body = await parseJsonBody(response)
+    } catch (error) {
+      // The same abort can now land here instead — the response's headers
+      // arrived before the timeout, but its body stalled after them.
+      if (controller.signal.aborted) {
+        throw timeoutError(options.timeoutMs, error)
+      }
+      throw error
+    }
+    return { status: response.status, ok: response.ok, body }
   } finally {
     clearTimeout(timer)
   }
-
-  const body = await parseJsonBody(response)
-  return { status: response.status, ok: response.ok, body }
 }
 
 /** `response.text()` then `JSON.parse`, tolerant of an empty or non-JSON body — an error response is still worth classifying even when it is not valid JSON. */

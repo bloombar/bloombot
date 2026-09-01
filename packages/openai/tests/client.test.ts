@@ -7,9 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetConfigCache } from '@bloombot/config'
-import type { ModelClient, ModelRequest } from '@bloombot/core'
+import {
+  ModelAskError,
+  type ModelClient,
+  type ModelRequest,
+} from '@bloombot/core'
 
 import { createOpenAiModelClient } from '../src/client.js'
+import { ModelRequestError } from '../src/errors.js'
 import {
   fakeResponsesPayload,
   FakeOpenAiServer,
@@ -25,6 +30,13 @@ function baseRequest(overrides: Partial<ModelRequest> = {}): ModelRequest {
     model: null,
     upstreamThreadId: null,
     question: 'When is the midterm?',
+    // Finding 1 of the MDL-1 rework — `null` here by default so the
+    // existing tests above keep exercising the generic-opener path;
+    // `describe('finding 1 ...')` below overrides these to prove they are
+    // threaded through.
+    displayName: null,
+    courseTitle: null,
+    personRef: null,
     ...overrides,
   }
 }
@@ -298,15 +310,29 @@ describe('createOpenAiModelClient', () => {
     })
 
     it('omits usage entirely when the provider reported none', async () => {
+      // Finding 5 of the MDL-1 rework — this used to be `{ output: [{
+      // type: 'message', content: [] }] }`, an empty-content payload that
+      // extracts to no answer text at all and now fails the turn
+      // (`describe('finding 5 ...')`, below) rather than returning
+      // successfully. This test's own job is "usage omitted", so the
+      // payload here has real answer text and simply no `usage` field.
       server.respondToResponses({
         status: 200,
-        body: { output: [{ type: 'message', content: [] }] },
+        body: {
+          output: [
+            {
+              type: 'message',
+              content: [{ type: 'output_text', text: 'answer with no usage' }],
+            },
+          ],
+        },
       })
 
       const answer = await client.ask(
         baseRequest({ upstreamThreadId: 'conv_1' })
       )
 
+      expect(answer.text).toBe('answer with no usage')
       expect(answer.usage).toBeUndefined()
       expect('usage' in answer).toBe(false)
     })
@@ -361,6 +387,212 @@ describe('createOpenAiModelClient', () => {
       )
 
       expect(answer.text).toBe('answered via CONFIG default')
+    })
+  })
+
+  describe('finding 1 of the MDL-1 rework: the seeded opening item comes from the request', () => {
+    it("seeds the new conversation with the request's displayName, courseTitle and personRef", async () => {
+      server.respondToConversations({
+        status: 200,
+        body: { id: 'conv_seeded' },
+      })
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('the answer'),
+      })
+
+      await client.ask(
+        baseRequest({
+          upstreamThreadId: null,
+          displayName: 'Ada Lovelace',
+          courseTitle: 'Intro to Algorithms',
+          personRef: '<@123>',
+        })
+      )
+
+      const conversationRequest = server.requests.find(
+        (r) => r.path === '/conversations'
+      )!
+      expect(conversationRequest.body).toEqual({
+        items: [
+          {
+            role: 'user',
+            content:
+              'My name is Ada Lovelace (user id <@123>) and I am a student in the Intro to Algorithms course.',
+          },
+        ],
+        metadata: { user_id: '<@123>' },
+      })
+    })
+  })
+
+  describe('finding 3 of the MDL-1 rework: creating the conversation gets the same transient retry as the answer call', () => {
+    it('retries once after a transient failure creating the conversation, then still answers', async () => {
+      server.respondToConversations({
+        status: 500,
+        body: { error: { message: 'temporary outage' } },
+      })
+      server.respondToConversations({
+        status: 200,
+        body: { id: 'conv_after_retry' },
+      })
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('the answer'),
+      })
+
+      const answer = await client.ask(baseRequest({ upstreamThreadId: null }))
+
+      const conversationCalls = server.requests.filter(
+        (r) => r.path === '/conversations'
+      )
+      expect(conversationCalls).toHaveLength(2)
+      expect(answer.upstreamThreadId).toBe('conv_after_retry')
+      expect(answer.text).toBe('the answer')
+    })
+
+    it('does not retry a non-transient failure creating the conversation, and never calls /responses', async () => {
+      server.respondToConversations({
+        status: 400,
+        body: { error: { message: 'invalid request' } },
+      })
+
+      await expect(
+        client.ask(baseRequest({ upstreamThreadId: null }))
+      ).rejects.toThrow(/invalid request/)
+
+      const conversationCalls = server.requests.filter(
+        (r) => r.path === '/conversations'
+      )
+      const responsesCalls = server.requests.filter(
+        (r) => r.path === '/responses'
+      )
+      expect(conversationCalls).toHaveLength(1)
+      expect(responsesCalls).toHaveLength(0)
+    })
+  })
+
+  describe('finding 4 of the MDL-1 rework: a 2xx with an empty body is a classified error, not a raw TypeError', () => {
+    it('rejects with a ModelRequestError rather than an unclassified TypeError', async () => {
+      // A reused thread id (no create call) keeps this test isolated to
+      // finding 4 alone — an id freshly created on this same call would
+      // additionally wrap the error in a `ModelAskError` (finding 6,
+      // exercised separately below), which is not what this test is about.
+      // `FakeOpenAiServer` writes `JSON.stringify(result.body)`, which is
+      // `undefined` for `body: undefined` — `res.end(undefined)` ends the
+      // response with no body at all, the real "2xx, empty body" shape.
+      server.respondToResponses({ status: 200, body: undefined })
+
+      const rejection = client.ask(baseRequest({ upstreamThreadId: 'conv_1' }))
+      await expect(rejection).rejects.toBeInstanceOf(ModelRequestError)
+      await expect(rejection).rejects.toThrow(/no usable JSON body/)
+    })
+  })
+
+  describe('finding 5 of the MDL-1 rework: an empty extracted answer fails the turn rather than returning a blank reply', () => {
+    it('rejects rather than resolving with `text: ""`', async () => {
+      server.respondToResponses({
+        status: 200,
+        body: { output: [{ type: 'message', content: [] }] },
+      })
+
+      await expect(
+        client.ask(baseRequest({ upstreamThreadId: 'conv_1' }))
+      ).rejects.toThrow(/no answer text/)
+    })
+  })
+
+  describe('finding 6 of the MDL-1 rework: a conversation id created just before a failure is not lost', () => {
+    it('carries the freshly created id on a `ModelAskError` when the first turn fails outright', async () => {
+      server.respondToConversations({
+        status: 200,
+        body: { id: 'conv_first_turn' },
+      })
+      server.respondToResponses({
+        status: 500,
+        body: { error: { message: 'down' } },
+      })
+      server.respondToResponses({
+        status: 500,
+        body: { error: { message: 'still down' } },
+      })
+
+      const rejection = client.ask(baseRequest({ upstreamThreadId: null }))
+      await expect(rejection).rejects.toBeInstanceOf(ModelAskError)
+      await rejection.catch((error: unknown) => {
+        expect(
+          (error as InstanceType<typeof ModelAskError>).upstreamThreadId
+        ).toBe('conv_first_turn')
+      })
+
+      const conversationCalls = server.requests.filter(
+        (r) => r.path === '/conversations'
+      )
+      // No second create — a 500 is MDL-5's transient retry, not MDL-4's
+      // recreate.
+      expect(conversationCalls).toHaveLength(1)
+    })
+
+    it('preserves the id from a 404-recreate even when the retried call itself fails, and a later turn reuses it instead of creating a third', async () => {
+      // First turn: the stored id is rejected as unknown (MDL-4's
+      // recreate), the recreate succeeds, and the retried answer call
+      // fails twice (the attempt and its one transient retry) — the exact
+      // sequence finding 6 names: "404, recreate, then a failure".
+      server.respondToResponses({
+        status: 404,
+        body: {
+          error: {
+            message: 'No conversation found with id conv_gone',
+            code: 'conversation_not_found',
+          },
+        },
+      })
+      server.respondToConversations({
+        status: 200,
+        body: { id: 'conv_replacement' },
+      })
+      server.respondToResponses({
+        status: 500,
+        body: { error: { message: 'down after recreating' } },
+      })
+      server.respondToResponses({
+        status: 500,
+        body: { error: { message: 'still down' } },
+      })
+
+      const firstTurn = client.ask(
+        baseRequest({ upstreamThreadId: 'conv_gone' })
+      )
+      await expect(firstTurn).rejects.toBeInstanceOf(ModelAskError)
+      await firstTurn.catch((error: unknown) => {
+        expect(
+          (error as InstanceType<typeof ModelAskError>).upstreamThreadId
+        ).toBe('conv_replacement')
+      })
+
+      const conversationCallsAfterFirstTurn = server.requests.filter(
+        (r) => r.path === '/conversations'
+      )
+      expect(conversationCallsAfterFirstTurn).toHaveLength(1)
+
+      // `answer.ts` would have persisted `conv_replacement` from the
+      // thrown error above; the next turn hands it back as
+      // `upstreamThreadId` instead of `null`.
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('recovered on the second turn'),
+      })
+      const secondTurn = await client.ask(
+        baseRequest({ upstreamThreadId: 'conv_replacement' })
+      )
+
+      expect(secondTurn.text).toBe('recovered on the second turn')
+      // Still exactly one create call, total — the second turn reused the
+      // id rather than creating a third conversation.
+      const conversationCallsAfterSecondTurn = server.requests.filter(
+        (r) => r.path === '/conversations'
+      )
+      expect(conversationCallsAfterSecondTurn).toHaveLength(1)
     })
   })
 })

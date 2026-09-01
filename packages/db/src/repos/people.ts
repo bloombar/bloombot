@@ -113,6 +113,39 @@ export function listPeople(organizationId: string, db: Database): Person[] {
 }
 
 /**
+ * Look up one person's identity on a given surface — the raw external id
+ * (a Discord snowflake, a web account id, …) `person_identities` holds for
+ * them, scoped to `organizationId` (TEN-2). `undefined` when the person has
+ * no identity on that surface, or `personId` does not belong to
+ * `organizationId`.
+ *
+ * Added for finding 1 of the MDL-1 rework (docs/DECISIONS.md, D-16): MDL-4's
+ * seeded opening item needs the person's own external id to embed as
+ * `metadata.user_id` (`response_bot.py:262-269`'s `<@id>`), and the surface
+ * that reported the message knowing the raw snowflake is not a reason to
+ * make `answer.ts` ask its caller for something `person_identities` already
+ * holds.
+ */
+export function getPersonIdentity(
+  organizationId: string,
+  personId: string,
+  surface: Surface,
+  db: Database
+): PersonIdentity | undefined {
+  return db
+    .select()
+    .from(personIdentities)
+    .where(
+      and(
+        eq(personIdentities.personId, personId),
+        eq(personIdentities.organizationId, organizationId),
+        eq(personIdentities.surface, surface)
+      )
+    )
+    .get()
+}
+
+/**
  * Resolve an identity to the person it belongs to, or `undefined` if nobody
  * holds it in this organization yet. Read-only — see
  * `resolvePersonByIdentity` for "create on demand" (PPL-3).

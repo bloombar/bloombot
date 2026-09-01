@@ -5,19 +5,17 @@
  * seed its opening item; `client.ts` decides when to call it (no stored id,
  * or a stored id the provider has forgotten).
  *
- * A gap this file cannot close on its own: `response_bot.py`'s opening item
- * seeds the conversation with the student's Discord name, their Discord id
- * and the course name (`response_bot.py:264-273`). `ModelRequest`
- * (`@bloombot/core`'s `src/ports.ts`) carries none of the three — only
- * `promptId`, `instructions`, `vectorStoreId`, `model`, `upstreamThreadId`
- * and `question` — and `answer.ts` does not pass them either. Per this
- * slice's brief ("do not change [the port's] shape; if it genuinely cannot
- * express something the adapter needs, stop and report rather than
- * widening it"), this function is written to seed a real name and course
- * title when it is given them — and is unit-tested doing so — but
- * `client.ts`'s own call to it, constrained to what `ModelRequest` actually
- * carries, cannot supply either today. See docs/DECISIONS.md and this
- * slice's report.
+ * `response_bot.py`'s opening item seeds the conversation with the
+ * student's Discord name, their Discord id and the course name
+ * (`response_bot.py:262-269`). `ModelRequest` (`@bloombot/core`'s
+ * `src/ports.ts`) now carries all three — `displayName`, `courseTitle` and
+ * `personRef` — added in finding 1 of the MDL-1 rework (docs/DECISIONS.md,
+ * D-16) once `answer.ts` had somewhere to get a display name
+ * (`people.getPerson`) and an identity reference (the new
+ * `people.getPersonIdentity`) from. `client.ts` threads them straight
+ * through from the request it was given; this file still degrades
+ * gracefully when any of the three is missing, for a caller (or a future
+ * surface) that genuinely does not have one.
  */
 
 import { classifyHttpError } from './errors.js'
@@ -39,22 +37,33 @@ export interface CreateUpstreamConversationOptions {
 
 /**
  * The opening item's text (MDL-4's "seeded with who they are and which
- * course they are in"). Degrades gracefully when either half is missing
- * rather than fabricating one — see this file's module comment for why
- * `client.ts` hits the last branch today.
+ * course they are in"), matching `response_bot.py:262-269`'s own
+ * `f"My name is {name} (user id <@{id}>) and I am a student in the
+ * {course_name} course."` when every field is known. Degrades gracefully
+ * when any is missing rather than fabricating one: `personRef` only ever
+ * appears alongside a `displayName` (there is nothing to attach a bare
+ * identity reference to in prose), and a course title on its own drops the
+ * name clause entirely.
  */
 export function buildSeedText(
   displayName: string | null,
-  courseTitle: string | null
+  courseTitle: string | null,
+  personRef: string | null
 ): string {
-  if (displayName && courseTitle) {
-    return `My name is ${displayName} and I am a student in the ${courseTitle} course.`
+  const nameClause = displayName
+    ? personRef
+      ? `My name is ${displayName} (user id ${personRef})`
+      : `My name is ${displayName}`
+    : null
+
+  if (nameClause && courseTitle) {
+    return `${nameClause} and I am a student in the ${courseTitle} course.`
   }
   if (courseTitle) {
     return `I am a student in the ${courseTitle} course.`
   }
-  if (displayName) {
-    return `My name is ${displayName}.`
+  if (nameClause) {
+    return `${nameClause}.`
   }
   return 'Starting a new conversation.'
 }
@@ -77,7 +86,11 @@ export async function createUpstreamConversation(
     items: [
       {
         role: 'user',
-        content: buildSeedText(options.displayName, options.courseTitle),
+        content: buildSeedText(
+          options.displayName,
+          options.courseTitle,
+          options.personRef
+        ),
       },
     ],
   }

@@ -239,6 +239,64 @@ describe('courses repo', () => {
     expect(fetched?.categories[0]?.channels).toHaveLength(1)
   })
 
+  // Finding 6 of the CONV-1 rework: before this, `NewCourse` had no
+  // `conversationScope` field at all, so a course's `conversation_scope`
+  // could only ever be its database default — CONV-1's `course_surface`
+  // half was unreachable through this package's own API.
+  describe('conversationScope (CONV-1)', () => {
+    it('defaults to `course` when omitted on create', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const created = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      expect(created.conversationScope).toBe('course')
+    })
+
+    it('is written as given on create', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, { conversationScope: 'course_surface' }),
+          testDb.db
+        )
+      )
+
+      expect(created.conversationScope).toBe('course_surface')
+      expect(courses.getCourse(orgA, created.id, testDb.db)).toMatchObject({
+        conversationScope: 'course_surface',
+      })
+    })
+
+    it('is replaced on update, defaulting back to `course` when omitted', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, { conversationScope: 'course_surface' }),
+          testDb.db
+        )
+      )
+
+      const updated = expectOk(
+        courses.updateCourse(
+          orgA,
+          created.id,
+          courseInput(projectA.id), // no `conversationScope` this time
+          testDb.db
+        )
+      )
+
+      expect(updated.conversationScope).toBe('course')
+    })
+  })
+
   it('lists and enables/disables a course', () => {
     testDb = createTestDatabase()
     const { orgA, projectA } = seedTwoOrganizations(testDb)

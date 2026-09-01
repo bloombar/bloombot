@@ -61,7 +61,14 @@ export function seedCourseAndPerson(
           ? 10
           : options.maxRequestsPerDay,
       promptId: options.promptId ?? null,
-      instructions: options.instructions ?? 'Be helpful.',
+      // `?? 'Be helpful.'` can't tell "omitted" from "explicitly `null`"
+      // (finding 3 of the CORE-1 rework needs a course with neither
+      // `promptId` nor `instructions` set) — `undefined`-checked instead,
+      // the same device `maxRequestsPerDay` above already uses.
+      instructions:
+        options.instructions === undefined
+          ? 'Be helpful.'
+          : options.instructions,
       model: options.model ?? null,
       vectorStoreId: options.vectorStoreId ?? null,
       categories: [{ name: 'Test Category', channels: [] }],

@@ -14,6 +14,7 @@ const webDesign: RoutableCourse = {
   categoryNames: ['Web Design'],
   adminsRole: 'admins-wd',
   studentsRole: 'students-wd',
+  enabled: true,
 }
 
 const dataScience: RoutableCourse = {
@@ -21,6 +22,7 @@ const dataScience: RoutableCourse = {
   categoryNames: ['Data Science'],
   adminsRole: 'admins-ds',
   studentsRole: 'students-ds',
+  enabled: true,
 }
 
 describe('routeMessage (CORE-2)', () => {
@@ -75,6 +77,7 @@ describe('routeMessage (CORE-2)', () => {
       categoryNames: ['Web Design'],
       adminsRole: 'admins-dup',
       studentsRole: 'students-dup',
+      enabled: true,
     }
     const result = routeMessage([webDesign, duplicateCategory], {
       categoryName: 'Web Design',
@@ -94,6 +97,7 @@ describe('routeMessage (CORE-2)', () => {
       categoryNames: ['Something Else'],
       adminsRole: 'admins-wd',
       studentsRole: 'students-shared',
+      enabled: true,
     }
     const result = routeMessage([webDesign, sharedRole], {
       categoryName: null,
@@ -105,5 +109,46 @@ describe('routeMessage (CORE-2)', () => {
       signal: 'role',
       courseIds: [webDesign.id, sharedRole.id],
     })
+  })
+
+  // Finding 1 of the CORE-1 rework: an ended course must stop being
+  // answered through routing, not just through `answerQuestion`'s own
+  // guard — the two are reached by different callers.
+  it('is unmatched — not answered — when the only course whose category matches is disabled', () => {
+    const disabledWebDesign: RoutableCourse = { ...webDesign, enabled: false }
+    const result = routeMessage([disabledWebDesign, dataScience], {
+      categoryName: 'Web Design',
+      channelName: 'general',
+      roleNames: [],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  it('is unmatched — not answered — when the only course whose role matches is disabled', () => {
+    const disabledWebDesign: RoutableCourse = { ...webDesign, enabled: false }
+    const result = routeMessage([disabledWebDesign, dataScience], {
+      categoryName: null,
+      channelName: null,
+      roleNames: ['admins-wd'],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  // A disabled course's retained category name must not survive to force a
+  // spurious ambiguity that silences the live course still using it.
+  it('matches the still-enabled course outright, rather than reporting an ambiguity against a disabled course sharing its category', () => {
+    const disabledDuplicate: RoutableCourse = {
+      id: 'course-disabled-duplicate',
+      categoryNames: ['Web Design'],
+      adminsRole: 'admins-dup',
+      studentsRole: 'students-dup',
+      enabled: false,
+    }
+    const result = routeMessage([webDesign, disabledDuplicate], {
+      categoryName: 'Web Design',
+      channelName: 'general',
+      roleNames: [],
+    })
+    expect(result).toEqual({ kind: 'matched', course: webDesign })
   })
 })

@@ -612,19 +612,51 @@ says to answer with," not a resolved instruction ready for one specific vendor's
 **Choice, a model failure still counts against the daily allowance.** `response_bot.py`'s own counter update
 runs unconditionally after the `try`/`except` around its OpenAI call — a request whose model call raised still
 increments `num_requests_today` (the `is_response` flag it sets is computed and never read). CORE-3 and CORE-5
-are both silent on whether a failed call spends part of the allowance, so `answer.ts` matches the bot: `usage.
-incrementUsage` runs after the reply is recorded whether the model answered or raised, and only the
-`declined-over-limit` path (which returns before either write) never increments. This is carried over
-deliberately, not rediscovered by accident — worth revisiting if a future slice decides a provider outage
-should not cost a student part of their day.
+are both silent on whether a failed call spends part of the allowance, so `answer.ts` matches the bot: the
+allowance is reserved — counted — before the model is ever asked (see the finding 8 update below), so a request
+whose model call raises has already been counted by construction, the same as one that succeeds. Only the
+`declined-over-limit` path, which returns before the reservation is even attempted, never counts. This is
+carried over deliberately, not rediscovered by accident — worth revisiting if a future slice decides a provider
+outage should not cost a student part of their day.
 
-**Why not let a combined "last request, and it failed" state exist.** `response_bot.py` can produce that
-combination (the rate-limit notice is prepended to whichever text ends up in `openai_response`, including the
-apology, when the _n_-th request happens to be the one whose call fails). The brief's own result list is four
-outcomes, not a matrix of allowance × success; `answer.ts` decides the last-request notice before the model is
-asked and only ever applies it to a successful answer, so that combination cannot occur here. Narrower than
-the Python bot's behaviour, on purpose: the combined message reads oddly ("you have reached your limit... sorry,
-I can't respond") and nothing in CORE-3 or CORE-5 asks for it to be preserved.
+**Update (finding 8 of the CORE-1 rework) — the allowance check and the count are one atomic operation, reserved
+before the model call, not two steps straddling it.** As first shipped, this slice checked the allowance
+(`usage.getUsageCount`) before recording anything, then only counted the request (`usage.incrementUsage`) after
+the reply was recorded — with the model call's own `await` sitting between the two. That gap meant two requests
+from the same person arriving close together could both read the same "count so far", both be judged under the
+allowance, and both proceed, landing the stored count one past `limit` even though the check itself never let a
+request through improperly — the legacy bot has the same shape of race, but it kept its counter in memory, and
+this one has a real, shared `usage_counters` table connected processes can genuinely race on (D-2's "three
+writing processes"), which the in-memory version could not be raced on the same way. The fix is
+`packages/db/repos/usage.ts`'s `reserveUsageSlot`: one `INSERT ... ON CONFLICT DO UPDATE ... WHERE` statement
+that checks and counts atomically, called before the model is asked rather than after the reply is recorded.
+The "a failed call still counts" behaviour above is unchanged by this — reserving before the call means it holds
+by construction, not by a separate write after the fact that could be skipped or raced.
+
+**Why a combined "last request, and it failed" state exists after all.** The paragraph above originally read
+this slice as narrower than the Python bot on purpose, because `answer.ts` decided the last-request notice
+before the model was asked and only applied it to a successful answer, so the combination could not occur.
+Finding 7 of the CORE-1 rework reversed that: during a provider outage, a student whose allowance-reaching
+request is the one whose model call fails used to get a bare apology, be charged for it, and then be declined
+on their next request with no text at all — the notice was the only signal the day had ended, and it was lost
+exactly when it mattered. `failed-with-apology` now carries `lastRequestOfDay: boolean` for this reason. The
+apology's own _text_ still never combines with the notice's — it stays byte-identical to `response_bot.py`'s,
+and nothing in CORE-3 or CORE-5 asks for the combined message `response_bot.py` itself produces ("you have
+reached your limit... sorry, I can't respond") — but the _fact_ is no longer thrown away: a surface reads
+`lastRequestOfDay` off the result and decides for itself how (or whether) to say so, separately from the
+apology.
+
+**One request shorter than the running bot's day.** `response_bot.py` sets `rate_limit_message` when
+`num_requests_today == request_limit` and only refuses once `num_requests_today > request_limit` —
+`num_requests_today` is read _before_ being incremented for the current request, so with `request_limit = 10`
+the bot answers the request that arrives with a stored count of 0 through the one that arrives with a stored
+count of 10 (eleven answers total), puts the notice on the eleventh, and only refuses the twelfth.
+`reserveUsageSlot` refuses once the _stored_ count would reach `limit`, so with the same `limit = 10` this
+pipeline answers ten questions, puts the notice on the tenth, and declines the eleventh onward. This is CORE-3
+and BOT-5 exactly as written — "a person's count... is checked first" against `maxRequestsPerDay`, not against
+one fewer than it — so it is kept rather than patched to match the bot's own off-by-one. It is recorded here
+because it is cutover-visible: a real student moving from the running bot to this pipeline gets one fewer
+answer on their busiest day, the same kind of behavioural divergence D-14 documents for the legacy import.
 
 **Limits.** The two `throw`s (course/conversation not found) mean `answer.ts` is not safe to call with
 unvalidated input — a future MCP or web surface that accepts a raw `courseId` from outside the platform must

@@ -21,6 +21,8 @@ export interface RoutableCourse {
   categoryNames: string[]
   adminsRole: string
   studentsRole: string
+  /** CORE-2: "a message that matches no enabled course is ignored" — a disabled course is dropped before either signal runs (see `routeMessage`). */
+  enabled: boolean
 }
 
 /** What arrived: the Discord category and channel the message's channel sits in, and the author's role names. */
@@ -55,13 +57,21 @@ export type RoutingResult =
  * roles (BOT-3/BOT-12): a course is a candidate if the author holds either
  * its `adminsRole` or its `studentsRole`, with the same one-vs-many
  * treatment. Zero candidates on both signals is `unmatched` (BOT-4).
+ *
+ * A disabled course is filtered out before either signal runs (CORE-2: "a
+ * message that matches no enabled course is ignored"), not merely excluded
+ * from winning — otherwise its retained `categoryNames`/role names could
+ * still collide with a live course's and force a spurious `ambiguous`
+ * result, silencing a course that should have answered outright.
  */
 export function routeMessage(
   courses: RoutableCourse[],
   arrival: ArrivalContext
 ): RoutingResult {
+  const enabledCourses = courses.filter((course) => course.enabled)
+
   if (arrival.categoryName !== null) {
-    const categoryMatches = courses.filter((course) =>
+    const categoryMatches = enabledCourses.filter((course) =>
       course.categoryNames.includes(arrival.categoryName as string)
     )
     if (categoryMatches.length > 1) {
@@ -78,7 +88,7 @@ export function routeMessage(
   }
 
   const roleNames = new Set(arrival.roleNames)
-  const roleMatches = courses.filter(
+  const roleMatches = enabledCourses.filter(
     (course) =>
       roleNames.has(course.adminsRole) || roleNames.has(course.studentsRole)
   )

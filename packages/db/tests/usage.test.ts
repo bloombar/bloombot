@@ -328,4 +328,181 @@ describe('usage repo', () => {
         .run()
     ).toThrow(/CHECK constraint failed/)
   })
+
+  // --- Finding 8 of the CORE-1 rework: `reserveUsageSlot` is atomic -------
+
+  it('grants each request up to the limit, returning the count so far, and refuses once the limit is reached', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personA.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toEqual({ granted: true, count: 1 })
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personA.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toEqual({ granted: true, count: 2 })
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personA.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toEqual({ granted: true, count: 3 })
+    // The fourth request would push the stored count past the limit — refused.
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personA.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toEqual({ granted: false })
+    expect(
+      usage.getUsageCount(orgA, courseA.id, personA.id, '2026-08-31', testDb.db)
+    ).toBe(3)
+  })
+
+  it('refuses the very first request of the day for a limit of 0', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personA.id,
+        '2026-08-31',
+        0,
+        testDb.db
+      )
+    ).toEqual({ granted: false })
+    expect(
+      usage.getUsageCount(orgA, courseA.id, personA.id, '2026-08-31', testDb.db)
+    ).toBe(0)
+  })
+
+  it('grants every request, unconditionally, when `limit` is null', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    for (let i = 1; i <= 20; i++) {
+      expect(
+        usage.reserveUsageSlot(
+          orgA,
+          courseA.id,
+          personA.id,
+          '2026-08-31',
+          null,
+          testDb.db
+        )
+      ).toEqual({ granted: true, count: i })
+    }
+  })
+
+  it('refuses a course belonging to another organization, returning `undefined`', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseB, personA } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseB.id,
+        personA.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  it('refuses a person belonging to another organization, returning `undefined`', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personB } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.reserveUsageSlot(
+        orgA,
+        courseA.id,
+        personB.id,
+        '2026-08-31',
+        3,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // The regression finding 8 exists to close, reproduced at the level it
+  // actually occurs: two callers racing an `await` *between* a check and a
+  // write can both read the same "one slot left" count, both pass the
+  // check, and both write — landing the stored count one *past* `limit`
+  // even though the check itself never let a request through improperly.
+  // `getUsageCount` followed by `incrementUsage` is exactly the two-step
+  // shape `answerQuestion` used to use, with the model call's own `await`
+  // sitting between them; that gap is what `reserveUsageSlot` closes by
+  // exposing the check and the write as a *single* call with no `await`
+  // inside it — there is no separate "read" step for a caller to put
+  // anything between and its own increment, the same way there was here.
+  // (The concurrent case for `reserveUsageSlot` itself, and for
+  // `answerQuestion` built on it, is covered in `packages/core`'s
+  // `answer.test.ts`, driving two real `answerQuestion` calls around a
+  // model client under this test's control — the shape the brief asks for,
+  // and the one that actually exercises the `await` this bug lived around.)
+  it('the two-step check-then-increment `answerQuestion` used to do is over-granted by two callers racing an `await` between them', async () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const day = '2026-08-31'
+    const limit = 3
+    // One slot left before the limit is reached.
+    for (let i = 0; i < limit - 1; i++) {
+      usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+    }
+
+    // Two "requests" interleave around a network call (`await`), each doing
+    // the old two-step check-then-increment. `Promise.all` below invokes
+    // both synchronously up to their first `await` before either resumes —
+    // the same interleaving an `await model.ask(...)` between a read and a
+    // write produces for two real concurrent callers — so both read the
+    // same `usedBefore` (one slot left) before either has written.
+    async function racingTwoStepIncrement(): Promise<void> {
+      const usedBefore = usage.getUsageCount(
+        orgA,
+        courseA.id,
+        personA.id,
+        day,
+        testDb.db
+      )
+      await Promise.resolve() // the `await model.ask(...)` this reproduces
+      if (usedBefore < limit) {
+        usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+      }
+    }
+
+    await Promise.all([racingTwoStepIncrement(), racingTwoStepIncrement()])
+    // Both calls saw one slot left and both took it: the stored count is one
+    // past `limit`, even though the check itself never let a request through
+    // improperly — this is the bug finding 8 describes, and the two-step
+    // shape this file no longer exposes to `answerQuestion`.
+    expect(
+      usage.getUsageCount(orgA, courseA.id, personA.id, day, testDb.db)
+    ).toBe(limit + 1)
+  })
 })

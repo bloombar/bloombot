@@ -5,26 +5,83 @@
  * takes for "writes only through the repos".
  */
 
-import { readFileSync, readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
 const SRC_DIR = fileURLToPath(new URL('../src', import.meta.url))
+const PACKAGE_JSON_PATH = fileURLToPath(
+  new URL('../package.json', import.meta.url)
+)
 
-// Package names (or import path fragments) a vendor SDK would appear under.
-// `openai`, Discord's `discord.js`, and any `@discordjs/*` scoped package —
-// the two vendors named in the brief as "the next two slices".
+// Vendor package names (or scope prefixes) a Discord or OpenAI SDK would
+// appear under — the two vendors named in the brief as "the next two
+// slices". `escapeRegExp` guards `discord.js`'s `.`, which would otherwise
+// match any character in a regex.
+const VENDOR_PACKAGES = ['openai', 'discord.js']
+const VENDOR_SCOPE_PREFIXES = ['@discordjs/']
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Every way JavaScript can pull in a package — `from '<pkg>'`, a bare
+ * side-effect `import '<pkg>'` (finding 11 of the CORE-1 rework: the
+ * original list only matched `from`), a dynamic `import('<pkg>')`, and
+ * `require('<pkg>')` — for one exact package name.
+ */
+function patternsForExactPackage(pkg: string): RegExp[] {
+  const escaped = escapeRegExp(pkg)
+  return [
+    new RegExp(`from\\s+['"]${escaped}['"]`),
+    new RegExp(`^\\s*import\\s+['"]${escaped}['"]`, 'm'),
+    new RegExp(`import\\(\\s*['"]${escaped}['"]`),
+    new RegExp(`require\\(\\s*['"]${escaped}['"]\\s*\\)`),
+  ]
+}
+
+/** The same four import shapes, for any subpath under a scope (`@discordjs/builders`, `@discordjs/rest`, …). */
+function patternsForScopePrefix(prefix: string): RegExp[] {
+  const escaped = escapeRegExp(prefix)
+  return [
+    new RegExp(`from\\s+['"]${escaped}`),
+    new RegExp(`^\\s*import\\s+['"]${escaped}`, 'm'),
+    new RegExp(`import\\(\\s*['"]${escaped}`),
+    new RegExp(`require\\(\\s*['"]${escaped}`),
+  ]
+}
+
 const forbiddenPatterns = [
-  /from\s+['"]openai['"]/,
-  /from\s+['"]discord\.js['"]/,
-  /from\s+['"]@discordjs\//,
-  /require\(\s*['"]openai['"]\s*\)/,
-  /require\(\s*['"]discord\.js['"]\s*\)/,
+  ...VENDOR_PACKAGES.flatMap(patternsForExactPackage),
+  ...VENDOR_SCOPE_PREFIXES.flatMap(patternsForScopePrefix),
 ]
 
+/**
+ * Every `.ts` file under `SRC_DIR`, at any depth — finding 11: the original
+ * `readdirSync` was not recursive, so a future `src/adapters/openai.ts`
+ * would never be scanned. `withFileTypes` is what lets this tell a
+ * directory from a file without a second `statSync` per entry.
+ */
+function listSourceFilesRecursively(dir: string, prefix = ''): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      files.push(
+        ...listSourceFilesRecursively(`${dir}/${entry.name}`, relativePath)
+      )
+    } else if (entry.name.endsWith('.ts')) {
+      files.push(relativePath)
+    }
+  }
+  return files
+}
+
 describe('packages/core imports no vendor SDK (CORE-4)', () => {
-  const files = readdirSync(SRC_DIR).filter((name) => name.endsWith('.ts'))
+  const files = listSourceFilesRecursively(SRC_DIR)
 
   it('found at least one source file to check', () => {
     expect(files.length).toBeGreaterThan(0)
@@ -42,5 +99,30 @@ describe('packages/core imports no vendor SDK (CORE-4)', () => {
   it('ports.ts declares the model port this package depends on instead', () => {
     const source = readFileSync(`${SRC_DIR}/ports.ts`, 'utf8')
     expect(source).toMatch(/interface ModelClient/)
+  })
+
+  // Finding 11 — the constraint's actual form: no vendor SDK as a
+  // *dependency* of this package at all, not merely unimported today.
+  it('package.json declares no vendor SDK dependency', () => {
+    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf8')) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+      peerDependencies?: Record<string, string>
+    }
+    const declaredPackages = [
+      ...Object.keys(packageJson.dependencies ?? {}),
+      ...Object.keys(packageJson.devDependencies ?? {}),
+      ...Object.keys(packageJson.peerDependencies ?? {}),
+    ]
+
+    for (const vendorPackage of VENDOR_PACKAGES) {
+      expect(declaredPackages).not.toContain(vendorPackage)
+    }
+    for (const prefix of VENDOR_SCOPE_PREFIXES) {
+      expect(
+        declaredPackages.some((name) => name.startsWith(prefix)),
+        `package.json declares a dependency under ${prefix}`
+      ).toBe(false)
+    }
   })
 })

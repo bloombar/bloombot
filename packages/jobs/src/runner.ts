@@ -114,7 +114,7 @@ function runHandlerWithTimeout(
   payload: unknown,
   context: JobContext,
   timeoutMs: number
-): Promise<void> {
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(
@@ -204,7 +204,7 @@ export async function runNextJob(
   const claim = { owner: deps.owner, claimExpiresAt: job.claimExpiresAt! }
 
   try {
-    await runHandlerWithTimeout(
+    const handlerResult = await runHandlerWithTimeout(
       handler,
       payload,
       {
@@ -216,11 +216,16 @@ export async function runNextJob(
       },
       deps.handlerTimeoutMs
     )
+    // SRV-6..8 — whatever the handler resolved with is its own report;
+    // `completeJob`'s own `result` argument is `undefined`-tolerant
+    // (`repos/jobs.ts`'s own doc comment), so a handler that returns
+    // nothing at all leaves the row's `result` `null` exactly as before.
     const completed = jobs.completeJob(
       job.organizationId,
       job.id,
       claim,
-      deps.db
+      deps.db,
+      handlerResult
     )
     if (!completed) return superseded(deps, job, 'succeeded')
     return { outcome: 'succeeded', job: completed }

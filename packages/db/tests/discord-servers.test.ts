@@ -470,4 +470,110 @@ describe('discord-servers repo', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ serverId: '777777777777777777' })
   })
+
+  // SRV-6 — what `apps/worker/src/handlers/discord-scaffold.ts` resolves a
+  // job's `courseId`-only payload to a guild through.
+  describe('getActiveDiscordServerBindingForOrganization', () => {
+    it("resolves the organization's one active binding", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '151515151515151515'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      expect(
+        discordServers.getActiveDiscordServerBindingForOrganization(
+          orgA,
+          testDb.db
+        )
+      ).toMatchObject({ serverId, organizationId: orgA })
+    })
+
+    it('resolves to undefined for an organization with no active binding at all', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizationsWithInstallers(testDb)
+
+      expect(
+        discordServers.getActiveDiscordServerBindingForOrganization(
+          orgA,
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+
+    it("resolves to undefined once the organization's only binding is removed, rather than resurrecting it", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '161616161616161616'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+
+      expect(
+        discordServers.getActiveDiscordServerBindingForOrganization(
+          orgA,
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+
+    // TEN-5/TEN-2: never resolves another organization's binding.
+    it("does not resolve another organization's active binding", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, installerB } =
+        seedTwoOrganizationsWithInstallers(testDb)
+      discordServers.claimDiscordServerBinding(
+        orgB,
+        {
+          serverId: '171717171717171717',
+          installedByAccountId: installerB.id,
+        },
+        testDb.db
+      )
+
+      expect(
+        discordServers.getActiveDiscordServerBindingForOrganization(
+          orgA,
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+
+    // Documented edge case (this file's own module comment): more than one
+    // active binding has no single guild to resolve to, so this refuses
+    // exactly like "none bound" rather than guessing.
+    it('resolves to undefined when the organization holds more than one active binding', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '181818181818181818',
+          installedByAccountId: installerA.id,
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '191919191919191919',
+          installedByAccountId: installerA.id,
+        },
+        testDb.db
+      )
+
+      expect(
+        discordServers.getActiveDiscordServerBindingForOrganization(
+          orgA,
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+  })
 })

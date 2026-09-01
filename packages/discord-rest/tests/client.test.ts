@@ -238,3 +238,159 @@ describe('a 2xx response with no usable body (cheap-fix 6 of the TEN-4..6 rework
     )
   })
 })
+
+// SRV-6: the four guild-write calls `apps/worker`'s scaffold handler builds
+// on — proven at the REST layer against the loopback fake's own stateful
+// guild store (`FakeDiscordServer`'s own module comment), one level below
+// the handler's own idempotence/never-delete tests.
+describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuildChannel (SRV-6)', () => {
+  it("lists a guild's existing channels and categories, camelCasing parent_id", async () => {
+    server.setGuildChannels('guild-1', [
+      { id: 'cat-1', type: 4, name: 'Week 1', parent_id: null },
+      { id: 'chan-1', type: 0, name: 'general', parent_id: 'cat-1' },
+    ])
+
+    const channels = await client.listGuildChannels('bot-token', 'guild-1')
+
+    expect(channels).toEqual([
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parentId: null,
+        permissionOverwrites: [],
+      },
+      {
+        id: 'chan-1',
+        type: 0,
+        name: 'general',
+        parentId: 'cat-1',
+        permissionOverwrites: [],
+      },
+    ])
+    expect(server.requests[0]).toMatchObject({
+      method: 'GET',
+      path: '/guilds/guild-1/channels',
+    })
+    expect(server.requests[0]?.headers.authorization).toBe('Bot bot-token')
+  })
+
+  it("lists a guild's roles", async () => {
+    server.setGuildRoles('guild-1', [
+      { id: 'role-admins', name: 'course-admins' },
+      { id: 'role-students', name: 'course-students' },
+    ])
+
+    const roles = await client.listGuildRoles('bot-token', 'guild-1')
+
+    expect(roles).toEqual([
+      { id: 'role-admins', name: 'course-admins' },
+      { id: 'role-students', name: 'course-students' },
+    ])
+  })
+
+  it('creates a category with the given permission overwrites, as a JSON POST with a Bot authorization', async () => {
+    const overwrites = [
+      { id: 'guild-1', type: 0 as const, allow: '0', deny: '1024' },
+      { id: 'role-admins', type: 0 as const, allow: '3072', deny: '0' },
+    ]
+
+    const created = await client.createGuildCategory('bot-token', 'guild-1', {
+      name: 'Week 1',
+      permissionOverwrites: overwrites,
+    })
+
+    expect(created).toMatchObject({ type: 4, name: 'Week 1', parentId: null })
+    expect(created.id).toEqual(expect.any(String))
+    // Finding 4 of the SRV-6..8 rework: `parseChannel` now reads a channel's
+    // own `permission_overwrites` back, not just `id`/`type`/`name`/`parentId`
+    // — `apps/worker`'s scaffold handler needs this to report an existing
+    // category or channel's actual privacy rather than merely the declared
+    // one.
+    expect(created.permissionOverwrites).toEqual(overwrites)
+    expect(server.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/guilds/guild-1/channels',
+      headers: expect.objectContaining({
+        authorization: 'Bot bot-token',
+        'content-type': 'application/json',
+      }) as unknown,
+    })
+    expect(server.requests[0]?.body).toEqual({
+      name: 'Week 1',
+      type: 4,
+      permission_overwrites: overwrites,
+    })
+
+    // The fake's own guild store actually holds it now — proven here, not
+    // just asserted from the create call's own response, since SRV-7's
+    // idempotence depends on a subsequent `listGuildChannels` seeing it.
+    const channels = await client.listGuildChannels('bot-token', 'guild-1')
+    expect(channels).toEqual([created])
+  })
+
+  it('creates a text channel inside a category, omitting permission_overwrites entirely when none is given so the channel inherits the category', async () => {
+    const created = await client.createGuildChannel('bot-token', 'guild-1', {
+      name: 'general',
+      parentId: 'cat-1',
+    })
+
+    expect(created).toMatchObject({
+      type: 0,
+      name: 'general',
+      parentId: 'cat-1',
+    })
+    expect(server.requests[0]?.body).toEqual({
+      name: 'general',
+      type: 0,
+      parent_id: 'cat-1',
+    })
+    expect(server.requests[0]?.body).not.toHaveProperty('permission_overwrites')
+  })
+
+  it('creates an admin-only channel with its own explicit permission overwrites', async () => {
+    const overwrites = [
+      { id: 'guild-1', type: 0 as const, allow: '0', deny: '1024' },
+      { id: 'role-admins', type: 0 as const, allow: '3072', deny: '0' },
+    ]
+
+    await client.createGuildChannel('bot-token', 'guild-1', {
+      name: 'admins',
+      parentId: 'cat-1',
+      permissionOverwrites: overwrites,
+    })
+
+    expect(server.requests[0]?.body).toEqual({
+      name: 'admins',
+      type: 0,
+      parent_id: 'cat-1',
+      permission_overwrites: overwrites,
+    })
+  })
+
+  it('listGuildChannels throws DiscordRequestError for a non-2xx response', async () => {
+    server.respondToGuildChannels({ status: 500, body: { message: 'boom' } })
+
+    await expect(
+      client.listGuildChannels('bot-token', 'guild-1')
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 500 }) as Partial<DiscordRequestError>
+    )
+  })
+
+  it('createGuildCategory throws DiscordRequestError for a non-2xx response', async () => {
+    server.respondToGuildChannels({
+      status: 403,
+      body: { message: 'Missing Permissions' },
+    })
+
+    await expect(
+      client.createGuildCategory('bot-token', 'guild-1', {
+        name: 'Week 1',
+        permissionOverwrites: [],
+      })
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
+    )
+  })
+})

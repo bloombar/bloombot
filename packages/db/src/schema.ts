@@ -633,6 +633,15 @@ export const jobs = sqliteTable(
     // on a retryable failure, so the row shows why the *last* attempt failed
     // while it waits for the next one.
     lastError: text('last_error'),
+    // SRV-6..8 — what a succeeded handler resolved with, JSON, opaque to
+    // this table the same way `payload` above is (this file's own module
+    // comment): `repos/jobs.ts#completeJob`'s own optional `result` argument
+    // sets this, `@bloombot/jobs`'s `runNextJob` passes through whatever the
+    // handler's promise resolved to, and `@bloombot/actions`'s `jobs.get`
+    // read action is what a caller (the panel, eventually) reads it back
+    // through. Null until a job succeeds — a job still running, still
+    // pending, or that failed instead, has no report to show.
+    result: text('result'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

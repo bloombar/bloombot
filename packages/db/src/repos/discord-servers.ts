@@ -220,3 +220,32 @@ export function listDiscordServerBindingsForOrganization(
     .where(eq(discordServerBindings.organizationId, organizationId))
     .all()
 }
+
+/**
+ * SRV-6 — the guild a scaffold job writes to. A job payload names only a
+ * course (`apps/worker/src/handlers/discord-scaffold.ts`), never a server
+ * id directly, so the handler resolves the organization's one active
+ * binding itself, the same way `getActiveDiscordServerBinding` resolves one
+ * by an already-known server id, one level up. `undefined` when the
+ * organization holds no active binding at all, or — an edge case nothing in
+ * this slice creates, since an organization installs the bot into one
+ * server at a time in practice — holds more than one: a scaffold run has no
+ * way to guess which of two servers a course belongs to, so it refuses
+ * exactly the same way as "none bound" rather than picking one arbitrarily.
+ */
+export function getActiveDiscordServerBindingForOrganization(
+  organizationId: string,
+  db: Database
+): DiscordServerBinding | undefined {
+  const active = db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .all()
+  return active.length === 1 ? active[0] : undefined
+}

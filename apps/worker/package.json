@@ -13,6 +13,7 @@
   "dependencies": {
     "@bloombot/config": "*",
     "@bloombot/db": "*",
+    "@bloombot/discord-rest": "*",
     "@bloombot/jobs": "*",
     "@bloombot/logger": "*"
   }

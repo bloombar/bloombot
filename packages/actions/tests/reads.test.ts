@@ -4,14 +4,17 @@
  * `courses.list`, `courses.get`, `discordServers.list` — is exercised
  * through `dispatch` the same way the writes in `actions.test.ts` are, and
  * proven tenant-scoped the same way: a caller cannot see, or name, another
- * organization's record through any of them.
+ * organization's record through any of them. `jobs.get` (SRV-6..8) joins
+ * them this slice — the read that makes the queue usable rather than a hole
+ * work disappears into.
  */
 
-import { courses, discordServers, projects } from '@bloombot/db'
+import { courses, discordServers, jobs, projects } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   getCourseAction,
+  getJobAction,
   listCoursesAction,
   listDiscordServersAction,
   listProjectsAction,
@@ -253,5 +256,95 @@ describe('discordServers.list', () => {
     expect(result).toHaveLength(1)
     expect(result[0]?.serverId).toBe(serverId)
     expect(result[0]?.removedAt).not.toBeNull()
+  })
+})
+
+describe('jobs.get', () => {
+  it("reads a pending job's status and payload, with a null result before it has run", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'discordServers.scaffold',
+        payload: { courseId: 'course-1' },
+        maxAttempts: 5,
+      },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      getJobAction,
+      { jobId: enqueued.id },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result).toMatchObject({
+      id: enqueued.id,
+      kind: 'discordServers.scaffold',
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 5,
+      payload: { courseId: 'course-1' },
+      result: null,
+    })
+  })
+
+  // What makes the queue usable — a succeeded job's report is readable back
+  // through the action layer, parsed rather than a raw JSON string.
+  it("reads a succeeded job's parsed result", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'noop', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.completeJob(
+      organizationId,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { created: ['general'], alreadyPresent: [] }
+    )
+
+    const result = await dispatch(
+      getJobAction,
+      { jobId: enqueued.id },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result.status).toBe('succeeded')
+    expect(result.result).toEqual({
+      created: ['general'],
+      alreadyPresent: [],
+    })
+  })
+
+  // TEN-5: refuses another organization's job the same not-found-shaped way
+  // every other read does.
+  it("refuses another organization's job", async () => {
+    testDb = createTestDatabase()
+    const orgA = seedOrganizationWithProject(testDb.db, 'Org A').organizationId
+    const orgB = seedOrganizationWithProject(testDb.db, 'Org B').organizationId
+    const enqueued = jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        getJobAction,
+        { jobId: enqueued.id },
+        { organizationId: orgB, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
   })
 })

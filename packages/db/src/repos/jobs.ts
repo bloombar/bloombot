@@ -85,6 +85,7 @@ export function enqueueJob(
       claimedBy: null,
       claimExpiresAt: null,
       lastError: null,
+      result: null,
       createdAt: now,
       updatedAt: now,
     })
@@ -199,12 +200,24 @@ export function claimNextJob(
     .get()
 }
 
-/** Mark a claimed job succeeded. `undefined` when `claim` no longer owns a running job by this id in this organization (see `ownsRunningJob`). */
+/**
+ * Mark a claimed job succeeded. `undefined` when `claim` no longer owns a
+ * running job by this id in this organization (see `ownsRunningJob`).
+ *
+ * `result` (SRV-6..8) is what a handler resolved with — opaque JSON, the
+ * same "not this table's to interpret" discipline `payload` (`schema.ts`'s
+ * own comment) already holds itself to, serialized here so `@bloombot/jobs`'s
+ * `runNextJob` (the only real caller) never has to. Omitted entirely by a
+ * handler that resolves with nothing (`Promise<void>`, still the common
+ * case for a job with no report worth keeping) — the column stays `null`
+ * rather than becoming the string `"undefined"` or `"null"`.
+ */
 export function completeJob(
   organizationId: string,
   jobId: string,
   claim: OwnedClaim,
-  db: Database
+  db: Database,
+  result?: unknown
 ): Job | undefined {
   const now = Date.now()
   return db
@@ -214,6 +227,7 @@ export function completeJob(
       claimedBy: null,
       claimExpiresAt: null,
       updatedAt: now,
+      ...(result !== undefined ? { result: JSON.stringify(result) } : {}),
     })
     .where(ownsRunningJob(jobId, organizationId, claim))
     .returning()

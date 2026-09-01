@@ -164,6 +164,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/courses.get',
         'POST /organizations/:organizationId/actions/discordServers.remove',
         'POST /organizations/:organizationId/actions/discordServers.list',
+        'POST /organizations/:organizationId/actions/discordServers.scaffold',
+        'POST /organizations/:organizationId/actions/jobs.get',
         'POST /organizations/:organizationId/discord-servers/install/begin',
         'POST /organizations/:organizationId/discord-servers/install/callback',
       ].sort()

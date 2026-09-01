@@ -128,3 +128,24 @@ export async function getJson(
     options
   )
 }
+
+/** `POST` a JSON body with an `Authorization` header — SRV-6's guild-write calls (`client.ts`'s `createGuildCategory`/`createGuildChannel`), which Discord requires as `application/json`, unlike the OAuth token endpoint's form encoding `postForm` above exists for. */
+export async function postJson(
+  url: string,
+  authorization: string,
+  body: unknown,
+  options: RequestOptions
+): Promise<JsonResponse> {
+  return runFetch(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization,
+      },
+      body: JSON.stringify(body),
+    },
+    options
+  )
+}

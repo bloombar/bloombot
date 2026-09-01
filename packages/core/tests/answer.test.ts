@@ -4,11 +4,21 @@
  * `FakeModelClient`, never a real network call or `data/`.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { conversations, courses, usage, type Database } from '@bloombot/db'
+import {
+  conversations,
+  courses,
+  people,
+  schema,
+  usage,
+  type Database,
+} from '@bloombot/db'
 
 import { answerQuestion } from '../src/answer.js'
+import { ModelAskError } from '../src/ports.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
 import { FakeModelClient } from './helpers/fake-model-client.js'
 import { seedCourseAndPerson } from './helpers/seed.js'
@@ -907,5 +917,186 @@ describe('answerQuestion (finding 10 of the CORE-1 rework): `text` is recorded, 
     expect(model.calls[0]?.question).toBe(
       'a question with no mention to rewrite'
     )
+  })
+})
+
+// Finding 1 of the MDL-1 rework (D-16) — `ModelRequest` (`ports.ts`) gained
+// `displayName`/`courseTitle`/`personRef` so an adapter can seed a new
+// upstream conversation's opening item the way `response_bot.py` does
+// (`response_bot.py:262-269`), and this is the one call site that
+// populates them.
+describe('answerQuestion (finding 1 of the MDL-1 rework): the model is asked with who is asking and which course', () => {
+  it("sends the person's display name, the course title, and their identity reference", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    // `seedCourseAndPerson` gives the person a display name but no
+    // identity — added directly here, the same way `packages/db`'s own
+    // `people.test.ts` seeds one, so this test controls exactly which
+    // surface the identity is on.
+    testDb.db
+      .insert(schema.personIdentities)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        personId,
+        surface: 'discord',
+        externalId: 'snowflake-1',
+        createdAt: Date.now(),
+      })
+      .run()
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(model.calls[0]?.displayName).toBe('Test Student')
+    expect(model.calls[0]?.courseTitle).toBe('Test Course')
+    expect(model.calls[0]?.personRef).toBe('<@snowflake-1>')
+  })
+
+  it('sends `null` for the display name and identity reference when neither is known', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    // Unlike the test above, no roster merge and no identity — the ordinary
+    // state of a person PPL-3 just created on demand, with no import ever
+    // having run.
+    people.overwriteRosterFields(
+      organizationId,
+      personId,
+      { displayName: null },
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'web', // the person has no identity on this surface
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(model.calls[0]?.displayName).toBeNull()
+    expect(model.calls[0]?.personRef).toBeNull()
+    // The course title is always in hand regardless (CORE-1 already
+    // resolved the course before the model is ever asked).
+    expect(model.calls[0]?.courseTitle).toBe('Test Course')
+  })
+})
+
+// Finding 6 of the MDL-1 rework (D-16) — a `ModelAskError` (`ports.ts`)
+// carries the upstream conversation id an adapter already created before a
+// turn failed, so this failed turn's own conversation is not orphaned.
+describe('answerQuestion (finding 6 of the MDL-1 rework): a conversation id created just before a failure is not lost', () => {
+  it('persists the id from a thrown `ModelAskError`, and a later turn resumes it', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    // Simulates an adapter that created `conv_new_1` upstream and then
+    // failed to answer with it — the failure this finding closes.
+    model.failNext(
+      new ModelAskError(
+        'upstream is down after creating a conversation',
+        'conv_new_1'
+      )
+    )
+
+    const first = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(first.kind).toBe('failed-with-apology')
+    // The id survived the failure — persisted the same way a successful
+    // call's own id would be (CONV-1).
+    if (first.kind === 'failed-with-apology') {
+      expect(
+        conversations.getConversation(
+          organizationId,
+          first.conversationId,
+          testDb.db
+        )?.upstreamThreadId
+      ).toBe('conv_new_1')
+    }
+
+    // A second, successful turn is handed `conv_new_1` to resume — not
+    // `null` (which would make the adapter create yet another one).
+    const second = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q2',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(second.kind).toBe('answered')
+    expect(model.calls[1]?.upstreamThreadId).toBe('conv_new_1')
+  })
+
+  it('does not touch the stored conversation id when the thrown error carries none', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    model.failNext(new Error('a plain transient failure, no new conversation'))
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result.kind).toBe('failed-with-apology')
+    if (result.kind === 'failed-with-apology') {
+      expect(
+        conversations.getConversation(
+          organizationId,
+          result.conversationId,
+          testDb.db
+        )?.upstreamThreadId
+      ).toBeNull()
+    }
   })
 })

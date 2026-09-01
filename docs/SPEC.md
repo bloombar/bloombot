@@ -949,7 +949,53 @@ course and never resettable by switching surface. The day the counter belongs to
 on the row rather than derived when it is read, which is the defect BOT-11 fixed in the
 Python bot.
 
-### 26. Background Jobs & Admission
+### 19. Enrolment & Course Access
+
+#### ENRL-1 A person's courses are a record, not a guess
+
+Which courses a person may ask is a stored relation rather than something inferred per message.
+On Discord the category a question arrived in decides the course; the web chat has no category,
+so the question would otherwise be answered by whichever course the asker names. An enrolment
+says plainly which courses are theirs, and every surface consults the same relation.
+
+#### ENRL-2 A student chooses among the courses they are already eligible for
+
+The web surface lets a person pick the course they are asking, from the courses they are
+enrolled in and no others. Naming a course they are not enrolled in is refused the way every
+other unauthorized read is — as not found. Otherwise anyone inside a tenant could ask any
+course, spend that course's budget and appear in its transcripts, where the instructor would
+see a stranger's questions.
+
+#### ENRL-3 Enrolment comes from something the instructor controls
+
+An enrolment is created by one of three things, each an admission decision the instructor
+already makes: redeeming a course join link they issued and can revoke, holding that course's
+student role in the server bound to the organization, or appearing on an imported roster. A
+person never enrols themselves out of nothing, and the platform records which of the three
+admitted them.
+
+#### ENRL-4 A join link is revocable, and revoking it does not un-enrol anybody
+
+A join link can be disabled or given an expiry, so a link shared beyond its intended audience
+can be closed off. Revoking a link stops it admitting anyone new; it does not remove the people
+it already admitted, because taking a student's access away is a separate decision an
+instructor makes deliberately.
+
+#### ENRL-5 Staff roles are never self-selected
+
+Membership roles — owner, instructor, assistant — carry authority over a tenant's courses,
+transcripts and spending, and are granted only by an existing owner through an action that is
+recorded. No surface offers them as a choice. A Discord role is a routing signal and confers
+none of them: administering a Discord server is not instructing a course, and the two are
+deliberately not the same fact.
+
+#### ENRL-6 Ending an enrolment keeps what was said
+
+Removing an enrolment stops a person asking that course; it deletes neither their transcript
+nor the course's record of what was asked. A term ending is not a reason to lose what a student
+asked during it, and TEN-6's rule about removal applies here for the same reason.
+
+### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job
 
@@ -983,7 +1029,7 @@ The background worker is single-instance like every other process, reports wheth
 the database and the queue, and shuts down by finishing or releasing what it holds rather than
 abandoning it.
 
-### 27. Server Scaffolding on the Platform
+### 21. Server Scaffolding on the Platform
 
 #### SRV-6 A course's Discord structure is created from its configuration
 
@@ -1004,7 +1050,7 @@ Creating structure is not the same operation as removing it. A category or chann
 configuration no longer mentions is reported, never deleted — a student's messages live in those
 channels, and DATA-4's transcript is not a substitute for them.
 
-### 28. Roster Import on the Platform
+### 22. Roster Import on the Platform
 
 #### ROST-9 A roster is imported as a file, into a job
 
@@ -1031,7 +1077,7 @@ Handles that do not resolve, students already present, channels that could not b
 is reported at the end of the run, with enough detail for an instructor to fix the roster and run
 it again. An import that silently half-worked is worse than one that refused.
 
-### 29. Knowledge Files & Instructions
+### 23. Knowledge Files & Instructions
 
 #### FILE-1 A course's knowledge is files an instructor uploads
 
@@ -1061,7 +1107,7 @@ course.
 An attachment belongs to an organization and is reachable only through it, and the stored bytes are
 not addressable by anybody who guesses an id. Course material is not public.
 
-### 30. Cost Ledger, Caps & Monitoring
+### 24. Cost Ledger, Caps & Monitoring
 
 #### COST-1 Every model call is recorded with what it cost
 
@@ -1097,7 +1143,7 @@ reports it.
 Where a provider does not report usage, the ledger records that the number is an estimate rather
 than quietly storing a guess in the same column as a fact.
 
-### 31. MCP Server & Agent Access
+### 25. MCP Server & Agent Access
 
 #### MCP-1 An assistant reaches the platform through the action layer
 
@@ -1127,7 +1173,7 @@ confirmation the assistant cannot supply on the person's behalf.
 Calls made through MCP draw on the same allowances and the same cost ledger, attributed to the
 account that authorized the connection. An assistant is not a way around a cap.
 
-### 32. Admin Console, Transcripts & Export
+### 26. Admin Console, Transcripts & Export
 
 #### ADMIN-1 An instructor can read their course's transcripts
 
@@ -1157,7 +1203,7 @@ a student's questions, and AUTH-4's allowlist is not a master key.
 TEN-6 keeps data when a bot is removed; this is the separate, deliberate operation that removes
 it. It names exactly what will be deleted, requires confirmation, and is recorded.
 
-### 33. Production Hardening & Cutover
+### 27. Production Hardening & Cutover
 
 #### OPS-8 The platform deploys as the processes it actually is
 
@@ -1189,7 +1235,7 @@ When the bot stops answering — gateway lost, provider failing, database unreac
 is notified rather than finding out from an instructor. COST-5 makes it observable; this makes it
 noticed.
 
-### 25. Account Linking Across Surfaces
+### 28. Account Linking Across Surfaces
 
 #### LINK-1 An unrecognized person is invited to connect, not answered
 
@@ -1231,7 +1277,7 @@ surface they arrived on. Asking in Discord, in the web chat and through an assis
 on one count and continues one conversation, so a cap cannot be evaded by changing surface
 and an instructor sees one student rather than three.
 
-### 19. Legacy Import
+### 29. Legacy Import
 
 #### MIG-1 The import reads a copy, never the live database
 
@@ -1262,7 +1308,7 @@ importer reports what it created, what it matched to something already there, an
 could not place, and a message whose course cannot be identified is reported rather than
 dropped silently.
 
-### 20. Conversation Core
+### 30. Conversation Core
 
 #### CORE-1 One answering pipeline for every surface
 
@@ -1310,7 +1356,7 @@ conversation. A failure to record is logged and does not prevent the person rece
 their answer: losing a transcript row is bad, and withholding a student's answer because
 of it is worse.
 
-### 21. Model Adapter
+### 31. Model Adapter
 
 #### MDL-1 One package knows the vendor
 
@@ -1359,7 +1405,7 @@ The provider's base URL is configuration, never a literal in a client, and the t
 runs against a fake upstream in-process. No test needs an API key, and a test run costs
 nothing and reaches no network.
 
-### 22. Discord Surface
+### 32. Discord Surface
 
 #### SURF-1 The bot process holds the only gateway connection
 
@@ -1410,7 +1456,7 @@ supervisor can tell "running" from "connected". On shutdown it closes the gatewa
 database rather than leaving the socket to time out, and it refuses to start on an
 environment that does not validate.
 
-### 23. HTTP API
+### 33. HTTP API
 
 #### API-1 Routes carry, they do not decide
 
@@ -1452,7 +1498,7 @@ The API answers a health check with whether it can actually serve — that its c
 validated and its database is reachable — rather than merely that the process is running,
 and it shuts down by closing the server and the database rather than exiting under load.
 
-### 24. Web Control Panel
+### 34. Web Control Panel
 
 #### WEB-1 The panel is a static build
 

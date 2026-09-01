@@ -1014,7 +1014,7 @@
     while an import is being rehearsed, the file holds their names, emails and
     transcripts, and an import that can only ever be run against a snapshot can
     be run as many times as it takes to get right.
-  section: §19 Legacy Import
+  section: §29 Legacy Import
   family: MIG
   phase: 3
   status: Done
@@ -1026,7 +1026,7 @@
     — the same records the control panel writes, through the same repositories,
     so imported courses obey the same collision and scoping rules as courses
     created by hand.
-  section: §19 Legacy Import
+  section: §29 Legacy Import
   family: MIG
   phase: 3
   status: Done
@@ -1038,7 +1038,7 @@
     conversation for that person and course, preserving its direction and its
     original timestamp — a transcript whose times were rewritten to the moment
     of import would be useless as the record it exists to be.
-  section: §19 Legacy Import
+  section: §29 Legacy Import
   family: MIG
   phase: 3
   status: Done
@@ -1050,7 +1050,7 @@
     fixed and repeated. The importer reports what it created, what it matched to
     something already there, and what it could not place, and a message whose
     course cannot be identified is reported rather than dropped silently."
-  section: §19 Legacy Import
+  section: §29 Legacy Import
   family: MIG
   phase: 3
   status: Done
@@ -1276,7 +1276,7 @@
     reply and returns it. A surface adapter translates its own events into that
     call and renders the result, and holds no answering logic of its own, so a
     change to how the bot answers cannot apply to one surface and not another.
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1289,7 +1289,7 @@
     answered from general knowledge, and a message that matches two is a
     configuration error the platform reports rather than a choice it makes
     quietly.
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1302,7 +1302,7 @@
     declined without a model call. The day is supplied by the caller, never read
     from a clock inside the core, so the boundary is testable and does not drift
     with a process's timezone.
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1313,7 +1313,7 @@
     answer out — and never on a vendor's SDK. The whole pipeline therefore runs
     in tests against a fake model with no network, and a second model provider
     is an adapter rather than a rewrite.
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1325,7 +1325,7 @@
     pointed at the course's staff. The inbound message is still recorded,
     because a question the system failed to answer is exactly the one an
     instructor needs to see.
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1336,7 +1336,7 @@
     the same conversation. A failure to record is logged and does not prevent
     the person receiving their answer: losing a transcript row is bad, and
     withholding a student's answer because of it is worse."
-  section: §20 Conversation Core
+  section: §30 Conversation Core
   family: CORE
   phase: 4
   status: Done
@@ -1348,7 +1348,7 @@
     platform imports a vendor SDK, so a second provider — or a self-hosted model
     for an institution that requires one — is a new adapter rather than a change
     to how the bot answers.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1360,7 +1360,7 @@
     one is answered with the instructions held in its own record, which is what
     lets an instructor who has never seen the OpenAI dashboard write the
     assistant's persona in the control panel.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1371,7 +1371,7 @@
     against it, so answers come from that course's uploaded notes, syllabus and
     schedule rather than from the model's general knowledge. A course without
     one is answered without the tool rather than refused.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1384,7 +1384,7 @@
     in-memory map it replaces, this survives a restart. An identifier the
     provider no longer recognizes starts a new conversation instead of failing
     the turn.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1397,7 +1397,7 @@
     limit, a 5xx — is retried once; a refusal or an invalid request is not,
     because repeating it only spends money to fail again. The token counts the
     provider reports are returned for the cost ledger to record.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1406,7 +1406,7 @@
   title: Citation markers never reach a student
   full: The provider's inline source markers are stripped from an answer before it
     leaves the adapter, exactly as the running bot strips them today.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1416,7 +1416,7 @@
   full: The provider's base URL is configuration, never a literal in a client, and
     the test suite runs against a fake upstream in-process. No test needs an API
     key, and a test run costs nothing and reaches no network.
-  section: §21 Model Adapter
+  section: §31 Model Adapter
   family: MDL
   phase: 4
   status: Done
@@ -1451,7 +1451,7 @@
     inter-process coordination to get wrong and no second connection competing
     for the same session. The process is single-instance by design: two gateway
     connections on one token is an error rather than redundancy."
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1463,7 +1463,7 @@
     the question reaches the model, so the model sees a sentence rather than a
     numeric reference. What the student actually typed is what the transcript
     records.
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1474,7 +1474,7 @@
     an organization through the binding record. A message from an unbound server
     is logged and dropped rather than answered, so a bot added to a server by
     someone who has not installed it through the platform does nothing at all.
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1485,7 +1485,7 @@
     new person and identity the first time they are seen. The bot therefore
     fills its own roster as students arrive, and a student who later reaches the
     same course from the web is the same person with the same history.
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1496,7 +1496,7 @@
     legible. An answer longer than Discord's message limit is split on a
     boundary that keeps it readable and sent in order, rather than truncated or
     dropped by the platform.
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1508,7 +1508,7 @@
     spent, an apology when the model fails, and — for a course configured to
     answer nothing, or a message that matches no course — a log line naming the
     cause rather than a silent drop the instructor cannot see."
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1519,7 +1519,7 @@
     connected, so a supervisor can tell "running" from "connected". On shutdown
     it closes the gateway and the database rather than leaving the socket to
     time out, and it refuses to start on an environment that does not validate.
-  section: §22 Discord Surface
+  section: §32 Discord Surface
   family: SURF
   phase: 4
   status: Done
@@ -1606,7 +1606,7 @@
     Every rule about who may do what therefore lives in one place, and a second
     surface — the MCP server, a future mobile client — reaches the same rules
     without a route to copy."
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1617,7 +1617,7 @@
     the site, and is rotated when a sign-in succeeds. Nothing hands the token to
     JavaScript, so a cross-site script cannot read it, and signing out revokes
     the session rather than only clearing the cookie.
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1629,7 +1629,7 @@
     Cookies are sent by the browser whatever page asked for the request, so the
     origin check is what stands between a student's authenticated session and a
     form on somebody else's site.
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1640,7 +1640,7 @@
     middleware, and no route maps its own. A refusal is the same status and the
     same body whether the record is missing or belongs to another organization,
     so the API discloses no more than the action layer does.
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1650,7 +1650,7 @@
   full: "The API process opens no gateway connection: that is the bot's alone.
     Anything the API needs from Discord it does over REST with the same token,
     so there is no second connection to coordinate and no session to lose."
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1661,7 +1661,7 @@
     its configuration validated and its database is reachable — rather than
     merely that the process is running, and it shuts down by closing the server
     and the database rather than exiting under load.
-  section: §23 HTTP API
+  section: §33 HTTP API
   family: API
   phase: 5
   status: Done
@@ -1767,7 +1767,7 @@
     over the same origin. It runs no server of its own, so there is no third
     process to deploy, and the API is the only thing that ever touches the
     database.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1778,7 +1778,7 @@
     cookie is set by the API and never read by JavaScript. Nothing in the bundle
     stores a token, so there is nothing for a cross-site script to steal, and
     signing out ends the session on the server rather than only in the tab.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1789,7 +1789,7 @@
     which one it is acting in and carries that organization in every request, so
     a person who teaches in two places cannot act in one while believing they
     are in the other.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1801,7 +1801,7 @@
     server, or refused because the server belongs to somebody else — without
     saying who. A server already installed shows as installed, with the option
     to remove it."
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1812,7 +1812,7 @@
     was wrong, and nothing renders a stack trace, an internal message or an
     identifier the caller has no use for. The panel adds no interpretation the
     API did not give it.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1823,7 +1823,7 @@
     workspace. The data, configuration, Discord and model packages are
     unreachable from it by lint rule, because bundling any of them would ship
     credentials to every visitor.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 6
   status: Done
@@ -1894,7 +1894,7 @@
     the API exposes to anything else. A duplicated project's courses arrive
     disabled, and the panel says so rather than leaving the instructor to
     discover it when nothing routes.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 7
   status: Done
@@ -1906,7 +1906,7 @@
     saving writes them through the platform's own action. Nothing about a course
     requires editing a file in this repository or restarting a process, which is
     the whole point of the migration.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 7
   status: Done
@@ -1918,7 +1918,7 @@
     making it. A save refused because those names collide with another course
     names that course and its project, because that refusal is about a record in
     the instructor's own organization and is theirs to resolve.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 7
   status: Done
@@ -1930,7 +1930,7 @@
     — is queued as a job rather than held open on an HTTP connection. A job
     carries the organization it belongs to, so a queue is never a way around the
     scoping every other read and write obeys.
-  section: §26 Background Jobs & Admission
+  section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
   status: Backlog
@@ -1941,7 +1941,7 @@
     job that exhausts them stops and stays visible with the reason it stopped,
     rather than disappearing. Silent disappearance is what makes a queue
     impossible to operate.
-  section: §26 Background Jobs & Admission
+  section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
   status: Backlog
@@ -1952,7 +1952,7 @@
     worker that dies mid-job releases its claim rather than stranding it. Where
     the work itself cannot be made idempotent, the job records enough to resume
     rather than repeat.
-  section: §26 Background Jobs & Admission
+  section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
   status: Backlog
@@ -1964,7 +1964,7 @@
     a bound, and a student who waits is told they are waiting rather than left
     with silence. The bound is configuration, not a constant compiled into a
     client.
-  section: §26 Background Jobs & Admission
+  section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
   status: Backlog
@@ -1974,7 +1974,7 @@
   full: The background worker is single-instance like every other process, reports
     whether it can reach the database and the queue, and shuts down by finishing
     or releasing what it holds rather than abandoning it.
-  section: §26 Background Jobs & Admission
+  section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
   status: Backlog
@@ -1985,7 +1985,7 @@
     server on request, with the permissions its roles imply. This is the
     operation the Python hydrate_server script performs today, moved behind an
     action so an instructor can run it from the panel rather than a terminal.
-  section: §27 Server Scaffolding on the Platform
+  section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
   status: Backlog
@@ -1996,7 +1996,7 @@
     is missing is created, and the result names what changed. An instructor who
     is unsure whether it ran can run it again safely, which is the only way a
     provisioning tool is usable."
-  section: §27 Server Scaffolding on the Platform
+  section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
   status: Backlog
@@ -2007,7 +2007,7 @@
     channel the configuration no longer mentions is reported, never deleted — a
     student's messages live in those channels, and DATA-4's transcript is not a
     substitute for them.
-  section: §27 Server Scaffolding on the Platform
+  section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
   status: Backlog
@@ -2018,7 +2018,7 @@
     runs as a job (JOB-1), because a large roster outlives a request. The file
     is parsed against a schema, and a row that does not parse is reported with
     its line rather than skipped in silence.
-  section: §28 Roster Import on the Platform
+  section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
   status: Backlog
@@ -2030,7 +2030,7 @@
     surface already proved (PPL-4's rule, and the reason a roster is
     corroboration rather than authority). A row whose handle matches nobody yet
     is kept, so the person is recognized when they first appear.
-  section: §28 Roster Import on the Platform
+  section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
   status: Backlog
@@ -2041,7 +2041,7 @@
     cap on channels per category, spilling into the next numbered category as
     the current one fills — the behavior ROST-4 describes for the Python tool,
     on the platform's own job runner.
-  section: §28 Roster Import on the Platform
+  section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
   status: Backlog
@@ -2052,7 +2052,7 @@
     could not be created: each is reported at the end of the run, with enough
     detail for an instructor to fix the roster and run it again. An import that
     silently half-worked is worse than one that refused."
-  section: §28 Roster Import on the Platform
+  section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
   status: Backlog
@@ -2063,7 +2063,7 @@
     course in the panel. The platform stores the file, tracks which course it
     belongs to, and makes it available to that course's answering — replacing a
     vector store id typed in from a vendor dashboard.
-  section: §29 Knowledge Files & Instructions
+  section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
   status: Backlog
@@ -2073,7 +2073,7 @@
   full: An attachment is pending, ready, or failed, and the panel says which.
     Uploading a file that the provider then rejects must not leave a course
     looking configured while its answers are ungrounded.
-  section: §29 Knowledge Files & Instructions
+  section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
   status: Backlog
@@ -2083,7 +2083,7 @@
   full: Detaching a file stops it grounding answers, and the removal reaches the
     provider rather than only the platform's own record. A course's material is
     what the instructor last said it was.
-  section: §29 Knowledge Files & Instructions
+  section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
   status: Backlog
@@ -2095,7 +2095,7 @@
     assistant was told last week and restore it. This is D-3's
     course_instruction_revisions, and it is what makes instructions safe to edit
     on a live course.
-  section: §29 Knowledge Files & Instructions
+  section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
   status: Backlog
@@ -2105,7 +2105,7 @@
   full: An attachment belongs to an organization and is reachable only through it,
     and the stored bytes are not addressable by anybody who guesses an id.
     Course material is not public.
-  section: §29 Knowledge Files & Instructions
+  section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
   status: Backlog
@@ -2115,7 +2115,7 @@
   full: A call records the course, the person, the model, the token counts the
     provider reported and the cost in integer micros. Money as a floating-point
     number is how a ledger stops adding up.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
   status: Backlog
@@ -2126,7 +2126,7 @@
     was made for, so an instructor sees what their course spent and an
     administrator sees what a tenant spent. A call that cannot be attributed is
     a defect, not a row with a null.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
   status: Backlog
@@ -2137,7 +2137,7 @@
     metering step), before the model is asked, so exceeding it costs nothing. A
     tenant at their cap is refused with a message that says so, not a generic
     failure.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
   status: Backlog
@@ -2147,7 +2147,7 @@
   full: An instructor sees their courses' usage and the students approaching their
     limits; a platform administrator sees usage per organization. Neither has to
     read a log file or run a query to find out what is being spent.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
   status: Backlog
@@ -2157,7 +2157,7 @@
   full: Whether each process is running, connected and answering is observable —
     the gateway connection, the queue depth, the model provider's error rate —
     so a failure is noticed before a student reports it.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
   status: Backlog
@@ -2167,9 +2167,83 @@
   full: Where a provider does not report usage, the ledger records that the number
     is an estimate rather than quietly storing a guess in the same column as a
     fact.
-  section: §30 Cost Ledger, Caps & Monitoring
+  section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
+  status: Backlog
+  review: false
+- id: ENRL-1
+  title: A person's courses are a record, not a guess
+  full: Which courses a person may ask is a stored relation rather than something
+    inferred per message. On Discord the category a question arrived in decides
+    the course; the web chat has no category, so the question would otherwise be
+    answered by whichever course the asker names. An enrolment says plainly
+    which courses are theirs, and every surface consults the same relation.
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-2
+  title: A student chooses among the courses they are already eligible for
+  full: The web surface lets a person pick the course they are asking, from the
+    courses they are enrolled in and no others. Naming a course they are not
+    enrolled in is refused the way every other unauthorized read is — as not
+    found. Otherwise anyone inside a tenant could ask any course, spend that
+    course's budget and appear in its transcripts, where the instructor would
+    see a stranger's questions.
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-3
+  title: Enrolment comes from something the instructor controls
+  full: "An enrolment is created by one of three things, each an admission
+    decision the instructor already makes: redeeming a course join link they
+    issued and can revoke, holding that course's student role in the server
+    bound to the organization, or appearing on an imported roster. A person
+    never enrols themselves out of nothing, and the platform records which of
+    the three admitted them."
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-4
+  title: A join link is revocable, and revoking it does not un-enrol anybody
+  full: A join link can be disabled or given an expiry, so a link shared beyond
+    its intended audience can be closed off. Revoking a link stops it admitting
+    anyone new; it does not remove the people it already admitted, because
+    taking a student's access away is a separate decision an instructor makes
+    deliberately.
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-5
+  title: Staff roles are never self-selected
+  full: "Membership roles — owner, instructor, assistant — carry authority over a
+    tenant's courses, transcripts and spending, and are granted only by an
+    existing owner through an action that is recorded. No surface offers them as
+    a choice. A Discord role is a routing signal and confers none of them:
+    administering a Discord server is not instructing a course, and the two are
+    deliberately not the same fact."
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-6
+  title: Ending an enrolment keeps what was said
+  full: Removing an enrolment stops a person asking that course; it deletes
+    neither their transcript nor the course's record of what was asked. A term
+    ending is not a reason to lose what a student asked during it, and TEN-6's
+    rule about removal applies here for the same reason.
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
   status: Backlog
   review: false
 - id: LINK-1
@@ -2179,7 +2253,7 @@
     else. No model call is made and no allowance is spent. Attribution is
     therefore complete from the first message rather than reconstructed later,
     which is what makes usage across surfaces countable at all.
-  section: §25 Account Linking Across Surfaces
+  section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
   status: Backlog
@@ -2192,7 +2266,7 @@
     identity, and inherits their conversations, their transcript and their
     allowance. What travels in public is an address; what proves anything
     happens after signing in."
-  section: §25 Account Linking Across Surfaces
+  section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
   status: Backlog
@@ -2207,7 +2281,7 @@
     a direct message. A token is never posted where a third party can read it,
     and an identity is never bound on a visit alone — the page names the account
     being connected and waits to be told to proceed."
-  section: §25 Account Linking Across Surfaces
+  section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
   status: Backlog
@@ -2221,7 +2295,7 @@
     A merge that handed back a fresh allowance would make connecting the
     cheapest way to double it. The operation is idempotent and recorded, because
     it rewrites who owns a transcript."
-  section: §25 Account Linking Across Surfaces
+  section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
   status: Backlog
@@ -2233,7 +2307,7 @@
     and through an assistant draws on one count and continues one conversation,
     so a cap cannot be evaded by changing surface and an instructor sees one
     student rather than three.
-  section: §25 Account Linking Across Surfaces
+  section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
   status: Backlog
@@ -2273,7 +2347,7 @@
     an unsanitized HTML sink. A chat surface that renders assistant output as
     HTML is the shortest path to a student's session, and WEB-6 exists to keep
     that path closed.
-  section: §24 Web Control Panel
+  section: §34 Web Control Panel
   family: WEB
   phase: 12
   status: Backlog
@@ -2284,7 +2358,7 @@
     same pipeline the API uses. An assistant's call is an ordinary call by the
     account that authorized it — same policies, same refusals, same audit — not
     a parallel implementation.
-  section: §31 MCP Server & Agent Access
+  section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
   status: Backlog
@@ -2294,7 +2368,7 @@
   full: What an assistant may reach is an explicit list, not everything in the
     catalog. A new action does not silently become an agent-callable tool;
     adding one to the surface is a deliberate edit that a reviewer sees.
-  section: §31 MCP Server & Agent Access
+  section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
   status: Backlog
@@ -2305,7 +2379,7 @@
     memberships and nothing more. There is no service identity that transcends
     tenancy, because an assistant with more authority than the person who ran it
     is a privilege escalation with a friendly interface.
-  section: §31 MCP Server & Agent Access
+  section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
   status: Backlog
@@ -2315,7 +2389,7 @@
   full: A tool that deletes, exports, or spends money is marked as such and
     requires an explicit confirmation the assistant cannot supply on the
     person's behalf.
-  section: §31 MCP Server & Agent Access
+  section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
   status: Backlog
@@ -2325,7 +2399,7 @@
   full: Calls made through MCP draw on the same allowances and the same cost
     ledger, attributed to the account that authorized the connection. An
     assistant is not a way around a cap.
-  section: §31 MCP Server & Agent Access
+  section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
   status: Backlog
@@ -2335,7 +2409,7 @@
   full: The conversations a course has had are readable in the panel, filtered by
     student and by date, so an instructor can see what was asked and what was
     answered. This is the record CONV-2 exists to keep, made usable.
-  section: §32 Admin Console, Transcripts & Export
+  section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
   status: Backlog
@@ -2345,7 +2419,7 @@
   full: Who read whose conversation, and when, is written to an audit trail.
     Transcripts are student speech, and access to them is the kind of thing an
     institution has to be able to account for.
-  section: §32 Admin Console, Transcripts & Export
+  section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
   status: Backlog
@@ -2355,7 +2429,7 @@
   full: An instructor exports a course's transcripts and usage as a job (JOB-1),
     and collects the file when it is ready. The export carries only that
     organization's data, and the same audit entry as a read.
-  section: §32 Admin Console, Transcripts & Export
+  section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
   status: Backlog
@@ -2366,7 +2440,7 @@
     their health. It does not grant a route into a tenant's transcripts:
     administering the platform is not the same as reading a student's questions,
     and AUTH-4's allowlist is not a master key."
-  section: §32 Admin Console, Transcripts & Export
+  section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
   status: Backlog
@@ -2376,7 +2450,7 @@
   full: TEN-6 keeps data when a bot is removed; this is the separate, deliberate
     operation that removes it. It names exactly what will be deleted, requires
     confirmation, and is recorded.
-  section: §32 Admin Console, Transcripts & Export
+  section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
   status: Backlog
@@ -2387,7 +2461,7 @@
     supervised processes, each restarted independently, with the migration
     applied once before they start rather than by whichever process wins the
     race.
-  section: §33 Production Hardening & Cutover
+  section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
   status: Backlog
@@ -2397,7 +2471,7 @@
   full: "The legacy import runs against a copy of the production database, and the
     platform answers alongside the Python bot in a test server, before anything
     is switched. MIG-1's rule holds: the rehearsal never touches the live file."
-  section: §33 Production Hardening & Cutover
+  section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
   status: Backlog
@@ -2408,7 +2482,7 @@
     with a documented way back that does not depend on anything the cutover
     deleted. The two systems share a database file during the migration (D-9),
     which is what makes returning possible.
-  section: §33 Production Hardening & Cutover
+  section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
   status: Backlog
@@ -2418,7 +2492,7 @@
   full: Every credential the Python system used is rotated when the platform takes
     over, because a credential that has been in two systems' environments is a
     credential with two chances of having leaked.
-  section: §33 Production Hardening & Cutover
+  section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
   status: Backlog
@@ -2428,7 +2502,7 @@
   full: When the bot stops answering — gateway lost, provider failing, database
     unreachable — an operator is notified rather than finding out from an
     instructor. COST-5 makes it observable; this makes it noticed.
-  section: §33 Production Hardening & Cutover
+  section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
   status: Backlog

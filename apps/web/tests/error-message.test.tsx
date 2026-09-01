@@ -1,0 +1,75 @@
+/**
+ * WEB-5: a refusal reads as not found, a validation failure names the
+ * field, a conflict names what it collided with, and nothing renders a
+ * stack trace, an internal message, or an identifier the caller has no
+ * use for. This is the test that would fail if `describeApiError` started
+ * passing through anything `apps/api` did not already put in the response
+ * body — e.g. `error.message` (built from `error.body.error`, a code, not
+ * prose a person should read) or a raw `internal_error`'s absent detail.
+ */
+
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+
+import { ApiError } from '../src/api/client.js'
+import {
+  describeApiError,
+  ErrorMessage,
+} from '../src/components/ErrorMessage.js'
+
+describe('describeApiError (WEB-5)', () => {
+  it('a refusal (action_refused) reads as not found — nothing about what it protected', () => {
+    const error = new ApiError(404, { error: 'action_refused' })
+    const { headline, details } = describeApiError(error)
+    expect(headline).toMatch(/not found/i)
+    expect(details).toEqual([])
+  })
+
+  it('action_unknown reads the same as action_refused — indistinguishable, per TEN-5', () => {
+    const refused = describeApiError(
+      new ApiError(404, { error: 'action_refused' })
+    )
+    const unknown = describeApiError(
+      new ApiError(404, { error: 'action_unknown' })
+    )
+    expect(unknown.headline).toEqual(refused.headline)
+  })
+
+  it('a validation failure names the field that was wrong', () => {
+    const error = new ApiError(400, {
+      error: 'action_input_invalid',
+      issues: [{ path: ['email'], message: 'Invalid email' }],
+    })
+    const { details } = describeApiError(error)
+    expect(details).toEqual(['email: Invalid email'])
+  })
+
+  it('a conflict names what it collided with, from the API-supplied message', () => {
+    const error = new ApiError(409, {
+      error: 'action_conflict',
+      conflict: { message: 'A course named "Intro" already exists.' },
+    })
+    const { headline } = describeApiError(error)
+    expect(headline).toBe('A course named "Intro" already exists.')
+  })
+
+  it('an unexpected failure (internal_error) discloses nothing beyond a generic message', () => {
+    const error = new ApiError(500, { error: 'internal_error' })
+    const { headline, details } = describeApiError(error)
+    expect(headline).not.toMatch(/internal_error/)
+    expect(headline).not.toMatch(/stack/i)
+    expect(details).toEqual([])
+  })
+
+  it('ErrorMessage renders the headline and, when present, the field details', () => {
+    const error = new ApiError(400, {
+      error: 'invalid_request',
+      issues: [{ path: ['token'], message: 'Required' }],
+    })
+    render(<ErrorMessage error={error} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'That did not look right.'
+    )
+    expect(screen.getByText('token: Required')).toBeInTheDocument()
+  })
+})

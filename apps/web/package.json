@@ -1,0 +1,26 @@
+{
+  "name": "@bloombot/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The control panel (WEB-1..6): a static bundle served by nginx, talking to apps/api over the same origin. Imports @bloombot/schemas and nothing else from the workspace (PLAT-2) — enforced by eslint.config.js's own no-restricted-imports rule, and checked structurally by tests/bundle.test.ts (WEB-6).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --build && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^5.0.4",
+    "jsdom": "^27.0.0",
+    "vite": "^8.2.2"
+  }
+}

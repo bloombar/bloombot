@@ -1715,6 +1715,18 @@
   phase: 5
   status: Done
   review: false
+- id: QA-7
+  title: The signed-in path is tested end to end
+  full: "At least one test drives a real browser against a real front end, a real
+    API and a real database: sign in, land in an organization, and see what a
+    signed-in instructor sees. Unit tests on either side of a contract can both
+    pass while the contract itself is broken, and this is the test that would
+    notice."
+  section: §17 Quality, Types & Tooling
+  family: QA
+  phase: 6
+  status: In review
+  review: false
 - id: TEN-4
   title: Installation
   full: "The bot is installed through Discord's OAuth flow, initiated from a
@@ -1748,6 +1760,73 @@
   family: TEN
   phase: 6
   status: Done
+  review: false
+- id: WEB-1
+  title: The panel is a static build
+  full: The control panel is a static bundle served by nginx, talking to the API
+    over the same origin. It runs no server of its own, so there is no third
+    process to deploy, and the API is the only thing that ever touches the
+    database.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
+  review: false
+- id: WEB-2
+  title: Signing in happens in the browser, and the session never does
+  full: A visitor signs in with an emailed link or with Google, and the session
+    cookie is set by the API and never read by JavaScript. Nothing in the bundle
+    stores a token, so there is nothing for a cross-site script to steal, and
+    signing out ends the session on the server rather than only in the tab.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
+  review: false
+- id: WEB-3
+  title: The panel always knows which organization it is acting in
+  full: A signed-in account may belong to several organizations. The panel shows
+    which one it is acting in and carries that organization in every request, so
+    a person who teaches in two places cannot act in one while believing they
+    are in the other.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
+  review: false
+- id: WEB-4
+  title: Installing the bot is one button, and its outcomes are honest
+  full: "Installing starts the platform's own OAuth flow and reports what actually
+    happened: bound, refused because the account does not administer that
+    server, or refused because the server belongs to somebody else — without
+    saying who. A server already installed shows as installed, with the option
+    to remove it."
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
+  review: false
+- id: WEB-5
+  title: A failure reads the way the API reported it
+  full: A refusal reads as not found, a validation failure names the field that
+    was wrong, and nothing renders a stack trace, an internal message or an
+    identifier the caller has no use for. The panel adds no interpretation the
+    API did not give it.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
+  review: false
+- id: WEB-6
+  title: The bundle contains no server code and no secret
+  full: The browser bundle imports only the shared schema package from the
+    workspace. The data, configuration, Discord and model packages are
+    unreachable from it by lint rule, because bundling any of them would ship
+    credentials to every visitor.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 6
+  status: In review
   review: false
 - id: PROJ-4
   title: Duplicating a project

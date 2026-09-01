@@ -7,7 +7,7 @@
  * passed.
  */
 
-import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,6 +22,15 @@ const TMP_ROOT = join(process.cwd(), 'tmp', 'legacy-import-guard-tests')
 afterEach(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })
 })
+
+// Whether this checkout sits on a case-insensitive filesystem. It decides what
+// the case-variant spelling below *means*: on darwin (development, and the
+// machine this was written on) `DATA/data.db` and `data/data.db` are the same
+// file, so the guard must refuse it; on the case-sensitive Linux runner CI uses
+// they are two different paths, the upper-case one names nothing, and refusing
+// it would be refusing a file that is not the live database. The guard is right
+// either way — the assertion is what has to follow the platform.
+const CASE_INSENSITIVE_FS = existsSync(resolve('DATA'))
 
 describe('assertLegacySnapshotPath', () => {
   it('refuses a relative path under data/', () => {
@@ -73,6 +82,11 @@ describe('assertLegacySnapshotPath', () => {
   // symlinks but does not canonicalize case) let the upper-case spelling
   // sail past it. `resolveReal` now uses `realpathSync.native`.
   it('refuses a case-variant path that resolves into data/', () => {
+    if (!CASE_INSENSITIVE_FS) {
+      // A case-sensitive filesystem: `DATA/readme.txt` names nothing.
+      expect(() => assertLegacySnapshotPath('DATA/readme.txt')).not.toThrow()
+      return
+    }
     expect(() => assertLegacySnapshotPath('DATA/readme.txt')).toThrow(
       /live student database/
     )
@@ -109,6 +123,12 @@ describe('assertImportDestinationPath', () => {
   // finding 2, this guard's second caller: the case-insensitive-volume gap
   // must be closed here too, not just for the snapshot guard.
   it('refuses a case-variant path that resolves into data/ without --i-know', () => {
+    if (!CASE_INSENSITIVE_FS) {
+      expect(() =>
+        assertImportDestinationPath('DATA/data.db', [])
+      ).not.toThrow()
+      return
+    }
     expect(() => assertImportDestinationPath('DATA/data.db', [])).toThrow(
       /--i-know/
     )

@@ -2,6 +2,7 @@
 
 export { openDatabase, closeDatabase, type Database } from './client.js'
 export { runMigrations } from './migrate.js'
+export { resolveReal, repoDataDir, isUnderRepoData } from './path-guard.js'
 export * as schema from './schema.js'
 
 export * as organizations from './repos/organizations.js'

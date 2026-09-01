@@ -12,6 +12,7 @@
     { "path": "./packages/config" },
     { "path": "./packages/logger" },
     { "path": "./packages/schemas" },
-    { "path": "./packages/db" }
+    { "path": "./packages/db" },
+    { "path": "./packages/legacy-import" }
   ]
 }

@@ -892,3 +892,34 @@ A person's daily allowance is counted per course per calendar day, never pooled 
 course and never resettable by switching surface. The day the counter belongs to is stored
 on the row rather than derived when it is read, which is the defect BOT-11 fixed in the
 Python bot.
+
+### 19. Legacy Import
+
+#### MIG-1 The import reads a copy, never the live database
+
+The importer takes the path of a **copy** of the production SQLite file and refuses to
+open the live one. The running bot is still serving students while an import is being
+rehearsed, the file holds their names, emails and transcripts, and an import that can only
+ever be run against a snapshot can be run as many times as it takes to get right.
+
+#### MIG-2 Course configuration is imported from the YAML
+
+`bot_config.yml` becomes an organization, one project holding the term's courses, and for
+each course its Discord role names, categories and channels — the same records the control
+panel writes, through the same repositories, so imported courses obey the same collision
+and scoping rules as courses created by hand.
+
+#### MIG-3 Students and transcripts are imported with their history intact
+
+Each legacy user becomes a person with a Discord identity, keeping the roster fields the
+row carries. Each message becomes a message on the conversation for that person and course,
+preserving its direction and its original timestamp — a transcript whose times were
+rewritten to the moment of import would be useless as the record it exists to be.
+
+#### MIG-4 Importing twice changes nothing the second time
+
+An import is idempotent: re-running it against the same snapshot neither duplicates a
+person nor appends a transcript twice, so a failed run can be fixed and repeated. The
+importer reports what it created, what it matched to something already there, and what it
+could not place, and a message whose course cannot be identified is reported rather than
+dropped silently.

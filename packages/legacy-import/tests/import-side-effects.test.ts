@@ -1,8 +1,9 @@
 /**
  * PLAT-5: importing any module in this package must not open a connection,
- * create a file or a directory, or throw — even when `DATABASE_PATH` points
- * somewhere that has never existed. A connection is only ever created when
- * `openDatabase` is actually called.
+ * create a file or a directory, read the legacy snapshot, or throw — even
+ * when `DATABASE_PATH` points somewhere that has never existed. The same
+ * check `packages/db/tests/import-side-effects.test.ts` runs for that
+ * package, applied here.
  */
 
 import { existsSync, rmSync } from 'node:fs'
@@ -12,24 +13,22 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetConfigCache } from '@bloombot/config'
 
-// Every module this package ships, relative to this test file. Listed by
-// hand rather than walked with `readdirSync` so a new file is exercised only
-// once someone remembers to add it here — the same trade-off the logger
-// package's equivalent test makes.
+// Every module this package ships, relative to this test file — listed by
+// hand rather than walked with `readdirSync`, the same trade-off
+// `packages/db`'s equivalent test makes.
 const MODULES = [
-  '../src/schema.ts',
-  '../src/client.ts',
-  '../src/migrate.ts',
-  '../src/run-migrate.ts',
-  '../src/path-guard.ts',
-  '../src/repos/organizations.ts',
-  '../src/repos/accounts.ts',
-  '../src/repos/memberships.ts',
-  '../src/repos/discord-servers.ts',
+  '../src/guard.ts',
+  '../src/ids.ts',
+  '../src/read-legacy.ts',
+  '../src/import-config.ts',
+  '../src/import-people.ts',
+  '../src/import-messages.ts',
+  '../src/import.ts',
+  '../src/cli.ts',
   '../src/index.ts',
 ]
 
-const BOGUS_ROOT = join(process.cwd(), 'tmp', 'db-tests-side-effects')
+const BOGUS_ROOT = join(process.cwd(), 'tmp', 'legacy-import-side-effects')
 const BOGUS_DATABASE_PATH = join(BOGUS_ROOT, 'should-never-be-created.db')
 
 beforeEach(() => {

@@ -968,7 +968,7 @@
   section: §11 Specification & Project Board Tooling
   family: BOARD
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: CONV-1
   title: Conversations key on course and person
@@ -1200,7 +1200,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: QA-2
   title: No live services in tests
@@ -1244,7 +1244,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: QA-6
   title: Environment template cannot drift

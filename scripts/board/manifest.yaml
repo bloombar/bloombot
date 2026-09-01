@@ -1837,7 +1837,7 @@
   section: §16 Projects
   family: PROJ
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: PROJ-5
   title: The panel reads through the same layer it writes through
@@ -1849,7 +1849,7 @@
   section: §16 Projects
   family: PROJ
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: TEN-7
   title: An organization has a name a person recognizes
@@ -1860,7 +1860,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: TEN-8
   title: A server binding is visible to the organization that holds it
@@ -1872,5 +1872,5 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 7
-  status: In review
+  status: Done
   review: false

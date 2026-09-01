@@ -116,7 +116,11 @@ start of a lecture becoming thirty concurrent model calls.
 
 ## Phase 12 — Web student chat surface
 
-**In scope:**
+The surface that makes the platform more than a Discord bot: a student asks in a browser
+and gets the same course, the same conversation and the same allowance they would in
+Discord. That is why the identity rules land here rather than being invented per surface.
+
+**In scope:** PPL-4/5, WEB-10
 
 ## Phase 13 — MCP server & agent access
 

@@ -58,6 +58,30 @@ Known divergences from the Python bot, all deliberate and recorded: the day is o
 the bot replies in place rather than posting to the channel, an over-limit request is refused out loud
 rather than silently, and long answers are split (D-17).
 
+## Queued next
+
+**Operator documentation — a Discord server administrator's setup, step by step.** Requested directly, and
+it lands as a tracked requirement rather than a loose file: a new `OPS` id in `docs/SPEC.md`, claimed by a
+phase's `**In scope:**` line, plus `docs/DISCORD_SETUP.md` covering the whole path end to end —
+
+1. creating the Discord application, its bot user, the token and client secret, the permissions integer and
+   the privileged intents the bot actually needs (message content and server members);
+2. what to put in `.env` on the platform side, and which of those values are the same value under two names
+   (`BOT_APP_ID` doubles as the OAuth client id);
+3. installing into a guild through the control panel's own flow, and what the platform verifies before it
+   binds — the installing account must administer that guild, checked against Discord rather than trusted
+   from the request (TEN-4);
+4. the Discord-side structure the bot expects: the categories and role names a course claims, and why those
+   names must not collide with another enabled course's in the same server (PROJ-3);
+5. creating a project and defining a course in the panel, with the fields that decide routing called out;
+6. verifying it works — mention the bot in the course's category and get an answer — and what each failure
+   looks like: unbound server, no matching course, a course with no instructions or prompt, an exhausted
+   daily allowance;
+7. removing the bot, and what removal does **not** delete (TEN-6).
+
+It is written after the course-configuration screens land, so it documents what exists rather than what is
+planned, and its steps are checked against the code they describe.
+
 ## Working notes
 
 - Spawn implementation agents with **worktree isolation**. Subagents share this checkout, so a running

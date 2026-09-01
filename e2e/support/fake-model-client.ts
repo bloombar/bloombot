@@ -27,6 +27,7 @@ export class FakeModelClient implements ModelClient {
     return Promise.resolve({
       text: this.answerText,
       upstreamThreadId: 'e2e-fake-thread',
+      model: 'e2e-fake-model',
     })
   }
 }

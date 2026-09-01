@@ -506,3 +506,72 @@ describe('usage repo', () => {
     ).toBe(limit + 1)
   })
 })
+
+describe('listUsageNearLimit (COST-4)', () => {
+  it('reports a person at or above the threshold ratio, and not one below it, scoped to the requesting organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB, courseA, personA } = seedTwoOrganizations(testDb)
+    const day = '2026-08-31'
+    // courseA.maxRequestsPerDay is 3 (seedTwoOrganizations) — two of three
+    // is the default 80% threshold's own boundary (2/3 ≈ 0.667 < 0.8; use
+    // three of three to be unambiguously over it).
+    usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+    usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+    usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+
+    const nearLimit = usage.listUsageNearLimit(orgA, day, testDb.db)
+
+    expect(nearLimit).toEqual([
+      {
+        courseId: courseA.id,
+        courseTitle: 'Web Design',
+        personId: personA.id,
+        personDisplayName: 'A',
+        count: 3,
+        maxRequestsPerDay: 3,
+      },
+    ])
+    // Scoped: the same query against the other organization sees nothing,
+    // even though nothing about courseA/personA's own ids changed.
+    expect(usage.listUsageNearLimit(orgB, day, testDb.db)).toEqual([])
+  })
+
+  it('does not report a person below the threshold ratio', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const day = '2026-08-31'
+    // One of three is well under 80%.
+    usage.incrementUsage(orgA, courseA.id, personA.id, day, testDb.db)
+
+    expect(usage.listUsageNearLimit(orgA, day, testDb.db)).toEqual([])
+  })
+
+  it('never reports a course with no configured limit — there is nothing to be "near"', () => {
+    testDb = createTestDatabase()
+    const { orgA, personA } = seedTwoOrganizations(testDb)
+    const project = projects.createProject(
+      orgA,
+      { name: 'Unlimited Term' },
+      testDb.db
+    )
+    const unlimited = courses.createCourse(
+      orgA,
+      courseInput(project.id, {
+        maxRequestsPerDay: null,
+        adminsRole: 'admins-unlimited',
+        studentsRole: 'students-unlimited',
+      }),
+      testDb.db
+    )
+    if (!unlimited.ok) throw new Error('seed course creation failed')
+    usage.incrementUsage(
+      orgA,
+      unlimited.course.id,
+      personA.id,
+      '2026-08-31',
+      testDb.db
+    )
+
+    expect(usage.listUsageNearLimit(orgA, '2026-08-31', testDb.db)).toEqual([])
+  })
+})

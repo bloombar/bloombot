@@ -47,10 +47,29 @@
  * `model` from `CONFIG.OPENAI_API_KEY`) and handed down through
  * `@bloombot/discord`'s own `HandleMentionDependencies.admission` — this
  * file only has to expose the seam, not decide when it is real.
+ *
+ * COST-3 — the organization's spending cap is checked in exactly the same
+ * place, and for the same reason, D-29 already gives for admission: it runs
+ * *before* `reserveUsageSlot`, not merely before `model.ask`, because
+ * `usage.ts` has no operation that gives an already-reserved daily slot
+ * back. Ordered *after* admission is granted but *before* the allowance is
+ * reserved — a request that is still queued behind admission has spent
+ * nothing yet (D-29's own "waiting costs nothing" reasoning), so there is
+ * nothing to check the cap against until admission itself is settled; and
+ * checking the cap before the allowance means a caller who is going to be
+ * refused for being over the spending cap never spends a daily request on
+ * that refusal either — `declined-over-cap` and `declined-over-limit` are
+ * independent refusals, and this ordering is what keeps one from silently
+ * consuming the other (COST-3's own "over the cap costs nothing" reading,
+ * carried to the daily allowance too). Unlike the allowance, the cap check
+ * itself is a plain read (`@bloombot/db`'s own
+ * `costLedger.hasReachedSpendingCap`), not a reservation — there is nothing
+ * to give back on an early exit because nothing was ever held.
  */
 
 import {
   conversations,
+  costLedger,
   courses,
   people,
   usage,
@@ -61,6 +80,7 @@ import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import { ModelAskError, type ModelClient } from './ports.js'
+import { computeCost, type PricingTable } from './pricing.js'
 
 /** BOT-5's platform default, applied here — the layer D-13 named as responsible for it — for a course whose `maxRequestsPerDay` was never configured (`null`). */
 const DEFAULT_MAX_REQUESTS_PER_DAY = 10 // BOT-5
@@ -74,6 +94,26 @@ const DEFAULT_MAX_REQUESTS_PER_DAY = 10 // BOT-5
  */
 const NO_ADMISSION_LIMIT: AdmissionGate = {
   acquire: async () => ({ granted: true, release: () => {} }),
+}
+
+/**
+ * `deps.pricing`'s default when a caller omits it — the same "expose the
+ * seam, do not decide when it is real" reasoning `NO_ADMISSION_LIMIT` above
+ * already follows for admission: an empty rate table prices every model
+ * against `defaultRate` alone (`pricing.ts#computeCost`'s own fallback),
+ * flagged `estimated` rather than measured. `apps/bot`'s own `main()`
+ * builds the real table from `CONFIG.MODEL_PRICING_JSON`
+ * (`@bloombot/config`'s `getModelPricingTable`) and hands it down, the same
+ * "read `CONFIG` once at startup, thread it through" discipline `model`
+ * and `admission` already follow there — `packages/core` itself never
+ * reads `@bloombot/config` at all (D-29).
+ */
+const NO_PRICING_CONFIGURED: PricingTable = {
+  rates: {},
+  defaultRate: {
+    inputMicrosPerMillionTokens: 0,
+    outputMicrosPerMillionTokens: 0,
+  },
 }
 
 /** What one call to `answerQuestion` needs — the organization, course, person, surface and text CORE-1 names. */
@@ -106,6 +146,8 @@ export interface AnswerDependencies {
   logger: Logger
   /** JOB-4's bound on concurrent model calls. Defaults to `NO_ADMISSION_LIMIT` (this file's own module comment) when omitted — a test that wants to observe or control admission passes its own instead, and a real process wires its own configured gate through (`apps/bot`'s own `main()`). */
   admission?: AdmissionGate
+  /** COST-1/COST-6's per-model rates, priced against a successful call's own reported tokens. Defaults to `NO_PRICING_CONFIGURED` (this file's own module comment) when omitted — a real process wires the configured table through (`apps/bot`'s own `main()`, from `@bloombot/config`'s `getModelPricingTable`). */
+  pricing?: PricingTable
 }
 
 /**
@@ -118,6 +160,13 @@ export interface AnswerDependencies {
  *    (CORE-3).
  *  - `declined-over-limit` — past the allowance; no model call was made and
  *    nothing was recorded (CORE-3's "costs nothing").
+ *  - `declined-over-cap` — COST-3: the organization has already reached its
+ *    own spending cap; no model call was made, no allowance was reserved
+ *    and nothing was charged — the same "costs nothing" shape
+ *    `declined-over-limit` and `declined-busy` both already take, and a
+ *    distinct outcome from either so a caller can tell "this course is
+ *    busy today" apart from "this organization needs its cap raised"
+ *    (this file's own module comment has the full ordering reasoning).
  *  - `declined-busy` — JOB-4: no admission slot became free within the wait
  *    ceiling; no allowance was reserved and nothing was recorded, the same
  *    "costs nothing" treatment `declined-over-limit` gets, and for the same
@@ -141,6 +190,7 @@ export type AnswerResult =
   | { kind: 'answered'; conversationId: string; text: string }
   | { kind: 'answered-last-request'; conversationId: string; text: string }
   | { kind: 'declined-over-limit' }
+  | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
   | {
       kind: 'failed-with-apology'
@@ -163,13 +213,13 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
 
 /**
  * Answer one question. In order (CORE-1's brief, as reworked by findings 1,
- * 3 and 8, and by JOB-4):
+ * 3 and 8, and by JOB-4 and COST-3):
  *
  * 1. Guard the course itself — disabled, or not configured to answer at all
  *    — before anything else runs, matching `response_bot.py`'s own early
  *    return (`response_bot.py:208`).
  * 2. Wait for an admission slot (JOB-4), before the allowance is touched at
- *    all. Ordering this ahead of step 3, not around step 5's model call
+ *    all. Ordering this ahead of step 4, not around step 6's model call
  *    alone, is deliberate: the alternative — reserve the allowance first,
  *    then wait behind admission — lets a request spend a day's slot while
  *    it is still queued, and a caller that times out waiting (`declined-
@@ -183,26 +233,32 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
  *    each waiting its turn rather than one holding a reservation while the
  *    rest are refused outright. JOB-4's own text — "wait for a slot rather
  *    than failing" — is exactly that trade, made on purpose.
- * 3. Reserve a slot against the allowance (CORE-3), atomically, before
+ * 3. Check the organization's own spending cap (COST-3), after admission but
+ *    before the allowance — this file's own module comment has the full
+ *    reasoning for the ordering, the same D-29 shape JOB-4's own step 2
+ *    already takes one step earlier.
+ * 4. Reserve a slot against the allowance (CORE-3), atomically, before
  *    anything else is read or written, so an over-limit request costs
  *    nothing and two requests racing the model call's own `await` cannot
  *    both be granted (finding 8 — see `packages/db/repos/usage.ts`'s
  *    `reserveUsageSlot`).
- * 4. Record the inbound message (CORE-6) — before the model is asked, so a
+ * 5. Record the inbound message (CORE-6) — before the model is asked, so a
  *    question the model never answers is still on the transcript (CORE-5).
- * 5. Ask the model, through the port (CORE-4).
- * 6. Record the reply (CORE-6), and return a result.
+ * 6. Ask the model, through the port (CORE-4), and — for a call that
+ *    actually landed a response — record its cost (COST-1/COST-2).
+ * 7. Record the reply (CORE-6), and return a result.
  *
  * The admission slot step 2 acquired is released in a single `finally`
- * covering steps 3 through 6 as one unit, not the instant step 5's call
+ * covering steps 3 through 7 as one unit, not the instant step 6's call
  * settles: releasing the moment `model.ask` resolves would mean every early
  * exit between here and there (an over-limit decline, a conversation that
  * fails to open) would also have to remember its own release, and "nothing
  * forgets to release" is worth more than shaving the hold time by the cost
  * of a few synchronous local database writes.
  *
- * A failure to record (step 4 or step 6), or to persist the model's own
- * upstream thread id, is logged and never stops the reply (CORE-6): every
+ * A failure to record (step 5 or step 7), the cost ledger entry (step 6),
+ * or to persist the model's own upstream thread id, is logged and never
+ * stops the reply (CORE-6): every
  * write from here on is wrapped so a broken database write degrades to a
  * log line, not a lost answer.
  */
@@ -266,6 +322,21 @@ export async function answerQuestion(
   // own module comment says why this is one release rather than one per
   // early exit).
   try {
+    // COST-3 — the organization's own spending cap, checked here: after
+    // admission (a queued request has spent nothing yet to check a cap
+    // against) but before the allowance is reserved (this file's own
+    // module comment has the full ordering reasoning). A plain read, not a
+    // reservation — `hasReachedSpendingCap` holds nothing that needs
+    // releasing, so an early return here is as cheap as `declined-busy`'s
+    // own.
+    if (costLedger.hasReachedSpendingCap(organizationId, db)) {
+      logger.info(
+        { organizationId, courseId, personId },
+        'answerQuestion: declined, organization has reached its spending cap'
+      )
+      return { kind: 'declined-over-cap' }
+    }
+
     // BOT-5's default, applied here (D-13 named this the layer responsible for
     // it): a course that never configured `maxRequestsPerDay` is capped at
     // `DEFAULT_MAX_REQUESTS_PER_DAY`, not left unlimited.
@@ -375,6 +446,43 @@ export async function answerQuestion(
         ? withLastRequestNotice(course.title, modelAnswer.text)
         : modelAnswer.text
       newUpstreamThreadId = modelAnswer.upstreamThreadId
+
+      // COST-1/COST-2 — recorded for every call that actually landed a
+      // response, whether or not the provider reported usage for it
+      // (COST-6's own estimate path, `pricing.ts#computeCost`). A call that
+      // threw below (the `catch` this `try` feeds) never reaches here: there
+      // is no answer, and — for a plain thrown error, as opposed to
+      // `ModelAskError`'s own already-minted conversation — nothing this
+      // adapter reported actually happened to price, the same "nothing to
+      // give back because nothing was reserved" reasoning this function's
+      // own module comment gives the cap check above. Wrapped like every
+      // other write in this function (CORE-6): a broken ledger write
+      // degrades to a log line, never a lost answer.
+      try {
+        const priced = computeCost(
+          modelAnswer.model,
+          modelAnswer.usage,
+          deps.pricing ?? NO_PRICING_CONFIGURED
+        )
+        costLedger.recordCostLedgerEntry(
+          organizationId,
+          {
+            courseId,
+            personId,
+            model: modelAnswer.model,
+            inputTokens: priced.inputTokens,
+            outputTokens: priced.outputTokens,
+            costMicros: priced.costMicros,
+            measurement: priced.measurement,
+          },
+          db
+        )
+      } catch (error) {
+        logger.error(
+          { err: error, organizationId, courseId, personId },
+          'answerQuestion: failed to record the cost ledger entry'
+        )
+      }
     } catch (error) {
       // CORE-5 — logged with its cause, and the reply degrades to a plain
       // apology rather than silence or the raw error reaching the person.

@@ -17,3 +17,16 @@ export {
   type AnswerDependencies,
   type AnswerResult,
 } from './answer.js'
+
+export {
+  computeCost,
+  type ComputedCost,
+  type ModelRate,
+  type PricingTable,
+} from './pricing.js'
+
+export {
+  createCountingModelClient,
+  type CountingModelClient,
+  type ModelCallStats,
+} from './model-stats.js'

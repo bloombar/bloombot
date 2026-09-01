@@ -1,16 +1,19 @@
 /**
- * SURF-7's health endpoint — the one piece of `apps/bot` with no discord.js
- * in it at all, so it is cheap to test directly rather than leave inside
- * this app's otherwise-untested wiring. No network beyond loopback.
+ * SURF-7/COST-5's health endpoint — the one piece of `apps/bot` with no
+ * discord.js in it at all, so it is cheap to test directly rather than leave
+ * inside this app's otherwise-untested wiring. No network beyond loopback.
  */
 
 import { Server } from 'node:http'
 
+import type { ModelCallStats } from '@bloombot/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { startHealthServer, type HealthServer } from '../src/health.js'
 
 let server: HealthServer | undefined
+
+const ZERO_STATS: ModelCallStats = { calls: 0, errors: 0, errorRate: 0 }
 
 afterEach(async () => {
   await server?.close()
@@ -19,7 +22,8 @@ afterEach(async () => {
 
 /** Finds a free loopback port the same way the fake OpenAI/Discord test servers elsewhere in the repo do — `listen(0)` and read back the assigned port. */
 async function startOnFreePort(
-  isGatewayConnected: () => boolean
+  isGatewayConnected: () => boolean,
+  getModelStats: () => ModelCallStats = () => ZERO_STATS
 ): Promise<{ server: HealthServer; port: number }> {
   // node:http assigns the port synchronously inside `listen`, but there is
   // no public accessor on the `HealthServer` port itself — so the test binds
@@ -41,7 +45,10 @@ async function startOnFreePort(
   })
   await new Promise<void>((resolve) => probe.close(() => resolve()))
 
-  return { server: await startHealthServer(port, isGatewayConnected), port }
+  return {
+    server: await startHealthServer(port, isGatewayConnected, getModelStats),
+    port,
+  }
 }
 
 describe('startHealthServer (SURF-7)', () => {
@@ -51,7 +58,10 @@ describe('startHealthServer (SURF-7)', () => {
 
     const response = await fetch(`http://127.0.0.1:${port}`)
     expect(response.status).toBe(503)
-    expect(await response.json()).toEqual({ gatewayConnected: false })
+    expect(await response.json()).toEqual({
+      gatewayConnected: false,
+      model: ZERO_STATS,
+    })
   })
 
   it('reports 200 and gatewayConnected: true once the gateway is connected', async () => {
@@ -62,7 +72,10 @@ describe('startHealthServer (SURF-7)', () => {
     connected = true // flips after the server started — read fresh per request, not cached at startup
     const response = await fetch(`http://127.0.0.1:${port}`)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ gatewayConnected: true })
+    expect(await response.json()).toEqual({
+      gatewayConnected: true,
+      model: ZERO_STATS,
+    })
   })
 
   it('stops accepting connections once closed', async () => {
@@ -100,8 +113,33 @@ describe('startHealthServer (SURF-7)', () => {
     const { server: started, port } = await startOnFreePort(() => true)
     server = started
 
-    await expect(startHealthServer(port, () => true)).rejects.toThrow(
-      /already in use/
+    await expect(
+      startHealthServer(
+        port,
+        () => true,
+        () => ZERO_STATS
+      )
+    ).rejects.toThrow(/already in use/)
+  })
+})
+
+// COST-5 — the model provider's own error rate, read fresh on every request.
+describe('startHealthServer (COST-5): the model provider`s own error rate', () => {
+  it('reports the model stats callback`s current value, not a value captured at startup', async () => {
+    let stats: ModelCallStats = { calls: 0, errors: 0, errorRate: 0 }
+    const { server: started, port } = await startOnFreePort(
+      () => true,
+      () => stats
     )
+    server = started
+
+    stats = { calls: 4, errors: 2, errorRate: 0.5 }
+    const response = await fetch(`http://127.0.0.1:${port}`)
+    const body = (await response.json()) as { model: ModelCallStats }
+    expect(body.model).toEqual({
+      calls: 4,
+      errors: 2,
+      errorRate: 0.5,
+    })
   })
 })

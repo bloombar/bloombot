@@ -14,6 +14,7 @@ import {
   routeMessage,
   type AnswerDependencies,
   type ModelClient,
+  type PricingTable,
   type RoutableCourse,
 } from '@bloombot/core'
 import { courses, discordServers, people, type Database } from '@bloombot/db'
@@ -53,6 +54,8 @@ export interface HandleMentionDependencies {
    * `answerQuestion`'s own no-bound default.
    */
   admission?: AdmissionGate
+  /** COST-1/COST-6's per-model rates, passed straight through to `answerQuestion`'s own `AnswerDependencies.pricing`. Optional, the same reason `admission` is optional above: `apps/bot`'s own `main()` builds the real, configured table once (from `@bloombot/config`'s `getModelPricingTable`) and passes it here; a caller that omits it gets `answerQuestion`'s own zero-rate default. */
+  pricing?: PricingTable
 }
 
 /**
@@ -76,6 +79,7 @@ export type HandleMentionResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'declined-over-limit' }
+  | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
   | { kind: 'answered'; conversationId: string; messageCount: number }
   | {
@@ -97,6 +101,11 @@ function overLimitRefusalText(courseTitle: string): string {
 /** Rework finding 1 — JOB-4's own text is "a student who waits is told they are waiting rather than left with silence": a busy, correctly configured course is neither the "answers nothing" nor the "matches no course" case SURF-6 reserves for log-only, so this reaches the student too. */
 function busyRefusalText(): string {
   return `Bloombot is busy right now. Please try again shortly.`
+}
+
+/** COST-3 — the same "reaches the student, not just the log" treatment `overLimitRefusalText` already gets: an organization at its own spending cap is a refusal that says so, not a silent drop or a generic apology. */
+function overSpendingCapRefusalText(courseTitle: string): string {
+  return `Bloombot is unable to answer right now. See ${courseTitle} admins for help.`
 }
 
 /**
@@ -307,6 +316,7 @@ export async function handleMention(
     model,
     logger,
     ...(deps.admission ? { admission: deps.admission } : {}),
+    ...(deps.pricing ? { pricing: deps.pricing } : {}),
   }
   const result = await answerQuestion(
     {
@@ -360,6 +370,21 @@ export async function handleMention(
       // docs/DECISIONS.md.
       await sendReply(reply, overLimitRefusalText(courseTitle))
       return { kind: 'declined-over-limit' }
+    }
+    case 'declined-over-cap': {
+      // COST-3 — the organization has reached its own spending cap: the
+      // same "reaches the student, not a silent drop" treatment
+      // `declined-over-limit` above already gets, with its own wording
+      // (`overSpendingCapRefusalText`) so an instructor reading logs can
+      // tell "this student is over their daily allowance" apart from "this
+      // organization needs its cap raised" — the same distinction
+      // `answerQuestion`'s own two result kinds already draw.
+      await sendReply(reply, overSpendingCapRefusalText(courseTitle))
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: declined, organization has reached its spending cap'
+      )
+      return { kind: 'declined-over-cap' }
     }
     case 'course-disabled':
     case 'not-configured': {

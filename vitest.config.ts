@@ -60,6 +60,14 @@ export default defineConfig({
     // own reasoning above applies unchanged, and it is the one adapter in
     // this list that handles both the OAuth client secret and a user's own
     // access token, not a lesser case for the floor than `packages/openai`.
+    // `apps/web` (WEB-1..6, QA-7) stays outside the floor for the same
+    // reason `apps/bot` and `apps/api` do: it is a thin translation layer —
+    // here, HTTP calls and JSX markup around the rules `packages/actions`
+    // and `packages/auth` already hold to this standard — and a coverage
+    // percentage over markup buys assertions about DOM structure at the
+    // cost of attention to logic (QA-4's own wording). Its tests
+    // (`apps/web/tests`) still run as part of `npm test`, just not gated by
+    // a number here.
     coverage: {
       provider: 'v8',
       include: [
@@ -194,6 +202,24 @@ export default defineConfig({
           root: './apps/api',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // WEB-1..6: the panel's own logic — the organization switcher,
+          // WEB-5's error rendering, and the install button's outcomes
+          // (`tests/*.test.tsx`) — plus the WEB-6 bundle test
+          // (`tests/bundle.test.ts`), which runs a real `vite build` and is
+          // slower than the rest of this project; nothing else in this repo
+          // needs a browser-like environment, so `jsdom` is scoped to this
+          // one project rather than the root config.
+          name: 'web',
+          root: './apps/web',
+          environment: 'jsdom',
+          include: ['tests/**/*.test.{ts,tsx}'],
+          setupFiles: ['./tests/setup.ts'],
+          testTimeout: 60_000,
         },
       },
     ],

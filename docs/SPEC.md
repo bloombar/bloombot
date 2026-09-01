@@ -850,6 +850,13 @@ Every environment variable the configuration schema requires appears in the trac
 example file, verified by a test. A missing variable otherwise surfaces as a failure hours
 into a deployment.
 
+#### QA-7 The signed-in path is tested end to end
+
+At least one test drives a real browser against a real front end, a real API and a real
+database: sign in, land in an organization, and see what a signed-in instructor sees. Unit
+tests on either side of a contract can both pass while the contract itself is broken, and
+this is the test that would notice.
+
 ### 18. People, Conversations & Transcripts
 
 #### PPL-1 People are the platform's end users
@@ -1118,3 +1125,43 @@ coordinate and no session to lose.
 The API answers a health check with whether it can actually serve — that its configuration
 validated and its database is reachable — rather than merely that the process is running,
 and it shuts down by closing the server and the database rather than exiting under load.
+
+### 24. Web Control Panel
+
+#### WEB-1 The panel is a static build
+
+The control panel is a static bundle served by nginx, talking to the API over the same
+origin. It runs no server of its own, so there is no third process to deploy, and the API
+is the only thing that ever touches the database.
+
+#### WEB-2 Signing in happens in the browser, and the session never does
+
+A visitor signs in with an emailed link or with Google, and the session cookie is set by
+the API and never read by JavaScript. Nothing in the bundle stores a token, so there is
+nothing for a cross-site script to steal, and signing out ends the session on the server
+rather than only in the tab.
+
+#### WEB-3 The panel always knows which organization it is acting in
+
+A signed-in account may belong to several organizations. The panel shows which one it is
+acting in and carries that organization in every request, so a person who teaches in two
+places cannot act in one while believing they are in the other.
+
+#### WEB-4 Installing the bot is one button, and its outcomes are honest
+
+Installing starts the platform's own OAuth flow and reports what actually happened: bound,
+refused because the account does not administer that server, or refused because the server
+belongs to somebody else — without saying who. A server already installed shows as
+installed, with the option to remove it.
+
+#### WEB-5 A failure reads the way the API reported it
+
+A refusal reads as not found, a validation failure names the field that was wrong, and
+nothing renders a stack trace, an internal message or an identifier the caller has no use
+for. The panel adds no interpretation the API did not give it.
+
+#### WEB-6 The bundle contains no server code and no secret
+
+The browser bundle imports only the shared schema package from the workspace. The data,
+configuration, Discord and model packages are unreachable from it by lint rule, because
+bundling any of them would ship credentials to every visitor.

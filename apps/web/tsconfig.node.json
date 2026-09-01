@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../.tsbuild/apps-web-node",
+    // vite.config.ts itself runs under Node, at build/dev time — never
+    // bundled into the browser output `tests/bundle.test.ts` (WEB-6)
+    // checks, so it keeps the base project's Node `types` rather than the
+    // app project's browser `lib`/`types` above.
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"]
+}

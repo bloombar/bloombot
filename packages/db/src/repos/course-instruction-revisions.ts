@@ -15,7 +15,7 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, TransactingExecutor } from '../client.js'
 import { courseInstructionRevisions } from '../schema.js'
 
 export type CourseInstructionRevision =
@@ -41,11 +41,21 @@ export interface NewCourseInstructionRevision {
  * already uses for `messages.sequence`, and for the same reason: two saves
  * landing in the same millisecond must still get a real, distinguishable
  * order.
+ *
+ * `db` accepts `TransactingExecutor`, not just `Database` — the same
+ * "opens a real transaction at the top level, a savepoint nested inside a
+ * caller's own" shape `client.ts`'s own doc comment on `TransactingExecutor`
+ * describes for `accounts.ts#createAccount`. `@bloombot/actions`'
+ * `courseInstructions.save`/`.restore` are this package's callers: both now
+ * call this from inside their own `db.transaction(...)`, alongside
+ * `courses.ts#setCourseInstructions`, so a failure recording the revision
+ * rolls the instructions write back too — the "either both happen, or
+ * neither does" those actions' own comments claim.
  */
 export function createRevision(
   organizationId: string,
   input: NewCourseInstructionRevision,
-  db: Database
+  db: TransactingExecutor
 ): CourseInstructionRevision {
   return db.transaction((tx) => {
     const previous = tx

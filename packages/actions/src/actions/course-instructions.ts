@@ -47,9 +47,14 @@ type SaveInput = z.infer<typeof saveInputSchema>
  * FILE-4: save a course's instructions. Writes `courses.instructions`
  * (`repos/courses.ts#setCourseInstructions` — only that one column, unlike
  * `courses.save`'s own full replace) and records a new
- * `course_instruction_revisions` row in the same call, so a save is never
- * only half-durable: either both happen, or (a foreign `courseId`, ACT-3)
- * neither does.
+ * `course_instruction_revisions` row inside the same `db.transaction(...)`,
+ * so a save is never only half-durable: either both happen, or (a foreign
+ * `courseId`, ACT-3, or `createRevision`'s own foreign-key check on
+ * `savedByAccountId`) neither does — the instructions write rolls back with
+ * it. Two untransacted writes under this same claim was the bug (a rework
+ * finding): a failing `createRevision` used to leave the live instructions
+ * changed with no revision recording it, which is exactly what FILE-4
+ * exists to prevent.
  */
 export const saveCourseInstructionsAction: Action<
   'courseInstructions.save',
@@ -69,29 +74,36 @@ export const saveCourseInstructionsAction: Action<
   execute: ({ organizationId, input, entity, accountId, db }) => {
     const savedByAccountId = requireAccountId(accountId)
 
-    const updated = courses.setCourseInstructions(
-      organizationId,
-      entity.id,
-      input.instructions,
-      db
-    )
-    // Unreachable in practice — the policy just proved this course existed
-    // and belonged to this organization moments earlier — but guarded
-    // rather than assumed, the same race `unarchiveProjectAction`'s own
-    // comment (`actions/projects.ts`) documents for the same shape.
-    if (!updated) throw new ActionRefusedError()
+    // One `db.transaction(...)`, not two separate calls — see this action's
+    // own doc comment above for why: `setCourseInstructions` and
+    // `createRevision` both now accept an `Executor`/`TransactingExecutor`
+    // (`repos/courses.ts`, `repos/course-instruction-revisions.ts`) so they
+    // can run against the same `tx` and commit or roll back together.
+    return db.transaction((tx) => {
+      const updated = courses.setCourseInstructions(
+        organizationId,
+        entity.id,
+        input.instructions,
+        tx
+      )
+      // Unreachable in practice — the policy just proved this course
+      // existed and belonged to this organization moments earlier — but
+      // guarded rather than assumed, the same race `unarchiveProjectAction`'s
+      // own comment (`actions/projects.ts`) documents for the same shape.
+      if (!updated) throw new ActionRefusedError()
 
-    courseInstructionRevisions.createRevision(
-      organizationId,
-      {
-        courseId: entity.id,
-        instructions: input.instructions,
-        savedByAccountId,
-      },
-      db
-    )
+      courseInstructionRevisions.createRevision(
+        organizationId,
+        {
+          courseId: entity.id,
+          instructions: input.instructions,
+          savedByAccountId,
+        },
+        tx
+      )
 
-    return updated
+      return updated
+    })
   },
 }
 
@@ -138,7 +150,9 @@ interface RestoreEntity {
 /**
  * FILE-4: restore an earlier revision. Makes it current
  * (`setCourseInstructions`) and adds a *new* revision recording the restore
- * — it never deletes or rewrites the revision being restored from, or any
+ * — both inside the same `db.transaction(...)` `saveCourseInstructionsAction`
+ * above uses, for the same reason (that action's own doc comment) — it
+ * never deletes or rewrites the revision being restored from, or any
  * revision saved after it (`repos/course-instruction-revisions.ts`'s own
  * module comment: "never updated or deleted"). A restore's own new revision
  * is authored by whoever performed the restore, not by the original
@@ -175,24 +189,28 @@ export const restoreCourseInstructionRevisionAction: Action<
   execute: ({ organizationId, entity, accountId, db }) => {
     const restoredByAccountId = requireAccountId(accountId)
 
-    const updated = courses.setCourseInstructions(
-      organizationId,
-      entity.course.id,
-      entity.revision.instructions,
-      db
-    )
-    if (!updated) throw new ActionRefusedError()
+    // One `db.transaction(...)` — see `saveCourseInstructionsAction`'s own
+    // doc comment above for why.
+    return db.transaction((tx) => {
+      const updated = courses.setCourseInstructions(
+        organizationId,
+        entity.course.id,
+        entity.revision.instructions,
+        tx
+      )
+      if (!updated) throw new ActionRefusedError()
 
-    courseInstructionRevisions.createRevision(
-      organizationId,
-      {
-        courseId: entity.course.id,
-        instructions: entity.revision.instructions,
-        savedByAccountId: restoredByAccountId,
-      },
-      db
-    )
+      courseInstructionRevisions.createRevision(
+        organizationId,
+        {
+          courseId: entity.course.id,
+          instructions: entity.revision.instructions,
+          savedByAccountId: restoredByAccountId,
+        },
+        tx
+      )
 
-    return updated
+      return updated
+    })
   },
 }

@@ -690,8 +690,12 @@ export const courseAttachments = sqliteTable(
     sizeBytes: integer('size_bytes').notNull(),
     status: text('status', { enum: ATTACHMENT_STATUSES }).notNull(),
     // Set once the provider has uploaded the file and reported its own id
-    // back (FILE-1) — null until then, and stays null forever on a `failed`
-    // attachment.
+    // back (FILE-1) — null until then. Recorded as soon as the upload
+    // itself succeeds (`repos/course-attachments.ts#recordProviderFileId`,
+    // a rework finding), *before* the file is attached to a vector store —
+    // so a `failed` attachment still carries it whenever the upload itself
+    // succeeded, and `courseAttachments.detach` can still reach the
+    // provider to remove it rather than stranding it there permanently.
     providerFileId: text('provider_file_id'),
     // The provider's own rejection message (FILE-2) — null unless
     // `status = 'failed'`.

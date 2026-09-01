@@ -28,6 +28,36 @@ import {
 } from '@bloombot/actions'
 import { memberships, type Database } from '@bloombot/db'
 
+/**
+ * FILE-1 — a rework finding: `courseAttachments.attach`'s payload carries
+ * the file as base64 in the JSON body (`actions/course-attachments.ts`'s
+ * own module comment has why a reference is not the shape either), but
+ * this router used to rely entirely on `server.ts`'s global
+ * `express.json()`, which defaults to 100 kB — base64's 4/3 inflation
+ * makes that a ~74 kB *raw file* ceiling, well under a real syllabus or
+ * schedule (FILE-1's own text names all three), so a 300 kB PDF was
+ * rejected `413` before this action ever ran.
+ *
+ * `MAX_COURSE_ATTACHMENT_BYTES` is this route's explicit, tested ceiling on
+ * a raw file's own size — 20 MiB, generous for a course's notes, syllabus
+ * and schedule (a scanned PDF included) without inviting an instructor to
+ * treat this as general file storage. `ACTION_JSON_BODY_LIMIT_BYTES` is the
+ * JSON body limit that ceiling actually requires: base64 encoding a 20 MiB
+ * file takes `ceil(n / 3) * 4` bytes (~26.7 MiB), rounded up to 28 MiB for
+ * headroom covering the payload's other fields (`courseId`, `filename`,
+ * `contentType`) and JSON's own string escaping — every other action's
+ * input is tiny by comparison, so raising this only for the one route that
+ * needs it, rather than globally, keeps the rest of this API's own request
+ * bodies bounded at `server.ts`'s ordinary default. `server.ts` applies
+ * this router's own `express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })`
+ * *before* its global one — body-parser skips re-parsing a body it already
+ * parsed, so mounting the raised limit first is what makes it win for this
+ * one path prefix without touching any other route's own limit. Recorded
+ * in `docs/DECISIONS.md` D-32.
+ */
+export const MAX_COURSE_ATTACHMENT_BYTES = 20 * 1024 * 1024
+export const ACTION_JSON_BODY_LIMIT_BYTES = 28 * 1024 * 1024
+
 /** `:organizationId/actions/:actionName` — mounted with `mergeParams` so both route params are visible here regardless of where `server.ts` mounts this router. */
 export function buildActionsRouter(
   registry: ActionRegistry,

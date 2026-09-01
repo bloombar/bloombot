@@ -115,7 +115,21 @@ async function main(): Promise<void> {
     fetchFn: fetch,
     baseUrl: CONFIG.OPENAI_BASE_URL,
     apiKey: openaiApiKey,
-    timeoutMs: CONFIG.JOB_HANDLER_TIMEOUT_MS,
+    // Rework finding 10 — this used to equal `handlerTimeoutMs` itself, the
+    // whole handler's own budget, not just one request's. `createAttachCourseAttachmentHandler`
+    // makes up to three sequential provider calls (upload, create-vector-store,
+    // attach) — with no smaller bound, one slow call could consume the
+    // entire handler budget, leaving `runHandlerWithTimeout` (`@bloombot/jobs`'s
+    // own `runner.ts`) no slack to abandon a genuinely wedged handler before
+    // a fresh retry's own re-upload starts, while the abandoned attempt's
+    // own request might still be writing to a socket underneath it (that
+    // file's own doc comment: "JavaScript has no way to cancel a Promise
+    // already in flight"). One third of the handler's own budget per
+    // request, the same "the request gets a smaller bound than the handler
+    // that contains it" discipline `packages/discord-rest`'s own
+    // `DEFAULT_TIMEOUT_MS` already holds itself to, decoupled from the
+    // handler budget entirely.
+    timeoutMs: Math.floor(handlerTimeoutMs / 3),
   }
   // FILE-5 — the same directory `@bloombot/actions`' `courseAttachments.attach`
   // action already wrote an attachment's bytes under (both processes share

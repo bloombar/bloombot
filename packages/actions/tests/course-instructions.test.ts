@@ -134,6 +134,42 @@ describe('courseInstructions.save (FILE-4)', () => {
     ).rejects.toBeInstanceOf(ActionRefusedError)
   })
 
+  // A rework finding: `setCourseInstructions` and `createRevision` used to
+  // be two untransacted writes under a comment claiming atomicity. An
+  // `accountId` that authenticates (truthy, so `requireAccountId` accepts
+  // it) but names no real account row makes `createRevision`'s insert fail
+  // its foreign-key check (`course_instruction_revisions.saved_by_account_id`,
+  // `schema.ts`) — this proves the instructions write rolls back with it,
+  // rather than leaving the course changed with no revision recording it.
+  it('rolls back the instructions write when recording the revision fails', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const { courseId } = seedCourseWithAuthor(organizationId, testDb.db)
+    const before = courses.getCourse(organizationId, courseId, testDb.db)
+
+    await expect(
+      dispatch(
+        saveCourseInstructionsAction,
+        { courseId, instructions: 'never lands' },
+        {
+          organizationId,
+          db: testDb.db,
+          accountId: 'no-such-account',
+        }
+      )
+    ).rejects.toThrow()
+
+    const after = courses.getCourse(organizationId, courseId, testDb.db)
+    expect(after?.instructions).toBe(before?.instructions)
+
+    const revisions = await dispatch(
+      listCourseInstructionRevisionsAction,
+      { courseId },
+      { organizationId, db: testDb.db }
+    )
+    expect(revisions).toHaveLength(0)
+  })
+
   it("does not reach another organization's course", async () => {
     testDb = createTestDatabase()
     const organizationId = seedOrganization(testDb.db)

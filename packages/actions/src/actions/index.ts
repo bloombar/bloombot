@@ -91,19 +91,27 @@ export { importRosterAction } from './roster.js'
  * package's own tests run in an environment that does not set every
  * variable `@bloombot/config`'s schema requires — reaching `CONFIG` at all
  * from a zero-arg call would fail those tests for a reason that has
- * nothing to do with what they are testing. The literal fallback below
- * matches `ATTACHMENT_STORAGE_DIR`'s own schema default
- * (`packages/config/src/env.ts`) — a real deployment always threads
- * `CONFIG.ATTACHMENT_STORAGE_DIR` through explicitly instead
- * (`apps/api/src/index.ts`), the same way it already threads every other
- * `CONFIG` value it reads once, at startup, so the two are expected to
- * agree, not merely happen to.
+ * nothing to do with what they are testing.
+ *
+ * The literal fallback below is `'./tmp/attachments'`, **not**
+ * `ATTACHMENT_STORAGE_DIR`'s own schema default (`'./data/attachments'`,
+ * `packages/config/src/env.ts`) — a rework finding: a caller that forgets
+ * to thread `attachmentStorageDir` (an earlier revision of `apps/api`'s own
+ * test helper and the e2e harness both did) used to fall through to that
+ * literal and write real course material into `data/`, the same directory
+ * `data/*.db` is protected for holding real students' names, emails and
+ * conversations. A real deployment never reaches this fallback at all:
+ * `apps/api/src/index.ts` always threads `CONFIG.ATTACHMENT_STORAGE_DIR`
+ * through explicitly, the same way it already threads every other `CONFIG`
+ * value it reads once, at startup — so this default only ever runs for a
+ * caller that supplied nothing, which today means only a test, and a test
+ * belongs under `tmp/`, never `data/` (see `docs/DECISIONS.md` D-32).
  */
 export function createPlatformRegistry(options?: {
   attachmentStorageDir?: string
 }): ActionRegistry {
   const attachmentStorage = createFilesystemAttachmentStorage(
-    options?.attachmentStorageDir ?? './data/attachments'
+    options?.attachmentStorageDir ?? './tmp/attachments'
   )
 
   const registry = new ActionRegistry()

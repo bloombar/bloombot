@@ -17,12 +17,19 @@
  * name is always the literal `content`, regardless of what a browser upload
  * called the file.
  *
- * `safeSegment` below still refuses a non-UUID-shaped `organizationId` or
- * `attachmentId` outright, and every resolved path is checked to still
- * fall inside `rootDir` before use — belt and braces against a future
- * caller that reaches this module with something other than a value it
- * generated itself, not a defense this implementation expects to trip in
- * ordinary operation.
+ * `safeSegment` below is a charset check, not a UUID check — it refuses any
+ * segment containing `/`, `\`, `.` or anything else outside
+ * `[A-Za-z0-9_-]`, which is enough to reject a path-shaped id like
+ * `../../etc/passwd`, but it does *not* require a segment to actually look
+ * like a UUID (this slice's own worker tests pass non-UUID ids like `att-1`
+ * and `placeholder` through it deliberately, and both are accepted). Every
+ * resolved path is also checked to still fall inside `rootDir` before use —
+ * belt and braces against a future caller that reaches this module with
+ * something other than a value it generated itself — but given
+ * `safeSegment`'s own charset admits no `.`, `/` or `\` at all, `join(...)`
+ * can never actually produce a path outside `resolvedRoot` once
+ * `safeSegment` has passed both segments: this second check is unreachable
+ * in ordinary operation, not a defense this implementation expects to trip.
  */
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'

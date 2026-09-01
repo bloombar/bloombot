@@ -91,6 +91,43 @@ export function listAttachmentsForCourse(
     .all()
 }
 
+/**
+ * FILE-1/FILE-5 — a rework finding: records the provider's own file id the
+ * moment the upload itself succeeds, before either of `apps/worker`'s
+ * handler's own two later provider calls (creating a vector store, attaching
+ * the file to it) run — `status` is left exactly as it was (still
+ * `'pending'`, not yet `'ready'`), only `providerFileId` changes. Without
+ * this, a rejection or an exhausted retry on either later call left
+ * `providerFileId` `null` forever, and `courseAttachments.detach`'s own
+ * `if (attachment.providerFileId)` guard (`apps/worker`'s handler) skipped
+ * both provider deletes for exactly the row that most needed them — the
+ * uploaded file stayed on the provider permanently, costing storage nobody
+ * could see or remove. `undefined` if `attachmentId` does not resolve in
+ * this organization (TEN-5), the same contract every write function in this
+ * package holds itself to.
+ */
+export function recordProviderFileId(
+  organizationId: string,
+  attachmentId: string,
+  providerFileId: string,
+  db: Database
+): CourseAttachment | undefined {
+  return db
+    .update(courseAttachments)
+    .set({
+      providerFileId,
+      updatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(courseAttachments.id, attachmentId),
+        eq(courseAttachments.organizationId, organizationId)
+      )
+    )
+    .returning()
+    .get()
+}
+
 /** FILE-1 — the provider has uploaded and attached the file: `status: 'ready'`, carrying its own id. `undefined` if `attachmentId` does not resolve in this organization (TEN-5) — the same "the caller already knows why" contract every write function in this package holds itself to. */
 export function markAttachmentReady(
   organizationId: string,

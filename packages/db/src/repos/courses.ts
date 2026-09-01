@@ -850,6 +850,12 @@ export function disableCourse(
  * `course-attachments.ts`'s own module comment draws between a row's
  * lifecycle and the bytes or provider state a different file owns.
  *
+ * `db` accepts `Executor`, not just `Database`: `courseInstructions.save`/
+ * `.restore` (`@bloombot/actions`) call this from inside their own
+ * `db.transaction(...)`, alongside `course-instruction-revisions.ts#createRevision`
+ * — the same "one transaction, or the comment claiming atomicity is a lie"
+ * fix that entry's own module comment now spells out.
+ *
  * Returns the updated course, or `undefined` when `courseId` does not exist
  * or does not belong to `organizationId` (TEN-2/TEN-5).
  */
@@ -857,7 +863,7 @@ export function setCourseInstructions(
   organizationId: string,
   courseId: string,
   instructions: string,
-  db: Database
+  db: Executor
 ): Course | undefined {
   return db
     .update(courses)

@@ -5,7 +5,15 @@
  * suite. `src/index.ts` is the only caller that actually listens.
  *
  * Middleware order is load-bearing:
- *   1. `express.json()` — parse the body before anything reads it.
+ *   1. `express.json()`, twice — parse the body before anything reads it.
+ *      The actions mount gets its own `express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })`
+ *      *first*, so a `courseAttachments.attach` payload (base64 file bytes
+ *      in the JSON body, `routes/actions.ts`'s own doc comment on
+ *      `ACTION_JSON_BODY_LIMIT_BYTES`) is not held to `express.json()`'s
+ *      ordinary 100 kB default — body-parser skips re-parsing a body it
+ *      already parsed, so the second, general-purpose `express.json()`
+ *      below is a no-op for that one path prefix and the ordinary default
+ *      for every other route.
  *   2. `originCheck` (API-3) — before the session is even read: a refused
  *      request never reaches `sessionMiddleware`, let alone a route.
  *   3. `sessionMiddleware` (API-2) — attaches `req.session`, or not.
@@ -28,7 +36,10 @@ import { checkHealth } from './health.js'
 import { errorMiddleware } from './middleware/errors.js'
 import { originCheck } from './middleware/origin.js'
 import { sessionMiddleware } from './middleware/session.js'
-import { buildActionsRouter } from './routes/actions.js'
+import {
+  ACTION_JSON_BODY_LIMIT_BYTES,
+  buildActionsRouter,
+} from './routes/actions.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
 
@@ -42,7 +53,7 @@ export interface ServerDependencies {
   googleVerifier: GoogleIdTokenVerifier
   /** Defaults to `createPlatformRegistry()` — every action this slice ports. Overridable so a test can dispatch against a registry of its own, e.g. a recording action, without registering it alongside the platform's real ones. */
   registry?: ActionRegistry
-  /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. Defaults to `AttachmentStorage`'s own default (`CONFIG.ATTACHMENT_STORAGE_DIR`) when omitted, the same as every other `CONFIG` value this file's own caller (`src/index.ts`) reads once and passes down. */
+  /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. `src/index.ts` always supplies `CONFIG.ATTACHMENT_STORAGE_DIR` explicitly, the same as every other `CONFIG` value it reads once and passes down — omitting this is only ever a test's own choice, and falls through to `createPlatformRegistry`'s own `'./tmp/attachments'` default (never `data/`, a rework finding — see `docs/DECISIONS.md` D-32). */
   attachmentStorageDir?: string
   /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
   discordRestClient: DiscordRestClient
@@ -73,6 +84,15 @@ export function buildApp(deps: ServerDependencies): Express {
   // server binds to loopback only rather than trusting nobody asks.
   app.disable('x-powered-by')
 
+  // FILE-1 — mounted before the general-purpose `express.json()` below, and
+  // only for this one path prefix: see this file's own module comment
+  // ("Middleware order is load-bearing") and `routes/actions.ts`'s own doc
+  // comment on `ACTION_JSON_BODY_LIMIT_BYTES` for why a `courseAttachments.attach`
+  // payload needs a limit well above the ordinary default.
+  app.use(
+    '/organizations/:organizationId/actions',
+    express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })
+  )
   app.use(express.json())
   app.use(originCheck(deps.publicAppUrl))
   app.use(sessionMiddleware(deps.db))

@@ -28,7 +28,7 @@ import {
   listCourseAttachmentsAction,
 } from '../src/actions/course-attachments.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionRefusedError } from '../src/errors.js'
+import { ActionInputError, ActionRefusedError } from '../src/errors.js'
 import { seedOrganization } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -124,6 +124,38 @@ describe('courseAttachments.attach (FILE-1)', () => {
     expect(JSON.parse(created?.payload ?? '{}')).toEqual({
       attachmentId: result.attachmentId,
     })
+  })
+
+  // Rework finding 11 — `Buffer.from(input.contentBase64, 'base64')`
+  // silently *truncates* at the first character it cannot decode rather
+  // than throwing, so an unvalidated `contentBase64` let malformed input
+  // land as a corrupt, silently-shortened file on disk instead of being
+  // refused as the bad input it actually was.
+  it('refuses a malformed contentBase64 rather than silently storing a truncated file', async () => {
+    testDb = createTestDatabase()
+    const storage = freshStorage()
+    const organizationId = seedOrganization(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+    const before = allJobRows(testDb.db).length
+
+    const action = createAttachCourseAttachmentAction(storage)
+    await expect(
+      dispatch(
+        action,
+        {
+          courseId,
+          filename: 'syllabus.pdf',
+          contentType: 'application/pdf',
+          // Not valid base64 — `!` is outside the alphabet.
+          contentBase64: 'not-valid-base64!!!',
+        },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toBeInstanceOf(ActionInputError)
+
+    // Refused before `execute` ever ran (ACT-4's own "validate" step) — no
+    // bytes written, no row created, no job enqueued for it.
+    expect(allJobRows(testDb.db)).toHaveLength(before)
   })
 
   it("refuses to attach to another organization's course", async () => {

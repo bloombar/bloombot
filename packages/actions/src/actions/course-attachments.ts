@@ -64,8 +64,18 @@ const attachInputSchema = z.object({
   courseId: z.string().min(1),
   filename: z.string().min(1),
   contentType: z.string().min(1),
-  /** The file's own bytes, base64-encoded (this file's own module comment on why a reference, not a job payload, is not the shape either — a browser upload has nowhere else to land it inline in a JSON action call). */
-  contentBase64: z.string().min(1),
+  /**
+   * The file's own bytes, base64-encoded (this file's own module comment on
+   * why a reference, not a job payload, is not the shape either — a browser
+   * upload has nowhere else to land it inline in a JSON action call).
+   * `z.base64()`, not a bare `z.string()` (a rework finding): `Buffer.from`
+   * (this file's own `execute`, below) silently *truncates* malformed
+   * base64 at the first character it cannot decode rather than throwing —
+   * an unvalidated field let a malformed value through ACT-4's own
+   * "validate" step to land as a corrupt, silently-shortened file on disk
+   * instead of the bad input it actually was.
+   */
+  contentBase64: z.base64().min(1),
 })
 type AttachInput = z.infer<typeof attachInputSchema>
 

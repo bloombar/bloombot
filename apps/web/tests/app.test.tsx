@@ -48,8 +48,16 @@ describe('App (WEB-1..4)', () => {
       account: {
         id: 'account-1',
         memberships: [
-          { organizationId: 'org-1', role: 'owner' },
-          { organizationId: 'org-2', role: 'assistant' },
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
         ],
       },
     })

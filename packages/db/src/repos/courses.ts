@@ -23,7 +23,7 @@
 
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, TransactingExecutor } from '../client.js'
 import {
   courseCategories,
   courseChannels,
@@ -307,11 +307,16 @@ function findSelfConflict(
  * Refused through the same `{ ok: false, conflict }` channel as a name
  * collision, not a thrown foreign-key error, so `createCourse` and
  * `updateCourse` can return it directly.
+ *
+ * `db` accepts `Executor`, not just `Database`: `createCourse` (below) now
+ * takes `TransactingExecutor` (finding 1 of the PROJ-4/5/TEN-7/8 rework),
+ * so this internal helper has to accept whatever `createCourse` is handed,
+ * including another transaction's own `tx`.
  */
 function loadOwnedProject(
   organizationId: string,
   projectId: string,
-  db: Database
+  db: Executor
 ):
   | { ok: true; project: ProjectRow }
   | { ok: false; conflict: CourseNameConflict } {
@@ -423,11 +428,20 @@ function deleteCourseCategories(tx: Executor, courseId: string): void {
  * archived project, introduces no collision (`schema.ts`'s `courses.enabled`
  * comment; disabling is PROJ-3's escape hatch and must stay usable even
  * while its names are currently taken elsewhere).
+ *
+ * `db` accepts `TransactingExecutor`, not just `Database` (finding 1 of the
+ * PROJ-4/5/TEN-7/8 rework, matching `accounts.ts#createAccount`'s own
+ * widening): called with a top-level connection, `db.transaction(...)`
+ * below opens a real transaction exactly as before; called with another
+ * transaction's own `tx` (`actions/projects.ts#duplicateProjectAction`,
+ * composing a whole duplicate — the new project and every copied course —
+ * atomically) it opens a nested savepoint instead, so a later failure
+ * anywhere in that outer transaction rolls this course's insert back too.
  */
 export function createCourse(
   organizationId: string,
   input: NewCourse,
-  db: Database
+  db: TransactingExecutor
 ): SaveCourseResult {
   const projectResult = loadOwnedProject(organizationId, input.projectId, db)
   if (!projectResult.ok) return projectResult
@@ -479,11 +493,19 @@ export function createCourse(
   })
 }
 
-/** Look up a course by id, scoped to `organizationId`, with its categories and channels in order. */
+/**
+ * Look up a course by id, scoped to `organizationId`, with its categories
+ * and channels in order.
+ *
+ * `db` accepts `Executor`, not just `Database`: `actions/projects.ts#duplicateProjectAction`
+ * (finding 1 of the PROJ-4/5/TEN-7/8 rework) calls this from inside its own
+ * transaction, re-reading each source course inside the same atomic unit
+ * that then copies it.
+ */
 export function getCourse(
   organizationId: string,
   courseId: string,
-  db: Database
+  db: Executor
 ): CourseWithCategories | undefined {
   const courseRow = db
     .select()
@@ -524,10 +546,18 @@ export function getCourse(
   return { ...courseRow, categories }
 }
 
-/** List an organization's courses (base rows only — use `getCourse` for categories and channels). */
+/**
+ * List an organization's courses (base rows only — use `getCourse` for
+ * categories and channels).
+ *
+ * `db` accepts `Executor`, not just `Database`: `actions/projects.ts#duplicateProjectAction`
+ * (finding 1 of the PROJ-4/5/TEN-7/8 rework) calls this from inside its own
+ * transaction, listing the source project's courses inside the same atomic
+ * unit that then copies them.
+ */
 export function listCourses(
   organizationId: string,
-  db: Database,
+  db: Executor,
   options?: { projectId?: string }
 ): Course[] {
   const conditions = [eq(courses.organizationId, organizationId)]

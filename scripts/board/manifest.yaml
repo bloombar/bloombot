@@ -2066,7 +2066,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: In review
   review: false
 - id: FILE-2
   title: An attachment's lifecycle is visible
@@ -2076,7 +2076,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: In review
   review: false
 - id: FILE-3
   title: Removing a file removes it from answering
@@ -2086,7 +2086,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: In review
   review: false
 - id: FILE-4
   title: Instructions are versioned
@@ -2098,7 +2098,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: In review
   review: false
 - id: FILE-5
   title: A file is scoped like every other record
@@ -2108,7 +2108,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: In review
   review: false
 - id: COST-1
   title: Every model call is recorded with what it cost

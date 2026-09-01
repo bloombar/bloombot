@@ -40,6 +40,7 @@ import {
 } from '@bloombot/db'
 import type { ModelClient } from '@bloombot/core'
 import { handleMention } from '@bloombot/discord'
+import { createAdmissionGate, type AdmissionGate } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
 import { createOpenAiModelClient } from '@bloombot/openai'
 
@@ -74,6 +75,8 @@ interface MessageHandlerDeps {
   db: Database
   model: ModelClient
   logger: Logger
+  /** JOB-4's bound on concurrent model calls — built once in `main()`, from `CONFIG`, and shared across every message this process handles. */
+  admission: AdmissionGate
 }
 
 /** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
@@ -96,6 +99,7 @@ async function onMessageCreate(
     reply,
     day: today(),
     botDisplayName: deps.botDisplayName,
+    admission: deps.admission,
   })
 
   deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
@@ -110,6 +114,8 @@ async function main(): Promise<void> {
   const logsDir = CONFIG.LOGS_DIR
   const databasePath = CONFIG.DATABASE_PATH
   const healthPort = CONFIG.BOT_HEALTH_PORT
+  const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
+  const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
   const botToken = requireEnv('BOT_TOKEN')
   const openaiApiKey = requireEnv('OPENAI_API_KEY')
 
@@ -118,6 +124,15 @@ async function main(): Promise<void> {
   runMigrations(db)
 
   const model = createOpenAiModelClient({ apiKey: openaiApiKey, logger })
+  // JOB-4 — one gate, shared across every message this process handles;
+  // `@bloombot/core`'s own `answerQuestion` applies no bound at all when a
+  // caller omits this (its own module comment says why), so building the
+  // real, configured one is this process's own job, the same "read CONFIG
+  // once in main()" discipline `model` above already follows.
+  const admission = createAdmissionGate({
+    limit: admissionLimit,
+    waitMs: admissionWaitMs,
+  })
 
   const client = new Client({
     intents: [
@@ -176,6 +191,7 @@ async function main(): Promise<void> {
           db,
           model,
           logger,
+          admission,
         }).catch((error: unknown) => {
           logger.error(
             { err: error },

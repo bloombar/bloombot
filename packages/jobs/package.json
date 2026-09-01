@@ -1,8 +1,8 @@
 {
-  "name": "@bloombot/discord",
+  "name": "@bloombot/jobs",
   "version": "0.1.0",
   "private": true,
-  "description": "The Discord surface (SURF-1..7): turns an incoming mention into a call to @bloombot/core's answerQuestion and its result into a reply. No discord.js import here — that lives in apps/bot alone (PLAT-3, PLAT-4).",
+  "description": "The background job queue's runner (JOB-1..3): a handler registry, one atomic claim, and the retry-with-backoff policy — plus JOB-4's admission gate, bounding concurrent model calls in packages/core's answering path.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,12 +20,7 @@
     "typecheck": "tsc --build"
   },
   "dependencies": {
-    "@bloombot/core": "*",
     "@bloombot/db": "*",
-    "@bloombot/jobs": "*",
     "@bloombot/logger": "*"
-  },
-  "devDependencies": {
-    "@bloombot/openai": "*"
   }
 }

@@ -1933,7 +1933,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Backlog
+  status: In review
   review: false
 - id: JOB-2
   title: A job that fails is retried, and a job that keeps failing is visible
@@ -1944,7 +1944,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Backlog
+  status: In review
   review: false
 - id: JOB-3
   title: A job runs once, even with a worker restart in the middle
@@ -1955,7 +1955,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Backlog
+  status: In review
   review: false
 - id: JOB-4
   title: Admission bounds concurrent model calls
@@ -1967,7 +1967,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Backlog
+  status: In review
   review: false
 - id: JOB-5
   title: The worker is one process, and its health says whether it is working
@@ -1977,7 +1977,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Backlog
+  status: In review
   review: false
 - id: SRV-6
   title: A course's Discord structure is created from its configuration

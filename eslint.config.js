@@ -30,6 +30,13 @@ const BROWSER_FORBIDDEN_PACKAGES = [
   // — the model package WEB-6 names by name, same reasoning as
   // @bloombot/discord-rest above.
   '@bloombot/openai',
+  // @bloombot/jobs depends on @bloombot/db (the job queue's own repo) and
+  // @bloombot/logger — the same transitive credential-surface reasoning
+  // @bloombot/auth is named for above. Nothing in apps/web needs a
+  // background-job queue or the model-call admission gate it also carries
+  // (JOB-4); named explicitly so the boundary is enforced before a future
+  // import needs it, not reviewed after one lands.
+  '@bloombot/jobs',
 ]
 
 export default tseslint.config(

@@ -51,4 +51,15 @@ describe('assertMigratablePath', () => {
   it('allows a plain tmp/ path without any flag', () => {
     expect(() => assertMigratablePath('./tmp/test.db', [])).not.toThrow()
   })
+
+  // finding 2 (of the MIG-1 rework): darwin (this platform, development and
+  // CI) is case-insensitive — `DATA/data.db` and `data/data.db` are the same
+  // file on disk, and a guard built on plain `realpathSync` (which follows
+  // symlinks but does not canonicalize case) let the upper-case spelling
+  // sail past it, so `db:migrate DATA/data.db` wrote to the live file
+  // without tripping the guard. `resolveReal` (`path-guard.ts`) now uses
+  // `realpathSync.native`, which asks the OS for the real on-disk casing.
+  it('refuses a case-variant path that resolves into data/ without --i-know', () => {
+    expect(() => assertMigratablePath('DATA/data.db', [])).toThrow(/--i-know/)
+  })
 })

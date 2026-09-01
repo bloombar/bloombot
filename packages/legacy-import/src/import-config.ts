@@ -75,7 +75,10 @@ function toNewCourse(
     enabled: true,
     adminsRole: course.roles.admins,
     studentsRole: course.roles.students,
-    promptId: course.openai_assistant.id ?? null,
+    // CFG-2/D-3: `prompt_id` is the Responses API prompt the running bot
+    // actually answers with; the legacy Assistants `id` is not used by it at
+    // all (SPEC CFG-2) and has no column of its own to land in here.
+    promptId: course.openai_assistant.prompt_id,
     instructions: course.openai_assistant.instructions ?? null,
     model: course.openai_assistant.model ?? null,
     vectorStoreId: course.openai_assistant.vector_store_id ?? null,
@@ -101,9 +104,12 @@ function toNewCourse(
  * looked up by name within that organization (`listProjects`) — there is no
  * separate deterministic id needed for it once the organization it lives in
  * is itself stable. A course already present (matched by its title within
- * this project — the natural key the brief calls out) is left untouched
- * rather than re-saved, so a second run neither duplicates it nor churns its
- * category/channel ids for no reason.
+ * this project — the natural key the brief calls out) is re-saved from the
+ * YAML through `updateCourse` rather than left untouched: for *course
+ * configuration*, the YAML is the source of truth during this migration, so
+ * a re-run repairs whatever an earlier run got wrong (finding 3 of the MIG-1
+ * rework — see `docs/DECISIONS.md` D-14 for the asymmetry with *people*,
+ * where the legacy snapshot is the source of truth instead, `import-people.ts`).
  */
 export function importConfig(
   config: LegacyBotConfig,
@@ -139,11 +145,41 @@ export function importConfig(
         .listCourses(organizationId, db, { projectId: project.id })
         .find((course) => course.title === legacyCourse.title)
       if (existingCourse) {
+        // Re-save from the YAML (finding 3): the earlier run may have
+        // written the wrong `promptId` (or any other assistant setting), and
+        // the only way a re-run repairs that is by writing it again, not by
+        // leaving the matched row untouched. `updateCourse` replaces
+        // categories and channels too, which is harmless here: nothing
+        // outside this run keeps a previous run's category/channel id, and
+        // `importMessages` always re-reads them fresh through
+        // `loadRoutableCourses`.
+        const updateResult = coursesRepo.updateCourse(
+          organizationId,
+          existingCourse.id,
+          toNewCourse(project.id, legacyCourse),
+          db
+        )
+        // `updateCourse` returns `undefined` only when the course does not
+        // belong to `organizationId` (TEN-2/TEN-5) — impossible here, since
+        // `existingCourse` was itself just read back scoped to the same
+        // organization and project, with no write in between.
+        if (!updateResult) {
+          throw new Error(
+            `course '${legacyCourse.title}' (${existingCourse.id}) vanished between lookup and update`
+          )
+        }
+        if (!updateResult.ok) {
+          return {
+            legacyTitle: legacyCourse.title,
+            ok: false,
+            conflict: updateResult.conflict,
+          }
+        }
         return {
           legacyTitle: legacyCourse.title,
           ok: true,
           created: false,
-          courseId: existingCourse.id,
+          courseId: updateResult.course.id,
         }
       }
 

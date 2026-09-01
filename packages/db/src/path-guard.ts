@@ -22,6 +22,14 @@ import { fileURLToPath } from 'node:url'
  * that does not exist, so this walks up to the nearest ancestor that *does*
  * exist, resolves that through the filesystem, and rejoins the
  * not-yet-existing tail unchanged.
+ *
+ * Uses `realpathSync.native`, not plain `realpathSync`: the plain version
+ * follows symlinks but does not canonicalize case, and this platform
+ * (darwin, the development and CI platform) is case-insensitive — so
+ * `realpathSync('DATA/data.db')` returns `'.../DATA/data.db'` unchanged, and
+ * a guard built on it would let `DATA/data.db` sail past a check for `data/`
+ * while the OS opens the very same real file. `realpathSync.native` asks the
+ * OS for the path's actual on-disk casing, closing that gap.
  */
 export function resolveReal(path: string): string {
   const resolved = resolve(path)
@@ -33,7 +41,7 @@ export function resolveReal(path: string): string {
     tail.unshift(basename(ancestor))
     ancestor = parent
   }
-  const real = realpathSync(ancestor)
+  const real = realpathSync.native(ancestor)
   return tail.length === 0 ? real : join(real, ...tail)
 }
 

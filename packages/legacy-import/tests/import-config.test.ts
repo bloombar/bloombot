@@ -56,6 +56,12 @@ describe('importConfig (MIG-2)', () => {
     expect(webDesign?.adminsRole).toBe('admins-wd')
     expect(webDesign?.studentsRole).toBe('students-wd')
     expect(webDesign?.maxRequestsPerDay).toBe(20)
+    // finding 3: `promptId` must come from `openai_assistant.prompt_id`, the
+    // value the running bot actually reads (CFG-2) — not `.id`, the legacy
+    // Assistants id `response_bot.py` never uses.
+    expect(webDesign?.promptId).toBe('pmpt_wd')
+    expect(webDesign?.model).toBe('gpt-4o-mini')
+    expect(webDesign?.vectorStoreId).toBe('vs_wd')
 
     const webDesignWithCategories = courses.getCourse(
       result.organizationId,
@@ -94,5 +100,57 @@ describe('importConfig (MIG-2)', () => {
 
     const orgCourses = courses.listCourses(result.organizationId, testDb.db)
     expect(orgCourses).toHaveLength(1)
+  })
+
+  // finding 3: a matched course's assistant settings must be re-saved from
+  // the YAML on every run — the YAML is the source of truth for course
+  // configuration during this migration (docs/DECISIONS.md D-14) — so a
+  // re-import repairs whatever an earlier run got wrong, rather than a
+  // matched course keeping a bad `promptId` forever.
+  it('repairs a matched course’s assistant settings from the YAML on re-import', () => {
+    testDb = createTestPlatformDatabase()
+    const config = twoCourseConfig('Repair Server')
+
+    const first = importConfig(config, testDb.db)
+    expect(first.courses.every((outcome) => outcome.ok)).toBe(true)
+
+    // Simulate the bug this finding fixes: the first run left the course
+    // with a wrong `promptId` (the old `id ?? null` mapping's actual bug).
+    const webDesignId = courses
+      .listCourses(first.organizationId, testDb.db)
+      .find((course) => course.title === 'Web Design')!.id
+    courses.updateCourse(
+      first.organizationId,
+      webDesignId,
+      {
+        projectId: first.projectId,
+        title: 'Web Design',
+        filePrefix: 'wd',
+        enabled: true,
+        adminsRole: 'admins-wd',
+        studentsRole: 'students-wd',
+        promptId: null,
+        categories: [],
+      },
+      testDb.db
+    )
+    expect(
+      courses.getCourse(first.organizationId, webDesignId, testDb.db)?.promptId
+    ).toBeNull()
+
+    const second = importConfig(config, testDb.db)
+    expect(second.courses[0]).toMatchObject({ ok: true, created: false })
+
+    const repaired = courses.getCourse(
+      first.organizationId,
+      webDesignId,
+      testDb.db
+    )
+    expect(repaired?.promptId).toBe('pmpt_wd')
+    expect(repaired?.model).toBe('gpt-4o-mini')
+    expect(repaired?.categories.map((c) => c.name)).toEqual([
+      'Web Design - GLOBAL',
+      'Web Design - STUDENTS 01',
+    ])
   })
 })

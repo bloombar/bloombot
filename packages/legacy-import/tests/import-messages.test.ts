@@ -214,4 +214,178 @@ describe('importMessages (MIG-3)', () => {
     expect(result.unplaceable[0]?.legacyMessageId).toBe(1)
     expect(result.unplaceable[0]?.reason).toMatch(/Nonexistent Category/)
   })
+
+  // finding 5: `messages.id` is a single global primary key, not scoped per
+  // conversation — a re-run that routes the same legacy message to a
+  // *different* conversation (a course's `conversationScope` flipped to
+  // `course_surface`, D-13, opens a new conversation for the same person)
+  // must recognise the id as already-imported wherever it actually landed,
+  // not just on the conversation this run happens to open. Before the fix,
+  // the per-conversation check missed it and `appendMessage` threw
+  // `SQLITE_CONSTRAINT_PRIMARYKEY` uncaught.
+  it('recognises an already-imported message id after its course flips conversationScope', () => {
+    testDb = createTestPlatformDatabase()
+    const { orgId, courseId, routableCourses, personByLegacyUserId } =
+      seed(testDb)
+
+    // First run: lands on the course-scoped conversation (surface: null).
+    const first = importMessages(
+      orgId,
+      [legacyMessage()],
+      personByLegacyUserId,
+      routableCourses,
+      testDb.db
+    )
+    expect(first).toMatchObject({ created: 1, matched: 0 })
+
+    // Flip the course to `course_surface` — the next `getOrCreateConversation`
+    // for this (course, person) opens a *new* conversation instead of
+    // reusing the old one (`repos/conversations.ts`'s own documented
+    // behaviour).
+    const existingCourse = courses.getCourse(orgId, courseId, testDb.db)!
+    courses.updateCourse(
+      orgId,
+      courseId,
+      {
+        projectId: existingCourse.projectId,
+        title: existingCourse.title,
+        filePrefix: existingCourse.filePrefix,
+        enabled: existingCourse.enabled,
+        adminsRole: existingCourse.adminsRole,
+        studentsRole: existingCourse.studentsRole,
+        conversationScope: 'course_surface',
+        categories: existingCourse.categories,
+      },
+      testDb.db
+    )
+    // `importMessages` re-reads the course through `loadRoutableCourses`
+    // (matching this file's own pattern), but the courses' ids and category
+    // names are unchanged, so `routableCourses` is still valid for the
+    // second run.
+
+    // Re-running the same legacy message must not crash, and must report it
+    // matched rather than duplicating it under a colliding id.
+    const second = importMessages(
+      orgId,
+      [legacyMessage()],
+      personByLegacyUserId,
+      routableCourses,
+      testDb.db
+    )
+    expect(second).toMatchObject({ created: 0, matched: 1, unplaceable: [] })
+  })
+
+  // finding 8: a legacy row with an unparseable `created_at` is reported,
+  // not thrown out of `importMessages` uncaught.
+  it('reports, rather than throws, an unparseable created_at', () => {
+    testDb = createTestPlatformDatabase()
+    const { orgId, routableCourses, personByLegacyUserId } = seed(testDb)
+
+    const result = importMessages(
+      orgId,
+      [legacyMessage({ createdAt: 'not-a-timestamp' })],
+      personByLegacyUserId,
+      routableCourses,
+      testDb.db
+    )
+
+    expect(result.created).toBe(0)
+    expect(result.unplaceable).toHaveLength(1)
+    expect(result.unplaceable[0]?.legacyMessageId).toBe(1)
+    expect(result.unplaceable[0]?.reason).toMatch(/not-a-timestamp/)
+  })
+})
+
+describe('buildCategoryIndex (finding 9, through importMessages)', () => {
+  // The comment on `buildCategoryIndex` promises "the first course wins";
+  // before the fix, `index.set` made the *last* course win instead, silently
+  // disagreeing with `response_bot.py#find_course_by_category`'s own
+  // first-match behaviour.
+  it('routes a duplicate category to the first course that declares it, and reports the duplicate', () => {
+    testDb = createTestPlatformDatabase()
+    const orgId = randomUUID()
+    organizations.createOrganization(
+      orgId,
+      { name: 'Org', isPersonal: false },
+      testDb.db
+    )
+    const project = projects.createProject(orgId, { name: 'Term' }, testDb.db)
+    const firstCourse = courses.createCourse(
+      orgId,
+      {
+        projectId: project.id,
+        title: 'First',
+        filePrefix: 'first',
+        enabled: true,
+        adminsRole: 'admins-first',
+        studentsRole: 'students-first',
+        categories: [{ name: 'Shared - GLOBAL', channels: [] }],
+      },
+      testDb.db
+    )
+
+    // Two enabled courses in a non-archived project sharing a category name
+    // is normally refused by PROJ-3 at save time — this reproduces the one
+    // path that still reaches `importMessages` with a duplicate: a second
+    // course saved into an *archived* project, whose PROJ-3 collision check
+    // is skipped (`repos/courses.ts`'s `createCourse`).
+    const archivedProject = projects.createProject(
+      orgId,
+      { name: 'Archived Term' },
+      testDb.db
+    )
+    projects.archiveProject(orgId, archivedProject.id, testDb.db)
+    const secondCourse = courses.createCourse(
+      orgId,
+      {
+        projectId: archivedProject.id,
+        title: 'Second',
+        filePrefix: 'second',
+        enabled: true,
+        adminsRole: 'admins-second',
+        studentsRole: 'students-second',
+        categories: [{ name: 'Shared - GLOBAL', channels: [] }],
+      },
+      testDb.db
+    )
+    if (!firstCourse.ok || !secondCourse.ok) {
+      throw new Error('seed course save unexpectedly refused')
+    }
+    const routableCourses = [
+      { id: firstCourse.course.id, categoryNames: ['Shared - GLOBAL'] },
+      { id: secondCourse.course.id, categoryNames: ['Shared - GLOBAL'] },
+    ]
+    const person = people.createPerson(orgId, {}, testDb.db)
+    const personByLegacyUserId = new Map([[1, person.id]])
+
+    const result = importMessages(
+      orgId,
+      [legacyMessage({ category: 'Shared - GLOBAL' })],
+      personByLegacyUserId,
+      routableCourses,
+      testDb.db
+    )
+
+    expect(result.created).toBe(1)
+    expect(result.duplicateCategories).toEqual([
+      {
+        categoryName: 'Shared - GLOBAL',
+        courseId: firstCourse.course.id,
+        ignoredCourseId: secondCourse.course.id,
+      },
+    ])
+
+    const conversationsForFirst = conversations.listConversationsForCourse(
+      orgId,
+      firstCourse.course.id,
+      testDb.db
+    )
+    expect(conversationsForFirst).toHaveLength(1)
+    const conversationsForSecond = conversations.listConversationsForCourse(
+      orgId,
+      secondCourse.course.id,
+      testDb.db
+    )
+    expect(conversationsForSecond).toHaveLength(0)
+  })
 })

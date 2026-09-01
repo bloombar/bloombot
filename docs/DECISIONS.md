@@ -479,11 +479,20 @@ inventing its own.
 
 **Choice — a deterministic message id.** `import-messages.ts` derives each imported message's id from
 `(organizationId, the legacy row's own autoincrement id)`, hashed through `ids.ts#deterministicId` (SHA-256,
-truncated, prefixed for readability). Before appending, it checks the target conversation's own transcript
-(`getTranscript`, read once per conversation and cached for the rest of the run) for that id; if it is already
-there, the row is reported `matched` and nothing is written. `organizationId` is folded into the hash — not just
-the legacy row's id — specifically so two different organizations can each import the same snapshot without their
-message ids colliding on the single, non-tenant-partitioned `messages.id` primary key.
+truncated, prefixed for readability). Before appending, it checks that id against every message id already
+recorded across _all_ of the run's routable courses' conversations (`loadExistingMessageIds`, read once up front);
+if it is already there, the row is reported `matched` and nothing is written. `organizationId` is folded into the
+hash — not just the legacy row's id — specifically so two different organizations can each import the same
+snapshot without their message ids colliding on the single, non-tenant-partitioned `messages.id` primary key.
+
+The dedupe check was originally scoped to the one conversation the current run's message routes to, read and
+cached per conversation. That undercounted: `messages.id` is a single global primary key, not scoped per
+conversation, and a course's `conversationScope` flipping to `course_surface` between two runs opens a _new_
+conversation for a person who already had one (D-13) — so a message that landed on the old conversation is not
+in the new one's transcript, the per-conversation check missed it, and `appendMessage` threw
+`SQLITE_CONSTRAINT_PRIMARYKEY` uncaught instead of reporting the row `matched` (finding 5 of the MIG-1 rework).
+The fix reads every conversation each routable course has, not just the one this run's message resolves to, so
+the check is scoped the same way the primary key actually is.
 
 **Why not a content hash instead of the legacy row's id.** A hash of `(category, channel, direction, content)`
 would collide for two genuinely different messages with identical text (a repeated "thanks!"), silently dropping
@@ -516,13 +525,56 @@ the same real-path-resolution logic `db:migrate`'s `assertMigratablePath` alread
 repository's own `data/` directory. Rather than writing a second, subtly different version of that logic inside
 `packages/legacy-import`, it was pulled out into `packages/db/src/path-guard.ts` and both callers now use it:
 `run-migrate.ts` still layers its own `--i-know` override on top for an operator who genuinely needs to migrate
-the live file, while `packages/legacy-import/src/guard.ts` calls the same `isUnderRepoData` with no override at
-all — there is no legitimate reason for an import to ever touch the live database, so no escape hatch was added
-for it.
+the live file, while `packages/legacy-import/src/guard.ts#assertLegacySnapshotPath` calls the same
+`isUnderRepoData` with no override at all, for the _source_ snapshot — there is no legitimate reason for an
+import to ever read the live database, so no escape hatch was added for it.
+
+That left a real gap (finding 1 of the MIG-1 rework): the guard was only ever applied to the source, and the
+CLI's _destination_ — the platform database it opens and migrates via `CONFIG.DATABASE_PATH` — was never
+checked at all, defaulting to `./data/data.db`, the same live file. Unlike the source, the destination
+legitimately is the live database once an operator is ready to run the real, final import, so it takes the same
+shape `db:migrate` does rather than the source guard's "no escape hatch, ever": a new
+`guard.ts#assertImportDestinationPath` refuses `CONFIG.DATABASE_PATH` under `data/` unless `--i-know` is passed,
+called in `cli.ts` before `openDatabase`, ahead of `runMigrations` and ahead of `runImport` ever validating the
+source path.
+
+Separately, `resolveReal` (`packages/db/src/path-guard.ts`) resolved a candidate path with plain `realpathSync`,
+which follows symlinks but does not canonicalize filesystem case — invisible on a case-sensitive filesystem, but
+this project's development and CI platform (darwin) is case-insensitive, where `DATA/data.db` and `data/data.db`
+name the same on-disk file while comparing unequal as strings (finding 2). Both guards now compare through
+`realpathSync.native`, which asks the OS for the real on-disk casing, closing the gap for both callers.
+
+**Merge, not overwrite, for a person's roster fields (finding 4).** `import-people.ts` originally wrote a legacy
+row's roster fields (`email`, `first_name`, `last_name`, `github_username`) through
+`people.overwriteRosterFields` — every field named, written exactly as given, on every run. MIG-4 makes
+re-running the importer the normal way to pick up new transcripts, and the legacy snapshot is the _oldest_
+source of roster data in the system, not the newest: by the time a re-run happens, an instructor may have
+corrected a blank email by hand, or a real roster import may have filled it in, and the legacy snapshot knows
+nothing about either. Overwriting reset all of that on every re-run, including back to `null` where the legacy
+row itself never had a value. `import-people.ts` now uses `people.mergeRosterFields` instead, which only ever
+fills a field that is currently `null` — a re-run still repairs a person's roster fields the first time they are
+seen, and never re-clobbers a field something newer has since filled in.
+
+**The YAML is authoritative for course configuration on re-import (finding 3) — the opposite of the people
+choice above, deliberately.** `import-config.ts` originally left an already-matched course untouched on a
+second run, on the reasoning that re-saving would needlessly churn its category and channel ids. That let a bad
+import — the concrete case: `promptId` was being read from the legacy Assistants `id` field instead of
+`prompt_id`, the value the running bot actually reads (CFG-2) — stay wrong forever, since nothing would ever
+write the corrected value onto an already-matched course. Course configuration has no equivalent of "an
+instructor already corrected this by hand" the way a person's roster fields do: `bot_config.yml` is the one and
+only source for a course's assistant settings during this migration, so unlike a person (merged, above), a
+matched course is now re-saved from the YAML through `updateCourse` on every run, repairing whatever an earlier
+run got wrong. The category/channel id churn this causes on every re-run is accepted as harmless: nothing outside
+this run persists a reference to a previous run's category or channel id, and `import-messages.ts` always
+re-reads a course's categories fresh through `loadRoutableCourses`, never from a previous run's own output.
 
 **Limits.** The deterministic message id is stable only for as long as the legacy row's own autoincrement id is
 stable, which holds for a read-only snapshot but would not survive, say, re-exporting the legacy database with
 its ids renumbered. The organization-id-from-`server.name` scheme means renaming the Discord server in
 `bot_config.yml` between two runs of the importer against the _same_ underlying course would be read as "a new
 organization," not "the same one, renamed" — acceptable for a one-shot migration tool, but worth knowing if this
-importer is ever pressed into service as a recurring sync rather than a single cutover.
+importer is ever pressed into service as a recurring sync rather than a single cutover. The destination guard's
+`--i-know` override means the same single flag both lets an operator run the real, final import against the live
+database _and_ lets them accidentally run a rehearsal against it if they pass it out of habit — a narrower risk
+than the pre-fix state (no guard at all), but worth knowing since it is the one place in this package an escape
+hatch exists at all.

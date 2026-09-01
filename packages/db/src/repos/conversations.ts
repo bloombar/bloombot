@@ -8,7 +8,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -269,8 +269,10 @@ export interface NewMessage {
  * whose `courseId`/`personId` name a *new* conversation to find or create).
  *
  * `undefined` when `conversationId` does not exist or does not belong to
- * `organizationId` (TEN-2). Updates the conversation's `lastMessageAt` in
- * the same transaction as the insert, so the two never drift.
+ * `organizationId` (TEN-2). Updates the conversation's `lastMessageAt` — to
+ * the *later* of its current value and this message's own `createdAt`
+ * (finding 6 of the MIG-1 rework), never backward — in the same transaction
+ * as the insert, so the two never drift.
  *
  * There is no delete path for a message anywhere in this file (TEN-6): a
  * transcript is a record an instructor may be required to retain.
@@ -324,8 +326,20 @@ export function appendMessage(
       .returning()
       .get()
 
+    // finding 6 (MIG-1 rework): `lastMessageAt` moves *forward* to the later
+    // of its current value and this message's `createdAt` — never
+    // backward. A plain unconditional set was correct for every caller that
+    // appends "now" (`input.createdAt` omitted), but `packages/legacy-import`
+    // (MIG-3) is the one caller that supplies an explicit, potentially
+    // backdated `createdAt` — importing a two-year-old transcript into a
+    // conversation the live bot has already written to must not rewind
+    // "last message" into the past. Computed in the same `UPDATE` (`max`),
+    // not read-then-written from the `conversation` fetched before this
+    // transaction started, so a concurrent append cannot race it stale.
     tx.update(conversations)
-      .set({ lastMessageAt: createdAt })
+      .set({
+        lastMessageAt: sql`max(${conversations.lastMessageAt}, ${createdAt})`,
+      })
       .where(
         and(
           eq(conversations.id, conversationId),

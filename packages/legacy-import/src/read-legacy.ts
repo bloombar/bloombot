@@ -105,8 +105,18 @@ export function readLegacyMessages(
  * millisecond-precision, no-timezone form the ECMA-262 date-time string
  * grammar accepts, which `Date.parse` then reads as local time — the same
  * "naive local time" the value was written as.
+ *
+ * `raw` is typed `string` (`LegacyMessage.createdAt`'s own type, matching
+ * the legacy schema's `NOT NULL`), but nothing here validates a snapshot's
+ * actual column values at the driver boundary — a corrupted or hand-edited
+ * snapshot can still hand this `null` at runtime. That case is given its own
+ * message (finding 8 of the MIG-1 rework) rather than falling through to
+ * `.trim()` and surfacing as an unrelated `TypeError`.
  */
 export function parseLegacyTimestamp(raw: string): number {
+  if (raw == null) {
+    throw new Error(`Unparseable legacy timestamp: ${String(raw)}`)
+  }
   const isoLocal = raw
     .trim()
     .replace(' ', 'T')

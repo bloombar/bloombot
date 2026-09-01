@@ -11,7 +11,13 @@ export function twoCourseConfig(serverName = 'Test Server'): LegacyBotConfig {
           title: 'Web Design',
           file_prefix: 'wd',
           openai_assistant: {
+            // The legacy Assistants `id`, kept alongside `prompt_id` — CFG-2
+            // says the running bot never reads `id` (finding 3), so a
+            // correct import must map `promptId` from `prompt_id`, not `id`.
+            id: 'asst_legacy_wd',
             prompt_id: 'pmpt_wd',
+            model: 'gpt-4o-mini',
+            vector_store_id: 'vs_wd',
             tools: [],
             limits: { max_requests_per_day: 20 },
           },

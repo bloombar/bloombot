@@ -15,6 +15,7 @@ import { CONFIG } from '@bloombot/config'
 import { openDatabase, runMigrations } from '@bloombot/db'
 import { createLogger } from '@bloombot/logger'
 
+import { assertImportDestinationPath } from './guard.js'
 import {
   runImport,
   closeDatabase,
@@ -43,15 +44,23 @@ function printReport(report: ImportReport): void {
 
 function main(): void {
   const log = createLogger('legacy-import')
-  const [snapshotPath, yamlPath] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+  const [snapshotPath, yamlPath] = argv.filter((arg) => arg !== '--i-know')
 
   if (!snapshotPath || !yamlPath) {
     console.error(
-      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml>'
+      'Usage: legacy:import <path-to-snapshot.db> <path-to-bot_config.yml> [--i-know]'
     )
     process.exitCode = 1
     return
   }
+
+  // MIG-1 (finding 1): refuse the *destination* platform database before it
+  // is ever opened — this used to run `openDatabase`/`runMigrations` first
+  // and only validate the *source* snapshot path once `runImport` started,
+  // so a bare `npm run legacy:import` with no `DATABASE_PATH` override
+  // migrated and wrote straight into the live student database.
+  assertImportDestinationPath(CONFIG.DATABASE_PATH, argv)
 
   const db = openDatabase(CONFIG.DATABASE_PATH)
   try {

@@ -34,6 +34,16 @@ describe('parseLegacyTimestamp', () => {
   it('throws on a value that cannot be parsed as a date', () => {
     expect(() => parseLegacyTimestamp('not a timestamp')).toThrow(/Unparseable/)
   })
+
+  // finding 8: a `null` value (typed `string` per `LegacyMessage.createdAt`,
+  // but a corrupted or hand-edited snapshot can still hand this a `null` at
+  // runtime) must throw this function's own `Unparseable` message, not a
+  // bare `TypeError` from calling `.trim()` on `null`.
+  it('throws its own message, not a bare TypeError, on a null value', () => {
+    expect(() => parseLegacyTimestamp(null as unknown as string)).toThrow(
+      /Unparseable/
+    )
+  })
 })
 
 describe('readLegacyUsers / readLegacyMessages', () => {

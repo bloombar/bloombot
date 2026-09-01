@@ -47,7 +47,7 @@ import {
   type CourseImportOutcome,
 } from './import-config.js'
 import { loadRoutableCourses, importMessages } from './import-messages.js'
-import type { UnplaceableMessage } from './import-messages.js'
+import type { ImportMessagesResult } from './import-messages.js'
 import { importPeople, type PersonImportOutcome } from './import-people.js'
 import {
   openLegacySnapshot,
@@ -83,11 +83,7 @@ export interface ImportReport {
     skipped: number
     skippedReasons: PersonImportOutcome[]
   }
-  messages: {
-    created: number
-    matched: number
-    unplaceable: UnplaceableMessage[]
-  }
+  messages: ImportMessagesResult
 }
 
 /**

@@ -3,7 +3,10 @@
 export { runImport, closeDatabase, reportHasUnplaced } from './import.js'
 export type { RunImportOptions, ImportReport } from './import.js'
 
-export { assertLegacySnapshotPath } from './guard.js'
+export {
+  assertLegacySnapshotPath,
+  assertImportDestinationPath,
+} from './guard.js'
 export { deterministicId } from './ids.js'
 
 export {
@@ -27,6 +30,7 @@ export type { PersonImportOutcome } from './import-people.js'
 export { importMessages, loadRoutableCourses } from './import-messages.js'
 export type {
   UnplaceableMessage,
+  DuplicateCategory,
   ImportMessagesResult,
   RoutableCourse,
 } from './import-messages.js'

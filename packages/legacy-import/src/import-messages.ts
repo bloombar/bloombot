@@ -2,12 +2,18 @@
  * MIG-3's second half: each legacy `messages` row becomes a message on the
  * (course, person) conversation.
  *
- * Course routing matches `response_bot.py#find_course_by_category` exactly:
- * the legacy row's `category` (a Discord category name) is looked up
- * against the categories the *imported* courses declare, and the first
- * course whose `categories` list contains it wins — `response_bot.py` never
- * falls back to role-based routing (`find_course_by_roles`) for a message
- * already logged with a category, so this importer does not either. A
+ * Course routing matches `response_bot.py#find_course_by_category`: the
+ * legacy row's `category` (a Discord category name) is looked up against the
+ * categories the *imported* courses declare, and the first course (in
+ * `routableCourses`'s own order) whose `categories` list contains it wins —
+ * the same "first match" `find_course_by_category` itself uses. Unlike
+ * `response_bot.py`, this importer does *not* fall back to role-based
+ * routing (`find_course_by_roles`, `response_bot.py:183-187`) when the
+ * category lookup fails: a legacy Discord role assignment is not part of
+ * this snapshot, so there is nothing here to run that fallback against. That
+ * is a real, defensible gap, not a bug — but it does mean some messages the
+ * legacy bot *did* answer (because a category match failed and a role match
+ * then succeeded) are reported `unplaceable` here rather than imported. A
  * category matching no course, or a `user_id` this snapshot's people import
  * could not place, is reported in `unplaceable` rather than dropped (MIG-4)
  * — a transcript row that silently vanished on import would be exactly the
@@ -33,11 +39,25 @@ export interface UnplaceableMessage {
   reason: string
 }
 
+/**
+ * A category name two different courses both declare — PROJ-3 normally
+ * refuses this at save time, so seeing one here means something upstream let
+ * it through (a course saved into an archived project, whose PROJ-3 check is
+ * skipped — `repos/courses.ts`). `courseId` is the course routing actually
+ * used (the first to claim the name); `ignoredCourseId` is the one that lost.
+ */
+export interface DuplicateCategory {
+  categoryName: string
+  courseId: string
+  ignoredCourseId: string
+}
+
 /** What `importMessages` created, matched, or could not place. */
 export interface ImportMessagesResult {
   created: number
   matched: number
   unplaceable: UnplaceableMessage[]
+  duplicateCategories: DuplicateCategory[]
 }
 
 /** The courses this run imported (or matched), with enough of their shape to route by category. */
@@ -46,15 +66,75 @@ export interface RoutableCourse {
   categoryNames: string[]
 }
 
-/** A flat `category name -> course id` map — PROJ-3 guarantees a category name is unique across an organization's enabled courses, so this map is safe to build once. */
-function buildCategoryIndex(courses: RoutableCourse[]): Map<string, string> {
+/**
+ * A flat `category name -> course id` map, plus any duplicate a course
+ * later in `courses` tried to claim.
+ *
+ * The *first* course (in `courses`'s own order) whose list contains a
+ * category name wins — matching `response_bot.py#find_course_by_category`'s
+ * own "first match" behaviour (see this file's module comment) — so a later
+ * course's `index.set` for an already-claimed name is skipped, not applied,
+ * and recorded in `duplicates` rather than resolved silently.
+ */
+function buildCategoryIndex(courses: RoutableCourse[]): {
+  index: Map<string, string>
+  duplicates: DuplicateCategory[]
+} {
   const index = new Map<string, string>()
+  const duplicates: DuplicateCategory[] = []
   for (const course of courses) {
     for (const categoryName of course.categoryNames) {
+      const claimedBy = index.get(categoryName)
+      if (claimedBy !== undefined) {
+        duplicates.push({
+          categoryName,
+          courseId: claimedBy,
+          ignoredCourseId: course.id,
+        })
+        continue
+      }
       index.set(categoryName, course.id)
     }
   }
-  return index
+  return { index, duplicates }
+}
+
+/**
+ * Every message id already recorded for `organizationId`, across *every*
+ * conversation each of `courses` has — not just the one a given legacy
+ * message happens to route to on this run.
+ *
+ * `messages.id` (`schema.ts`) is a single global primary key, not scoped per
+ * conversation, so the re-run dedupe check below has to be scoped the same
+ * way: a message previously appended to one conversation and, on a later
+ * run, routed to a *different* one (a course's `conversationScope` flipped
+ * to `course_surface` creates a new conversation for the same person —
+ * D-13) must still be recognised as already-imported, not re-inserted under
+ * an id `messages`'s primary key already holds (finding 5 of the MIG-1
+ * rework).
+ */
+function loadExistingMessageIds(
+  organizationId: string,
+  courses: RoutableCourse[],
+  db: Database
+): Set<string> {
+  const ids = new Set<string>()
+  for (const course of courses) {
+    for (const conversation of conversationsRepo.listConversationsForCourse(
+      organizationId,
+      course.id,
+      db
+    )) {
+      for (const message of conversationsRepo.getTranscript(
+        organizationId,
+        conversation.id,
+        db
+      )) {
+        ids.add(message.id)
+      }
+    }
+  }
+  return ids
 }
 
 /**
@@ -71,9 +151,16 @@ function buildCategoryIndex(courses: RoutableCourse[]): Map<string, string> {
  * key of their own to match on (unlike a course's title or a person's
  * Discord identity), so a caller-generated id is what lets a re-run
  * recognise "this row is already here" instead of appending a duplicate.
- * Checked against each conversation's own transcript, read once per
- * conversation and cached for the rest of this run, so importing N messages
- * costs one transcript read per distinct conversation, not N.
+ * Checked against `loadExistingMessageIds`'s global set, read once up front
+ * (finding 5) rather than per conversation — a per-conversation check missed
+ * a message that a re-run routes to a *different* conversation than it
+ * landed on before, and then crashed the whole run on `messages`'s primary
+ * key instead of reporting it.
+ *
+ * A legacy `created_at` that fails to parse is reported in `unplaceable`
+ * (finding 8), not thrown out of this function uncaught — `created_at` is
+ * `NOT NULL` in the legacy schema, so this is bounded, but a corrupted or
+ * hand-edited snapshot should still produce a report, not an aborted run.
  */
 export function importMessages(
   organizationId: string,
@@ -82,8 +169,9 @@ export function importMessages(
   courses: RoutableCourse[],
   db: Database
 ): ImportMessagesResult {
-  const categoryIndex = buildCategoryIndex(courses)
-  const transcriptIdsByConversation = new Map<string, Set<string>>()
+  const { index: categoryIndex, duplicates: duplicateCategories } =
+    buildCategoryIndex(courses)
+  const existingMessageIds = loadExistingMessageIds(organizationId, courses, db)
 
   let created = 0
   let matched = 0
@@ -125,23 +213,26 @@ export function importMessages(
       continue
     }
 
-    let seenIds = transcriptIdsByConversation.get(conversation.id)
-    if (!seenIds) {
-      seenIds = new Set(
-        conversationsRepo
-          .getTranscript(organizationId, conversation.id, db)
-          .map((message) => message.id)
-      )
-      transcriptIdsByConversation.set(conversation.id, seenIds)
-    }
-
     const messageId = deterministicId(
       'legacy-message',
       organizationId,
       String(legacyMessage.id)
     )
-    if (seenIds.has(messageId)) {
+    if (existingMessageIds.has(messageId)) {
       matched += 1
+      continue
+    }
+
+    let createdAt: number
+    try {
+      createdAt = parseLegacyTimestamp(legacyMessage.createdAt)
+    } catch (error) {
+      unplaceable.push({
+        legacyMessageId: legacyMessage.id,
+        reason: `Unparseable created_at (${JSON.stringify(legacyMessage.createdAt)}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
       continue
     }
 
@@ -156,15 +247,15 @@ export function importMessages(
         surface: 'discord',
         channelRef: legacyMessage.channel,
         categoryRef: legacyMessage.category,
-        createdAt: parseLegacyTimestamp(legacyMessage.createdAt),
+        createdAt,
       },
       db
     )
-    seenIds.add(messageId)
+    existingMessageIds.add(messageId)
     created += 1
   }
 
-  return { created, matched, unplaceable }
+  return { created, matched, unplaceable, duplicateCategories }
 }
 
 /** Build `RoutableCourse[]` from a set of course ids, reading each course's categories back through the repos (never the importer's own return value — the same principle the tests hold the importer to). */

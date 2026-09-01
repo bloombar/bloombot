@@ -39,8 +39,25 @@ coordinate, not proceed. The `.claude/skills/stale-check/` skill has the command
 
 ## Pull requests
 
-Every PR body includes `Closes #N`, where `N` is the board issue's number, so the card links and advances to
-Done on merge.
+Every PR body includes `Closes #N`, where `N` is the board issue's number — one line per requirement the PR
+satisfies — so the change and the requirement stay linked in the history.
+
+> **`Closes #N` does not move the card during the platform build.** GitHub's closing keywords fire only for a
+> pull request merged into the **default branch**, and slice branches target `feat/PLAT-1-multi-surface-platform`
+> instead. Left to itself the board would show every card in Backlog while the work happened and long after it
+> shipped. Move the card explicitly at each transition:
+>
+> ```bash
+> npm run board:status -- "In progress" TEN-1 TEN-2   # when the slice starts
+> npm run board:status -- "In review"   TEN-1 TEN-2   # when the PR opens
+> npm run board:status -- Done          TEN-1 TEN-2   # when it merges
+> ```
+>
+> The script writes the status into `scripts/board/manifest.yaml` and reconciles the board with it; `Done`
+> also closes the issue. Commit the manifest change — it is the board's source of truth (BOARD-4).
+
+Check the issue number before writing it. Board issues are not numbered in requirement-family order, and a
+wrong number closes somebody else's requirement.
 
 Run the checks before opening one:
 

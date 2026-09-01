@@ -11,13 +11,15 @@
  * platform enforces it: a second instance fails to bind this process's own
  * health port.
  *
- * SRV-6..8 — `discordServers.scaffold` (`handlers/discord-scaffold.ts`) is
+ * SRV-6..8 — `discordServers.scaffold` (`handlers/discord-scaffold.ts`) was
  * this process's first real handler: `HandlerRegistry` no longer starts
  * empty. It is registered here, not built into `@bloombot/jobs` itself,
  * the same "handlers are registered by whoever wires a process up, never
  * by the registry's own package" division `registry.ts`'s own module
- * comment describes — a later phase's roster import, knowledge-file
- * attachment or project duplication registers alongside it the same way.
+ * comment describes — ROST-9..12's `roster.import`
+ * (`handlers/roster-import.ts`) registers alongside it the same way, this
+ * slice; a later phase's knowledge-file attachment or project duplication
+ * does too, in theirs.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -37,6 +39,10 @@ import {
   createDiscordScaffoldHandler,
   DISCORD_SCAFFOLD_JOB_KIND,
 } from './handlers/discord-scaffold.js'
+import {
+  createRosterImportHandler,
+  ROSTER_IMPORT_JOB_KIND,
+} from './handlers/roster-import.js'
 import { startHealthServer, workerHealthStatus } from './health.js'
 import { createWorkerLoop, runLoopOrExit } from './loop.js'
 import { createShutdown, InFlightJob } from './shutdown.js'
@@ -107,6 +113,19 @@ async function main(): Promise<void> {
   handlers.register(
     DISCORD_SCAFFOLD_JOB_KIND,
     createDiscordScaffoldHandler({
+      discordRestClient: createDiscordRestClient({
+        clientId: discordClientId,
+        clientSecret: discordClientSecret,
+      }),
+      botToken: discordBotToken,
+    })
+  )
+  // ROST-9..12 — this process's second real handler, the same shape the
+  // scaffold one above uses: its own `DiscordRestClient`, the same bot
+  // token, `categoryChannelCap` left at its default (Discord's real 50).
+  handlers.register(
+    ROSTER_IMPORT_JOB_KIND,
+    createRosterImportHandler({
       discordRestClient: createDiscordRestClient({
         clientId: discordClientId,
         clientSecret: discordClientSecret,

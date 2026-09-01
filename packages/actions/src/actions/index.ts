@@ -32,6 +32,7 @@ import {
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
 import { getJobAction } from './jobs.js'
+import { importRosterAction } from './roster.js'
 
 export {
   archiveProjectAction,
@@ -53,6 +54,7 @@ export {
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
 export { getJobAction, type JobStatus } from './jobs.js'
+export { importRosterAction } from './roster.js'
 
 /** Every action this slice ports, registered once. */
 export function createPlatformRegistry(): ActionRegistry {
@@ -71,5 +73,6 @@ export function createPlatformRegistry(): ActionRegistry {
   registry.register(listDiscordServersAction)
   registry.register(scaffoldDiscordServerAction)
   registry.register(getJobAction)
+  registry.register(importRosterAction)
   return registry
 }

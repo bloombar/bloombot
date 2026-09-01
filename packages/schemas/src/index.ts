@@ -15,3 +15,11 @@ export {
   type LegacyOpenAiAssistant,
   type LegacyRoles,
 } from './legacy-yaml.js'
+
+export {
+  parseRosterCsv,
+  rosterRowSchema,
+  type RosterParseError,
+  type RosterParseResult,
+  type RosterRow,
+} from './roster.js'

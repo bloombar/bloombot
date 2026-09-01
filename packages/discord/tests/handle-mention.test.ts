@@ -259,6 +259,82 @@ describe('handleMention — SURF-4: a person is recognized by their Discord acco
   })
 })
 
+// D-31 rework — the identity-model gap: a roster imported before a student
+// ever joined the server keeps them under a synthetic `handle:`-keyed
+// identity (`roster-import.ts`'s own ROST-10 fallback). Before this fix,
+// that student's first live message resolved by snowflake, found nothing,
+// and `resolvePersonByIdentity` minted a *second* person — a second
+// conversation, a second daily allowance, the roster's own fields stranded
+// on the orphan. See `docs/DECISIONS.md`'s own entry on this rework.
+describe('handleMention — D-31 rework: a roster-known person is reconciled with their first live message', () => {
+  it("resolves a student's first message to the person a roster import already created under a handle:-keyed identity, rather than minting a second one", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+
+    // Simulates `roster-import.ts`'s own ROST-10 fallback directly, rather
+    // than depending on `apps/worker` (out of this rework's own scope):
+    // a roster row kept under a synthetic `handle:`-keyed identity, with
+    // its roster fields already merged on.
+    const rosterPerson = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'handle:ada-lovelace' },
+      testDb.db
+    )
+    people.mergeRosterFields(
+      organizationId,
+      rosterPerson.id,
+      { email: 'ada@example.edu', firstName: 'Ada' },
+      testDb.db
+    )
+
+    const { deps } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({
+        guildId,
+        authorId: 'snowflake-ada',
+        // The same handle the roster row was keyed on — case-different, the
+        // same tolerance `normalizeRosterHandle`/`normalizeHandle` give a
+        // self-reported handle elsewhere in this platform.
+        authorDisplayName: 'Ada-Lovelace',
+      }),
+      deps
+    )
+
+    const everyone = people.listPeople(organizationId, testDb.db)
+    expect(everyone).toHaveLength(1)
+    expect(everyone[0]?.id).toBe(rosterPerson.id)
+    // The roster's own fields travel with the same person — not stranded on
+    // a second, orphaned one.
+    expect(everyone[0]?.email).toBe('ada@example.edu')
+  })
+
+  it("still creates a new person when no handle:-keyed identity matches the author's own display name", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+
+    people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'handle:someone-else' },
+      testDb.db
+    )
+
+    const { deps } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({
+        guildId,
+        authorId: 'snowflake-ada',
+        authorDisplayName: 'Ada-Lovelace',
+      }),
+      deps
+    )
+
+    const everyone = people.listPeople(organizationId, testDb.db)
+    // The pre-seeded `handle:someone-else` person, plus a genuinely new one
+    // for Ada — no accidental match against an unrelated handle.
+    expect(everyone).toHaveLength(2)
+  })
+})
+
 describe('handleMention — SURF-5: the reply is sent through the port, and a long answer is split', () => {
   it('sends the answer through `reply`, not any other channel', async () => {
     testDb = createTestDatabase()

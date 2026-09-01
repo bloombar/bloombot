@@ -1082,6 +1082,40 @@
   phase: 3
   status: Backlog
   review: false
+- id: TEN-1
+  title: The tenant is an organization
+  full: Every scoped record carries an organization id. An account gets a personal
+    organization on sign-up; membership is a separate record so a second
+    instructor or a teaching assistant can be added without restructuring
+    anything.
+  section: §15 Tenancy & Server Registration
+  family: TEN
+  phase: 3
+  status: Backlog
+  review: false
+- id: TEN-2
+  title: Repository-level scoping
+  full: Every data-access function takes the organization id as its first
+    parameter and includes it in the query. There is no function that fetches a
+    scoped record by id alone, and route handlers do not reach the database
+    directly. Tenant isolation is therefore a property of the data layer rather
+    than a rule each handler must remember.
+  section: §15 Tenancy & Server Registration
+  family: TEN
+  phase: 3
+  status: Backlog
+  review: false
+- id: TEN-3
+  title: One organization per Discord server
+  full: "A Discord server is bound to exactly one organization, structurally: the
+    server's snowflake is the primary key of the binding record, so a second
+    claim cannot be inserted. An attempt to register a server already registered
+    elsewhere is refused, and a server whose bot was removed may be re-claimed."
+  section: §15 Tenancy & Server Registration
+  family: TEN
+  phase: 3
+  status: Backlog
+  review: false
 - id: ACT-1
   title: Every operation is an action
   full: "Everything the platform can do on a user's behalf is an action: a dotted
@@ -1199,40 +1233,6 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
-  review: false
-- id: TEN-1
-  title: The tenant is an organization
-  full: Every scoped record carries an organization id. An account gets a personal
-    organization on sign-up; membership is a separate record so a second
-    instructor or a teaching assistant can be added without restructuring
-    anything.
-  section: §15 Tenancy & Server Registration
-  family: TEN
-  phase: 6
-  status: Backlog
-  review: false
-- id: TEN-2
-  title: Repository-level scoping
-  full: Every data-access function takes the organization id as its first
-    parameter and includes it in the query. There is no function that fetches a
-    scoped record by id alone, and route handlers do not reach the database
-    directly. Tenant isolation is therefore a property of the data layer rather
-    than a rule each handler must remember.
-  section: §15 Tenancy & Server Registration
-  family: TEN
-  phase: 6
-  status: Backlog
-  review: false
-- id: TEN-3
-  title: One organization per Discord server
-  full: "A Discord server is bound to exactly one organization, structurally: the
-    server's snowflake is the primary key of the binding record, so a second
-    claim cannot be inserted. An attempt to register a server already registered
-    elsewhere is refused, and a server whose bot was removed may be re-claimed."
-  section: §15 Tenancy & Server Registration
-  family: TEN
-  phase: 6
   status: Backlog
   review: false
 - id: TEN-4

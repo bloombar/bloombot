@@ -13,6 +13,7 @@
     { "path": "./packages/logger" },
     { "path": "./packages/schemas" },
     { "path": "./packages/db" },
-    { "path": "./packages/legacy-import" }
+    { "path": "./packages/legacy-import" },
+    { "path": "./packages/core" }
   ]
 }

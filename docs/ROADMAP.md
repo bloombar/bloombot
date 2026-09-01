@@ -68,7 +68,7 @@ programme and the only component already serving real students, so it happens be
 web work rather than after: the behaviour it must preserve is easiest to verify while it
 is still the only thing running. Requirement ids land with this phase's SPEC sections.
 
-**In scope:**
+**In scope:** CORE-1..6
 
 ## Phase 5 — API, action layer & authentication
 

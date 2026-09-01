@@ -1585,3 +1585,52 @@ answers readable. The text being rendered is model output and student input, so 
 it is never passed through, links carry no script scheme, and nothing reaches the page
 through an unsanitized HTML sink. A chat surface that renders assistant output as HTML is
 the shortest path to a student's session, and WEB-6 exists to keep that path closed.
+
+
+#### WEB-11 One styling system, not several
+
+The panel is styled with Tailwind CSS and nothing else: no parallel stylesheet, no
+component library with its own opinions, no hand-rolled utility classes competing with the
+framework's. A second system is how a two-screen app becomes one that looks like two
+applications, and the divergence is invisible until somebody sees two pages side by side.
+
+#### WEB-12 One icon set, used to mean something
+
+Icons come from Lucide React, and each recurring intent keeps the same icon everywhere it
+appears — editing, deleting, disabling, adding, removing from a list. An icon never carries
+meaning alone: every icon-only control has an accessible name, because an icon is a
+reminder for people who already know what it does and nothing at all for a screen reader.
+
+#### WEB-13 The panel works on the screen a person actually has
+
+The layout is responsive from a phone to a desktop. Nothing requires horizontal scrolling
+to reach a control, no table becomes unusable by narrowing, and the navigation collapses
+rather than overflowing. Instructors do this work on a laptop and check it on a phone, and
+a course that cannot be enabled from a phone is a course that waits until Monday.
+
+#### WEB-14 A conventional application shell
+
+A fixed header carries the main navigation — a menu control that opens it on narrow
+screens, with a home control beside it — and a fixed footer carries the standard links and
+the information a person expects to find there. Content lives between them and scrolls
+independently. This is the shape people already know; a control panel is not the place to
+teach somebody a new one.
+
+#### WEB-15 A primary action looks different from a secondary one
+
+Each screen makes plain which action it expects — one primary call to action, visually
+distinct from the secondary ones — and destructive actions are distinguishable from both.
+Archiving a term and deleting one must never look alike.
+
+#### WEB-16 Forms say what they want and what went wrong
+
+Every field has a visible label, related fields are grouped, and a refusal names the field
+it concerns and appears next to it rather than only at the top. A form that reports "invalid
+input" for a course with fourteen fields has told the instructor nothing.
+
+#### WEB-17 The panel is usable from the keyboard
+
+Every control is reachable and operable by keyboard, focus is always visible, and the
+contrast of text and controls meets WCAG AA. The panel is administrative software used
+daily by people whose institutions require this, and retrofitting it costs more than
+building it in.

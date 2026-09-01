@@ -2352,6 +2352,88 @@
   phase: 12
   status: Backlog
   review: false
+- id: WEB-11
+  title: One styling system, not several
+  full: "The panel is styled with Tailwind CSS and nothing else: no parallel
+    stylesheet, no component library with its own opinions, no hand-rolled
+    utility classes competing with the framework's. A second system is how a
+    two-screen app becomes one that looks like two applications, and the
+    divergence is invisible until somebody sees two pages side by side."
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-12
+  title: One icon set, used to mean something
+  full: "Icons come from Lucide React, and each recurring intent keeps the same
+    icon everywhere it appears — editing, deleting, disabling, adding, removing
+    from a list. An icon never carries meaning alone: every icon-only control
+    has an accessible name, because an icon is a reminder for people who already
+    know what it does and nothing at all for a screen reader."
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-13
+  title: The panel works on the screen a person actually has
+  full: The layout is responsive from a phone to a desktop. Nothing requires
+    horizontal scrolling to reach a control, no table becomes unusable by
+    narrowing, and the navigation collapses rather than overflowing. Instructors
+    do this work on a laptop and check it on a phone, and a course that cannot
+    be enabled from a phone is a course that waits until Monday.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-14
+  title: A conventional application shell
+  full: A fixed header carries the main navigation — a menu control that opens it
+    on narrow screens, with a home control beside it — and a fixed footer
+    carries the standard links and the information a person expects to find
+    there. Content lives between them and scrolls independently. This is the
+    shape people already know; a control panel is not the place to teach
+    somebody a new one.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-15
+  title: A primary action looks different from a secondary one
+  full: Each screen makes plain which action it expects — one primary call to
+    action, visually distinct from the secondary ones — and destructive actions
+    are distinguishable from both. Archiving a term and deleting one must never
+    look alike.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-16
+  title: Forms say what they want and what went wrong
+  full: Every field has a visible label, related fields are grouped, and a refusal
+    names the field it concerns and appears next to it rather than only at the
+    top. A form that reports "invalid input" for a course with fourteen fields
+    has told the instructor nothing.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-17
+  title: The panel is usable from the keyboard
+  full: Every control is reachable and operable by keyboard, focus is always
+    visible, and the contrast of text and controls meets WCAG AA. The panel is
+    administrative software used daily by people whose institutions require
+    this, and retrofitting it costs more than building it in.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false
 - id: MCP-1
   title: An assistant reaches the platform through the action layer
   full: The MCP server exposes actions as tools and dispatches them through the

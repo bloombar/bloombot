@@ -27,11 +27,17 @@
  * every caller to have checked first.
  */
 
-import { conversations, courses, usage, type Database } from '@bloombot/db'
+import {
+  conversations,
+  courses,
+  people,
+  usage,
+  type Database,
+} from '@bloombot/db'
 import type { schema } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 
-import type { ModelClient } from './ports.js'
+import { ModelAskError, type ModelClient } from './ports.js'
 
 /** BOT-5's platform default, applied here — the layer D-13 named as responsible for it — for a course whose `maxRequestsPerDay` was never configured (`null`). */
 const DEFAULT_MAX_REQUESTS_PER_DAY = 10 // BOT-5
@@ -244,6 +250,22 @@ export async function answerQuestion(
     )
   }
 
+  // Finding 1 of the MDL-1 rework (D-16) — resolved once per turn so a new
+  // upstream conversation's opening item can say who is asking and which
+  // course they are in, the same information `response_bot.py` seeds with
+  // (`response_bot.py:262-269`). `getPerson` cannot come back empty here:
+  // PPL-3 already created this person before `personId` ever reached this
+  // function, the same trust CORE-2/PPL-3 hold everywhere else in this
+  // file — a display name simply not merged in yet reads as `null`, which
+  // the port's own contract already treats as "seed without one".
+  const person = people.getPerson(organizationId, personId, db)
+  const identity = people.getPersonIdentity(
+    organizationId,
+    personId,
+    surface,
+    db
+  )
+
   // CORE-4 — the model is asked through the port, never a vendor SDK.
   // `modelText` (finding 10), not `text`: a surface may have rewritten the
   // question before sending it (BOT-6's mention rewriting) without that
@@ -259,6 +281,9 @@ export async function answerQuestion(
       model: course.model,
       upstreamThreadId: conversation.upstreamThreadId,
       question: modelText,
+      displayName: person?.displayName ?? null,
+      courseTitle: course.title,
+      personRef: identity ? `<@${identity.externalId}>` : null,
     })
     replyText = isLastRequestOfDay
       ? withLastRequestNotice(course.title, modelAnswer.text)
@@ -273,6 +298,15 @@ export async function answerQuestion(
     )
     replyText = apologyText(course.title)
     failed = true
+    // Finding 6 of the MDL-1 rework — a call that already minted a new
+    // upstream conversation id before failing must not orphan it:
+    // `ModelAskError` (`ports.ts`) carries the id across the throw, and the
+    // write below persists it exactly the way a successful call's own id
+    // is persisted, so the next turn resumes it instead of creating (and
+    // failing to use) yet another one.
+    if (error instanceof ModelAskError) {
+      newUpstreamThreadId = error.upstreamThreadId
+    }
   }
 
   // CONV-1 — "the model's own context can be resumed" (D-13's own text for

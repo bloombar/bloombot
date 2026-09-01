@@ -1,6 +1,7 @@
 /** Public surface of `@bloombot/core`. */
 
 export type { ModelClient, ModelRequest, ModelAnswer } from './ports.js'
+export { ModelAskError } from './ports.js'
 
 export {
   routeMessage,

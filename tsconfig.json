@@ -9,6 +9,7 @@
     { "path": "./packages/db" },
     { "path": "./packages/legacy-import" },
     { "path": "./packages/core" },
+    { "path": "./packages/openai" },
     { "path": "./tsconfig.tests.json" }
   ]
 }

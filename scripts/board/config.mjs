@@ -147,6 +147,11 @@ export const FAMILY_LABEL = {
     color: '0e8a16',
     description: 'The surface-agnostic answering pipeline',
   },
+  MDL: {
+    name: 'area:model-adapter',
+    color: 'b60205',
+    description: 'The OpenAI Responses API adapter behind the model port',
+  },
   MIG: {
     name: 'area:legacy-import',
     color: '8250df',

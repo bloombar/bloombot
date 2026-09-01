@@ -129,6 +129,53 @@ describe('people repo', () => {
     expect(people.listPeople(orgB, testDb.db)).toHaveLength(1)
   })
 
+  // --- Finding 1 of the MDL-1 rework: getPersonIdentity -------------------
+
+  it('getPersonIdentity returns the identity for a person on a given surface', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizations(testDb)
+
+    const person = people.resolvePersonByIdentity(
+      orgA,
+      { surface: 'discord', externalId: 'snowflake-42' },
+      testDb.db
+    )
+
+    expect(
+      people.getPersonIdentity(orgA, person.id, 'discord', testDb.db)
+    ).toMatchObject({ personId: person.id, externalId: 'snowflake-42' })
+  })
+
+  it('getPersonIdentity returns undefined for a surface the person has no identity on', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizations(testDb)
+
+    const person = people.resolvePersonByIdentity(
+      orgA,
+      { surface: 'discord', externalId: 'snowflake-43' },
+      testDb.db
+    )
+
+    expect(
+      people.getPersonIdentity(orgA, person.id, 'web', testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('getPersonIdentity refuses a person id belonging to another organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizations(testDb)
+
+    const person = people.resolvePersonByIdentity(
+      orgA,
+      { surface: 'discord', externalId: 'snowflake-44' },
+      testDb.db
+    )
+
+    expect(
+      people.getPersonIdentity(orgB, person.id, 'discord', testDb.db)
+    ).toBeUndefined()
+  })
+
   // --- PPL-3: created on demand --------------------------------------------
 
   it('resolving an unknown identity creates the person and the identity together', () => {

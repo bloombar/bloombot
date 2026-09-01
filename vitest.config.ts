@@ -20,6 +20,7 @@ export default defineConfig({
       '@bloombot/db': sourceEntry('db'),
       '@bloombot/legacy-import': sourceEntry('legacy-import'),
       '@bloombot/core': sourceEntry('core'),
+      '@bloombot/openai': sourceEntry('openai'),
     },
   },
   test: {
@@ -28,10 +29,16 @@ export default defineConfig({
     // not a blanket percentage across the tree — a package like `db` has
     // plenty of code (schema definitions, the migration runner) that is
     // exercised end-to-end by every other test rather than meaningfully
-    // unit-testable on its own.
+    // unit-testable on its own. `packages/openai` joins the floor here
+    // (MDL-1..7): it is the vendor adapter behind the model port, exactly
+    // the kind of logic-that-matters this floor exists to hold.
     coverage: {
       provider: 'v8',
-      include: ['packages/db/src/repos/**/*.ts', 'packages/core/src/**/*.ts'],
+      include: [
+        'packages/db/src/repos/**/*.ts',
+        'packages/core/src/**/*.ts',
+        'packages/openai/src/**/*.ts',
+      ],
       thresholds: {
         lines: 90,
         functions: 90,
@@ -90,6 +97,15 @@ export default defineConfig({
         test: {
           name: 'core',
           root: './packages/core',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'openai',
+          root: './packages/openai',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

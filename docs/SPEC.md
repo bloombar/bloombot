@@ -971,3 +971,52 @@ The question and the answer are both written to the transcript against the same
 conversation. A failure to record is logged and does not prevent the person receiving
 their answer: losing a transcript row is bad, and withholding a student's answer because
 of it is worse.
+
+### 21. Model Adapter
+
+#### MDL-1 One package knows the vendor
+
+The Responses API, the shapes it accepts and the errors it raises live in a single adapter
+behind the answering core's model port. Nothing else in the platform imports a vendor SDK,
+so a second provider — or a self-hosted model for an institution that requires one — is a
+new adapter rather than a change to how the bot answers.
+
+#### MDL-2 A stored prompt when the course has one, its own instructions otherwise
+
+A course with a `prompt_id` is answered through that stored prompt, so the two courses
+running today behave exactly as they do now. A course without one is answered with the
+instructions held in its own record, which is what lets an instructor who has never seen
+the OpenAI dashboard write the assistant's persona in the control panel.
+
+#### MDL-3 Answers are grounded in the course's own material
+
+When a course has a vector store, every request enables file search against it, so answers
+come from that course's uploaded notes, syllabus and schedule rather than from the model's
+general knowledge. A course without one is answered without the tool rather than refused.
+
+#### MDL-4 Continuity is an upstream conversation the platform remembers
+
+The adapter creates the upstream conversation on a person's first turn in a course, seeded
+with who they are and which course they are in, and reuses the identifier the platform
+stored for every turn after that. Unlike the in-memory map it replaces, this survives a
+restart. An identifier the provider no longer recognizes starts a new conversation instead
+of failing the turn.
+
+#### MDL-5 Every request is bounded, and a transient failure is retried once
+
+Output is capped, the model comes from the course or a platform default, and a request that
+does not return within a timeout is abandoned rather than holding a student's reply open.
+A transient failure — a timeout, a rate limit, a 5xx — is retried once; a refusal or an
+invalid request is not, because repeating it only spends money to fail again. The token
+counts the provider reports are returned for the cost ledger to record.
+
+#### MDL-6 Citation markers never reach a student
+
+The provider's inline source markers are stripped from an answer before it leaves the
+adapter, exactly as the running bot strips them today.
+
+#### MDL-7 No test ever calls OpenAI
+
+The provider's base URL is configuration, never a literal in a client, and the test suite
+runs against a fake upstream in-process. No test needs an API key, and a test run costs
+nothing and reaches no network.

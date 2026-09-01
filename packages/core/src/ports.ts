@@ -33,6 +33,28 @@ export interface ModelRequest {
   upstreamThreadId: string | null
   /** The question text, already cleaned of any surface-specific formatting (mention rewriting, etc.) by the caller. */
   question: string
+  /**
+   * The person's display name, when known — seeds a new upstream
+   * conversation's opening item the way `response_bot.py` does
+   * (`response_bot.py:262-269`, MDL-4). `null` when the person has none yet
+   * (no roster import has merged one onto them).
+   */
+  displayName: string | null
+  /**
+   * The course's own title, for the same opening item. `answer.ts` already
+   * has `course.title` in hand for the apology text (CORE-5), so this is
+   * never `null` from that call site in practice — kept nullable here so an
+   * adapter's own degradation (a generic opener) is still exercised by a
+   * caller that genuinely has none.
+   */
+  courseTitle: string | null
+  /**
+   * An opaque reference to the person — `<@id>` on Discord, matching
+   * `response_bot.py`'s own `metadata={"user_id": ...}` — embedded in both
+   * the opening item and the upstream conversation's metadata (MDL-4).
+   * `null` when the person has no identity on this request's surface.
+   */
+  personRef: string | null
 }
 
 /**
@@ -57,4 +79,37 @@ export interface ModelAnswer {
  */
 export interface ModelClient {
   ask(request: ModelRequest): Promise<ModelAnswer>
+}
+
+/**
+ * Thrown by `ModelClient.ask` when a turn fails *after* the adapter already
+ * created a new upstream conversation for it (MDL-4's "no stored id" or
+ * "stored id forgotten" paths) — finding 6 of the MDL-1 rework. A plain
+ * thrown error loses that id: `answer.ts` only persists
+ * `ModelAnswer.upstreamThreadId`, which a failed call never returns, so the
+ * platform keeps pointing at whichever id it already had (`null`, or a
+ * stale one the provider just rejected) and the next turn repeats the same
+ * create-then-fail dance. This carries the id across the throw so
+ * `answer.ts` can persist it before taking the apology path — the
+ * conversation the adapter started is real even though this turn's answer
+ * is not.
+ *
+ * Defined here rather than in `@bloombot/openai` because `answer.ts` must
+ * never import a vendor package (CORE-4, this file's own module comment) —
+ * an adapter that wants this behaviour throws this port's own error type,
+ * not one of its own.
+ */
+export class ModelAskError extends Error {
+  /** The upstream conversation id the failed call had already created. */
+  readonly upstreamThreadId: string
+
+  constructor(
+    message: string,
+    upstreamThreadId: string,
+    options: { cause?: unknown } = {}
+  ) {
+    super(message, options)
+    this.name = 'ModelAskError'
+    this.upstreamThreadId = upstreamThreadId
+  }
 }

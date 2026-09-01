@@ -1302,7 +1302,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: CORE-2
   title: Routing attributes a message to exactly one course
@@ -1315,7 +1315,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: CORE-3
   title: The daily allowance is enforced before the model is called
@@ -1328,7 +1328,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: CORE-4
   title: The model is a port, not an import
@@ -1339,7 +1339,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: CORE-5
   title: A model failure degrades to an apology, never to silence or a stack trace
@@ -1351,7 +1351,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: CORE-6
   title: Both directions are recorded, and recording never blocks the reply
@@ -1362,7 +1362,7 @@
   section: §20 Conversation Core
   family: CORE
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: ACT-1
   title: Every operation is an action

@@ -97,6 +97,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courses.save',
         'courses.enable',
         'courses.disable',
+        'discordServers.remove',
       ].sort()
     )
 

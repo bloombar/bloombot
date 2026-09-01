@@ -38,9 +38,16 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    level up — a cheap mailbox-flooding guard (API-1..6 rework, "also
 //    worth doing"): refuse to issue a second link while an unexpired,
 //    unused one for the same address already exists.
+//  - discord-install-states.ts: TEN-4, the same class as `sign-in-tokens.ts`
+//    one level up. A callback carries only the state value Discord echoed
+//    back — not an organization id — so `createInstallState`/
+//    `consumeInstallState` are keyed on that state's hash instead;
+//    `organizationId` lives *in* the row (what the callback claims the
+//    eventual binding for), it is just not how the row is found.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
+  'discord-install-states.ts': ['createInstallState', 'consumeInstallState'],
   'memberships.ts': ['listMembershipsForAccount'],
   'sign-in-tokens.ts': [
     'createSignInToken',
@@ -125,7 +132,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the eleven repo files this test is written against', () => {
+  it('found the twelve repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -133,6 +140,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'accounts.ts',
         'conversations.ts',
         'courses.ts',
+        'discord-install-states.ts',
         'discord-servers.ts',
         'memberships.ts',
         'organizations.ts',

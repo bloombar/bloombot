@@ -1263,3 +1263,55 @@ the database is reachable with a cheap `select 1` against the live connection; i
 note about `validateSession` already taking a write lock on every authenticated request, deliberately does not)
 attempt a write of its own on every health check. `apps/api` is not part of the coverage floor `vitest.config.ts`
 enforces, the same call already made for `apps/bot` and for the same reason — see that file's own comment.
+
+---
+
+## D-21 — `packages/db`/`packages/auth`/`packages/discord-rest`/`apps/api`: where the install state lives, what the guild-administration check trusts, and what happens to a binding when an organization is deleted
+
+**Problem.** TEN-4 needs somewhere to hold an OAuth+PKCE attempt between "a signed-in caller begins an
+install" and "Discord's callback completes it" — a state value, a PKCE verifier, which account and
+organization began it, and a short expiry — and needs to decide, concretely, what "verify the installing
+account actually administers the server" is allowed to trust. Neither is settled by TEN-1..6's own text.
+
+**Choice, the install state lives in `packages/db` as `discord_install_states`, with the state hashed and the
+verifier in plain text.** Mirrors `sign_in_tokens` closely (AUTH-1's own shape, `schema.ts`'s comment on
+`signInTokens`): a random secret returned to the caller exactly once and stored only as its SHA-256 hash
+(`@bloombot/auth`'s `secrets.ts#hashSecret`, the same function `tokens.ts`/`sessions.ts` already use), single-use
+(`used_at`), short-lived (ten minutes — `discord-install.ts#DEFAULT_INSTALL_STATE_TTL_MS`; AUTH-1's own
+fifteen-minute sign-in link is the closest precedent, shortened here because this state never sits in a mail
+queue the way an emailed link does — it only ever travels as a URL parameter and a same-site POST body). The
+PKCE `code_verifier` breaks that pattern deliberately: unlike a session token or a sign-in token, nothing ever
+presents the verifier back to this platform to prove anything — the callback needs the *exact* value this
+server generated, to hand to Discord's own token endpoint verbatim (RFC 7636 §4.5), and a SHA-256 hash of it
+cannot be un-hashed to recover that value. Hashing it would not make it safer, only unusable, so it is stored
+in plain text, in the same row the hashed state is found by. This is the sense in which "state" and "verifier"
+are not the same kind of secret at all, despite sitting in the same table: the state is a bearer credential
+(whoever presents the right one on callback is trusted to be the caller the attempt began for) and the
+verifier is not (it is never presented to this platform by anyone; this platform presents it to Discord).
+
+**Choice, the guild-administration check reads the caller's own guild list from Discord after the token
+exchange, not the `guild_id` Discord's own redirect carries on its own.** `apps/api/src/routes/discord-servers.ts`'s
+callback takes `guildId` from its request body (posted by the front end, which read it off Discord's own
+redirect query string) only as *which entry to look up* in a list `@bloombot/discord-rest#getUserGuilds` reads
+fresh, with the access token the exchange just returned — never as a claim taken at face value. What this
+still trusts: that the access token itself proves who it belongs to (ordinary OAuth trust, not something this
+slice can improve on) and that Discord's own `owner`/`permissions` fields on a guild summary are honest about
+that account's real standing in that guild — `@bloombot/discord-rest#administersGuild` treats `owner: true` or
+the `MANAGE_GUILD` bit (`0x20`, read as a `BigInt` since Discord's own bitfield can exceed the 32 bits
+JavaScript's `&` operator works on) as sufficient, matching TEN-4's own text exactly and no more strictly. A
+second read — the bot's own guild list, `getBotGuilds` with `BOT_TOKEN` — confirms the bot the exchange is
+meant to have just installed is actually a member of the guild being claimed, closing the separate gap where a
+caller administers a real guild the bot was never added to at all.
+
+**Choice, an organization's deletion has no effect on its Discord server bindings, because organization
+deletion does not exist yet.** No function anywhere in `packages/db` deletes an `organizations` row — TEN-1's
+personal-organization-on-signup and every scoped table's `organization_id` foreign key assume the row simply
+exists for the lifetime of the account structure built on it, and nothing in AUTH-1..4, TEN-1..6, or this
+slice's own brief introduces a delete path. `discord_server_bindings.organization_id` references
+`organizations.id` with SQLite's default `ON DELETE NO ACTION` (`schema.ts`), so if a future slice does add
+organization deletion, a straightforward `DELETE FROM organizations` would fail with a foreign-key violation
+while an active or removed binding still references it — refusing loudly rather than leaving an orphaned
+binding row, but that is FROM this schema's default behaviour, not a decision this slice made on purpose. The
+day organization deletion is designed, it needs its own answer for what happens to a binding (and to every
+other tenant-scoped table) — plausibly "released the same way TEN-6's own removal already is," but that is a
+call for that slice to make with TEN-6's full text in front of it, not one this slice should anticipate.

@@ -23,6 +23,7 @@ export default defineConfig({
       '@bloombot/core': sourceEntry('core'),
       '@bloombot/openai': sourceEntry('openai'),
       '@bloombot/discord': sourceEntry('discord'),
+      '@bloombot/discord-rest': sourceEntry('discord-rest'),
       '@bloombot/actions': sourceEntry('actions'),
     },
   },
@@ -158,6 +159,15 @@ export default defineConfig({
         test: {
           name: 'actions',
           root: './packages/actions',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'discord-rest',
+          root: './packages/discord-rest',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

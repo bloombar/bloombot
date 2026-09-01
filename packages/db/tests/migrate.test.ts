@@ -65,6 +65,7 @@ describe('runMigrations', () => {
       'course_categories',
       'course_channels',
       'courses',
+      'discord_install_states',
       'discord_server_bindings',
       'memberships',
       'messages',
@@ -101,6 +102,16 @@ describe('runMigrations', () => {
       'organization_id',
       'removed_at',
       'server_id',
+    ])
+    expect(schema.discord_install_states).toEqual([
+      'account_id',
+      'code_verifier',
+      'created_at',
+      'expires_at',
+      'id',
+      'organization_id',
+      'state_hash',
+      'used_at',
     ])
     expect(schema.projects).toEqual([
       'archived_at',

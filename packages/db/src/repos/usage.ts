@@ -14,7 +14,7 @@
  * boundary to behave correctly.
  */
 
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, gte, isNotNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { courses, people, usageCounters } from '../schema.js'
@@ -279,4 +279,79 @@ export function hasExhaustedDailyLimit(
 
   const count = getUsageCount(organizationId, courseId, personId, day, db)
   return count >= course.maxRequestsPerDay
+}
+
+/** One row of `listUsageNearLimit`'s own report — a person, a course, and how close today's count is to what that course allows. */
+export interface UsageNearLimit {
+  courseId: string
+  courseTitle: string
+  personId: string
+  personDisplayName: string | null
+  count: number
+  maxRequestsPerDay: number
+}
+
+/** `listUsageNearLimit`'s own default — 80% of a course's own daily allowance, not a platform-wide count. */
+const DEFAULT_NEAR_LIMIT_RATIO = 0.8
+
+/**
+ * COST-4 — "an instructor sees ... the students approaching their limits":
+ * every (course, person) pair in `organizationId` whose count for `day` has
+ * reached at least `thresholdRatio` (default 80%) of that course's own
+ * `maxRequestsPerDay`.
+ *
+ * Only courses with a *configured* `maxRequestsPerDay` are considered — a
+ * course left at `null` has no limit to be near, the same "no default value
+ * is invented here" reading `hasExhaustedDailyLimit`'s own comment already
+ * gives that column; BOT-5's platform default (applied by
+ * `@bloombot/core`'s `answer.ts`, D-13) is that layer's own business, not
+ * this repo's, so a course relying on it is simply not reported here rather
+ * than reported against a limit this file invented on its behalf.
+ */
+export function listUsageNearLimit(
+  organizationId: string,
+  day: string,
+  db: Database,
+  thresholdRatio: number = DEFAULT_NEAR_LIMIT_RATIO
+): UsageNearLimit[] {
+  assertValidDay(day)
+
+  const rows = db
+    .select({
+      courseId: usageCounters.courseId,
+      courseTitle: courses.title,
+      personId: usageCounters.personId,
+      personDisplayName: people.displayName,
+      count: usageCounters.count,
+      maxRequestsPerDay: courses.maxRequestsPerDay,
+    })
+    .from(usageCounters)
+    .innerJoin(courses, eq(courses.id, usageCounters.courseId))
+    .innerJoin(people, eq(people.id, usageCounters.personId))
+    .where(
+      and(
+        eq(usageCounters.organizationId, organizationId),
+        eq(usageCounters.day, day),
+        isNotNull(courses.maxRequestsPerDay),
+        // `maxRequestsPerDay` is proven non-null by the `isNotNull` guard
+        // above; SQL itself has no way to express "and compare it" in the
+        // same `WHERE` without repeating the column, so the ratio filter
+        // below is a second, redundant-looking condition on the same
+        // column rather than a single combined one.
+        gte(
+          sql`cast(${usageCounters.count} as real) / ${courses.maxRequestsPerDay}`,
+          thresholdRatio
+        )
+      )
+    )
+    .all()
+
+  // The `isNotNull` guard above makes this cast safe — every row reaching
+  // here matched it — but drizzle's own inferred type still carries
+  // `number | null` for a nullable column regardless of the `WHERE` clause
+  // that filtered it.
+  return rows.map((row) => ({
+    ...row,
+    maxRequestsPerDay: row.maxRequestsPerDay as number,
+  }))
 }

@@ -30,9 +30,18 @@ export {
   listCoursesAction,
   listDiscordServersAction,
   listProjectsAction,
+  organizationUsageAction,
   removeDiscordServerAction,
   saveCourseAction,
   scaffoldDiscordServerAction,
   unarchiveProjectAction,
   type JobStatus,
+  type OrganizationUsageReport,
 } from './actions/index.js'
+
+export {
+  checkPlatformHealth,
+  type CheckPlatformHealthOptions,
+  type PlatformHealthReport,
+  type ProcessHealth,
+} from './monitoring.js'

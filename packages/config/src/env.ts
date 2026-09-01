@@ -14,6 +14,8 @@
 
 import { z } from 'zod'
 
+import { DEFAULT_PRICING_JSON } from './pricing.js'
+
 /** A port number as it can appear in an environment variable: a decimal string. */
 const port = (defaultValue: number) =>
   z.coerce.number().int().min(1).max(65535).default(defaultValue)
@@ -102,6 +104,25 @@ export const envSchema = z.object({
   // read to the process instead).
   MODEL_ADMISSION_LIMIT: z.coerce.number().int().min(1).default(5),
   MODEL_ADMISSION_WAIT_MS: z.coerce.number().int().min(0).default(15_000),
+
+  // COST-1/COST-6 — per-model rates the cost ledger prices token counts
+  // against, in integer micros per million tokens (D-2's "money as INTEGER
+  // micros", carried into configuration too — a rate expressed as a float
+  // dollar amount would drift the moment it is multiplied). A JSON object
+  // shaped `{ "rates": { "<model>": { "inputMicrosPerMillionTokens": n,
+  // "outputMicrosPerMillionTokens": n } }, "defaultRate": { ... } }` — read
+  // and validated by `pricing.ts#getModelPricingTable`, not here: this
+  // schema only proves the value is a string, the same "a schema proves
+  // shape, a dedicated module proves meaning" split `ADMIN_EMAILS`'s own
+  // comma-separated string already takes with `admin.ts`. No `.min(1)`, the
+  // same reason `ADMIN_EMAILS`/`GOOGLE_CLIENT_ID` have none — `env.example`
+  // documents this as present but empty, and `pricing.ts#getModelPricingTable`
+  // itself treats an empty value the same as an unset one, falling back to
+  // its own `DEFAULT_PRICING_JSON` — a documented, approximate rate for the
+  // models this platform ships against today — so production needs nothing
+  // set to get a real (if approximate) cost, the same "defaults to the real
+  // thing" shape `OPENAI_BASE_URL` above takes.
+  MODEL_PRICING_JSON: z.string().default(DEFAULT_PRICING_JSON),
 
   // Upstream base URLs. These exist so tests can point every outbound call at a
   // fake upstream and no vendor host is ever hardcoded in a client (QA-2).

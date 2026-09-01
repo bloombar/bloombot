@@ -102,6 +102,10 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // restoring is itself a write to `courses.instructions`, gated the same
   // way an ordinary save already is.
   'courseInstructions.restore': { resource: 'course', access: 'write' },
+  // COST-4: no existing record of its own to resolve — the organization
+  // itself is the resource, read rather than written, the same shape
+  // `discordServers.list`/`projects.list` already use above.
+  'costLedger.organizationUsage': { resource: 'organization', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

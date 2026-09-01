@@ -35,6 +35,16 @@ export const organizations = sqliteTable('organizations', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   isPersonal: integer('is_personal', { mode: 'boolean' }).notNull(),
+  // COST-3 — the total the organization may spend before `answerQuestion`
+  // (`@bloombot/core`'s `answer.ts`) refuses to ask the model at all. `null`
+  // is "no cap configured", the same "no default value is invented"
+  // reasoning `courses.maxRequestsPerDay`'s own comment already applies —
+  // an organization with no cap set is never silently capped at some
+  // platform-wide number. Integer micros, the same unit
+  // `cost_ledger_entries.cost_micros` below uses, for the same reason (D-2's
+  // own "money as INTEGER micros" rule): comparing a float cap against a
+  // float running total is exactly how a ledger stops adding up.
+  spendingCapMicros: integer('spending_cap_micros'),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -752,6 +762,71 @@ export const courseInstructionRevisions = sqliteTable(
     index('course_instruction_revisions_course_id_idx').on(table.courseId),
     index('course_instruction_revisions_organization_id_idx').on(
       table.organizationId
+    ),
+  ]
+)
+
+// COST-1/COST-6 — a call's cost is either `measured` (the provider reported
+// token counts, `repos/cost-ledger.ts#recordCostLedgerEntry` priced them
+// against a configured rate) or `estimated` — either because the provider
+// reported no usage at all (`@bloombot/openai`'s own `extractUsage` returns
+// `undefined` rather than inventing zeros, MDL-5), or because the model it
+// billed for has no configured rate (`@bloombot/config`'s pricing table
+// falls back to a documented default rate rather than pricing it at zero).
+// One column, not a boolean, so a future third case (a provider that reports
+// *partial* usage, say) has somewhere to go without a schema rewrite.
+export const COST_MEASUREMENTS = ['measured', 'estimated'] as const
+export type CostMeasurement = (typeof COST_MEASUREMENTS)[number]
+
+// COST-1/COST-2 — one row per model call, attributed to the organization,
+// course and person it was made for. `organizationId`, `courseId` and
+// `personId` are all `.notNull()` — COST-2's "a call that cannot be
+// attributed is a defect, not a row with a null" is enforced structurally
+// here, the same "let the database refuse it" approach `discordServerBindings`
+// takes for TEN-3, rather than trusted to an application check alone:
+// nothing can construct a row with any of the three missing, not even a
+// future direct writer that skips `repos/cost-ledger.ts` entirely.
+// `inputTokens`/`outputTokens` are nullable, for a caller with genuinely
+// nothing to report — `0` would read as a fact ("this call used zero
+// tokens") rather than what it actually is. In practice
+// `@bloombot/core`'s own `computeCost` (finding 2 of the COST-1 rework)
+// fills both even when the provider reported no usage at all, from a
+// character-based estimate of the request and answer text, rather than
+// leaving them `null` while `costMicros` is priced from them anyway —
+// `measurement` (below), not nullness, is what tells a reader the count is
+// an estimate rather than what the provider actually reported. `costMicros`
+// is always set, integer micros (D-2), never a float — a ledger a float can
+// silently drift is not a ledger.
+export const costLedgerEntries = sqliteTable(
+  'cost_ledger_entries',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    costMicros: integer('cost_micros').notNull(),
+    measurement: text('measurement', { enum: COST_MEASUREMENTS }).notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // COST-3's cap check sums every row for an organization; COST-4's
+    // instructor read sums by course within it — both index the columns
+    // they filter by, the same "index what a real query filters by" pattern
+    // `messages`/`course_attachments` already follow above.
+    index('cost_ledger_entries_organization_id_idx').on(table.organizationId),
+    index('cost_ledger_entries_course_id_idx').on(table.courseId),
+    check(
+      'cost_ledger_entries_measurement_check',
+      sql`${table.measurement} in ('measured', 'estimated')`
     ),
   ]
 )

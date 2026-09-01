@@ -85,6 +85,18 @@ jobs:
       - name: Check the coverage floor over the data access layer (QA-4)
         run: npm run test:coverage
 
+      # QA-7: "at least one test drives a real browser against a real front
+      # end, a real API and a real database" — cheap-fix 8 of the WEB-1..6
+      # rework. Without this step CI never ran `npm run e2e` at all, so
+      # QA-7 held only when somebody remembered to run it locally.
+      # `--with-deps` installs the OS libraries the browser binary itself
+      # needs on the runner image, not merely the binary.
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the end-to-end test (QA-7)
+        run: npm run e2e
+
       - name: Check the board manifest is up to date with the SPEC
         # derive is deterministic: if re-running it changes manifest.yaml, the
         # SPEC or ROADMAP was edited without regenerating the manifest.

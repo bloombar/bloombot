@@ -1,0 +1,39 @@
+/**
+ * Vite config for the control panel (WEB-1): a static build, no server of
+ * its own. `apps/api` is the only thing that ever touches the database —
+ * in production nginx puts the built bundle and the API behind one origin
+ * (PLAT-4); here, `server.proxy`/`preview.proxy` reproduce that same-origin
+ * shape for `npm run dev` and for the Playwright harness (`e2e/`), which
+ * drives a real `vite preview` against a real `apps/api` process rather
+ * than a mock (QA-2's "end-to-end tests run the real API ... and a
+ * throwaway database").
+ *
+ * `API_PORT` is read from `process.env` at config-load time, the same
+ * variable `apps/api` itself listens on (`env.example`) — not a value this
+ * file invents, so pointing the proxy at a different API instance (the
+ * e2e harness's own throwaway one, `e2e/support/start-api.ts`) is a matter
+ * of setting the same environment variable before starting Vite, nothing
+ * this file needs to know about.
+ */
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+const apiPort = process.env['API_PORT'] ?? '3000'
+const apiOrigin = `http://127.0.0.1:${apiPort}`
+
+// Only the paths apps/api actually serves (server.ts) are proxied.
+// `/discord/callback` is deliberately absent: it is this app's own page
+// (Discord redirects the browser there — src/pages/DiscordCallback.tsx),
+// not a route apps/api answers.
+const proxy = {
+  '/health': apiOrigin,
+  '/auth': apiOrigin,
+  '/organizations': apiOrigin,
+}
+
+export default defineConfig({
+  plugins: [react()],
+  server: { proxy },
+  preview: { proxy },
+})

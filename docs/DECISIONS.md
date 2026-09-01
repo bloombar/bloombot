@@ -1315,3 +1315,115 @@ binding row, but that is FROM this schema's default behaviour, not a decision th
 day organization deletion is designed, it needs its own answer for what happens to a binding (and to every
 other tenant-scoped table) — plausibly "released the same way TEN-6's own removal already is," but that is a
 call for that slice to make with TEN-6's full text in front of it, not one this slice should anticipate.
+
+---
+
+## D-22 — `apps/web`/`e2e`: framework and build choices, how the e2e harness starts and stops its processes, and three things the panel needed that the API does not expose
+
+**Problem.** WEB-1..6 and QA-7 needed a real browser app and a real Playwright harness, neither of which
+existed before this slice, plus a set of build-tooling decisions (`tsc --build`'s composite-project rules,
+`vite build` vs. a dev-server transform, jsdom vs. node per test file) the rest of the monorepo's own
+conventions do not directly answer for a browser bundle. Writing the panel also surfaced three places where
+`apps/api`'s existing routes (deliberately out of this slice's scope — "do not change the API's routes") do
+not give the panel enough to do everything WEB-3/WEB-4's text describes.
+
+**Choice, React + Vite + TypeScript, no router and no state-management library.** `docs/ARCHITECTURE.md` and
+SPEC §12 (PLAT-1) already name "the React control panel"; Vite is the build tool the brief itself suggested
+and the one that makes a same-origin static bundle (WEB-1) cheapest to produce. The brief for this slice is
+explicit that the panel is "a shell, not a design system" — three screens (sign in, redeem a link, the signed-
+in shell) and two callback pages (`/sign-in/:token`, `/discord/callback`) do not need a router library;
+`App.tsx` switches on `window.location.pathname` directly and uses `history.replaceState` for the two
+one-time transitions (a redeemed link, a completed OAuth callback) that must not be reachable by pressing
+"back." State lives in component `useState`, refetched from `GET /auth/me` after anything that changes it
+(sign-in, sign-out) rather than a client-side store that could drift from what the session cookie actually
+proves (WEB-2).
+
+**Choice, `apps/web` is two composite tsc projects, not one.** `vite.config.ts` runs under Node at build/dev
+time and needs `@types/node`; the browser source needs the DOM lib and `types: ["vite/client"]` for
+`import.meta.env`, and mixing the two in one `tsconfig.json` would give one or the other the wrong ambient
+globals. `apps/web/tsconfig.json` is a solution file (`files: []`, two references), the same shape the repo
+root's own `tsconfig.json` already takes — `apps/web/tsconfig.app.json` for `src/`, `apps/web/tsconfig.node.json`
+for `vite.config.ts`. Both emit into `.tsbuild/` rather than `dist/`: `dist/` is `vite build`'s own output
+directory, and letting `tsc --build`'s declaration files land there risked one build's artifacts being mistaken
+for (or clobbered by) the other's, for a declaration output nothing in this repo ever imports the way another
+package imports, say, `packages/db`'s. The same reasoning splits `apps/web/tsconfig.tests.json` out of the root
+`tsconfig.tests.json`: this package's tests are `.tsx` and need the DOM lib and the JSX runtime, which every
+other package's plain-Node test suite must not inherit — the root project's `include` explicitly `exclude`s
+`apps/web/tests/**` and references the dedicated project instead of folding its settings into the shared one.
+
+**Choice, the `web` vitest project stays outside the coverage floor.** `apps/web` (WEB-1..6, QA-7) is added to
+`vitest.config.ts`'s `projects` array so its tests run under `npm test`, but not to `coverage.include` — the
+same call already made for `apps/bot` and `apps/api`, and for the same reason (that file's own comment): it is
+a thin translation layer (HTTP calls and JSX markup) around rules `packages/actions`/`packages/auth` already
+hold to the floor, and QA-4's own text warns that a uniform target over markup buys assertions about DOM
+structure at the cost of attention to logic. `tests/bundle.test.ts` (WEB-6) still enforces the one property
+that actually matters about the bundle's content, just not as a line/branch percentage.
+
+**Choice, the WEB-6 bundle test checks bundled *signatures*, not the bare import specifier.** The first version
+of `tests/bundle.test.ts` searched the built `dist/` for the literal string `"@bloombot/db"` and passed even
+after a scratch import of `@bloombot/db` was added to `apps/web/src/main.tsx` to check the test actually
+catches something — Rollup inlines a bundled module's source rather than leaving its specifier as a string to
+require at runtime, so the specifier itself does not survive being bundled. What does survive is
+runtime-significant string content *inside* that source: `better-sqlite3` (an `import`/`require` of
+`@bloombot/db`'s own native driver) and `discord_server_bindings` (a SQL table name literal in
+`packages/db/src/schema.ts`) both did, and the test now checks for those — verified the same way, by
+re-adding the scratch import, confirming the test fails, then removing it. `pino` (`@bloombot/logger`'s own
+dependency) covers that package the same way; `@bloombot/auth` needs no signature of its own because it
+depends on `@bloombot/db` (`eslint.config.js`'s own comment on why it is in `BROWSER_FORBIDDEN_PACKAGES` at
+all), so importing it trips the `@bloombot/db` signatures already in the list.
+
+**Choice, the e2e harness reuses `apps/api/src/server.ts#buildApp` directly, never `apps/api/src/index.ts`.**
+`src/index.ts`'s own `main()` builds a `LoggingEmailSender`, which — on purpose (its own module comment) —
+logs that mail was "sent" without ever logging the body, because a sign-in link is a bearer credential and
+`logs/*.log` is a protected path for exactly that reason. That is exactly right for a real deployment and
+useless for a test that needs to read the link back out, so `e2e/support/start-api.ts` calls `buildApp` with
+its own `FileEmailSender` (`e2e/support/file-email-sender.ts`) instead — the same factory
+`apps/api/tests/helpers/build-test-app.ts` already drives for the unit suite, so this needed no change to
+`apps/api` itself. `FileEmailSender` appends each "sent" mail as one JSON line to `e2e/tmp/mail.jsonl`
+(`.claude/hooks/guard-paths.sh`'s own comment already anticipates `e2e/tmp/` as a throwaway path); the
+Playwright spec, a separate process, polls that file rather than sharing memory with the API process.
+
+**Choice, fixed ports and a fixed database path, not dynamic allocation.** `e2e/support/env.ts` hardcodes
+`E2E_API_PORT=3919`, `E2E_WEB_PORT=5919` and `e2e/tmp/e2e.db`, chosen away from `env.example`'s own dev
+defaults (`3000`, `5173`) so this suite does not collide with a `npm run dev` already running locally. This
+slice runs one Playwright project at a time, not several in parallel, so a free-port search would solve a
+problem this harness does not have; `start-api.ts` deletes its own database (and the mail file) at the start
+of every run rather than reusing one across runs, so a prior run's sign-in tokens and sessions cannot leak
+into the next. `playwright.config.ts`'s `webServer` array starts and stops both processes around the whole
+run — `reuseExistingServer: false` always, so a stale process left over from a previous manual run is refused
+rather than silently reused (`http://127.0.0.1:5919 is already used` was hit, and fixed by killing the leftover
+process, while writing this harness). `vite preview`'s command explicitly passes `--host 127.0.0.1`: without
+it, its default host binding was observed not to answer on `127.0.0.1` promptly enough for Playwright's own
+readiness poll, which checks exactly that address.
+
+**What the panel needed that the API does not expose — three gaps, not fixed here (the brief: "do not change
+the API's routes ... stop and report").**
+
+1. **No route turns an organization id into a name.** `GET /auth/me` returns only `{ organizationId, role }`
+   per membership (D-20's own "who am I reports only what the session cookie itself already proved," which
+   explicitly left a richer profile/organization read to "whichever future slice gives it a real consumer").
+   `components/OrganizationSwitcher.tsx` therefore shows the organization's id, not a name — WEB-3's "shows
+   which one it is acting in" is satisfied literally, just not with a name a person would recognize at a
+   glance. A `GET /organizations/:organizationId` (or a name on `/auth/me`'s own membership entries) is the
+   natural fix, for whichever future slice gives it a consumer beyond this one.
+2. **No route lists an organization's Discord server bindings.** `packages/db/src/repos/discord-servers.ts#listDiscordServerBindingsForOrganization`
+   exists and is exercised by that package's own tests, but no `apps/api` route reaches it — only
+   `install/begin`, `install/callback` and the `discordServers.remove` action exist, none of which answer "what
+   is already installed." `components/InstallButton.tsx` can therefore only show "installed" for a server this
+   *same browser session* just finished installing (state kept in the parent, `pages/Shell.tsx`) — a page
+   reload, or a second device, sees no installed server at all even when one exists, which is a real gap in
+   WEB-4's "a server already installed shows as installed" rather than something this slice's UI chose not to
+   do. A `GET /organizations/:organizationId/discord-servers` route wrapping that existing repo function is
+   the natural fix.
+3. **The install callback's refusal is one outcome, not three.** WEB-4's text describes three outcomes —
+   bound, "refused because the account does not administer that server," and "refused because the server
+   belongs to somebody else — without saying who" — but TEN-5 and `apps/api/src/routes/discord-servers.ts`'s
+   own callback deliberately collapse every refusal reason (an expired state, a guild the caller does not
+   administer, a guild the bot was never added to, a server bound elsewhere) into the same `ActionRefusedError`
+   (`404`, byte-identical body, "indistinguishable in every case" per that file's own comment) — a security
+   choice this slice's brief also states directly (WEB-4's own "without saying who") and did not ask this
+   slice to weaken. `pages/DiscordCallback.tsx` therefore renders the one refusal message
+   `components/ErrorMessage.tsx` already renders for `action_refused` everywhere else in this app, rather than
+   inventing two more specific messages the API gives it no way to tell apart — WEB-5's "the panel adds no
+   interpretation the API did not give it" reads as the tie-breaker between the two requirements where they
+   pull in different directions.

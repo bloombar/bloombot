@@ -16,6 +16,7 @@
     { "path": "./packages/actions" },
     { "path": "./apps/bot" },
     { "path": "./apps/api" },
+    { "path": "./apps/web" },
     { "path": "./tsconfig.tests.json" }
   ]
 }

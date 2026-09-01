@@ -19,6 +19,17 @@ const BROWSER_FORBIDDEN_PACKAGES = [
   // credential-surface risk transitively — reachable through this one import
   // rather than the two direct ones the rule already blocks.
   '@bloombot/auth',
+  // @bloombot/discord-rest holds the Discord OAuth exchange
+  // (exchangeAuthorizationCode spends BOT_TOKEN/DISCORD_CLIENT_SECRET) — the
+  // one function whose entire job is spending a client secret. Named
+  // explicitly rather than left to fall out of @bloombot/db/@bloombot/auth
+  // above: it depends only on @bloombot/config, so nothing else in this list
+  // would have caught it.
+  '@bloombot/discord-rest',
+  // @bloombot/openai holds the OpenAI Responses API adapter (OPENAI_API_KEY)
+  // — the model package WEB-6 names by name, same reasoning as
+  // @bloombot/discord-rest above.
+  '@bloombot/openai',
 ]
 
 export default tseslint.config(

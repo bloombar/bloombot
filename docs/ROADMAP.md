@@ -85,7 +85,7 @@ authorization underneath routes that already exist means rewriting every route t
 
 Sign-in, the control panel shell, and the Discord installation flow end to end.
 
-**In scope:** TEN-4..6
+**In scope:** TEN-4..6, WEB-1..6, QA-7
 
 ## Phase 7 — Projects & course configuration
 

@@ -79,7 +79,7 @@ the monorepo scaffold phase 3 built before any process existed to connect at all
 The action layer lands with the API rather than after it. Retrofitting declared
 authorization underneath routes that already exist means rewriting every route twice.
 
-**In scope:** ACT-1..6, AUTH-1..4
+**In scope:** ACT-1..6, AUTH-1..4, API-1..6
 
 ## Phase 6 — Web shell & server registration
 

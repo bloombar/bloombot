@@ -214,6 +214,32 @@ describe('signInWithGoogle (AUTH-2)', () => {
     expect(testDb.db.select().from(schema.accounts).all()).toHaveLength(1)
   })
 
+  // Must-fix 2 of the API-1..6 rework: `redeemSignInLink` already rotates a
+  // returning sign-in's other sessions; `signInWithGoogle`'s `link` branch
+  // did not, so a stolen cookie survived the victim signing back in through
+  // Google. A successful Google sign-in is proof of control of the address,
+  // the same proof redeeming an emailed link is.
+  it('rotates the session when linking to an existing account: the old token stops validating', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('person@example.edu', testDb.db)
+    const existing = redeemSignInLink(token, testDb.db)
+    const oldToken = existing!.session.token
+    expect(validateSession(oldToken, testDb.db)).toBeDefined()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'person@example.edu' }),
+      testDb.db
+    )
+
+    expect(result?.account.id).toBe(existing?.account.id)
+    // The session from the earlier redemption no longer validates …
+    expect(validateSession(oldToken, testDb.db)).toBeUndefined()
+    // … but the new one from this Google sign-in does.
+    expect(validateSession(result!.session.token, testDb.db)).toMatchObject({
+      accountId: existing?.account.id,
+    })
+  })
+
   it('creates a new account when the email is verified but matches nobody', () => {
     testDb = createTestDatabase()
 
@@ -331,5 +357,55 @@ describe('requestSignInLink (AUTH-1)', () => {
     const token = sentLink.split('/sign-in/')[1]?.trim()
     expect(token).toBeDefined()
     expect(redeemSignInLink(token!, testDb.db)).toBeDefined()
+  })
+
+  // "Also worth doing" of the API-1..6 rework: `/auth/request-link`
+  // (`apps/api`) is unauthenticated and unthrottled, so without this a
+  // single address is an unbounded mail-send and row-insert. The response
+  // must stay silent either way — AUTH-1's own "always the same response
+  // whether or not the address has an account" — so this is proven by what
+  // was (not) written and sent, not by a different return value.
+  it('declines to issue a second token, and to send a second email, while an earlier one is still outstanding', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const deps = {
+      db: testDb.db,
+      emailSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await requestSignInLink('flooded@example.edu', deps)
+    await requestSignInLink('flooded@example.edu', deps)
+    await requestSignInLink('flooded@example.edu', deps)
+
+    expect(emailSender.sent).toHaveLength(1)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.signInTokens)
+        .all()
+        .filter((row) => row.email === 'flooded@example.edu')
+    ).toHaveLength(1)
+  })
+
+  it('issues a new token again once the earlier one has been redeemed', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const deps = {
+      db: testDb.db,
+      emailSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await requestSignInLink('returning-requester@example.edu', deps)
+    const firstLink = emailSender.sent[0]!.body
+    const firstToken = firstLink.split('/sign-in/')[1]!.trim()
+    redeemSignInLink(firstToken, testDb.db)
+
+    await requestSignInLink('returning-requester@example.edu', deps)
+
+    expect(emailSender.sent).toHaveLength(2)
   })
 })

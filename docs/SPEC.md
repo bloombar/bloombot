@@ -1076,3 +1076,45 @@ The bot exposes a health endpoint that reports whether the gateway is connected,
 supervisor can tell "running" from "connected". On shutdown it closes the gateway and the
 database rather than leaving the socket to time out, and it refuses to start on an
 environment that does not validate.
+
+### 23. HTTP API
+
+#### API-1 Routes carry, they do not decide
+
+A route validates nothing, authorizes nothing and writes nothing itself: it turns a request
+into an action dispatch and the result into a response. Every rule about who may do what
+therefore lives in one place, and a second surface — the MCP server, a future mobile
+client — reaches the same rules without a route to copy.
+
+#### API-2 The session is a cookie the browser cannot read
+
+A session token travels in an HttpOnly, Secure, SameSite cookie, scoped to the site, and is
+rotated when a sign-in succeeds. Nothing hands the token to JavaScript, so a cross-site
+script cannot read it, and signing out revokes the session rather than only clearing the
+cookie.
+
+#### API-3 A state-changing request must come from the site
+
+Every non-GET request is checked against its origin before it reaches an action, and one
+that does not match is refused without being dispatched. Cookies are sent by the browser
+whatever page asked for the request, so the origin check is what stands between a student's
+authenticated session and a form on somebody else's site.
+
+#### API-4 One place turns a failure into a status
+
+Typed errors from the action layer are mapped to HTTP statuses by a single middleware, and
+no route maps its own. A refusal is the same status and the same body whether the record is
+missing or belongs to another organization, so the API discloses no more than the action
+layer does.
+
+#### API-5 The API reaches Discord over REST, never the gateway
+
+The API process opens no gateway connection: that is the bot's alone. Anything the API needs
+from Discord it does over REST with the same token, so there is no second connection to
+coordinate and no session to lose.
+
+#### API-6 The process reports readiness honestly
+
+The API answers a health check with whether it can actually serve — that its configuration
+validated and its database is reachable — rather than merely that the process is running,
+and it shuts down by closing the server and the database rather than exiting under load.

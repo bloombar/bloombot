@@ -85,3 +85,33 @@ export function consumeSignInToken(
     .returning()
     .get()
 }
+
+/**
+ * Whether `email` currently has an unexpired, unused token outstanding.
+ *
+ * The "also worth doing" item of the API-1..6 rework: `/auth/request-link`
+ * is unauthenticated and unthrottled, so without this a single address is
+ * an unbounded mail-send and row-insert — `requestSignInLink`
+ * (`@bloombot/auth`'s `sign-in.ts`) calls this before issuing a new token,
+ * and silently declines to issue (and to send mail) a second one while an
+ * earlier one for the same address is still live. Keyed on email, like every
+ * other function in this file — see the module comment.
+ */
+export function hasActiveSignInToken(
+  email: string,
+  now: number,
+  db: Executor
+): boolean {
+  const row = db
+    .select({ id: signInTokens.id })
+    .from(signInTokens)
+    .where(
+      and(
+        eq(signInTokens.email, email.toLowerCase()),
+        isNull(signInTokens.usedAt),
+        gt(signInTokens.expiresAt, now)
+      )
+    )
+    .get()
+  return row !== undefined
+}

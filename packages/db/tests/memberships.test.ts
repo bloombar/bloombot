@@ -81,6 +81,32 @@ describe('memberships repo', () => {
     })
   })
 
+  // Must-fix 9 of the API-1..6 rework: `apps/api`'s `GET /auth/me` needs
+  // every organization a signed-in caller belongs to, not just one it
+  // already knows the id of — this is the account-keyed counterpart to
+  // `listMembershipsForOrganization` above.
+  it('lists every membership an account holds, across every organization it belongs to', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB, accountInA } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgB, accountInA.id, 'assistant', testDb.db)
+
+    const rows = memberships.listMembershipsForAccount(accountInA.id, testDb.db)
+
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.organizationId).sort()).toEqual(
+      [orgA, orgB].sort()
+    )
+  })
+
+  it('lists nothing for an account with no memberships at all', () => {
+    testDb = createTestDatabase()
+
+    expect(
+      memberships.listMembershipsForAccount(randomUUID(), testDb.db)
+    ).toHaveLength(0)
+  })
+
   it('updates a role scoped to its organization', () => {
     testDb = createTestDatabase()
     const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)

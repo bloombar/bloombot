@@ -23,6 +23,7 @@
     { "path": "./packages/openai" },
     { "path": "./packages/discord" },
     { "path": "./packages/actions" },
-    { "path": "./apps/bot" }
+    { "path": "./apps/bot" },
+    { "path": "./apps/api" }
   ]
 }

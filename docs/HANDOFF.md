@@ -16,37 +16,47 @@ sequence is `docs/ROADMAP.md` phases 3–15, and every judgment call is in `docs
 
 ## Done
 
-| PR   | what                                                                                                                                |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| #74  | supervisor/developer agent workflow, tested `PreToolUse` guard, hooks, skills, `CONTRIBUTING.md`, `PROJECT_BOARD.md`, `DECISIONS.md` |
-| #76  | SPEC §12–17 (31 requirements across PLAT/ACT/AUTH/TEN/PROJ/QA), roadmap phases 3–15, board config for 15 phases and 14 families      |
-| #108 | Phase 3 slice 1 — npm workspaces, `packages/config`, `packages/logger`, `packages/schemas`, TS project references, vitest, CI gates  |
-| #109 | Phase 3 slice 2 — `packages/db`: SQLite engine, migrations, and the tenant-scoped repos for organizations, accounts, memberships and Discord-server bindings (TEN-1..3) |
+Phases 3 and 4 are complete on `feat/PLAT-1-multi-surface-platform`.
 
-The board issues for the platform requirements now exist (#77–#107): PLAT-1..5 are #77–#81, QA-1..6
-#82–#87, ACT-1..6 #88–#93, AUTH-1..4 #94–#97, TEN-1..6 #98–#103, PROJ-1..4 #104–#107. `npm run board:sync`
-had never been run since the SPEC merged, so there was nothing for a PR to close.
+| PR   | what                                                                                                     |
+| ---- | -------------------------------------------------------------------------------------------------------- |
+| #74  | supervisor/developer agent workflow, tested `PreToolUse` guard, hooks, skills, contributing/board docs    |
+| #76  | SPEC §12–17, roadmap phases 3–15, board config                                                            |
+| #108 | Phase 3 — npm workspaces, `packages/config`, `packages/logger`, `packages/schemas`, TS refs, vitest, CI   |
+| #109 | Phase 3 — `packages/db`: engine, migrations, organizations/accounts/memberships/bindings (TEN-1..3)       |
+| #110 | Phase 3 — projects, courses, and the PROJ-3 name-collision rule (PROJ-1..3)                               |
+| #112 | BOARD-4 — `npm run board:status`, because `Closes #N` never fires on a merge into a non-default branch    |
+| #119 | Phase 3 — people, identities, conversations, transcripts, usage counters (PPL-1..3, CONV-1..3)            |
+| #124 | Phase 3 — `packages/legacy-import` (MIG-1..4), reading a copy and refusing the live database              |
+| #131 | Phase 4 — `packages/core`, the answering pipeline behind a model port (CORE-1..6)                         |
+| #139 | Phase 4 — `packages/openai`, the only package that knows the vendor (MDL-1..7)                            |
+| #147 | Phase 4 — `packages/discord` and `apps/bot`, the first process (SURF-1..7, PLAT-3/4)                      |
 
-`master` was merged into this branch on 2026-08-31 (D-6's rule about not letting the promotion become a
-conflict resolution). Its roadmap had collapsed to two phases and its `scripts/board/config.mjs` to two
-milestones — both predate the fifteen-phase plan, so the conflict was resolved in favour of this branch's
-structure, keeping master's newer status facts.
+`docs/ARCHITECTURE.md` describes the shape all of this follows and which boundaries are machine-enforced.
 
 ## In flight
 
-Nothing. Phase 3 slice 3 is the next thing to start.
+Nothing. **Phase 5 — API, action layer & authentication (ACT-1..6, AUTH-1..4) — is next**, and the roadmap
+puts the action layer with the API deliberately: retrofitting declared authorization underneath routes that
+already exist means writing every route twice.
 
-## Queued follow-ups
+## Board
 
-- **The PLAT-2 boundary lint rule now covers `packages/schemas` as well as `apps/web`** — that gap was
-  found in review of #108 and closed. It still has no regression test of its own (a vitest project outside
-  `packages/*` running `eslint --stdin`), which is the QA-5 failure mode.
-- Phase 3 slice 3: projects and courses — the schema and org-scoped repos behind PROJ-1/2/3. Move those
-  ids into phase 3 in the ROADMAP when the slice lands, the way TEN-1..3 were.
-- Phase 3 slice 4: people, conversations and messages — the tables the conversation core needs.
-- Phase 3 slice 5: `legacy:import`, bringing `bot_config.yml` and a **copy** of `data/data.db` in as
-  tenant 1. Never the live file.
-- Phases 4 and 8–15 carry roadmap narrative but no requirement ids yet; their SPEC sections land with them.
+Every requirement through phase 4 is closed and Done. Cards do **not** move on merge — `Closes #N` only fires
+for a merge into the default branch, and every slice merges into the integration branch — so each slice runs
+`npm run board:status -- "In review" <ids>` at PR time and `-- Done <ids>` after the merge, and commits the
+manifest change. See BOARD-4 and `docs/PROJECT_BOARD.md`.
+
+## Cutover is not done and is not automatic
+
+The Python bot still serves students. Nothing in this branch touches `ecosystem.config.cjs`, the deploy
+script, the CI deploy job or any `.env`. Promotion to `master` triggers a production deploy (D-6), so it is
+the operator's decision. Before it can sensibly happen: the legacy import needs a rehearsal against a
+**copy** of the live database, and `apps/bot` needs a real Discord test server.
+
+Known divergences from the Python bot, all deliberate and recorded: the day is one request shorter (D-15),
+the bot replies in place rather than posting to the channel, an over-limit request is refused out loud
+rather than silently, and long answers are split (D-17).
 
 ## Working notes
 

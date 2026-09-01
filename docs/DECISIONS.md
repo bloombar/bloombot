@@ -863,3 +863,94 @@ readability regression, not a correctness one. `apps/bot`'s own shutdown (findin
 for in-flight message handlers to settle before closing the gateway and the database, but only up to a bounded
 timeout — a handler wedged past it is abandoned mid-answer on shutdown, the same trade-off every bounded drain
 makes between closing promptly and closing completely.
+
+---
+
+## D-18 — `packages/actions`: a required `policy` field, why a conflict names itself but a refusal never does, and where metering lands
+
+**Problem.** ACT-2 makes three specific demands: "an action with no declaration does not compile," a policy
+that "resolves and returns the entity it authorized" so an action can never reach a record it was not handed,
+and (ACT-2's second paragraph) that "authorization runs outside the usage attribution context." Separately,
+ACT-3 requires that a not-found and a not-yours refusal be the _same_ error, while this slice's own ported
+actions (`courses.save`) need to surface `packages/db`'s PROJ-3 collisions, which _do_ name what they collided
+with (D-12) — the same pipeline has to treat these two "the write did not happen" outcomes differently on
+purpose, not accidentally reuse one error type for both. And ACT-1 declares a metering hook this slice has
+nothing real to plug into it.
+
+**Choice, "does not compile" as a required property, not a runtime check.** `Action<Name, Input, Entity,
+Output>` (`types.ts`) declares `policy` as an ordinary required field, the same way every other field on the
+interface is required. An object literal assigned to (or passed as an argument typed) `Action` that omits
+`policy` fails TypeScript's own missing-property check at the call site — before `ActionRegistry#register`
+(`registry.ts`) or `dispatch.ts` ever sees it, so there is no runtime path that reaches an unauthorized action
+at all. This is not a novel mechanism; it is what a required property already does, and it is enough to
+satisfy ACT-2's literal text without inventing a compile-time framework this repo has no other example of.
+
+**What this does not catch.** TypeScript's structural typing means a value assembled through `any`, a wide
+enough intersection, or a cast can still slip past a required-property check — `policy: undefined as any`
+compiles. Nothing in this package (or TypeScript itself) closes that gap; the brief for this slice asks that
+_declaring_ an action without a policy fail to compile, which this does, not that every possible way to smuggle
+one past the type checker is impossible. A reviewer reading a diff that adds `as any` or `as unknown as Action`
+near a new action is the actual backstop, the same as it is for every other type-level guarantee in this
+codebase (`packages/core/src/answer.ts`'s own discriminated result can be similarly bypassed by a caller willing
+to lie to the compiler).
+
+**Choice, `ActionRefusedError` carries nothing; `ActionConflictError` carries the whole conflict.** The two
+errors `dispatch.ts` and the ported actions raise for "the write did not happen" are asymmetric on purpose.
+`ActionRefusedError` (ACT-3) is thrown for a record that does not exist, or exists in another organization —
+and an organization boundary is exactly the boundary a message must never cross, so the error is a fixed
+sentence with no detail about the record at all: probing ids for "not found" versus "not yours" learns
+nothing either way. `ActionConflictError` is thrown when `packages/db`'s own repos refuse a write with
+`{ ok: false, conflict }` (PROJ-3, TEN-5 — D-12) — a name, a project, a course, already named by the repo
+itself. That is safe to pass through because PROJ-3 and TEN-5 are both scoped to the _caller's own_
+organization (`repos/courses.ts`'s `findCourseNameConflict`, `loadOwnedProject`): the record named in a
+conflict is always one the caller could already find by listing their own courses and projects, so naming it
+again in the error saves a round trip rather than leaking anything. The asymmetry is about whose data a
+message can expose, not a looser editorial bar for "how much detail is too much" — the same record, reached
+through a policy refusal on a _different_ organization's data, still gets `ActionRefusedError`'s empty
+sentence regardless of what it collided with.
+
+**Choice, the meter hook stays unfilled.** `Action.meter` (`types.ts`) and `MeterContext` exist, and
+`dispatch.ts` calls a declared meter after authorization and before execution (ACT-4's ordering), but none of
+the six ported actions supplies one — this slice has no cost ledger to attribute against, and ACT-2's own text
+("authorization runs outside the usage attribution context") is about _when_ metering may run relative to
+authorization, not a license to build the ledger itself here. Tests exercise the pipeline's ordering with a
+recording no-op meter (`tests/dispatch-order.test.ts`) rather than a real one. The real implementation belongs
+to whichever future slice adds the cost ledger — likely `packages/jobs` or the worker, since the same "an
+unauthorized call must not be metered" ordering this slice already enforces is exactly what a paid action (a
+model call `answer.ts` already meters informally via its own `usage` counters, D-15) would need before it can
+be billed per organization rather than per platform.
+
+**Limits.** `ActionRegistry` is a plain class rather than a validated, versioned catalog — two actions
+registered under the same name throw at registration time, which only surfaces if something actually calls
+`register` for both (a test does, for the six ported actions; nothing enforces that every future action's
+registration is exercised at all). The JSON-Schema catalog (ACT-6, `z.toJSONSchema`) is derived correctly for
+this slice's own schemas but was only checked against the subset of JSON Schema those schemas actually produce
+(object, array, string, number/integer, boolean, null, `enum`, `anyOf`, `minLength`) — a future action with a
+schema shape outside that subset (a `oneOf`, a `pattern`, a recursive type) is untested territory for the
+catalog's own correctness, though `z.toJSONSchema` itself is responsible for producing valid output regardless.
+
+**Finding 9 (rework pass) — ACT-2's "an action cannot reach a record without having been given one that was
+already checked" is a convention today, not a structural guarantee.** `ExecuteContext` (`types.ts`) hands
+`execute` a live `Database`, and `packages/db`'s repos are ordinary importable functions scoped only by
+whatever `organizationId` they are called with — so nothing stops an `execute` from importing `getCourse` and
+calling it with an id, or an `organizationId`, `entity` never resolved. The six ported actions simply do not:
+every `execute` in `src/actions/` reaches a record through `entity`, on purpose, but that is a fact about this
+slice's own code, not one TypeScript or `dispatch.ts` enforces about the next action written. What would make
+it real: dropping `db` from `ExecuteContext` entirely, and replacing it with a narrowed set of
+already-org-scoped closures derived from the entity the policy just resolved (`entity.saveCategories`, say,
+rather than `db` plus `courses.updateCourse`), so that a call reaching an arbitrary organization id is not
+expressible in `execute`'s own signature — not merely avoided by convention. That is a larger reshaping of
+`Action`, `Policy`, and every ported action's `execute` than this rework pass's brief calls for; it is recorded
+here as the design question whichever slice builds the API (the first caller with untrusted callers on the
+other end of `dispatch`) has to settle, not attempted in this one.
+
+**Finding 10 (rework pass) — a descriptor names the resource an action's policy resolves, not necessarily the
+one its `execute` writes.** `courses.save`'s descriptor is `{ resource: 'project', access: 'write' }` on both
+the create and the update path — accurate to what the policy resolves (a project, always; a course too, on
+update), but on update, `execute` writes a _course_, not the project. Nothing enforces descriptors yet (see
+`policy.ts`'s own comment: they are read by `registry.ts`'s catalog, ACT-6, and pinned by the access audit
+index, ACT-5, but not themselves checked by `dispatch.ts`), so this has no effect today. The day something
+does enforce them — an assistant's own permission grant checked against a descriptor before `dispatch` is
+called, say — an actor permitted only to write projects would be permitted to rewrite courses through this one
+action, which is worth a reviewer's attention rather than a surprise. `tests/access-audit.test.ts`'s
+`EXPECTED_DESCRIPTORS` comment on `courses.save` says so; this is the same note kept alongside it here.

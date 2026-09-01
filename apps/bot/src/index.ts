@@ -31,7 +31,7 @@ import {
   type OmitPartialGroupDMChannel,
 } from 'discord.js'
 
-import { CONFIG, getModelPricingTable } from '@bloombot/config'
+import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import {
   closeDatabase,
   openDatabase,
@@ -113,6 +113,10 @@ async function onMessageCreate(
 }
 
 async function main(): Promise<void> {
+  // CFG-5: credentials live in `.env`; load it before anything reads CONFIG,
+  // which validates the whole environment on first access.
+  loadDotEnv()
+
   // SURF-7 — refuses to start on an environment that does not validate:
   // touching `CONFIG` forces the whole zod schema (LOGS_DIR, DATABASE_PATH,
   // BOT_HEALTH_PORT, ...) to validate before anything else runs, and the two

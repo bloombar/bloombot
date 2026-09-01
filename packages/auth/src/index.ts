@@ -45,6 +45,14 @@ export {
 export { isPlatformAdministrator } from './admin.js'
 
 export {
+  beginDiscordInstall,
+  consumeDiscordInstallState,
+  DEFAULT_INSTALL_STATE_TTL_MS,
+  type BeginDiscordInstall,
+  type ConsumedDiscordInstall,
+} from './discord-install.js'
+
+export {
   type EmailSender,
   type RecordedEmail,
   RecordingEmailSender,

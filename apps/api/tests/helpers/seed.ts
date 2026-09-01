@@ -63,6 +63,38 @@ export function seedSignedInCaller(
   }
 }
 
+/**
+ * A second, distinct account — with its own session — in `organizationId`,
+ * alongside whatever caller `seedSignedInCaller` already returned for it.
+ * For a test proving a guarantee scoped to *which account* acted, not
+ * merely which organization it belongs to (finding 1 of the TEN-4..6
+ * rework): two members of the same organization must not be
+ * interchangeable just because a membership check alone would pass for
+ * either of them.
+ */
+export function seedSecondCallerInOrganization(
+  db: Database,
+  organizationId: string
+): SignedInCaller {
+  const account = accounts.createAccount(
+    organizationId,
+    {
+      email: `${randomUUID()}@example.edu`,
+      displayName: 'Second Caller',
+      role: 'assistant',
+    },
+    db
+  )
+  const session = createSession(account.id, db)
+
+  return {
+    organizationId,
+    accountId: account.id,
+    token: session.token,
+    cookieHeader: `${SESSION_COOKIE_NAME}=${session.token}`,
+  }
+}
+
 /** A second organization with no membership for `caller` — for proving TEN-5's "cross-tenant access is indistinguishable from absence." */
 export function seedOtherOrganization(db: Database): string {
   const organizationId = randomUUID()

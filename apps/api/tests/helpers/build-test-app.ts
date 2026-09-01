@@ -15,6 +15,7 @@ import type { Database } from '@bloombot/db'
 import type { Express } from 'express'
 
 import { buildApp, type ServerDependencies } from '../../src/server.js'
+import { createFakeDiscordRestClient } from './fake-discord-rest-client.js'
 import { createFakeLogger } from './fake-logger.js'
 
 /** The origin every origin-check test treats as "this site" — never a real host, since nothing here reaches the network. */
@@ -43,6 +44,17 @@ export function buildTestApp(
     emailSender: new RecordingEmailSender(),
     buildSignInLink: (token) => `${TEST_PUBLIC_APP_URL}/sign-in/${token}`,
     googleVerifier: createFakeGoogleVerifier(),
+    // TEN-4 — a fake `DiscordRestClient` by default (no network); a test
+    // that needs a particular guild list or exchange result overrides this
+    // directly with its own `createFakeDiscordRestClient(...)` call.
+    discordRestClient: createFakeDiscordRestClient(),
+    discordClientId: 'test-discord-client-id',
+    discordBotToken: 'test-discord-bot-token',
+    discordRedirectUri: `${TEST_PUBLIC_APP_URL}/discord/callback`,
+    // Never `CONFIG.DISCORD_OAUTH_BASE`'s real default — this package's own
+    // test suite never sets `process.env`'s Discord/`PUBLIC_APP_URL`
+    // variables, by design (`routes/discord-servers.ts`'s own doc comment).
+    discordOauthBase: 'https://discord.test/oauth2',
     ...overrides,
   })
 }

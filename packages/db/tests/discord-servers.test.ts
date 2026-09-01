@@ -379,6 +379,73 @@ describe('discord-servers repo', () => {
     ).toMatchObject({ organizationId: orgA })
   })
 
+  // Backs `@bloombot/actions`' `discordServers.remove` policy — unlike
+  // `resolveDiscordServerBinding` above, this one is reached with an
+  // organization already known.
+  describe('getActiveDiscordServerBinding', () => {
+    it("resolves an active binding when it belongs to the caller's organization", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '121212121212121212'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      expect(
+        discordServers.getActiveDiscordServerBinding(orgA, serverId, testDb.db)
+      ).toMatchObject({ serverId, organizationId: orgA })
+    })
+
+    // TEN-5: a binding belonging to a different organization resolves to
+    // `undefined`, the same as one that never existed.
+    it("resolves to undefined for another organization's binding", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, installerA } =
+        seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '131313131313131313'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      expect(
+        discordServers.getActiveDiscordServerBinding(orgB, serverId, testDb.db)
+      ).toBeUndefined()
+    })
+
+    it('resolves to undefined for a removed binding, even for the organization that held it', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '141414141414141414'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+
+      expect(
+        discordServers.getActiveDiscordServerBinding(orgA, serverId, testDb.db)
+      ).toBeUndefined()
+    })
+
+    it('resolves to undefined for a snowflake that was never bound', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizationsWithInstallers(testDb)
+
+      expect(
+        discordServers.getActiveDiscordServerBinding(
+          orgA,
+          'no-such-server',
+          testDb.db
+        )
+      ).toBeUndefined()
+    })
+  })
+
   it('lists only the bindings belonging to the given organization', () => {
     testDb = createTestDatabase()
     const { orgA, orgB, installerA, installerB } =

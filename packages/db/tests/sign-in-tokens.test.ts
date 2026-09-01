@@ -122,4 +122,98 @@ describe('sign-in-tokens repo (AUTH-1)', () => {
 
     expect(row.email).toBe('mixed.case@example.edu')
   })
+
+  // "Also worth doing" of the API-1..6 rework: the mailbox-flooding guard
+  // `@bloombot/auth`'s `requestSignInLink` checks before issuing a second
+  // token for the same address.
+  describe('hasActiveSignInToken', () => {
+    it('is false when no token has ever been issued for the address', () => {
+      testDb = createTestDatabase()
+      expect(
+        signInTokens.hasActiveSignInToken(
+          'nobody@example.edu',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(false)
+    })
+
+    it('is true while an unexpired, unused token exists', () => {
+      testDb = createTestDatabase()
+      signInTokens.createSignInToken(
+        {
+          email: 'student@example.edu',
+          tokenHash: 'hash-active',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+
+      expect(
+        signInTokens.hasActiveSignInToken(
+          'student@example.edu',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(true)
+    })
+
+    it('is case-insensitive on the address, the same way the rest of this repo is', () => {
+      testDb = createTestDatabase()
+      signInTokens.createSignInToken(
+        {
+          email: 'Student@Example.edu',
+          tokenHash: 'hash-active',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+
+      expect(
+        signInTokens.hasActiveSignInToken(
+          'student@EXAMPLE.edu',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(true)
+    })
+
+    it('is false once the outstanding token has been consumed', () => {
+      testDb = createTestDatabase()
+      signInTokens.createSignInToken(
+        {
+          email: 'student@example.edu',
+          tokenHash: 'hash-consumed',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+      signInTokens.consumeSignInToken('hash-consumed', Date.now(), testDb.db)
+
+      expect(
+        signInTokens.hasActiveSignInToken(
+          'student@example.edu',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(false)
+    })
+
+    it('is false once the outstanding token has expired', () => {
+      testDb = createTestDatabase()
+      const now = Date.now()
+      signInTokens.createSignInToken(
+        {
+          email: 'student@example.edu',
+          tokenHash: 'hash-expired',
+          expiresAt: now - 1,
+        },
+        testDb.db
+      )
+
+      expect(
+        signInTokens.hasActiveSignInToken('student@example.edu', now, testDb.db)
+      ).toBe(false)
+    })
+  })
 })

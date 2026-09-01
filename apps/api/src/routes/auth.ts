@@ -20,7 +20,7 @@ import {
   type EmailSender,
   type GoogleIdTokenVerifier,
 } from '@bloombot/auth'
-import type { Database } from '@bloombot/db'
+import { memberships, type Database } from '@bloombot/db'
 
 import { clearSessionCookie, setSessionCookie } from '../middleware/session.js'
 
@@ -33,7 +33,14 @@ export interface AuthRouterDependencies {
   googleVerifier: GoogleIdTokenVerifier
 }
 
-const requestLinkInputSchema = z.object({ email: z.string().min(1) })
+// Must-fix 3 of the API-1..6 rework: `z.string().min(1)` let a syntactically
+// invalid address (a typo, not merely an empty string) reach
+// `issueSignInToken`, which validates with its own `z.email()` and throws a
+// `ZodError` — a value with no `code`, so `middleware/errors.ts` treated it
+// as unexpected and answered `500`. `z.email()` here catches the same
+// address at the route boundary instead, where a validation failure is
+// already an ordinary `400`.
+const requestLinkInputSchema = z.object({ email: z.email() })
 const redeemInputSchema = z.object({ token: z.string().min(1) })
 const googleInputSchema = z.object({ idToken: z.string().min(1) })
 
@@ -44,7 +51,12 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
   router.post('/request-link', (req, res, next) => {
     const parsed = requestLinkInputSchema.safeParse(req.body)
     if (!parsed.success) {
-      res.status(400).json({ error: 'invalid_request' })
+      // Field errors, the way `middleware/errors.ts` reports every other
+      // input-validation failure (`action_input_invalid`'s own `issues`
+      // array) — must-fix 3 of the API-1..6 rework.
+      res
+        .status(400)
+        .json({ error: 'invalid_request', issues: parsed.error.issues })
       return
     }
     requestSignInLink(parsed.data.email, {
@@ -112,13 +124,39 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
     }
   })
 
-  /** "Who am I" — reports exactly what the session cookie already proved (`middleware/session.ts`), nothing looked up beyond it. `{ account: null }` for an anonymous or dead session; never an error, since having no session is not a failure. */
+  /**
+   * "Who am I" — reports what the session cookie already proved
+   * (`middleware/session.ts`), plus the caller's own memberships. `{
+   * account: null }` for an anonymous or dead session; never an error,
+   * since having no session is not a failure.
+   *
+   * Must-fix 9 of the API-1..6 rework: every action URL is
+   * `POST /organizations/:organizationId/actions/:name`
+   * (`routes/actions.ts`) — without the memberships below, a signed-in web
+   * client had no way to discover which organization id to put there at
+   * all. `memberships.listMembershipsForAccount` is organization-independent
+   * for the same documented reason `accounts.getAccountByEmail` is: an
+   * account exists across organizations, so nothing here can be scoped to
+   * one until this call names it.
+   */
   router.get('/me', (req, res) => {
     if (!req.session) {
       res.status(200).json({ account: null })
       return
     }
-    res.status(200).json({ account: { id: req.session.accountId } })
+    const accountMemberships = memberships.listMembershipsForAccount(
+      req.session.accountId,
+      deps.db
+    )
+    res.status(200).json({
+      account: {
+        id: req.session.accountId,
+        memberships: accountMemberships.map((membership) => ({
+          organizationId: membership.organizationId,
+          role: membership.role,
+        })),
+      },
+    })
   })
 
   return router

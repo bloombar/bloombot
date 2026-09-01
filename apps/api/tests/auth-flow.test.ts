@@ -8,10 +8,16 @@
  */
 
 import { RecordingEmailSender, validateSession } from '@bloombot/auth'
+import { accounts } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
-import { buildTestApp, TEST_PUBLIC_APP_URL } from './helpers/build-test-app.js'
+import {
+  buildTestApp,
+  createFakeGoogleVerifier,
+  TEST_PUBLIC_APP_URL,
+} from './helpers/build-test-app.js'
+import { seedSignedInCaller } from './helpers/seed.js'
 import { SESSION_COOKIE_NAME } from '../src/middleware/session.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -69,12 +75,23 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
     const sessionToken = sessionCookieValue(setCookie)!
     const cookieHeader = `${SESSION_COOKIE_NAME}=${sessionToken}`
 
-    // 3. "Who am I" — signed in.
+    // 3. "Who am I" — signed in, and (must-fix 9 of the API-1..6 rework)
+    //    carrying the organization id every action URL needs
+    //    (`POST /organizations/:organizationId/actions/:name`).
     const me = await request(app).get('/auth/me').set('Cookie', cookieHeader)
     expect(me.status).toBe(200)
-    expect(
-      (me.body as { account: { id: string } | null }).account
-    ).not.toBeNull()
+    const meAccount = (
+      me.body as {
+        account: {
+          id: string
+          memberships: { organizationId: string; role: string }[]
+        } | null
+      }
+    ).account
+    expect(meAccount).not.toBeNull()
+    expect(meAccount!.memberships).toHaveLength(1)
+    expect(meAccount!.memberships[0]).toMatchObject({ role: 'owner' })
+    expect(meAccount!.memberships[0]!.organizationId).toBeTruthy()
 
     // 4. Sign out — revokes server-side, not merely clears the cookie.
     const signOut = await request(app)
@@ -126,5 +143,167 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
     expect(validateSession(firstToken, testDb.db)).toBeUndefined()
     // The second is the one now live.
     expect(validateSession(secondToken, testDb.db)).toBeDefined()
+  })
+})
+
+// Must-fix 2 of the API-1..6 rework: `/auth/google` had no test at all — the
+// default fake verifier (`build-test-app.ts`) always returns `ok: false`, so
+// the success path, the cookie attributes and the 401 path were all
+// unexercised. Every test below supplies its own verifier so the success
+// path is actually reached.
+describe('POST /auth/google (AUTH-2, API-2)', () => {
+  it('signs in with a verified identity: 200, a full-attribute session cookie, and "who am I" reflects it', async () => {
+    testDb = createTestDatabase()
+    const app = buildTestApp(testDb.db, {
+      googleVerifier: createFakeGoogleVerifier({
+        ok: true,
+        identity: {
+          subject: 'google-subject-1',
+          email: 'instructor@example.edu',
+          emailVerified: true,
+        },
+      }),
+    })
+
+    const response = await request(app)
+      .post('/auth/google')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ idToken: 'fake-id-token' })
+
+    expect(response.status).toBe(200)
+    expect((response.body as { accountId: string }).accountId).toBeTruthy()
+
+    const setCookie = response.headers['set-cookie'] as unknown as string[]
+    const cookieLine = setCookie.find((header) =>
+      header.startsWith(`${SESSION_COOKIE_NAME}=`)
+    )!
+    expect(cookieLine).toContain('HttpOnly')
+    expect(cookieLine).toContain('Secure')
+    expect(cookieLine).toContain('SameSite=Lax')
+    expect(cookieLine).toContain('Expires=')
+    expect(cookieLine).toContain('Path=/')
+
+    const cookieHeader = `${SESSION_COOKIE_NAME}=${sessionCookieValue(setCookie)}`
+    const me = await request(app).get('/auth/me').set('Cookie', cookieHeader)
+    expect((me.body as { account: { id: string } | null }).account?.id).toBe(
+      (response.body as { accountId: string }).accountId
+    )
+  })
+
+  it('rotates the session on a second Google sign-in: the old token stops validating (must-fix 2)', async () => {
+    testDb = createTestDatabase()
+    const identity = {
+      subject: 'google-subject-2',
+      email: 'returning-google@example.edu',
+      emailVerified: true,
+    }
+    const app = buildTestApp(testDb.db, {
+      googleVerifier: createFakeGoogleVerifier({ ok: true, identity }),
+    })
+
+    const first = await request(app)
+      .post('/auth/google')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ idToken: 'fake-id-token' })
+    const firstToken = sessionCookieValue(
+      first.headers['set-cookie'] as unknown as string[]
+    )!
+    expect(validateSession(firstToken, testDb.db)).toBeDefined()
+
+    const second = await request(app)
+      .post('/auth/google')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ idToken: 'fake-id-token' })
+    const secondToken = sessionCookieValue(
+      second.headers['set-cookie'] as unknown as string[]
+    )!
+
+    // The token an attacker might have captured from the first sign-in no
+    // longer validates — the whole point of rotating on sign-in.
+    expect(validateSession(firstToken, testDb.db)).toBeUndefined()
+    expect(validateSession(secondToken, testDb.db)).toBeDefined()
+  })
+
+  it('refuses with 401 when the verifier rejects the token', async () => {
+    testDb = createTestDatabase()
+    // `createFakeGoogleVerifier()` with no argument defaults to `ok: false`.
+    const app = buildTestApp(testDb.db, {
+      googleVerifier: createFakeGoogleVerifier(),
+    })
+
+    const response = await request(app)
+      .post('/auth/google')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ idToken: 'not-a-real-token' })
+
+    expect(response.status).toBe(401)
+    expect(response.body).toEqual({ error: 'invalid_token' })
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+})
+
+// Must-fix 3 of the API-1..6 rework: `z.string().min(1)` let a mistyped
+// address reach `issueSignInToken`, which threw a `ZodError` — a value with
+// no `code` — and `middleware/errors.ts` answered `500`, not a `400`.
+describe('POST /auth/request-link — malformed address (AUTH-1)', () => {
+  it('is a 400 carrying field errors, not a 500', async () => {
+    testDb = createTestDatabase()
+    const app = buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'not-an-email' })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ error: 'invalid_request' })
+    expect(Array.isArray((response.body as { issues: unknown[] }).issues)).toBe(
+      true
+    )
+    expect(
+      (response.body as { issues: unknown[] }).issues.length
+    ).toBeGreaterThan(0)
+  })
+})
+
+// Cheap-fix 8 of the API-1..6 rework: `packages/db`'s own `sessions.test.ts`
+// already proves `validateSession` refuses a disabled account's session —
+// this is the same property, but through the HTTP surface: nothing before
+// this asserted that `sessionMiddleware` (which every route reads
+// `req.session` from) actually carries that refusal all the way up to a
+// response, rather than, say, only being true of the raw repo call.
+describe('a disabled account (AUTH-3, API-2)', () => {
+  it('its session cookie no longer authenticates, over HTTP', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = buildTestApp(testDb.db)
+
+    // Confirm the session works before disabling, so the refusal below is
+    // actually caused by disabling the account, not some other mistake.
+    const before = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(
+      (before.body as { account: { id: string } | null }).account?.id
+    ).toBe(caller.accountId)
+
+    accounts.disableAccount(caller.accountId, testDb.db)
+
+    const after = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(after.status).toBe(200)
+    expect(
+      (after.body as { account: { id: string } | null }).account
+    ).toBeNull()
+
+    // And an authenticated action route treats it as anonymous too — the
+    // same 401 API-1 gives a request with no cookie at all.
+    const dispatch = await request(app)
+      .post(`/organizations/${caller.organizationId}/actions/projects.create`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ name: 'Should Not Be Created' })
+    expect(dispatch.status).toBe(401)
   })
 })

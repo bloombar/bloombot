@@ -23,16 +23,30 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - discord-servers.ts#resolveDiscordServerBinding: this *is* the lookup
 //    that establishes which organization an incoming Discord message
 //    belongs to, so it cannot itself take an organization id as input.
+//  - memberships.ts#listMembershipsForAccount: the same class as
+//    accounts.ts#getAccountByEmail — an account can hold a membership in
+//    more than one organization, so this is how a caller (apps/api's
+//    `GET /auth/me`, API-1..6 rework must-fix 9) discovers which
+//    organization ids it may act within, before any one of them is known.
 //  - sign-in-tokens.ts / sessions.ts: AUTH-1/AUTH-3. A sign-in token exists
 //    to find or create an account, and a session authenticates an account
 //    across every organization it belongs to — both sit one level above
 //    organization scoping, the same way `accounts.ts` itself does, so every
 //    exported function in these two files is keyed on an email or an
-//    account id rather than an `organizationId`.
+//    account id rather than an `organizationId`. `hasActiveSignInToken` is
+//    the same "existing/outstanding" check `getAccountByEmail` is, one
+//    level up — a cheap mailbox-flooding guard (API-1..6 rework, "also
+//    worth doing"): refuse to issue a second link while an unexpired,
+//    unused one for the same address already exists.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
-  'sign-in-tokens.ts': ['createSignInToken', 'consumeSignInToken'],
+  'memberships.ts': ['listMembershipsForAccount'],
+  'sign-in-tokens.ts': [
+    'createSignInToken',
+    'consumeSignInToken',
+    'hasActiveSignInToken',
+  ],
   'sessions.ts': [
     'createSession',
     'validateSession',

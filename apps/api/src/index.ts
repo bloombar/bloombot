@@ -24,7 +24,7 @@ import {
 } from '@bloombot/db'
 import { createLogger, type Logger } from '@bloombot/logger'
 
-import { LoggingEmailSender } from './logging-email-sender.js'
+import { buildLoggingEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
 
 const PROCESS_NAME = 'api'
@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   const databasePath = CONFIG.DATABASE_PATH
   const port = CONFIG.API_PORT
   const publicAppUrl = CONFIG.PUBLIC_APP_URL
+  const nodeEnv = CONFIG.NODE_ENV
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -47,7 +48,10 @@ async function main(): Promise<void> {
     db,
     logger,
     publicAppUrl,
-    emailSender: new LoggingEmailSender(logger),
+    // Must-fix 1 of the API-1..6 rework: refuses outright rather than
+    // silently logging sign-in links in production — see
+    // `logging-email-sender.ts`.
+    emailSender: buildLoggingEmailSender(nodeEnv, logger),
     buildSignInLink: (token) => `${publicAppUrl}/sign-in/${token}`,
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.
@@ -64,7 +68,15 @@ async function main(): Promise<void> {
           : error.message
       reject(new Error(`apps/api: could not start the server: ${reason}`))
     })
-    server.listen(port, () => {
+    // Bound to `127.0.0.1` only (cheap-fix 7 of the API-1..6 rework):
+    // `listen(port)` with no host binds every interface, and PLAT-4 puts
+    // nginx in front of this process for TLS termination — on an
+    // unfirewalled host, listening on every interface would let this API
+    // answer directly, outside that termination. The same choice
+    // `apps/bot`'s own health server already made for its far less
+    // sensitive endpoint (D-19's finding 8); no reason found to make the
+    // interface configurable instead.
+    server.listen(port, '127.0.0.1', () => {
       logger.info({ port }, 'apps/api: listening')
       resolve()
     })
@@ -84,7 +96,22 @@ async function main(): Promise<void> {
     closeDatabase(db)
   }
   const onSignal = (signal: string) => {
-    void shutdown(signal).then(() => process.exit(0))
+    // Cheap-fix 6 of the API-1..6 rework: the previous version had no
+    // rejection handler here, so a failing `shutdown` (e.g. `server.close`
+    // erroring) skipped both `closeDatabase(db)` and the clean exit,
+    // leaving an unhandled rejection with the SQLite handle still open. A
+    // failed shutdown now still exits — non-zero, so an operator (or pm2,
+    // PLAT-4) can tell a clean stop from a botched one.
+    shutdown(signal).then(
+      () => process.exit(0),
+      (error: unknown) => {
+        logger.error(
+          { err: error, signal },
+          'apps/api: failed to shut down cleanly'
+        )
+        process.exit(1)
+      }
+    )
   }
   process.once('SIGINT', () => onSignal('SIGINT'))
   process.once('SIGTERM', () => onSignal('SIGTERM'))

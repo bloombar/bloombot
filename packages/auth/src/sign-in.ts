@@ -16,6 +16,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import {
   accounts as accountsRepo,
   organizations as organizationsRepo,
+  signInTokens as signInTokensRepo,
   type Database,
   type TransactingExecutor,
 } from '@bloombot/db'
@@ -114,6 +115,19 @@ export async function requestSignInLink(
   email: string,
   deps: RequestSignInLinkDeps
 ): Promise<void> {
+  // "Also worth doing" of the API-1..6 rework: `/auth/request-link`
+  // (`apps/api`) is unauthenticated, and its own origin check is trivially
+  // bypassed by a non-browser caller, so without a guard here a single
+  // address is an unbounded mail-send and row-insert. A cheap structural
+  // one: decline to issue (and to send mail for) a second token while an
+  // earlier one for this address is still unexpired and unused. Silent, on
+  // purpose — this function's own caller (`routes/auth.ts`) already answers
+  // the same way whether or not the address has an account, and answering
+  // differently here would give a flooding caller an oracle for "is a link
+  // already outstanding" that AUTH-1 gives nobody today.
+  if (signInTokensRepo.hasActiveSignInToken(email, Date.now(), deps.db)) {
+    return
+  }
   const { token } = issueSignInToken(email, deps.db)
   await deps.emailSender.send(
     email,
@@ -185,6 +199,15 @@ export function redeemSignInLink(
  * unverified assertion proves nothing about who controls the address, so it
  * must not be able to reach an account *or* pre-create one). See
  * docs/DECISIONS.md (D-19).
+ *
+ * Rotates on the `link` branch the same way `redeemSignInLink` does for a
+ * returning sign-in (must-fix 2 of the API-1..6 rework): every other session
+ * this account already holds is revoked before the new one is created. A
+ * successful Google sign-in is proof of control of the address, same as
+ * redeeming an emailed link, and is exactly the moment to invalidate
+ * whatever a session cookie captured earlier in that account's lifetime was
+ * still carrying — without this, a stolen cookie survived the victim signing
+ * in again through Google, the natural response to suspecting compromise.
  */
 export function signInWithGoogle(
   identity: GoogleIdentity,
@@ -201,6 +224,7 @@ export function signInWithGoogle(
     if (decision.action === 'link' && existing) {
       if (existing.disabledAt !== null) return undefined
       account = existing
+      revokeAllSessions(account.id, tx)
     } else {
       const created = tryCreateAccountForEmail(identity.email, tx)
       if (!created) return undefined

@@ -141,4 +141,50 @@ describe('API-4 — one middleware maps every action error to a status', () => {
     expect(loggedError).toBeInstanceOf(Error)
     expect(loggedError.message).toContain('secret internal detail')
   })
+
+  // Must-fix 4 of the API-1..6 rework: `body-parser`'s own errors (via
+  // `http-errors`) carry a numeric `status`/`statusCode` and `expose: true`
+  // for a client-caused parse failure, but no `code` — so `actionErrorCode`
+  // never matched them and they fell all the way to the "unexpected" `500`
+  // branch, each writing an error-level log line. Body parsing runs *before*
+  // `originCheck` (`server.ts`'s own ordering comment), so this is reachable
+  // by an unauthenticated, cross-origin caller — proven here with no
+  // `Origin` header set at all, and still answering `400`, not the `403`
+  // `originCheck` would give a non-GET request with neither header present.
+  it('malformed JSON is a 400, not a 500, and logs nothing at error level', async () => {
+    testDb = createTestDatabase()
+    const logger = createFakeLogger()
+    const app = buildTestApp(testDb.db, { logger })
+
+    const response = await request(app)
+      .post('/auth/sign-out')
+      .set('Content-Type', 'application/json')
+      .send('{ this is not valid json')
+
+    expect(response.status).toBe(400)
+    expect(response.status).not.toBe(403) // not the origin check, either
+    expect(response.body).not.toEqual({ error: 'internal_error' })
+    expect(logger.errorCalls).toHaveLength(0)
+  })
+
+  // Same shape, for `express.json()`'s own size limit — an over-limit body
+  // is `413`, `expose: true`, no `code`, same pre-origin-check reachability.
+  it('an over-limit body is a 413, not a 500, and logs nothing at error level', async () => {
+    testDb = createTestDatabase()
+    const logger = createFakeLogger()
+    const app = buildTestApp(testDb.db, { logger })
+
+    // `express.json()` defaults to a 100kb limit (`server.ts`); comfortably
+    // over it without relying on any non-default configuration.
+    const oversizedBody = JSON.stringify({ padding: 'x'.repeat(200_000) })
+
+    const response = await request(app)
+      .post('/auth/sign-out')
+      .set('Content-Type', 'application/json')
+      .send(oversizedBody)
+
+    expect(response.status).toBe(413)
+    expect(response.body).not.toEqual({ error: 'internal_error' })
+    expect(logger.errorCalls).toHaveLength(0)
+  })
 })

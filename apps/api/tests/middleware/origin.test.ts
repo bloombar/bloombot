@@ -138,4 +138,39 @@ describe('API-3 — non-GET requests are checked against their origin', () => {
     // would produce for a non-GET — proving the check never ran at all.
     expect(response.status).not.toBe(403)
   })
+
+  // Cheap-fix 8 of the API-1..6 rework: every test above (and every auth
+  // route test elsewhere) exercises `originCheck` only through the actions
+  // router, or with a correct `Origin`. `server.ts` mounts `originCheck`
+  // with `app.use`, ahead of *every* route, `routes/auth.ts` included — but
+  // nothing before this proved that structurally: if `originCheck` were
+  // remounted on the actions router alone, `POST /auth/sign-out` would
+  // become CSRF-able (a form on another site driving a signed-in caller's
+  // own browser to sign them out — or worse, once a future auth route
+  // writes something more sensitive) with every other test here still
+  // green. Proven the same way the actions-route tests above are: a foreign
+  // `Origin` is refused, and the effect it would have had — the session
+  // revoked — never happens.
+  it('refuses a foreign Origin on /auth/sign-out too, not only the actions router', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post('/auth/sign-out')
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', 'https://evil.example')
+      .send({})
+
+    expect(response.status).toBe(403)
+    // The session must still be exactly as valid as before the refused
+    // request — proof the refusal happened before `revokeSession` ever ran,
+    // not merely that the response code looked right.
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect((me.body as { account: { id: string } | null }).account?.id).toBe(
+      caller.accountId
+    )
+  })
 })

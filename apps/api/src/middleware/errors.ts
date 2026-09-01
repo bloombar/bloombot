@@ -34,6 +34,40 @@ function actionErrorCode(error: unknown): string | undefined {
 }
 
 /**
+ * Must-fix 4 of the API-1..6 rework: `express.json()` (`server.ts`) rejects
+ * malformed JSON and an over-limit body through `body-parser`, whose errors
+ * (via `http-errors`) carry a numeric `status`/`statusCode` and `expose:
+ * true` for exactly these client-caused 4xx cases — but no `code`, so
+ * `actionErrorCode` above never matches them and they fell through to the
+ * "unexpected" branch: a `500` the caller should never see for its own bad
+ * request, and an error-level log line on every occurrence. Because body
+ * parsing runs *before* `originCheck` (`server.ts`'s own ordering comment),
+ * that log line was reachable from an unauthenticated, cross-origin page —
+ * driving unbounded error-level log growth was the actual finding, not just
+ * the wrong status code. `expose` is checked, not merely presence of a
+ * status: `http-errors` sets `expose: false` on a 5xx it builds for an
+ * *unexpected* failure inside body-parser, and that case must still reach
+ * the log below, not be silently reported as an ordinary 4xx.
+ */
+function exposedClientErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const candidate = error as {
+    status?: unknown
+    statusCode?: unknown
+    expose?: unknown
+  }
+  if (candidate.expose !== true) return undefined
+  const status =
+    typeof candidate.status === 'number'
+      ? candidate.status
+      : typeof candidate.statusCode === 'number'
+        ? candidate.statusCode
+        : undefined
+  if (status === undefined || status < 400 || status >= 500) return undefined
+  return status
+}
+
+/**
  * Build the error-handling middleware. Express recognises this as an error
  * handler by its four-parameter signature — dropping any one parameter
  * (even an unused `req`) turns it into an ordinary middleware Express will
@@ -61,6 +95,12 @@ export function errorMiddleware(logger: Logger) {
       if (error instanceof ActionConflictError)
         body['conflict'] = error.conflict
       res.status(status).json(body)
+      return
+    }
+
+    const clientErrorStatus = exposedClientErrorStatus(error)
+    if (clientErrorStatus !== undefined) {
+      res.status(clientErrorStatus).json({ error: 'invalid_request' })
       return
     }
 

@@ -2182,7 +2182,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: ENRL-2
   title: A student chooses among the courses they are already eligible for
@@ -2195,7 +2195,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: ENRL-3
   title: Enrolment comes from something the instructor controls
@@ -2208,7 +2208,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: ENRL-4
   title: A join link is revocable, and revoking it does not un-enrol anybody
@@ -2220,7 +2220,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: ENRL-5
   title: Staff roles are never self-selected
@@ -2233,7 +2233,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: ENRL-6
   title: Ending an enrolment keeps what was said
@@ -2244,7 +2244,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-1
   title: An unrecognized person is invited to connect, not answered

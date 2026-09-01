@@ -901,6 +901,15 @@ export const enrolments = sqliteTable(
       .on(table.organizationId, table.courseId, table.personId)
       .where(sql`${table.endedAt} is null`),
     index('enrolments_organization_id_idx').on(table.organizationId),
+    // Cheap-fix 10: `repos/enrolments.ts#listCoursesForPerson` (ENRL-2) and
+    // `#getActiveEnrolment`/`#admit` all filter by `personId` alongside
+    // `organizationId`, but the unique index above has `courseId` between
+    // them — a query that does not also filter on `courseId` (`listCoursesForPerson`
+    // does not) cannot use it past the leading `organizationId` column, so
+    // it scanned every enrolment row in the tenant. `personId` first here
+    // (rather than appended after `organizationId`) is what actually serves
+    // that query without also filtering by course.
+    index('enrolments_person_id_idx').on(table.personId, table.organizationId),
     check(
       'enrolments_source_check',
       sql`${table.source} in ('join_link', 'discord_role', 'roster')`

@@ -2717,6 +2717,68 @@ caller granting a role to their own account — "never self-selected" is enforce
 place `courseInstructions.save`'s `requireAccountId` already enforces "every revision has a real author",
 because nothing in `packages/actions`' policy shape today can express "and not to themselves" declaratively.
 
+**Rework finding 1 — `memberships.grant` was a cross-tenant account-existence oracle.** `execute`'s "does
+`email` resolve to a real account" check ran through `accounts.getAccountByEmail`, organization-independent by
+design (TEN-2's own documented exception) — with no membership check alongside it, an owner of *any*
+organization (and sign-in is open to anybody, who becomes owner of their own personal organization on first
+sign-up — TEN-1) could call `memberships.grant` against their own organization with an arbitrary email and read
+the account/not-found refusal as an oracle over the whole platform's account table, and a success would enrol a
+real stranger's account into an organization they never consented to join. `execute` now also requires
+`memberships.getMembership(organizationId, target.id, db)` to already find a row before it will change that
+account's role — see `actions/memberships.ts`'s own doc comment. This narrows what `memberships.grant` does:
+it changes an existing member's role, and no longer doubles as an ad hoc way to add a first-time member by
+email — ENRL-5 asks for no invitation flow, and none is added here; a first membership for a new instructor or
+TA stays `memberships.createMembership`'s own concern, uncalled by anything in this slice.
+
+**Rework finding 2 — `admit` did not check `courseId`/`personId` belong to `organizationId`.**
+`repos/course-join-links.ts#redeemJoinLink` already checked its own `personId` against the link's organization,
+but the module-private `admit` (`repos/enrolments.ts`) — the one place every `enrolVia*` actually writes a row —
+did not, so `enrolViaRoster`/`enrolViaJoinLink`, called directly (as `apps/worker`'s roster handler and a future
+join-link-redemption wiring both do), could write a cross-tenant enrolment that read back as real once
+committed. `admit` now resolves both through `courses.getCourse`/`people.getPerson` before writing anything,
+refusing (`undefined`) exactly as every other repo function in this package refuses a foreign id.
+
+**Rework finding 3 — a roster re-import silently undid ENRL-6.** `admit` looked only for an *active* row before
+deciding whether to write a new one; a person who held an *ended* enrolment for a course had no active row, so
+a re-import (`enrolViaRoster`) inserted a brand-new active one — an instructor who ends a student's enrolment
+and later re-imports the same, unedited roster (routine hygiene, not a correction) would find that student
+quietly back. `admit` gained a `reviveEnded` parameter, and each `enrolVia*` now states its own choice
+explicitly rather than sharing one implicit default: `enrolViaRoster` passes `false` (a re-import is not a
+deliberate re-admission decision), `enrolViaJoinLink` and `enrolViaDiscordRole` pass `true` (redeeming a link,
+or continuing to hold a Discord role, *is* one). See `repos/enrolments.ts`'s own doc comments on `admit` and
+each `enrolVia*` for the reasoning in full.
+
+**Rework finding 4 — `callerAssertedPersonId` is not proof of identity, and now says so loudly.**
+`redeemJoinLink`'s (and `redeemCourseJoinLink`'s) `personId` parameter used to read like any other
+organization-scoped id this package proves belongs to a tenant. It is that, and only that — nothing about
+presenting a join link's *secret* proves who is presenting it, since a join link is deliberately shareable with
+an entire class (ENRL-3). Both parameters are renamed `callerAssertedPersonId`, and their doc comments now spell
+out the obligation this leaves an eventual `POST /join { secret, personId }` wiring: binding it to the caller's
+own already-authenticated identity is that future caller's job, not something either function can check from
+the two arguments it is given.
+
+**Rework finding 5 — `redeemCourseJoinLink` was unreachable from any app.** It was exported from
+`packages/actions/src/actions/index.ts` but not this package's own root `src/index.ts`, and `package.json`'s
+`exports` field exposes only the `.` entry — so no app could import it at all, deep or otherwise. It is not a
+dispatched `Action` (this section's own earlier "Choice" paragraph), so it has no other door in the way every
+other action here does through `createPlatformRegistry`; it is now re-exported from the package root.
+
+**Rework finding 6 — redemption was three statements, not one transaction.** `redeemJoinLink` read the link,
+looked up the person, and (through `enrolViaJoinLink`) wrote the enrolment as three separate statements. A
+`courseJoinLinks.revoke` committing between the first read and the enrolment write could still let that
+in-flight redemption admit somebody — `revoke` reporting success would not yet be true for a redeemer already
+past the first check. The whole function now runs inside one `db.transaction(...)`, the same "narrow the race
+in the same transaction as the write, don't just document it" discipline `courses.ts#createCourse` already
+holds its PROJ-3 check to — a link is multi-use, so the single conditional-`UPDATE` device
+`consumeSignInToken`/`claimDiscordServerBinding` use for a single-use secret is not available here.
+`repos/enrolments.ts#getActiveEnrolment`/`#admit`/`#enrolViaJoinLink` and `repos/people.ts#getPerson` all widened
+their `db` parameter from `Database` to `Executor` to make this possible — see `client.ts`'s own `Executor`
+doc comment for what that type already exists for.
+
+**Rework finding 7 — `expiresAt` accepted a past timestamp.** `courseJoinLinks.create`'s input schema now
+refuses an `expiresAt` at or before the moment of the call (`z.number().refine(...)`) — before this, a caller
+could create a link that reported success and could never be redeemed.
+
 **Limits.** `enrolViaDiscordRole` is unreachable from any live surface in this slice — nothing calls it yet,
 by design (previous paragraph). `grantMembershipRole`'s two new columns record only the *most recent* grant,
 not a full history the way `course_instruction_revisions` keeps one per save — sufficient for ENRL-5's "the
@@ -2724,4 +2786,8 @@ grant is recorded with who did it," insufficient if a later requirement needs "e
 ever held and who changed it." `courseJoinLinks`' secret is generated and hashed with a small, deliberately
 duplicated copy of `@bloombot/auth`'s `secrets.ts` (SHA-256 over a CSPRNG, no salt) rather than a new
 cross-package dependency — see `packages/actions/src/actions/course-join-links.ts`'s own module comment for
-why duplication was chosen over depending on `@bloombot/auth` for ten lines.
+why duplication was chosen over depending on `@bloombot/auth` for ten lines. `redeemCourseJoinLink`/`redeemJoinLink`
+are still unwired from any live surface (rework finding 4's own "nothing calls it yet") — the next slice that
+adds a `POST /join` route (web) or a Discord-side redemption is the one that has to bind
+`callerAssertedPersonId` to a real, already-authenticated identity; neither function can do that itself from a
+secret and a bare id.

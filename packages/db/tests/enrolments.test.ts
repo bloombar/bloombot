@@ -101,6 +101,39 @@ describe('enrolments repo (ENRL-1..6)', () => {
     expect(listed.map((c) => c.id)).not.toContain(courseB.id)
   })
 
+  // Cheap-fix 10: a disabled course routes nothing (CORE-2,
+  // `@bloombot/core`'s `routing.ts`) — this list must not offer one either,
+  // or a course `checkEnrolmentAccessAction` still permits reads as
+  // "you may ask this" for a course routing silently drops. The enrolment
+  // itself is untouched (D-34's own "what disabling a course does to an
+  // enrolment: nothing") — it simply stops appearing here while disabled.
+  it('excludes a disabled course, even though the enrolment itself is untouched', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    courses.disableCourse(organizationId, course.id, testDb.db)
+
+    expect(
+      enrolments.listCoursesForPerson(organizationId, person.id, testDb.db)
+    ).toEqual([])
+    // The enrolment itself is still active — only the listing changed.
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeDefined()
+  })
+
   it('has no active enrolment for a course the person was never admitted to', () => {
     testDb = createTestDatabase()
     const { organizationId, course } = seedOrganizationWithCourse(testDb)
@@ -129,7 +162,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       testDb.db
     )
 
-    expect(enrolment.source).toBe('roster')
+    expect(enrolment?.source).toBe('roster')
   })
 
   it('enrolViaDiscordRole records source "discord_role" when the person holds the course\'s student role', () => {
@@ -224,16 +257,139 @@ describe('enrolments repo (ENRL-1..6)', () => {
       { courseId: course.id, personId: person.id },
       testDb.db
     )
+    if (!first) throw new Error('setup failed: no enrolment')
     const second = enrolments.enrolViaRoster(
       organizationId,
       { courseId: course.id, personId: person.id },
       testDb.db
     )
 
-    expect(second.id).toBe(first.id)
+    expect(second?.id).toBe(first.id)
     expect(
       enrolments.listPeopleForCourse(organizationId, course.id, testDb.db)
     ).toHaveLength(1)
+  })
+
+  // --- Rework finding 2: `admit` refuses a foreign course or person, for
+  // every `enrolVia*`, not only the join-link path `redeemJoinLink` already
+  // checked for itself --------------------------------------------------
+
+  it('enrolViaRoster refuses a courseId that does not belong to this organization', () => {
+    testDb = createTestDatabase()
+    const { course: courseA } = seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const personInOrgB = people.createPerson(orgB, {}, testDb.db)
+
+    expect(
+      enrolments.enrolViaRoster(
+        orgB,
+        { courseId: courseA.id, personId: personInOrgB.id },
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      enrolments.listPeopleForCourse(orgB, courseA.id, testDb.db)
+    ).toHaveLength(0)
+  })
+
+  it('enrolViaRoster refuses a personId that does not belong to this organization', () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const personInOrgB = people.createPerson(orgB, {}, testDb.db)
+
+    expect(
+      enrolments.enrolViaRoster(
+        orgA,
+        { courseId: courseA.id, personId: personInOrgB.id },
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      enrolments.listPeopleForCourse(orgA, courseA.id, testDb.db)
+    ).toHaveLength(0)
+  })
+
+  // --- Rework finding 3 / cheap-fix 9: reviving an ended enrolment -------
+
+  // The load-bearing consequence of the partial unique index
+  // (`enrolments_org_course_person_active_unique`, `schema.ts`'s own
+  // comment): a person who holds an *ended* enrolment can still be admitted
+  // again, as a genuinely new row, through a path that means to revive
+  // them — `enrolViaJoinLink`'s own `reviveEnded: true`.
+  it('re-enrolling through a path that means to revive creates a new, distinct row and leaves the ended one intact', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaJoinLink(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = enrolments.enrolViaJoinLink(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(second?.id).toBeDefined()
+    expect(second?.id).not.toBe(first.id)
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ endedAt: expect.any(Number) })
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toMatchObject({ id: second?.id })
+  })
+
+  // A roster re-import must not do what the test above proves
+  // `enrolViaJoinLink` deliberately does — reviving an ended enrolment.
+  // Fails without the fix: before `admit` gained `reviveEnded`, this same
+  // call sequence produced a brand-new active row here too, silently
+  // undoing the `endEnrolment` call an instructor made on purpose (ENRL-6).
+  it('enrolViaRoster does not revive an ended enrolment', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+    // The original row is still there, still ended — not deleted, not
+    // reactivated.
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })
   })
 
   // --- ENRL-6: ending an enrolment stops asking, deletes nothing ---------
@@ -247,6 +403,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       { courseId: course.id, personId: person.id },
       testDb.db
     )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
 
     const conversation = conversations.getOrCreateConversation(
       organizationId,
@@ -316,6 +473,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       { courseId: course.id, personId: person.id },
       testDb.db
     )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
 
     expect(
       enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
@@ -344,6 +502,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       { courseId: courseA.id, personId: person.id },
       testDb.db
     )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
 
     expect(
       enrolments.getActiveEnrolment(orgB, courseA.id, person.id, testDb.db)

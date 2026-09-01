@@ -104,6 +104,7 @@ describe('enrolments.listForPerson/.checkAccess/.end (ENRL-2, ENRL-6)', () => {
       { courseId: course.id, personId: person.id },
       testDb.db
     )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
 
     const result = await dispatch(
       endEnrolmentAction,
@@ -132,6 +133,7 @@ describe('enrolments.listForPerson/.checkAccess/.end (ENRL-2, ENRL-6)', () => {
       { courseId: courseA.id, personId: person.id },
       testDb.db
     )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
 
     await expect(
       dispatch(

@@ -51,8 +51,23 @@ function requireAccountId(accountId: string | undefined): string {
 
 const createInputSchema = z.object({
   courseId: z.string().min(1),
-  /** Epoch milliseconds. Omitted or `null`: no expiry, valid until revoked (ENRL-4). */
-  expiresAt: z.number().int().positive().nullable().optional(),
+  /**
+   * Epoch milliseconds. Omitted or `null`: no expiry, valid until revoked
+   * (ENRL-4). Rework finding 7: must be strictly in the future — a past
+   * value would create a link that reports success but can never be
+   * redeemed (`courseJoinLinks.redeemJoinLink`'s own expiry check refuses
+   * anything at or before `now`), which is a confusing way to fail an
+   * instructor never sees the reason for.
+   */
+  expiresAt: z
+    .number()
+    .int()
+    .positive()
+    .refine((value) => value > Date.now(), {
+      message: 'expiresAt must be in the future',
+    })
+    .nullable()
+    .optional(),
 })
 type CreateInput = z.infer<typeof createInputSchema>
 
@@ -146,19 +161,28 @@ export const revokeCourseJoinLinkAction: Action<
 }
 
 /**
- * ENRL-3: redeem a join link — enrols `personId` in the course it names, or
- * refuses. Not a dispatched `Action`; see this file's own module comment.
- * `db` is a plain `Database`, not a `DispatchContext`, since there is no
- * organization to carry one with yet.
+ * ENRL-3: redeem a join link — enrols `callerAssertedPersonId` in the course
+ * it names, or refuses. Not a dispatched `Action`; see this file's own
+ * module comment. `db` is a plain `Database`, not a `DispatchContext`, since
+ * there is no organization to carry one with yet.
+ *
+ * Rework finding 4/5: exported from `@bloombot/actions`' own package root
+ * (`src/index.ts`) — before this it was reachable only through
+ * `./actions/index.js`, which `package.json`'s `exports` field does not
+ * expose to a deep import, so no app could actually call it. And read
+ * `callerAssertedPersonId`'s own name, and `repos/course-join-links.ts#redeemJoinLink`'s
+ * doc comment, before wiring a caller to this: this function proves the
+ * secret was issued and is still live, never that whoever is calling it *is*
+ * the person named — see `docs/DECISIONS.md` D-34's own Limits.
  */
 export function redeemCourseJoinLink(
   secret: string,
-  personId: string,
+  callerAssertedPersonId: string,
   db: Database
 ) {
   return courseJoinLinks.redeemJoinLink(
     hashSecret(secret),
-    personId,
+    callerAssertedPersonId,
     Date.now(),
     db
   )

@@ -38,6 +38,14 @@ export {
   type JobStatus,
   type OrganizationUsageReport,
 } from './actions/index.js'
+// Rework finding 5: `redeemCourseJoinLink` is not a dispatched `Action` (see
+// `actions/course-join-links.ts`'s own module comment), so it is never
+// reachable through `createPlatformRegistry`/`dispatch` the way every other
+// action here is — this package's own root export is the only door in, and
+// `package.json`'s `exports` field exposes only this one entry point, so an
+// app importing `@bloombot/actions` deeply for it would fail to resolve at
+// all.
+export { redeemCourseJoinLink } from './actions/index.js'
 
 export {
   checkPlatformHealth,

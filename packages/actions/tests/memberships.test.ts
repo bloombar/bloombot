@@ -3,7 +3,7 @@
  * the caller's own account, and recorded.
  */
 
-import { accounts } from '@bloombot/db'
+import { accounts, memberships } from '@bloombot/db'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -148,5 +148,45 @@ describe('memberships.grant (ENRL-5)', () => {
         { organizationId, db: testDb.db, accountId: owner.id }
       )
     ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // Rework finding 1: without a membership check, this action was a
+  // cross-tenant account-existence oracle — an owner of orgA could learn
+  // whether a given email holds an account *anywhere* on the platform by
+  // calling this against their own organization, and a success would have
+  // enrolled that stranger's account into orgA without their consent. Fails
+  // without the fix: before `execute` required `memberships.getMembership`
+  // to already find a row, this same call resolved `target` through
+  // `accounts.getAccountByEmail` alone and granted the role, creating a
+  // brand-new membership in orgA for an account that had never had one.
+  it("refuses an email that resolves to a real account, but one with no membership in the caller's organization", async () => {
+    testDb = createTestDatabase()
+    const orgA = seedOrganization(testDb.db)
+    const orgB = seedOrganization(testDb.db)
+    const ownerOfA = accounts.createAccount(
+      orgA,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    // A real account, but only ever a member of orgB — a stranger to orgA.
+    const strangerOfA = accounts.createAccount(
+      orgB,
+      { email: 'stranger@example.edu', displayName: 'Stranger', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        grantMembershipAction,
+        { email: 'stranger@example.edu', role: 'instructor' },
+        { organizationId: orgA, db: testDb.db, accountId: ownerOfA.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // No membership was created for them in orgA as a side effect of the
+    // refused call.
+    expect(
+      memberships.getMembership(orgA, strangerOfA.id, testDb.db)
+    ).toBeUndefined()
   })
 })

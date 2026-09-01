@@ -27,8 +27,9 @@
 
 import { and, eq, isNull } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import * as courses from './courses.js'
+import { getPerson } from './people.js'
 import { enrolments, people, type EnrolmentSource } from '../schema.js'
 
 export type Enrolment = typeof enrolments.$inferSelect
@@ -48,7 +49,7 @@ export function getActiveEnrolment(
   organizationId: string,
   courseId: string,
   personId: string,
-  db: Database
+  db: Executor
 ): Enrolment | undefined {
   return db
     .select()
@@ -82,7 +83,20 @@ export function getEnrolment(
     .get()
 }
 
-/** ENRL-2: every course `personId` may currently ask — the courses behind their active enrolments, and no others. */
+/**
+ * ENRL-2: every course `personId` may currently ask — the courses behind
+ * their active enrolments, and no others.
+ *
+ * Cheap-fix 10: also excludes a disabled course — a disabled course routes
+ * nothing (CORE-2's "a message that matches no enabled course is ignored",
+ * `@bloombot/core`'s `routing.ts#routeMessage`), so a course this function
+ * still listed here would pass `checkEnrolmentAccessAction` while routing
+ * silently dropped it, reading as "you may ask this" for a course nothing
+ * ever answers. An enrolment into a disabled course is not ended by this —
+ * see `docs/DECISIONS.md` D-34's "what disabling a course does to an
+ * enrolment: nothing" — it just does not appear in this particular list
+ * while the course stays disabled, exactly as it does not route.
+ */
 export function listCoursesForPerson(
   organizationId: string,
   personId: string,
@@ -103,7 +117,8 @@ export function listCoursesForPerson(
   return rows
     .map((row) => courses.getCourse(organizationId, row.courseId, db))
     .filter(
-      (course): course is courses.CourseWithCategories => course !== undefined
+      (course): course is courses.CourseWithCategories =>
+        course !== undefined && course.enabled
     )
 }
 
@@ -179,16 +194,62 @@ export function endEnrolment(
  * `schema.ts`). Not exported: every caller reaches this only through one of
  * the three `enrolVia*` functions below, each of which supplies its own
  * fixed `source` — see this file's own module comment.
+ *
+ * Rework finding 2: `courseId` and `personId` must both belong to
+ * `organizationId` — every other repo in this package refuses a foreign id
+ * the same way (`courses.ts#getCourse`, `people.ts#getPerson`), and this is
+ * the one place an enrolment row is actually written, so this is the one
+ * place that check has to hold for every source, rather than trusting each
+ * `enrolVia*` (or a caller upstream of it) to have done it already.
+ * `undefined` for a foreign `courseId`/`personId`, indistinguishable from
+ * this function's other refusals, the same "caller already knows why"
+ * contract `getActiveEnrolment` documents for itself.
+ *
+ * `db` accepts `Executor`, not just `Database`: `repos/course-join-links.ts#redeemJoinLink`
+ * (rework finding 6) calls `enrolViaJoinLink`, and so this, from inside its
+ * own transaction — the link's revocation check and the enrolment it admits
+ * have to commit or fail together.
+ *
+ * `reviveEnded`: whether a person who already holds an *ended* enrolment for
+ * this course (and, per the check above, no active one) gets a brand-new
+ * active row, or is left exactly as ended as whatever ended them last left
+ * them (rework finding 3). Each `enrolVia*` below states its own choice
+ * explicitly, rather than this function assuming one default for every
+ * source — see their own doc comments and `docs/DECISIONS.md` D-34's rework
+ * notes.
  */
 function admit(
   organizationId: string,
   courseId: string,
   personId: string,
   source: EnrolmentSource,
-  db: Database
-): Enrolment {
+  reviveEnded: boolean,
+  db: Executor
+): Enrolment | undefined {
+  if (!courses.getCourse(organizationId, courseId, db)) return undefined
+  if (!getPerson(organizationId, personId, db)) return undefined
+
   const existing = getActiveEnrolment(organizationId, courseId, personId, db)
   if (existing) return existing
+
+  if (!reviveEnded) {
+    // Rework finding 3: `existing` above already ruled out an *active* row
+    // for this pairing, so any row this finds is necessarily an ended one —
+    // a caller that does not ask to revive it gets `undefined` rather than a
+    // brand-new active row.
+    const priorEnded = db
+      .select({ id: enrolments.id })
+      .from(enrolments)
+      .where(
+        and(
+          eq(enrolments.organizationId, organizationId),
+          eq(enrolments.courseId, courseId),
+          eq(enrolments.personId, personId)
+        )
+      )
+      .get()
+    if (priorEnded) return undefined
+  }
 
   try {
     return db
@@ -215,22 +276,64 @@ function admit(
   }
 }
 
-/** ENRL-3: enrol via a redeemed course join link — called by `@bloombot/actions`' `redeemCourseJoinLink`, once it has already validated the link itself (`repos/course-join-links.ts#redeemJoinLink`). */
+/**
+ * ENRL-3: enrol via a redeemed course join link — called by
+ * `repos/course-join-links.ts#redeemJoinLink`, once it has already validated
+ * the link itself, inside the same transaction (rework finding 6).
+ *
+ * `reviveEnded: true` — redeeming a link is a deliberate, caller-initiated
+ * admission (the redeemer presented a secret somebody handed them), not this
+ * platform's own idempotent housekeeping the way a roster re-import is
+ * (`enrolViaRoster`, below) — an instructor handing the same link back to a
+ * student they had previously ended is exactly the "a caller actually means
+ * to re-admit this person" case ENRL-6's "ended, not deleted" was written to
+ * allow back in, so a prior ended enrolment for this course does not block a
+ * fresh one here.
+ */
 export function enrolViaJoinLink(
   organizationId: string,
   input: { courseId: string; personId: string },
-  db: Database
-): Enrolment {
-  return admit(organizationId, input.courseId, input.personId, 'join_link', db)
+  db: Executor
+): Enrolment | undefined {
+  return admit(
+    organizationId,
+    input.courseId,
+    input.personId,
+    'join_link',
+    true,
+    db
+  )
 }
 
-/** ENRL-3: enrol via an imported roster row — called by `apps/worker`'s `roster-import.ts` handler for each row it resolves to a person. */
+/**
+ * ENRL-3: enrol via an imported roster row — called by `apps/worker`'s
+ * `roster-import.ts` handler for each row it resolves to a person.
+ *
+ * `reviveEnded: false` (rework finding 3): a roster import is not a
+ * deliberate re-admission decision the way redeeming a link, or holding a
+ * Discord role, is — it is this platform's own idempotent re-sync of the
+ * same CSV, re-run on a schedule or by habit, that an instructor never
+ * edited to remove anybody. Left free to revive an ended enrolment, an
+ * instructor who explicitly ends one (`endEnrolment`, ENRL-6) — routine
+ * roster hygiene, not a mistake — would find that student silently
+ * re-admitted the moment the next import ran. Leaving it ended here is what
+ * keeps "ended" meaning ended until something that actually means to
+ * re-admit this person calls one of the other two `enrolVia*` functions
+ * instead.
+ */
 export function enrolViaRoster(
   organizationId: string,
   input: { courseId: string; personId: string },
-  db: Database
-): Enrolment {
-  return admit(organizationId, input.courseId, input.personId, 'roster', db)
+  db: Executor
+): Enrolment | undefined {
+  return admit(
+    organizationId,
+    input.courseId,
+    input.personId,
+    'roster',
+    false,
+    db
+  )
 }
 
 /**
@@ -240,11 +343,18 @@ export function enrolViaRoster(
  * of its own (this file's own module comment). `undefined` both when
  * `courseId` does not resolve in `organizationId` and when `roleNames` does
  * not include the course's `studentsRole` — nobody is admitted either way.
+ *
+ * `reviveEnded: true` — holding the role is an ongoing, re-checked fact
+ * about this person each time this function runs (unlike a roster row,
+ * which is only ever re-asserted verbatim from a file nobody necessarily
+ * revisited), so a prior ended enrolment does not block a fresh one here
+ * either. See `docs/DECISIONS.md` D-34's "what the linking slice should
+ * change in routing" for this function's own intended future caller.
  */
 export function enrolViaDiscordRole(
   organizationId: string,
   input: { courseId: string; personId: string; roleNames: string[] },
-  db: Database
+  db: Executor
 ): Enrolment | undefined {
   const course = courses.getCourse(organizationId, input.courseId, db)
   if (!course) return undefined
@@ -254,6 +364,7 @@ export function enrolViaDiscordRole(
     input.courseId,
     input.personId,
     'discord_role',
+    true,
     db
   )
 }

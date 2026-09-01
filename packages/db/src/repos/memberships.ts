@@ -5,13 +5,22 @@
  * function here is scoped by `organizationId`, its first parameter — there is
  * no exception in this file.
  *
- * `grantMembershipRole` (ENRL-5) is additive, not a replacement for
- * `createMembership`/`updateMembershipRole` above: those two stay exactly
- * as every existing caller found them (including the founding-owner write
- * `accounts.ts#createAccount` makes inline, which records no grantor — see
- * `schema.ts`'s own comment on `grantedByAccountId`), and
- * `grantMembershipRole` is the one path that stamps who granted a role,
- * for `@bloombot/actions`' `memberships.grant` action to call.
+ * `grantMembershipRole` (ENRL-5) is additive to `createMembership` above,
+ * which stays exactly as every existing caller found it (including the
+ * founding-owner write `accounts.ts#createAccount` makes inline, which
+ * records no grantor — see `schema.ts`'s own comment on
+ * `grantedByAccountId`); `grantMembershipRole` is the one path that stamps
+ * who granted a role, for `@bloombot/actions`' `memberships.grant` action to
+ * call. Rework finding, "cheap-fix": this file used to also export a plain
+ * `updateMembershipRole`, changing a role without stamping either column —
+ * a caller of it left `grantedByAccountId`/`grantedAt` describing a *wrong*
+ * grantor (whoever the row's columns already held, if any) rather than an
+ * honestly absent one, for a role that in fact just changed. It had no
+ * caller outside its own tests, so it was removed rather than fixed:
+ * `grantMembershipRole` already covers "change an existing membership's
+ * role" (its own `existing` branch) and always stamps both columns
+ * correctly, so there is no longer a plain role-change path a future caller
+ * could reach for by mistake.
  */
 
 import { and, eq } from 'drizzle-orm'
@@ -96,31 +105,6 @@ export function listMembershipsForAccount(
     .from(memberships)
     .where(eq(memberships.accountId, accountId))
     .all()
-}
-
-/**
- * Change an existing membership's role.
- *
- * Returns the number of rows changed — `0` rather than a different
- * organization's membership when `organizationId` does not match.
- */
-export function updateMembershipRole(
-  organizationId: string,
-  accountId: string,
-  role: MembershipRole,
-  db: Database
-): number {
-  const result = db
-    .update(memberships)
-    .set({ role })
-    .where(
-      and(
-        eq(memberships.organizationId, organizationId),
-        eq(memberships.accountId, accountId)
-      )
-    )
-    .run()
-  return result.changes
 }
 
 /**

@@ -107,39 +107,6 @@ describe('memberships repo', () => {
     ).toHaveLength(0)
   })
 
-  it('updates a role scoped to its organization', () => {
-    testDb = createTestDatabase()
-    const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
-
-    const changed = memberships.updateMembershipRole(
-      orgA,
-      accountInA.id,
-      'instructor',
-      testDb.db
-    )
-
-    expect(changed).toBe(1)
-    expect(
-      memberships.getMembership(orgA, accountInA.id, testDb.db)
-    ).toMatchObject({ role: 'instructor' })
-  })
-
-  // TEN-2: an update issued with the wrong organization id affects zero rows
-  // rather than the other tenant's row.
-  it('updating a role through the wrong organization affects zero rows', () => {
-    testDb = createTestDatabase()
-    const { orgB, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
-
-    const changed = memberships.updateMembershipRole(
-      orgB,
-      accountInA.id,
-      'instructor',
-      testDb.db
-    )
-
-    expect(changed).toBe(0)
-  })
-
   it('deletes a membership scoped to its organization', () => {
     testDb = createTestDatabase()
     const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)

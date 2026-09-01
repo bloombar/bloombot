@@ -927,5 +927,92 @@ describe('roster.import handler', () => {
       )
       expect(after?.id).toBe(before?.id)
     })
+
+    // Cheap-fix 9: ROST-10's own synthetic `handle:`-keyed identity (this
+    // file's own module comment) is a real person, created and merged onto
+    // the same way a resolved one is — a row that never resolves in the
+    // guild must still end up enrolled, not silently kept off the course.
+    it('enrols the person created under a synthetic handle: identity when the Discord handle never resolves', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      // No guild members seeded at all — the row's handle cannot resolve.
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.unresolvedHandles).toHaveLength(1)
+      const personId = report.peopleCreated[0]?.personId
+      expect(personId).toBeDefined()
+      const enrolment = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId as string,
+        testDb.db
+      )
+      expect(enrolment?.source).toBe('roster')
+    })
+
+    // Rework finding 3: re-importing an unedited roster must not undo an
+    // instructor's own `endEnrolment` call (ENRL-6). Fails without the fix:
+    // before `enrolViaRoster` passed `reviveEnded: false` through to
+    // `admit`, the second import below created a brand-new active row for
+    // this person, silently reversing the removal.
+    it('re-importing after an instructor ends the enrolment leaves it ended, not revived', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      const personId = first.peopleCreated[0]?.personId as string
+      const originalEnrolment = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId,
+        testDb.db
+      )
+      if (!originalEnrolment) throw new Error('setup failed: no enrolment')
+
+      enrolments.endEnrolment(
+        seeded.organizationId,
+        originalEnrolment.id,
+        testDb.db
+      )
+
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      expect(
+        enrolments.getActiveEnrolment(
+          seeded.organizationId,
+          seeded.courseId,
+          personId,
+          testDb.db
+        )
+      ).toBeUndefined()
+      expect(
+        enrolments.getEnrolment(
+          seeded.organizationId,
+          originalEnrolment.id,
+          testDb.db
+        )
+      ).toMatchObject({
+        id: originalEnrolment.id,
+        endedAt: expect.any(Number),
+      })
+    })
   })
 })

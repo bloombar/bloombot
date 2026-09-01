@@ -10,7 +10,9 @@
  * person (whether newly created or merged onto an existing one) is enrolled
  * in the course via `@bloombot/db`'s `enrolments.enrolViaRoster`, recording
  * `source: 'roster'`. A re-import of the same roster does not duplicate the
- * enrolment (`enrolViaRoster`'s own idempotency).
+ * enrolment (`enrolViaRoster`'s own idempotency), and does not resurrect one
+ * an instructor has since ended (ENRL-6) — `enrolViaRoster`'s own doc
+ * comment has the reasoning (rework finding 3).
  *
  * **Scope**: the CSV this handler parses is the *merged* five-column shape
  * `roster_create_channels.py` itself reads (`Last`, `First`, `Email`,
@@ -566,7 +568,10 @@ export function createRosterImportHandler(
       // `source: 'roster'`. Idempotent the same way person resolution above
       // is (`enrolments.ts#admit`): a re-import of the same roster leaves
       // an already-active enrolment exactly as it found it, rather than
-      // erroring or duplicating it.
+      // erroring or duplicating it. Rework finding 3: it also leaves an
+      // *ended* enrolment (ENRL-6) exactly as ended — `enrolViaRoster`'s own
+      // doc comment — so re-importing the term's roster after an instructor
+      // has removed a student does not quietly bring them back.
       enrolments.enrolViaRoster(
         context.organizationId,
         { courseId: course.id, personId: person.id },

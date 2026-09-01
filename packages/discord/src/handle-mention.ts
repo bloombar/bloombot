@@ -1,0 +1,289 @@
+/**
+ * SURF-1..6: the Discord surface's one entry point. Everything `apps/bot`
+ * needs from a discord.js `messageCreate` event funnels through here —
+ * ignoring what should never reach the model (SURF-2), resolving the
+ * server and the person (SURF-3, SURF-4), routing and answering through
+ * `@bloombot/core` (CORE-1, CORE-2), and rendering whatever comes back
+ * (SURF-5, SURF-6). `apps/bot` itself holds none of this logic (CORE-1's
+ * own "a surface adapter ... holds no answering logic of its own"); it only
+ * builds an `InboundMention` and a `ReplyPort` and calls this.
+ */
+
+import {
+  answerQuestion,
+  routeMessage,
+  type AnswerDependencies,
+  type ModelClient,
+  type RoutableCourse,
+} from '@bloombot/core'
+import { courses, discordServers, people, type Database } from '@bloombot/db'
+import type { Logger } from '@bloombot/logger'
+
+import type { InboundMention, ReplyPort } from './dto.js'
+import {
+  DEFAULT_BOT_DISPLAY_NAME,
+  mentionsBot,
+  rewriteMention,
+} from './mention.js'
+import { splitForDiscord } from './split.js'
+
+/** What `handleMention` needs beyond the message itself. */
+export interface HandleMentionDependencies {
+  db: Database
+  model: ModelClient
+  logger: Logger
+  reply: ReplyPort
+  /**
+   * `YYYY-MM-DD`, supplied by the caller — the same discipline CORE-3's
+   * `answerQuestion` holds itself to (`AnswerQuestionInput.day`'s own
+   * comment): never read from a clock inside this package, so the day
+   * boundary stays testable.
+   */
+  day: string
+  /** The bare name (no `@`) BOT-6 rewrites a mention to. Defaults to `'Bloombot'`; `apps/bot` passes the gateway client's own username instead of hardcoding it here. */
+  botDisplayName?: string
+}
+
+/**
+ * What happened, as a discriminated result — the same "ordinary outcome,
+ * not an exception" discipline `AnswerResult` (`@bloombot/core`'s
+ * `answer.ts`) holds itself to, one level up: everything `answerQuestion`
+ * can return has a case here too, plus the outcomes that never reach it at
+ * all (an ignored message, an unbound server, a routing failure).
+ */
+export type HandleMentionResult =
+  | { kind: 'ignored-self' }
+  | { kind: 'ignored-other-bot' }
+  | { kind: 'ignored-not-a-mention' }
+  | { kind: 'unbound-server' }
+  | { kind: 'unrouted' }
+  | {
+      kind: 'routing-ambiguous'
+      signal: 'category' | 'role'
+      courseIds: string[]
+    }
+  | { kind: 'course-disabled' }
+  | { kind: 'not-configured' }
+  | { kind: 'declined-over-limit' }
+  | { kind: 'answered'; conversationId: string; messageCount: number }
+  | {
+      kind: 'answered-last-request'
+      conversationId: string
+      messageCount: number
+    }
+  | {
+      kind: 'failed-with-apology'
+      conversationId: string
+      messageCount: number
+    }
+
+/** BOT-5/SURF-6's refusal text for a request that arrives after the allowance is already spent — `response_bot.py` never sends this at all (BOT-5's own "requests beyond the limit are silently ignored"); SURF-6 requires every outcome reach the student or the log, so this one now reaches the student too. See docs/DECISIONS.md. */
+function overLimitRefusalText(courseTitle: string): string {
+  return `You have reached the maximum number of responses for today. See ${courseTitle} admins for help.`
+}
+
+/** SURF-5 — send `text` through `reply`, split first if it is over Discord's limit, each part awaited in order so the parts cannot arrive out of sequence. Returns how many messages were sent. */
+async function sendReply(reply: ReplyPort, text: string): Promise<number> {
+  const parts = splitForDiscord(text)
+  for (const part of parts) {
+    await reply.reply(part)
+  }
+  return parts.length
+}
+
+/**
+ * CORE-2's `routeMessage` wants a flat `RoutableCourse[]`; `listCourses`
+ * (`@bloombot/db`) returns base rows with no category names attached, so
+ * each course is re-read through `getCourse` for the category list
+ * `routeMessage` needs to run its category signal at all. Also returns each
+ * course's title, keyed by id, for the one place a title is needed after
+ * routing decides a course (`overLimitRefusalText`) — `RoutableCourse`
+ * itself carries no title, only what `routeMessage` reads.
+ */
+function loadRoutableCourses(
+  organizationId: string,
+  db: Database
+): { routable: RoutableCourse[]; titleById: Map<string, string> } {
+  const routable: RoutableCourse[] = []
+  const titleById = new Map<string, string>()
+
+  for (const course of courses.listCourses(organizationId, db)) {
+    titleById.set(course.id, course.title)
+    const full = courses.getCourse(organizationId, course.id, db)
+    // Unreachable in practice — `full` is read with the same organizationId
+    // `listCourses` just used — kept as a guard rather than a
+    // non-null assertion, the same belt-and-suspenders `getPerson` calls in
+    // `@bloombot/core`'s `answer.ts` take for a row that "cannot" be missing.
+    if (!full) continue
+    routable.push({
+      id: course.id,
+      categoryNames: full.categories.map((category) => category.name),
+      adminsRole: course.adminsRole,
+      studentsRole: course.studentsRole,
+      enabled: course.enabled,
+    })
+  }
+
+  return { routable, titleById }
+}
+
+/**
+ * Handle one incoming message. In order:
+ *
+ * 1. SURF-2 — ignore the bot's own messages, another bot's messages, and
+ *    anything that does not mention this bot at all, before any database or
+ *    model call.
+ * 2. SURF-3 — resolve the Discord server to an organization; an unbound
+ *    server is logged and dropped.
+ * 3. SURF-4 — resolve (or create) the person, and merge in their current
+ *    Discord display name.
+ * 4. CORE-2 — route the message to exactly one course.
+ * 5. CORE-1 — answer through `answerQuestion`, and render whatever it
+ *    returns (SURF-5, SURF-6).
+ */
+export async function handleMention(
+  input: InboundMention,
+  deps: HandleMentionDependencies
+): Promise<HandleMentionResult> {
+  const { db, model, logger, reply, day } = deps
+  const botDisplayName = deps.botDisplayName ?? DEFAULT_BOT_DISPLAY_NAME
+
+  // SURF-2 — checked before anything else: a loop between two bots (or the
+  // bot replying to its own reply) must never depend on whether either
+  // message happens to mention the other.
+  if (input.authorId === input.botId) {
+    return { kind: 'ignored-self' }
+  }
+  if (input.authorIsBot) {
+    return { kind: 'ignored-other-bot' }
+  }
+  if (!mentionsBot(input.text, input.botId)) {
+    return { kind: 'ignored-not-a-mention' }
+  }
+
+  // SURF-3 — an incoming message is answered only when its Discord server
+  // resolves to an organization through the binding record.
+  const binding = discordServers.resolveDiscordServerBinding(input.guildId, db)
+  if (!binding) {
+    logger.info(
+      { guildId: input.guildId },
+      'handleMention: dropped, Discord server is not bound to an organization'
+    )
+    return { kind: 'unbound-server' }
+  }
+  const organizationId = binding.organizationId
+
+  // SURF-4 — the author's snowflake resolves to a person, created together
+  // with a new identity the first time they are seen (PPL-3). Their current
+  // Discord display name is merged in now rather than waiting for a roster
+  // import: `mergeRosterFields` only fills a field that is still `null`, so
+  // a name a later roster import supplies is never overwritten by this.
+  const person = people.resolvePersonByIdentity(
+    organizationId,
+    { surface: 'discord', externalId: input.authorId },
+    db
+  )
+  people.mergeRosterFields(
+    organizationId,
+    person.id,
+    { displayName: input.authorDisplayName },
+    db
+  )
+
+  // CORE-2 — attribute the message to exactly one course.
+  const { routable, titleById } = loadRoutableCourses(organizationId, db)
+  const routing = routeMessage(routable, {
+    categoryName: input.categoryName,
+    channelName: input.channelName,
+    roleNames: input.authorRoleNames,
+  })
+
+  if (routing.kind === 'unmatched') {
+    // SURF-6 — "a message that matches no course": logged, not answered.
+    logger.info(
+      {
+        organizationId,
+        guildId: input.guildId,
+        channelName: input.channelName,
+        categoryName: input.categoryName,
+      },
+      'handleMention: dropped, message matches no course'
+    )
+    return { kind: 'unrouted' }
+  }
+  if (routing.kind === 'ambiguous') {
+    // CORE-2 — "a configuration error the platform reports rather than a
+    // choice it makes quietly": also logged and dropped, at ERROR since an
+    // instructor's own configuration needs fixing, not just noting.
+    logger.error(
+      { organizationId, signal: routing.signal, courseIds: routing.courseIds },
+      'handleMention: dropped, message matches more than one course'
+    )
+    return {
+      kind: 'routing-ambiguous',
+      signal: routing.signal,
+      courseIds: routing.courseIds,
+    }
+  }
+
+  const courseId = routing.course.id
+  const courseTitle = titleById.get(courseId) ?? courseId
+
+  // BOT-6 — the raw mention token is rewritten to a readable name before
+  // the model ever sees the question; `text` (unrewritten) is what the
+  // transcript records via `answerQuestion`'s own `text`/`modelText` split.
+  const modelText = rewriteMention(input.text, input.botId, botDisplayName)
+
+  const answerDeps: AnswerDependencies = { db, model, logger }
+  const result = await answerQuestion(
+    {
+      organizationId,
+      courseId,
+      personId: person.id,
+      surface: 'discord',
+      text: input.text,
+      modelText,
+      day,
+      channelRef: input.channelName,
+      categoryRef: input.categoryName,
+    },
+    answerDeps
+  )
+
+  switch (result.kind) {
+    case 'answered':
+    case 'answered-last-request': {
+      const messageCount = await sendReply(reply, result.text)
+      return {
+        kind: result.kind,
+        conversationId: result.conversationId,
+        messageCount,
+      }
+    }
+    case 'failed-with-apology': {
+      const messageCount = await sendReply(reply, result.text)
+      return {
+        kind: 'failed-with-apology',
+        conversationId: result.conversationId,
+        messageCount,
+      }
+    }
+    case 'declined-over-limit': {
+      // SURF-6 — the allowance is spent: unlike `response_bot.py`'s own
+      // silent drop (BOT-5), a refusal now reaches the student. See
+      // docs/DECISIONS.md.
+      await sendReply(reply, overLimitRefusalText(courseTitle))
+      return { kind: 'declined-over-limit' }
+    }
+    case 'course-disabled':
+    case 'not-configured': {
+      // SURF-6 — "a course configured to answer nothing": logged, not
+      // answered, matching `answerQuestion`'s own treatment of both.
+      logger.info(
+        { organizationId, courseId, personId: person.id, kind: result.kind },
+        'handleMention: dropped, course is not configured to answer'
+      )
+      return { kind: result.kind }
+    }
+  }
+}

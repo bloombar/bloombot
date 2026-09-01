@@ -21,6 +21,7 @@ export default defineConfig({
       '@bloombot/legacy-import': sourceEntry('legacy-import'),
       '@bloombot/core': sourceEntry('core'),
       '@bloombot/openai': sourceEntry('openai'),
+      '@bloombot/discord': sourceEntry('discord'),
     },
   },
   test: {
@@ -32,12 +33,19 @@ export default defineConfig({
     // unit-testable on its own. `packages/openai` joins the floor here
     // (MDL-1..7): it is the vendor adapter behind the model port, exactly
     // the kind of logic-that-matters this floor exists to hold.
+    // `packages/discord` joins it too (SURF-1..7): it holds every line of
+    // Discord surface logic actually testable without discord.js — binding
+    // lookup, person resolution, routing, splitting, rendering. `apps/bot`
+    // stays outside the floor: it is the thin, deliberately-untested wiring
+    // to the gateway this slice's brief asks to keep "thin enough that its
+    // untested part is obvious", not logic this floor exists to hold.
     coverage: {
       provider: 'v8',
       include: [
         'packages/db/src/repos/**/*.ts',
         'packages/core/src/**/*.ts',
         'packages/openai/src/**/*.ts',
+        'packages/discord/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,
@@ -106,6 +114,24 @@ export default defineConfig({
         test: {
           name: 'openai',
           root: './packages/openai',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'discord',
+          root: './packages/discord',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'bot',
+          root: './apps/bot',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

@@ -1,0 +1,22 @@
+{
+  "name": "@bloombot/bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Discord bot process (SURF-1..7, PLAT-3, PLAT-4): the only process holding a gateway connection, translating discord.js events into @bloombot/discord's handleMention and rendering its result.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@bloombot/config": "*",
+    "@bloombot/core": "*",
+    "@bloombot/db": "*",
+    "@bloombot/discord": "*",
+    "@bloombot/logger": "*",
+    "@bloombot/openai": "*",
+    "discord.js": "^14.27.0"
+  }
+}

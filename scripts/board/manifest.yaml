@@ -1086,29 +1086,6 @@
   phase: 3
   status: Done
   review: false
-- id: PLAT-3
-  title: One gateway connection
-  full: apps/bot holds the only Discord gateway connection. The API and the worker
-    reach Discord over REST with the same token, so there is no inter-process
-    coordination to get wrong; Discord enforces the shared rate-limit buckets
-    server-side. Each REST client is configured below the global request ceiling
-    so the two processes together stay under it.
-  section: §12 Platform Architecture
-  family: PLAT
-  phase: 3
-  status: Backlog
-  review: false
-- id: PLAT-4
-  title: Process topology
-  full: "Four processes, each single-instance: API, bot, worker, and a static
-    build served by nginx. Never clustered — multiple API workers would multiply
-    writers against a single-writer database for no gain, and two gateway
-    connections on one token is an error rather than redundancy."
-  section: §12 Platform Architecture
-  family: PLAT
-  phase: 3
-  status: Backlog
-  review: false
 - id: PLAT-5
   title: No import-time side effects
   full: Modules do not open connections, read configuration files, construct API
@@ -1443,6 +1420,109 @@
   family: MDL
   phase: 4
   status: Done
+  review: false
+- id: PLAT-3
+  title: One gateway connection
+  full: apps/bot holds the only Discord gateway connection. The API and the worker
+    reach Discord over REST with the same token, so there is no inter-process
+    coordination to get wrong; Discord enforces the shared rate-limit buckets
+    server-side. Each REST client is configured below the global request ceiling
+    so the two processes together stay under it.
+  section: §12 Platform Architecture
+  family: PLAT
+  phase: 4
+  status: Backlog
+  review: false
+- id: PLAT-4
+  title: Process topology
+  full: "Four processes, each single-instance: API, bot, worker, and a static
+    build served by nginx. Never clustered — multiple API workers would multiply
+    writers against a single-writer database for no gain, and two gateway
+    connections on one token is an error rather than redundancy."
+  section: §12 Platform Architecture
+  family: PLAT
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-1
+  title: The bot process holds the only gateway connection
+  full: "One process connects to the Discord gateway. The API and the background
+    worker reach Discord over REST with the same token, so there is no
+    inter-process coordination to get wrong and no second connection competing
+    for the same session. The process is single-instance by design: two gateway
+    connections on one token is an error rather than redundancy."
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-2
+  title: Only a direct mention is answered
+  full: The bot answers a message that mentions it, ignores its own messages and
+    those of other bots, and rewrites the mention into a readable name before
+    the question reaches the model, so the model sees a sentence rather than a
+    numeric reference. What the student actually typed is what the transcript
+    records.
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-3
+  title: A server that is not bound to an organization is ignored
+  full: An incoming message is answered only when its Discord server resolves to
+    an organization through the binding record. A message from an unbound server
+    is logged and dropped rather than answered, so a bot added to a server by
+    someone who has not installed it through the platform does nothing at all.
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-4
+  title: A person is recognized by their Discord account
+  full: The author's snowflake resolves to a person in that organization, and to a
+    new person and identity the first time they are seen. The bot therefore
+    fills its own roster as students arrive, and a student who later reaches the
+    same course from the web is the same person with the same history.
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-5
+  title: The answer is a reply, and a long answer is split rather than lost
+  full: The bot replies to the message it is answering, so a busy channel stays
+    legible. An answer longer than Discord's message limit is split on a
+    boundary that keeps it readable and sent in order, rather than truncated or
+    dropped by the platform.
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-6
+  title: Every outcome reaches the student or the log, and none reaches neither
+  full: "Each outcome the answering core can return has a rendering: an answer, an
+    answer carrying the day's-last notice, a refusal when the allowance is
+    spent, an apology when the model fails, and — for a course configured to
+    answer nothing, or a message that matches no course — a log line naming the
+    cause rather than a silent drop the instructor cannot see."
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
+  review: false
+- id: SURF-7
+  title: The process starts, reports its health, and stops cleanly
+  full: The bot exposes a health endpoint that reports whether the gateway is
+    connected, so a supervisor can tell "running" from "connected". On shutdown
+    it closes the gateway and the database rather than leaving the socket to
+    time out, and it refuses to start on an environment that does not validate.
+  section: §22 Discord Surface
+  family: SURF
+  phase: 4
+  status: Backlog
   review: false
 - id: ACT-1
   title: Every operation is an action

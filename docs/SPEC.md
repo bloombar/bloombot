@@ -1229,6 +1229,15 @@ Every credential the Python system used is rotated when the platform takes over,
 credential that has been in two systems' environments is a credential with two chances of having
 leaked.
 
+#### OPS-13 A server administrator can set the platform up from documentation alone
+
+The path from an empty Discord application to a bot answering a student's question is written down,
+in order, with what each step is for and how to tell it worked — including which privileged intents
+must be enabled, which single value is both the application id and the OAuth client id, what the
+platform verifies before it binds a server, and what each way of failing to answer looks like from
+the channel. An instructor who has never seen this repository should not need to read its source to
+install it.
+
 #### OPS-12 A student-facing failure pages somebody
 
 When the bot stops answering — gateway lost, provider failing, database unreachable — an operator

@@ -97,6 +97,121 @@ export function incrementUsage(
     .get()
 }
 
+/**
+ * What `reserveUsageSlot` reports: `granted` with the count *after* this
+ * request is counted, or a plain refusal when the limit was already
+ * reached — no count is returned on refusal, since nothing was written.
+ */
+export type UsageReservation =
+  { granted: true; count: number } | { granted: false }
+
+/**
+ * Atomically check the daily allowance and count this request against it, in
+ * one statement (finding 8 of the CORE-1 rework). `packages/core`'s
+ * `answerQuestion` used to do this as two steps — `getUsageCount` to read the
+ * count, then `incrementUsage` to write it, with an `await` on the model call
+ * sitting in between — so two requests from the same person arriving close
+ * together could both read the same "count so far", both pass the check, and
+ * both write, landing the stored count one *past* `limit` even though the
+ * check itself never let a request through improperly. SQLite's own
+ * single-threaded, synchronous execution (via `better-sqlite3`) makes one
+ * statement enough to close that: nothing else can run *inside* the
+ * statement below for a second caller to interleave with, the way it could
+ * across the two separate calls this replaces.
+ *
+ * The check and the write are the same `INSERT ... ON CONFLICT DO UPDATE ...
+ * WHERE` — SQLite evaluates the `WHERE` on the conflicting row as part of
+ * applying the conflict resolution itself (verified against this file's own
+ * `better-sqlite3` version, not assumed from the docs alone): when it is
+ * false the row is left exactly as it was and `RETURNING` reports nothing,
+ * which this function surfaces as `{ granted: false }` rather than a
+ * separately-read "would this exceed the limit" boolean that could itself
+ * go stale before the write that acts on it.
+ *
+ * The first request of a `(course, person, day)` triple has no existing row
+ * to conflict with, so the `INSERT`'s own `SELECT ... WHERE ${limit} > 0`
+ * guard is what refuses it for a `limit` of `0` — without that guard, a
+ * fresh `INSERT` would always succeed regardless of `limit`, since only the
+ * `ON CONFLICT` branch's `WHERE` is conditional.
+ *
+ * `limit === null` means the course has no configured allowance — always
+ * granted, unconditionally, the same "no default value is invented here"
+ * reading `hasExhaustedDailyLimit` already gives a `null`
+ * `maxRequestsPerDay` (BOT-5's platform default of 10 is `answerQuestion`'s
+ * own responsibility to apply before calling this, per
+ * `docs/DECISIONS.md` D-13).
+ *
+ * `undefined` when `courseId` or `personId` does not exist, or does not
+ * belong to `organizationId` (TEN-2/TEN-5) — same tenant-scoping convention
+ * `incrementUsage` already holds itself to, checked before the reservation
+ * statement runs so a foreign id is refused rather than written through.
+ */
+export function reserveUsageSlot(
+  organizationId: string,
+  courseId: string,
+  personId: string,
+  day: string,
+  limit: number | null,
+  db: Database
+): UsageReservation | undefined {
+  assertValidDay(day)
+
+  const course = db
+    .select({ id: courses.id })
+    .from(courses)
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .get()
+  if (!course) return undefined
+
+  const person = db
+    .select({ id: people.id })
+    .from(people)
+    .where(
+      and(eq(people.id, personId), eq(people.organizationId, organizationId))
+    )
+    .get()
+  if (!person) return undefined
+
+  if (limit === null) {
+    const row = db
+      .insert(usageCounters)
+      .values({ organizationId, courseId, personId, day, count: 1 })
+      .onConflictDoUpdate({
+        target: [
+          usageCounters.organizationId,
+          usageCounters.courseId,
+          usageCounters.personId,
+          usageCounters.day,
+        ],
+        set: { count: sql`${usageCounters.count} + 1` },
+      })
+      .returning({ count: usageCounters.count })
+      .get()
+    return { granted: true, count: row.count }
+  }
+
+  // Raw SQL, not the query builder: drizzle's `onConflictDoUpdate` supports
+  // a `setWhere` on the `DO UPDATE` branch, but not a matching condition on
+  // the plain `INSERT` branch a first-ever row takes — the `SELECT ...
+  // WHERE` above is what closes that gap for a `limit` of `0`. Column and
+  // table names are written out rather than taken from `usageCounters`
+  // because interpolating a table-qualified column reference into an
+  // unqualified `INSERT` column list produces invalid SQL; they must be kept
+  // in sync with `usage_counters`'s definition in `schema.ts` by hand.
+  const row = db.get<{ count: number }>(sql`
+    INSERT INTO usage_counters (organization_id, course_id, person_id, day, count)
+    SELECT ${organizationId}, ${courseId}, ${personId}, ${day}, 1
+    WHERE ${limit} > 0
+    ON CONFLICT (organization_id, course_id, person_id, day)
+    DO UPDATE SET count = count + 1 WHERE usage_counters.count < ${limit}
+    RETURNING count
+  `)
+  if (!row) return { granted: false }
+  return { granted: true, count: row.count }
+}
+
 /** A person's request count for a course on `day` — `0` when no row exists yet. */
 export function getUsageCount(
   organizationId: string,

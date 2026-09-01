@@ -923,3 +923,51 @@ person nor appends a transcript twice, so a failed run can be fixed and repeated
 importer reports what it created, what it matched to something already there, and what it
 could not place, and a message whose course cannot be identified is reported rather than
 dropped silently.
+
+### 20. Conversation Core
+
+#### CORE-1 One answering pipeline for every surface
+
+Answering a question is one function no matter where the question arrived from — a
+Discord mention, the web chat, or an agent through the MCP server. It takes the
+organization, course, person, surface and text; it enforces the daily allowance, records
+the inbound message, asks the model, records the reply and returns it. A surface adapter
+translates its own events into that call and renders the result, and holds no answering
+logic of its own, so a change to how the bot answers cannot apply to one surface and not
+another.
+
+#### CORE-2 Routing attributes a message to exactly one course
+
+A message is attributed by the Discord category it arrived in, and failing that by the
+author's roles, matching the behaviour the running bot already has. A message that
+matches no enabled course is ignored rather than answered from general knowledge, and a
+message that matches two is a configuration error the platform reports rather than a
+choice it makes quietly.
+
+#### CORE-3 The daily allowance is enforced before the model is called
+
+A person's count for that course and day is checked first, so an over-limit request costs
+nothing. The request that reaches the allowance is answered with a notice that it is the
+day's last; requests past it are declined without a model call. The day is supplied by
+the caller, never read from a clock inside the core, so the boundary is testable and does
+not drift with a process's timezone.
+
+#### CORE-4 The model is a port, not an import
+
+The core depends on an interface — a question and its context in, an answer out — and
+never on a vendor's SDK. The whole pipeline therefore runs in tests against a fake model
+with no network, and a second model provider is an adapter rather than a rewrite.
+
+#### CORE-5 A model failure degrades to an apology, never to silence or a stack trace
+
+When the model call fails, the failure is logged with its cause and the person is told
+plainly that the assistant cannot answer right now and pointed at the course's staff. The
+inbound message is still recorded, because a question the system failed to answer is
+exactly the one an instructor needs to see.
+
+#### CORE-6 Both directions are recorded, and recording never blocks the reply
+
+The question and the answer are both written to the transcript against the same
+conversation. A failure to record is logged and does not prevent the person receiving
+their answer: losing a transcript row is bad, and withholding a student's answer because
+of it is worse.

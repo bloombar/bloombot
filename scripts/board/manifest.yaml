@@ -1988,7 +1988,7 @@
   section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
-  status: In review
+  status: Done
   review: false
 - id: SRV-7
   title: Scaffolding is idempotent and reports what it did
@@ -1999,7 +1999,7 @@
   section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
-  status: In review
+  status: Done
   review: false
 - id: SRV-8
   title: Scaffolding never deletes
@@ -2010,7 +2010,7 @@
   section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
-  status: In review
+  status: Done
   review: false
 - id: ROST-9
   title: A roster is imported as a file, into a job

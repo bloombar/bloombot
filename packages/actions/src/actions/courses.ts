@@ -26,9 +26,13 @@ const categoryInputSchema = z.object({
 /**
  * `id` is only meaningful when saving an *update*: its presence, not a
  * separate `courses.create`/`courses.update` pair of actions, is what tells
- * `courses.save` which of `packages/db`'s two functions to call — matching
- * `NewCourse`'s own doc comment ("only used on create") one level up, since
- * a create still accepts a caller-supplied id.
+ * `courses.save` which of `packages/db`'s two functions to call. Unlike
+ * `NewCourse`'s own doc comment ("only used on create") one level up,
+ * `courses.save` never actually accepts a caller-supplied id on create —
+ * the policy (below) refuses the whole call whenever `input.id` does not
+ * already resolve to an existing course in this organization, so by the
+ * time `execute` runs, `input.id` present always means
+ * `entity.existingCourse` is set.
  */
 const saveInputSchema = z.object({
   id: z.string().min(1).optional(),
@@ -92,29 +96,56 @@ export const saveCourseAction: Action<
     },
   },
   execute: ({ organizationId, input, entity, db }) => {
-    // `entity.project.id`, not `input.projectId` — the policy already
-    // resolved and checked it (ACT-2). `id` is only ever supplied to
-    // `NewCourse` on create (its own doc comment, `repos/courses.ts`) —
-    // `exactOptionalPropertyTypes` means the property has to be omitted
-    // entirely rather than set to `undefined` when there is none to give it.
+    // Finding 2 (rework pass): `promptId`, `instructions`, `model`,
+    // `vectorStoreId` and `maxRequestsPerDay` are optional in
+    // `saveInputSchema` so a caller can update, say, only a course's title
+    // — but that means an *omitted* field must keep whatever is already
+    // stored, not get wiped to `null`. An *explicit* `null` is the caller's
+    // way to clear one, and `exactOptionalPropertyTypes` is exactly what
+    // makes "omitted" (`undefined`) and "explicitly cleared" (`null`) two
+    // different values `input.promptId` etc. can actually carry, rather
+    // than both collapsing to the same thing. On create there is nothing
+    // yet to preserve, so an omitted field there falls back to `null`,
+    // matching `createCourse`'s own previous behaviour.
+    const keepOrClear = <Value>(
+      given: Value | null | undefined,
+      stored: Value | null | undefined
+    ): Value | null => (given !== undefined ? given : (stored ?? null))
+
     const newCourse: courses.NewCourse = {
-      ...(entity.existingCourse ? {} : input.id ? { id: input.id } : {}),
+      // `id` is never supplied here — `entity.existingCourse` set is the
+      // only case that reaches `updateCourse`, which does not read `id`
+      // off `NewCourse` at all; `createCourse` generates its own.
       projectId: entity.project.id,
       title: input.title,
       filePrefix: input.filePrefix,
       enabled: input.enabled,
       adminsRole: input.adminsRole,
       studentsRole: input.studentsRole,
-      promptId: input.promptId ?? null,
-      instructions: input.instructions ?? null,
-      model: input.model ?? null,
-      vectorStoreId: input.vectorStoreId ?? null,
-      maxRequestsPerDay: input.maxRequestsPerDay ?? null,
-      // Same `exactOptionalPropertyTypes` reasoning as `id` above — omitted
-      // entirely rather than set to `undefined` when the caller left it out.
+      promptId: keepOrClear(input.promptId, entity.existingCourse?.promptId),
+      instructions: keepOrClear(
+        input.instructions,
+        entity.existingCourse?.instructions
+      ),
+      model: keepOrClear(input.model, entity.existingCourse?.model),
+      vectorStoreId: keepOrClear(
+        input.vectorStoreId,
+        entity.existingCourse?.vectorStoreId
+      ),
+      maxRequestsPerDay: keepOrClear(
+        input.maxRequestsPerDay,
+        entity.existingCourse?.maxRequestsPerDay
+      ),
+      // `conversationScope` has no "clear" state to distinguish — it is not
+      // nullable (`schema.ts`'s own column default is `'course'`) — so
+      // omitted means "keep what is stored" on update, or "let
+      // `createCourse` apply its default" on create; never written as
+      // `undefined` explicitly (`exactOptionalPropertyTypes` again).
       ...(input.conversationScope
         ? { conversationScope: input.conversationScope }
-        : {}),
+        : entity.existingCourse
+          ? { conversationScope: entity.existingCourse.conversationScope }
+          : {}),
       categories: input.categories,
     }
 
@@ -169,7 +200,13 @@ export const enableCourseAction: Action<
     const result = courses.enableCourse(organizationId, entity.id, db)
     if (!result) throw new ActionRefusedError()
     if (!result.ok) throw new ActionConflictError(result.conflict)
-    return { enabled: result.changed }
+    // Finding 4 (rework pass): `result.changed` is rows-changed, not
+    // state — enabling an already-enabled course is `enableCourse`'s own
+    // idempotent no-op (`{ ok: true, changed: false }`, `repos/courses.ts`),
+    // and the course is enabled either way once `result.ok` is true.
+    // Reporting `changed` here told a caller enabling an already-enabled
+    // course "this failed," which is not true.
+    return { enabled: true }
   },
 }
 
@@ -187,7 +224,14 @@ export const disableCourseAction: Action<
     descriptor: { resource: 'course', access: 'write' },
     resolve: resolveOwnCourse,
   },
-  execute: ({ organizationId, entity, db }) => ({
-    disabled: courses.disableCourse(organizationId, entity.id, db) > 0,
-  }),
+  execute: ({ organizationId, entity, db }) => {
+    // Finding 4 (rework pass): same fix as `courses.enable`, above —
+    // `disableCourse` returns rows-changed, not state, and disabling an
+    // already-disabled course changes `0` rows without failing. There is no
+    // conflict case here (removing a course from PROJ-3's candidate set
+    // cannot collide with anything), so the course is disabled either way
+    // once this returns; report that state, not the row count.
+    courses.disableCourse(organizationId, entity.id, db)
+    return { disabled: true }
+  },
 }

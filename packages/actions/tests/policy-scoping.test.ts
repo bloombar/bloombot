@@ -5,16 +5,51 @@
  * `execute` reading `input` itself.
  */
 
-import { projects } from '@bloombot/db'
+import { courses, projects, type Database } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
+import {
+  disableCourseAction,
+  enableCourseAction,
+  saveCourseAction,
+} from '../src/actions/courses.js'
 import { archiveProjectAction } from '../src/actions/projects.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionRefusedError } from '../src/errors.js'
 import type { Action } from '../src/types.js'
 import { seedOrganizationWithProject } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
+
+/** A minimal course, created directly through the repo (not through `dispatch`) so a test can seed a scenario `courses.save`/`enable`/`disable` are then checked against. */
+function seedCourse(
+  organizationId: string,
+  projectId: string,
+  db: Database,
+  overrides: Partial<{
+    title: string
+    filePrefix: string
+    enabled: boolean
+    adminsRole: string
+    studentsRole: string
+  }> = {}
+) {
+  const result = courses.createCourse(
+    organizationId,
+    {
+      projectId,
+      title: overrides.title ?? 'Seeded Course',
+      filePrefix: overrides.filePrefix ?? 'sc',
+      enabled: overrides.enabled ?? true,
+      adminsRole: overrides.adminsRole ?? 'admins-seeded',
+      studentsRole: overrides.studentsRole ?? 'students-seeded',
+      categories: [],
+    },
+    db
+  )
+  if (!result.ok) throw new Error('setup failed: unexpected conflict')
+  return result.course
+}
 
 let testDb: TestDatabase
 
@@ -115,5 +150,94 @@ describe('ACT-2 — the policy scopes the entity execute receives', () => {
     expect(
       projects.getProject(orgB, projectBId, testDb.db)?.archivedAt
     ).toBeNull()
+  })
+})
+
+// Finding 5 (rework pass): `projects.archive` was the only two-step policy
+// with a cross-tenant regression test. `courses.save` resolves the target
+// project *and*, on update, the existing course — the only place a tenant
+// check can be half-done — and `courses.enable`/`courses.disable` each
+// resolve a course by id the same way `projects.archive` resolves a
+// project. Deleting the `if (!existingCourse) return undefined` line at
+// `actions/courses.ts:90` leaves the rest of the suite green while making
+// it possible to update another organization's course; these tests catch
+// exactly that.
+describe('ACT-2 — courses.save, courses.enable, courses.disable scope by organization', () => {
+  it("courses.save refuses to update another organization's course, even when projectId is the caller's own", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, projectId: projectAId } =
+      seedOrganizationWithProject(testDb.db)
+    const { organizationId: orgB, projectId: projectBId } =
+      seedOrganizationWithProject(testDb.db)
+    const courseB = seedCourse(orgB, projectBId, testDb.db, {
+      title: 'Org B Course',
+    })
+
+    await expect(
+      dispatch(
+        saveCourseAction,
+        {
+          id: courseB.id,
+          projectId: projectAId,
+          title: 'Hijacked',
+          filePrefix: 'hj',
+          enabled: true,
+          adminsRole: 'admins-hijack',
+          studentsRole: 'students-hijack',
+          categories: [],
+        },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // Org B's course is untouched — the policy refused before `execute`
+    // (which updates by `entity.existingCourse.id`, never `input.id`) ever
+    // ran.
+    expect(courses.getCourse(orgB, courseB.id, testDb.db)?.title).toBe(
+      'Org B Course'
+    )
+  })
+
+  it("courses.enable refuses to enable another organization's course", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithProject(testDb.db)
+    const { organizationId: orgB, projectId: projectBId } =
+      seedOrganizationWithProject(testDb.db)
+    const courseB = seedCourse(orgB, projectBId, testDb.db, {
+      enabled: false,
+      adminsRole: 'admins-orgb-enable',
+      studentsRole: 'students-orgb-enable',
+    })
+
+    await expect(
+      dispatch(
+        enableCourseAction,
+        { courseId: courseB.id },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(courses.getCourse(orgB, courseB.id, testDb.db)?.enabled).toBe(false)
+  })
+
+  it("courses.disable refuses to disable another organization's course", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithProject(testDb.db)
+    const { organizationId: orgB, projectId: projectBId } =
+      seedOrganizationWithProject(testDb.db)
+    const courseB = seedCourse(orgB, projectBId, testDb.db, {
+      adminsRole: 'admins-orgb-disable',
+      studentsRole: 'students-orgb-disable',
+    })
+
+    await expect(
+      dispatch(
+        disableCourseAction,
+        { courseId: courseB.id },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(courses.getCourse(orgB, courseB.id, testDb.db)?.enabled).toBe(true)
   })
 })

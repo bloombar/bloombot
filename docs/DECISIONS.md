@@ -928,3 +928,29 @@ this slice's own schemas but was only checked against the subset of JSON Schema 
 (object, array, string, number/integer, boolean, null, `enum`, `anyOf`, `minLength`) — a future action with a
 schema shape outside that subset (a `oneOf`, a `pattern`, a recursive type) is untested territory for the
 catalog's own correctness, though `z.toJSONSchema` itself is responsible for producing valid output regardless.
+
+**Finding 9 (rework pass) — ACT-2's "an action cannot reach a record without having been given one that was
+already checked" is a convention today, not a structural guarantee.** `ExecuteContext` (`types.ts`) hands
+`execute` a live `Database`, and `packages/db`'s repos are ordinary importable functions scoped only by
+whatever `organizationId` they are called with — so nothing stops an `execute` from importing `getCourse` and
+calling it with an id, or an `organizationId`, `entity` never resolved. The six ported actions simply do not:
+every `execute` in `src/actions/` reaches a record through `entity`, on purpose, but that is a fact about this
+slice's own code, not one TypeScript or `dispatch.ts` enforces about the next action written. What would make
+it real: dropping `db` from `ExecuteContext` entirely, and replacing it with a narrowed set of
+already-org-scoped closures derived from the entity the policy just resolved (`entity.saveCategories`, say,
+rather than `db` plus `courses.updateCourse`), so that a call reaching an arbitrary organization id is not
+expressible in `execute`'s own signature — not merely avoided by convention. That is a larger reshaping of
+`Action`, `Policy`, and every ported action's `execute` than this rework pass's brief calls for; it is recorded
+here as the design question whichever slice builds the API (the first caller with untrusted callers on the
+other end of `dispatch`) has to settle, not attempted in this one.
+
+**Finding 10 (rework pass) — a descriptor names the resource an action's policy resolves, not necessarily the
+one its `execute` writes.** `courses.save`'s descriptor is `{ resource: 'project', access: 'write' }` on both
+the create and the update path — accurate to what the policy resolves (a project, always; a course too, on
+update), but on update, `execute` writes a _course_, not the project. Nothing enforces descriptors yet (see
+`policy.ts`'s own comment: they are read by `registry.ts`'s catalog, ACT-6, and pinned by the access audit
+index, ACT-5, but not themselves checked by `dispatch.ts`), so this has no effect today. The day something
+does enforce them — an assistant's own permission grant checked against a descriptor before `dispatch` is
+called, say — an actor permitted only to write projects would be permitted to rewrite courses through this one
+action, which is worth a reviewer's attention rather than a surprise. `tests/access-audit.test.ts`'s
+`EXPECTED_DESCRIPTORS` comment on `courses.save` says so; this is the same note kept alongside it here.

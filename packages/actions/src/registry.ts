@@ -31,14 +31,33 @@ export class ActionRegistry {
   /**
    * Register an action. ACT-2's "an action with no policy does not compile"
    * is enforced by `Action`'s own type (`types.ts`) before an object literal
-   * ever reaches this call; this only guards the one thing the type system
-   * cannot — two actions registered under the same name.
+   * ever reaches this call; this guards the two things the type system
+   * cannot — two actions registered under the same name, and (finding 8,
+   * rework pass) an action whose `policy` slipped past that compile-time
+   * check anyway (`as any`, a cast — see `docs/DECISIONS.md` D-18's "What
+   * this does not catch"). Without this, a smuggled action fails much
+   * later and confusingly: `catalog()` throwing `TypeError: Cannot read
+   * properties of undefined (reading 'descriptor')`, or `dispatch.ts`
+   * throwing a raw `TypeError` calling `.resolve` instead of refusing. This
+   * is the one place both of those would otherwise first surface, so it is
+   * the one place that refuses to register such an action at all.
    */
   register<Name extends string, Input, Entity, Output>(
     action: Action<Name, Input, Entity, Output>
   ): void {
     if (this.actionsByName.has(action.name)) {
       throw new Error(`An action is already registered as "${action.name}".`)
+    }
+    if (
+      typeof action.policy !== 'object' ||
+      action.policy === null ||
+      typeof action.policy.resolve !== 'function' ||
+      typeof action.policy.descriptor !== 'object' ||
+      action.policy.descriptor === null
+    ) {
+      throw new Error(
+        `Action "${action.name}" has no valid policy; refusing to register it.`
+      )
     }
     // Type parameters are erased on the way into a heterogeneous map
     // (`AnyAction`, `types.ts`); `dispatch.ts` is always called with the

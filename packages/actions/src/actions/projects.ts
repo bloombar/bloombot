@@ -19,6 +19,26 @@ const createInputSchema = z.object({
 type CreateInput = z.infer<typeof createInputSchema>
 
 /**
+ * Finding 3 (rework pass): `createProject` (`repos/projects.ts`) leaves a
+ * name collision unhandled by design (D-12) — a fresh id can never have
+ * collided with anything before its own insert, so the repo just lets
+ * `projects_org_name_active_unique` (`schema.ts`) throw
+ * `SQLITE_CONSTRAINT_UNIQUE` rather than wrap its own return type. This
+ * package is exactly the layer D-12 leaves that for: every other write here
+ * converts a repo-level collision into `ActionConflictError` (D-18), so a
+ * duplicate project name has to as well, rather than reach the caller as an
+ * unmapped 500 (`HTTP_STATUS_BY_ACTION_ERROR`, `errors.ts`, has no entry for
+ * a raw driver error).
+ */
+function isUniqueNameConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'SQLITE_CONSTRAINT_UNIQUE'
+  )
+}
+
+/**
  * `projects.create` has no existing project to resolve — the record it
  * protects is the *organization* a new project is created inside, so the
  * policy resolves that instead (still tenant-scoped: `getOrganizationById`
@@ -39,8 +59,31 @@ export const createProjectAction: Action<
     resolve: (_input, context) =>
       organizations.getOrganizationById(context.organizationId, context.db),
   },
-  execute: ({ organizationId, input, db }) =>
-    projects.createProject(organizationId, { name: input.name }, db),
+  execute: ({ organizationId, input, db }) => {
+    try {
+      return projects.createProject(organizationId, { name: input.name }, db)
+    } catch (error) {
+      if (!isUniqueNameConstraintError(error)) throw error
+      // The database just refused this exact write for this exact reason,
+      // so the conflicting row is there to find — the same fallback
+      // `renameProject` (`repos/projects.ts`) uses for the race where it was
+      // renamed or archived between the failed write and this lookup.
+      const conflictingProject = projects
+        .listProjects(organizationId, db)
+        .find((project) => project.name === input.name)
+      // Typed as `ProjectNameConflict` (not an inline object literal passed
+      // straight to `ActionConflictError`) so this matches the same shape
+      // `renameProject`'s own fallback builds, rather than tripping
+      // `ActionConflictError`'s excess-property check on `name` and
+      // `conflictingProjectId`.
+      const conflict: projects.ProjectNameConflict = {
+        message: `Project name "${input.name}" is already used by another active project in this organization.`,
+        name: input.name,
+        conflictingProjectId: conflictingProject?.id ?? '',
+      }
+      throw new ActionConflictError(conflict)
+    }
+  },
 }
 
 const projectIdInputSchema = z.object({
@@ -76,9 +119,17 @@ export const archiveProjectAction: Action<
   },
   // `entity.id`, not `input.projectId` — the id the policy already resolved
   // and checked, not the raw one a caller supplied (ACT-2).
-  execute: ({ organizationId, entity, db }) => ({
-    archived: projects.archiveProject(organizationId, entity.id, db) > 0,
-  }),
+  execute: ({ organizationId, entity, db }) => {
+    // Finding 4 (rework pass): `archiveProject`'s return is rows-changed,
+    // not state — archiving an already-archived project changes `0` rows
+    // (its own no-op treatment of the case, `repos/projects.ts`), not a
+    // failure. There is no conflict case for archiving, so the project is
+    // archived either way once this returns; report that state, not the
+    // row count, matching how `projects.unarchive` (below) already reports
+    // its own idempotent case honestly.
+    projects.archiveProject(organizationId, entity.id, db)
+    return { archived: true }
+  },
 }
 
 export const unarchiveProjectAction: Action<

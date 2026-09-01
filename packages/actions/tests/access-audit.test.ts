@@ -27,7 +27,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // Resolves the *project* a course is saved into, whether creating or
   // updating (`actions/courses.ts`'s `CourseSaveEntity`) — an update also
   // resolves the existing course, but the descriptor names the one
-  // resource every save requires.
+  // resource every save requires. Finding 10 (rework pass): on the update
+  // path, `execute` actually *writes* a course, not a project — nothing
+  // enforces descriptors yet (`policy.ts`), but the day something does, an
+  // actor permitted to write projects would be permitted to rewrite courses
+  // through this action (see `docs/DECISIONS.md` D-18).
   'courses.save': { resource: 'project', access: 'write' },
   'courses.enable': { resource: 'course', access: 'write' },
   'courses.disable': { resource: 'course', access: 'write' },

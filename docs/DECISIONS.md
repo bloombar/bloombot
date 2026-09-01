@@ -279,3 +279,98 @@ the same snowflake, for the reason above — but that safety is a property of _t
 not of read-then-write in general. A future two-step operation in this package that reads one thing and writes
 based on it needs to be checked against the same question this one now answers, rather than assumed safe by
 analogy.
+
+---
+
+## D-12 — `packages/db`: PROJ-3's collision rule is a repo-level check, not a SQL constraint
+
+**Problem.** PROJ-3 requires that a course's Discord category names and its two role names be unique across
+every _enabled_ course in an organization, excluding a course whose project is archived. `projects`' own name
+uniqueness (PROJ-2's "unique among non-archived projects") is the same shape of rule on a single table and is
+enforced with a SQL constraint (below); PROJ-3 is not, and the two needed to be decided separately.
+
+**Choice — `projects`: a partial unique index, mostly caught.** `projects_org_name_active_unique` (`schema.ts`)
+is a `UNIQUE INDEX ON (organization_id, name) WHERE archived_at IS NULL` — the same "let the database refuse
+it" approach `discord_server_bindings`'s primary key takes for TEN-3 (D-11). A partial unique index is portable
+SQL Postgres supports too (D-2), so this is not a rewrite later. `renameProject` and `unarchiveProject` catch
+the resulting `SQLITE_CONSTRAINT_UNIQUE` and refuse through `{ ok: false, conflict }`, naming the project
+already using the name, rather than letting a raw driver error escape — both can reach the constraint on a
+write that is not the row's first (a rename into a name freed by someone else's archiving; an unarchive back
+into a name reused while archived), so "the caller already knows this row exists and needs to know why the
+write failed" applies to them the way it does not to a fresh insert. `createProject` is left unhandled: a
+freshly generated id has never collided with anything before this call, so there is no "was this name reused"
+question for it to answer, and its return type (`Project`, not a result to unwrap) is depended on directly by
+every existing call site in this package's tests — wrapping it to catch a case that cannot arise for a new row
+would be a larger, unrelated change for no behavioural gain.
+
+**Choice — `courses`: a repo-level check (`findCourseNameConflict` in `repos/courses.ts`).** Unlike a project's
+name, PROJ-3's rule cannot be expressed as a constraint on one table: it spans `courses`, `projects` (to
+exclude an archived project) and `course_categories` (for the category half of the rule), and its refusal has
+to _name_ the conflicting project and course — a `CHECK` or a unique index can refuse a write, but it cannot
+explain one. So `createCourse` and `updateCourse` run a `SELECT`-based check before writing, and refuse with a
+structured result (`{ ok: false, conflict }`) that names the field, the colliding name, and the conflicting
+project and course, rather than a boolean or a thrown error a caller would have to enrich itself. The same
+check also runs, self-only, against `input` itself (`findSelfConflict`): an admin and student role that are the
+same name, or two categories sharing a name, break PROJ-3's invariant inside one course, not just across two.
+
+**`projectId` must belong to the organization saving the course (TEN-5).** `courses.project_id`'s foreign key
+only proves the row refers to _some_ project, not that it belongs to the organization making the write — the
+same gap `claimDiscordServerBinding` closes for `installedByAccountId` (D-11). `loadOwnedProject` (in
+`repos/courses.ts`) checks this before `createCourse` or `updateCourse` writes anything, and refuses through the
+same `{ ok: false, conflict }` channel as a name collision (`field: 'projectId'`) rather than a thrown
+foreign-key error — a course saved against a foreign project would otherwise quote that project's name in a
+later PROJ-3 refusal (disclosing it across the tenant boundary) and drop out of the candidate set whenever the
+foreign owner archived its own project.
+
+**Replacing a course's categories and channels on update.** `updateCourse` deletes every existing category (and,
+through it, every channel) for the course and re-inserts the input's list, rather than diffing old and new by
+name or id. A course's categories are always saved as a whole — CFG-4's list, not a set of independently
+addressable rows — so there is no partial-update case a diff would serve, and delete-then-insert cannot leave
+an orphaned channel the way a partial update that forgot one branch could. Channels are deleted before their
+parent category explicitly; nothing in this package relies on `ON DELETE CASCADE` (D-2's portable subset, as
+`discord_server_bindings` and `memberships` already establish by using plain foreign keys with no cascade).
+
+**The check only applies to a save that would actually route.** `createCourse`, `updateCourse`, `enableCourse`
+and `unarchiveProject`'s course half (below) all run the PROJ-3 check only when the course being saved would end
+up enabled _and_ in a non-archived project. A disabled course, or one in an archived project, introduces no
+routing collision — it is PROJ-3's escape hatch (`schema.ts`'s comment on `courses.enabled`), and the escape
+hatch has to stay usable: refusing an edit to a disabled course because its names are now taken elsewhere would
+make disabling it permanent, which defeats the point of it being reversible.
+
+**Enabling, and unarchiving, both re-run the check.** `enableCourse` and `findProjectUnarchiveConflict` (called
+by `unarchiveProject`, `repos/projects.ts`) both re-run PROJ-3's cross-course check — `createCourse` and
+`updateCourse` are not the only places a collision can appear. A course disabled while another course took its
+names, then re-enabled, would otherwise produce exactly the state PROJ-3 forbids; the same is true one level up
+when an entire project's courses come back at once on unarchive. `findProjectUnarchiveConflict` checks each of
+the project's own enabled courses against every other enabled course in a non-archived project _and_ against
+each other (`includeProjectId` on `findCourseNameConflict`), since two courses in the same archived project
+could have taken the same name without either being a PROJ-3 candidate at the time.
+
+**Limits.** The repo-level check reads every enabled, non-archived-project course's roles (one query) and then
+their categories (one more, batched — not one per candidate), so its cost grows with the organization's active
+course count, not with the whole table. That is fine at today's scale; a very large tenant would need an
+index-backed check instead, the same way any other "check the whole active set" query would.
+
+The check is application code with no SQL constraint behind it (unlike `projects`' partial unique index above),
+which is a deliberate trade — PROJ-3 spans three tables and needs to name what it collided with, neither of
+which a `CHECK` or a unique index can do. `createCourse` and `updateCourse` now run the check inside the same
+`db.transaction(...)` as the write, rather than before it, which narrows but does not close the race PLAT-4's
+writer processes create: two concurrent saves can still both read the pre-write state before either commits, so
+both can still pass the check and both commit, leaving the invariant broken until the next save notices. Moving
+the check into the transaction only helps once SQLite's own write-lock ordering serializes the two connections'
+writes — it does not make the check-then-write atomic the way a real constraint would. Closing this fully would
+need either a real constraint (not expressible here, per above) or an application-level lock scoped to the
+organization around the whole check-and-write, and neither is in this slice's scope.
+
+Two further deviations from PROJ-3's literal wording, both narrowing rather than widening what gets refused:
+
+- PROJ-3 says names are unique across every enabled course in a **Discord server**; this enforces uniqueness per
+  **organization**, because the schema has no course-to-server link yet (that link lands with routing, in a
+  later phase). Per-organization is stricter, not looser: an organization that has bound two Discord servers
+  would be refused a name reuse the SPEC would allow across them. Recorded here so it is a known deviation, not
+  rediscovered as a bug when routing is added.
+- The comparison is case-sensitive throughout (`findCourseNameConflict`, `findSelfConflict`,
+  `findActiveProjectConflict` in `repos/projects.ts`), so `"Web Design - GLOBAL"` and `"web design - global"` are
+  treated as different names. This matches the legacy exact-match router and Discord's own tolerance of
+  duplicate channel/category names, so it is deliberate, not an oversight — `accounts.email`'s repo-layer
+  lowercasing (`schema.ts`) is the precedent for closing this later if a phase wants names case-insensitive too.

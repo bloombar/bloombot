@@ -24,6 +24,7 @@ import {
   sqliteTable,
   text,
   integer,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core'
 
 // TEN-1 — the tenant is an organization. An account gets a personal
@@ -107,4 +108,111 @@ export const discordServerBindings = sqliteTable('discord_server_bindings', {
     .references(() => accounts.id),
   installedAt: integer('installed_at').notNull(),
   removedAt: integer('removed_at'),
+})
+
+// PROJ-1 — course configurations are grouped into a project, typically a
+// term (e.g. "Fall 2026"), replacing the convention of encoding the term
+// into Discord role names. PROJ-2 — archiving a project stops its courses
+// routing without deleting anything; `archivedAt` is nullable and
+// reversible, the same shape `discordServerBindings.removedAt` above uses
+// for TEN-6.
+export const projects = sqliteTable(
+  'projects',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    name: text('name').notNull(),
+    archivedAt: integer('archived_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // A project name is unique within an organization, but only among
+    // projects that are *not* archived: once a term is archived, its name is
+    // free for a new project to reuse (PROJ-2). Enforced structurally with a
+    // partial unique index — the same "let the database refuse it rather
+    // than trust an application check" approach `discordServerBindings`
+    // takes for TEN-3 — and a partial unique index is portable SQL Postgres
+    // supports too (D-2), so this does not become a rewrite later.
+    uniqueIndex('projects_org_name_active_unique')
+      .on(table.organizationId, table.name)
+      .where(sql`${table.archivedAt} is null`),
+  ]
+)
+
+// PROJ-1 — one course configuration. This is the database form of a
+// `server.courses` entry in `bot_config.yml` (CFG-1 … CFG-4): the columns
+// below are that YAML shape carried into a row, not a redesign of it, so a
+// later slice can import a course unchanged.
+export const courses = sqliteTable('courses', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => projects.id),
+  title: text('title').notNull(),
+  // CFG-1 — the prefix used to locate this course's roster and
+  // questionnaire CSV files.
+  filePrefix: text('file_prefix').notNull(),
+  // A disabled course routes nothing — the database equivalent of
+  // commenting a course out of `bot_config.yml` (CFG-1) — and is excluded
+  // from the PROJ-3 name-collision check below, the same way a course in an
+  // archived project is.
+  enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+  // CFG-3 — the two Discord role names this course is taught through.
+  // PROJ-3 requires these unique across every *enabled* course in the
+  // organization; that check is conditional on other tables (which project
+  // a course belongs to, whether it is archived) and needs to name the
+  // conflicting course and project in its refusal, so it is enforced in
+  // `repos/courses.ts`, not with a SQL constraint here — see that file.
+  adminsRole: text('admins_role').notNull(),
+  studentsRole: text('students_role').notNull(),
+  // CFG-2 / D-3 — answering settings. All nullable, and nullable means "not
+  // configured, fall back to the platform default": no default value is
+  // invented here, the same reasoning D-10 already applied to the YAML
+  // schema this table mirrors. `promptId` is D-3's escape hatch — when set
+  // it wins over `instructions`.
+  promptId: text('prompt_id'),
+  instructions: text('instructions'),
+  model: text('model'),
+  vectorStoreId: text('vector_store_id'),
+  maxRequestsPerDay: integer('max_requests_per_day'),
+  createdAt: integer('created_at').notNull(),
+})
+
+// CFG-4 — a Discord category belonging to a course. `ordering` is the
+// position categories are declared in — the YAML list's order today — kept
+// explicit here since a database table otherwise has no inherent order.
+export const courseCategories = sqliteTable('course_categories', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  courseId: text('course_id')
+    .notNull()
+    .references(() => courses.id),
+  name: text('name').notNull(),
+  ordering: integer('ordering').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+// CFG-4 — a channel inside a category. `adminsOnly` mirrors the YAML's
+// `admins_only` flag; `ordering` is the channel list's declared order,
+// carried the same way `courseCategories.ordering` carries the category
+// list's.
+export const courseChannels = sqliteTable('course_channels', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  categoryId: text('category_id')
+    .notNull()
+    .references(() => courseCategories.id),
+  name: text('name').notNull(),
+  adminsOnly: integer('admins_only', { mode: 'boolean' }).notNull(),
+  ordering: integer('ordering').notNull(),
+  createdAt: integer('created_at').notNull(),
 })

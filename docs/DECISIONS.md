@@ -279,3 +279,53 @@ the same snowflake, for the reason above — but that safety is a property of _t
 not of read-then-write in general. A future two-step operation in this package that reads one thing and writes
 based on it needs to be checked against the same question this one now answers, rather than assumed safe by
 analogy.
+
+---
+
+## D-12 — `packages/db`: PROJ-3's collision rule is a repo-level check, not a SQL constraint
+
+**Problem.** PROJ-3 requires that a course's Discord category names and its two role names be unique across
+every _enabled_ course in an organization, excluding a course whose project is archived. `projects`' own name
+uniqueness (PROJ-2's "unique among non-archived projects") is the same shape of rule on a single table and is
+enforced with a SQL constraint (below); PROJ-3 is not, and the two needed to be decided separately.
+
+**Choice — `projects`: a partial unique index.** `projects_org_name_active_unique` (`schema.ts`) is a
+`UNIQUE INDEX ON (organization_id, name) WHERE archived_at IS NULL` — the same "let the database refuse it"
+approach `discord_server_bindings`'s primary key takes for TEN-3 (D-11). A partial unique index is portable SQL
+Postgres supports too (D-2), so this is not a rewrite later. No application code catches the resulting
+constraint error: project creation is a single-table write with nothing else to say about the conflict, so a
+thrown error reaching the (future) API layer is enough.
+
+**Choice — `courses`: a repo-level check (`findCourseNameConflict` in `repos/courses.ts`).** Unlike a project's
+name, PROJ-3's rule cannot be expressed as a constraint on one table: it spans `courses`, `projects` (to
+exclude an archived project) and `course_categories` (for the category half of the rule), and its refusal has
+to _name_ the conflicting project and course — a `CHECK` or a unique index can refuse a write, but it cannot
+explain one. So `createCourse` and `updateCourse` run a `SELECT`-based check before writing, and refuse with a
+structured result (`{ ok: false, conflict }`) that names the field, the colliding name, and the conflicting
+project and course, rather than a boolean or a thrown error a caller would have to enrich itself.
+
+**Why a result object, not `discord-servers.ts`'s `undefined`.** `claimDiscordServerBinding` reports "already
+claimed elsewhere" as `undefined` (D-11) because there is nothing more to say — a snowflake either binds or it
+does not. A PROJ-3 refusal needs to say _what_ it collided with, so `undefined` would have thrown away the one
+thing the brief requires the refusal to carry. `createCourse` returns `SaveCourseResult` (`{ ok: true, course }`
+or `{ ok: false, conflict }`) always; `updateCourse` additionally returns bare `undefined` for "this course does
+not exist, or does not belong to this organization" (TEN-2/TEN-5), checked _before_ the collision check, so a
+caller cannot distinguish "wrong organization" from "a conflict" for a course it does not own.
+
+**Replacing a course's categories and channels on update.** `updateCourse` deletes every existing category (and,
+through it, every channel) for the course and re-inserts the input's list, rather than diffing old and new by
+name or id. A course's categories are always saved as a whole — CFG-4's list, not a set of independently
+addressable rows — so there is no partial-update case a diff would serve, and delete-then-insert cannot leave
+an orphaned channel the way a partial update that forgot one branch could. Channels are deleted before their
+parent category explicitly; nothing in this package relies on `ON DELETE CASCADE` (D-2's portable subset, as
+`discord_server_bindings` and `memberships` already establish by using plain foreign keys with no cascade).
+
+**Enabling does not re-run the check.** `enableCourse` toggles `courses.enabled` without checking PROJ-3 again.
+A course disabled while another enabled course took its names, then re-enabled, could silently collide with
+that other course — a real gap, noted here rather than closed, because the brief scopes PROJ-3's enforcement to
+"a save (create or update)" and closing it is a judgment call past that scope, not a bug in what was asked for.
+
+**Limits.** The repo-level check reads every enabled, non-archived-project course's roles (one query) and then
+their categories (one more, batched — not one per candidate), so its cost grows with the organization's active
+course count, not with the whole table. That is fine at today's scale; a very large tenant would need an
+index-backed check instead, the same way any other "check the whole active set" query would.

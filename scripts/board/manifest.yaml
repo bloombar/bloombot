@@ -1019,6 +1019,41 @@
   phase: 3
   status: Backlog
   review: false
+- id: PROJ-1
+  title: Courses are grouped into projects
+  full: Course configurations belong to a project — typically a term, such as
+    "Fall 2026". An organization may have any number of projects and a project
+    any number of courses. This replaces the convention of encoding the term in
+    Discord role names.
+  section: §16 Projects
+  family: PROJ
+  phase: 3
+  status: Backlog
+  review: false
+- id: PROJ-2
+  title: Archiving a project
+  full: Archiving a project stops its courses routing without deleting anything.
+    This is the first-class form of the existing practice of commenting a course
+    out of the configuration file, and it is reversible.
+  section: §16 Projects
+  family: PROJ
+  phase: 3
+  status: Backlog
+  review: false
+- id: PROJ-3
+  title: Names must not collide within a server
+  full: A course is matched to an incoming message by the name of the Discord
+    category it arrived in, and secondarily by the author's roles. One server
+    may host several projects at once, so category and role names must be unique
+    across every enabled course in that server, regardless of project. A save
+    that would collide is refused, naming the project and course it conflicts
+    with. Archived projects are excluded, so a term may reuse the previous
+    term's names once that term is archived.
+  section: §16 Projects
+  family: PROJ
+  phase: 3
+  status: Backlog
+  review: false
 - id: QA-1
   title: Tests fail before they pass
   full: New behaviour is covered by a test that fails without the change. A test
@@ -1267,41 +1302,6 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 6
-  status: Backlog
-  review: false
-- id: PROJ-1
-  title: Courses are grouped into projects
-  full: Course configurations belong to a project — typically a term, such as
-    "Fall 2026". An organization may have any number of projects and a project
-    any number of courses. This replaces the convention of encoding the term in
-    Discord role names.
-  section: §16 Projects
-  family: PROJ
-  phase: 7
-  status: Backlog
-  review: false
-- id: PROJ-2
-  title: Archiving a project
-  full: Archiving a project stops its courses routing without deleting anything.
-    This is the first-class form of the existing practice of commenting a course
-    out of the configuration file, and it is reversible.
-  section: §16 Projects
-  family: PROJ
-  phase: 7
-  status: Backlog
-  review: false
-- id: PROJ-3
-  title: Names must not collide within a server
-  full: A course is matched to an incoming message by the name of the Discord
-    category it arrived in, and secondarily by the author's roles. One server
-    may host several projects at once, so category and role names must be unique
-    across every enabled course in that server, regardless of project. A save
-    that would collide is refused, naming the project and course it conflicts
-    with. Archived projects are excluded, so a term may reuse the previous
-    term's names once that term is archived.
-  section: §16 Projects
-  family: PROJ
-  phase: 7
   status: Backlog
   review: false
 - id: PROJ-4

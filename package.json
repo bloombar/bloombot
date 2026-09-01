@@ -21,10 +21,12 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --build",
     "build": "tsc --build",
-    "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run",
+    "test": "node --test \"scripts/board/*.test.mjs\" \"scripts/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run",
     "test:coverage": "vitest run --coverage",
+    "dev": "node scripts/dev.mjs",
     "bot:dev": "tsx watch apps/bot/src/index.ts",
     "api:dev": "tsx watch apps/api/src/index.ts",
+    "worker:dev": "tsx watch apps/worker/src/index.ts",
     "web:dev": "npm run dev --workspace apps/web",
     "pree2e": "npm run build && npm run build --workspace apps/web",
     "e2e": "playwright test"

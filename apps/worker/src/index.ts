@@ -24,7 +24,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, loadDotEnv } from '@bloombot/config'
 import {
   closeDatabase,
   createFilesystemAttachmentStorage,
@@ -72,6 +72,10 @@ function requireEnv(name: string): string {
 }
 
 async function main(): Promise<void> {
+  // CFG-5: credentials live in `.env`; load it before anything reads CONFIG,
+  // which validates the whole environment on first access.
+  loadDotEnv()
+
   // JOB-5 — refuses to start on an environment that does not validate,
   // the same "touch CONFIG before building anything" discipline
   // `apps/bot`/`apps/api`'s own `main()` already holds itself to.

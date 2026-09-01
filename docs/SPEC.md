@@ -844,3 +844,51 @@ code.
 Every environment variable the configuration schema requires appears in the tracked
 example file, verified by a test. A missing variable otherwise surfaces as a failure hours
 into a deployment.
+
+### 18. People, Conversations & Transcripts
+
+#### PPL-1 People are the platform's end users
+
+A person is the human a course serves — usually a student — and is distinct from the
+account that signs in to administer a tenant. Every person belongs to exactly one
+organization, and nothing about a person is visible outside it. Conversations,
+transcripts and usage all key on the person, so a student who reaches a course from
+Discord today and from the web chat tomorrow is one person with one history.
+
+#### PPL-2 Identities link a person to a surface
+
+A person is reached through identities: one per surface, each holding that surface's own
+identifier — a Discord snowflake, an email address, a web account id. An identity is
+unique per organization, surface and external id, so one Discord account cannot resolve to
+two people in the same organization. Resolving an incoming message means resolving its
+identity to a person.
+
+#### PPL-3 People are created on demand
+
+The first time a course sees a message from someone it has no identity for, the person and
+the identity are created together. No import step stands between a student and their first
+answer, and roster fields — name, email, GitHub handle — are merged onto the person later
+when a roster is imported.
+
+#### CONV-1 Conversations key on course and person
+
+A conversation is the continuity of one person's exchange with one course, keyed on the
+course and the person rather than on the surface account it arrived through. A course
+declares its conversation scope: `course`, the default, is one conversation per person per
+course across every surface; `course_surface` keeps a web session distinct from a Discord
+thread, for instructors who want that. A conversation records the upstream model thread it
+corresponds to, so the model's own context can be resumed.
+
+#### CONV-2 The transcript records both directions
+
+Every message is recorded: its text, its direction — from the person, or to them — the
+surface and channel context it occurred in, and the person, course and conversation it
+belongs to. A transcript is a record an instructor may be required to retain, so removing
+a bot from a server never deletes one.
+
+#### CONV-3 Daily usage counters key on course, person and day
+
+A person's daily allowance is counted per course per calendar day, never pooled across a
+course and never resettable by switching surface. The day the counter belongs to is stored
+on the row rather than derived when it is read, which is the defect BOT-11 fixed in the
+Python bot.

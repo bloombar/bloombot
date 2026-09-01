@@ -15,6 +15,13 @@
       "when": 1788221671586,
       "tag": "0001_loving_ulik",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788224249225,
+      "tag": "0002_wet_shotgun",
+      "breakpoints": true
     }
   ]
 }

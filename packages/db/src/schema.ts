@@ -20,6 +20,7 @@
 import { sql } from 'drizzle-orm'
 import {
   check,
+  index,
   primaryKey,
   sqliteTable,
   text,
@@ -141,47 +142,74 @@ export const projects = sqliteTable(
   ]
 )
 
+// CONV-1 — a course's conversation scope: `course` (the default) is one
+// conversation per person per course across every surface; `course_surface`
+// keeps each surface's conversation distinct, for instructors who want a web
+// session kept separate from a Discord thread. Read by
+// `repos/conversations.ts#getOrCreateConversation`, which is the only place
+// this column is interpreted — see `conversations` below.
+export const CONVERSATION_SCOPES = ['course', 'course_surface'] as const
+export type ConversationScope = (typeof CONVERSATION_SCOPES)[number]
+
 // PROJ-1 — one course configuration. This is the database form of a
 // `server.courses` entry in `bot_config.yml` (CFG-1 … CFG-4): the columns
 // below are that YAML shape carried into a row, not a redesign of it, so a
 // later slice can import a course unchanged.
-export const courses = sqliteTable('courses', {
-  id: text('id').primaryKey(),
-  organizationId: text('organization_id')
-    .notNull()
-    .references(() => organizations.id),
-  projectId: text('project_id')
-    .notNull()
-    .references(() => projects.id),
-  title: text('title').notNull(),
-  // CFG-1 — the prefix used to locate this course's roster and
-  // questionnaire CSV files.
-  filePrefix: text('file_prefix').notNull(),
-  // A disabled course routes nothing — the database equivalent of
-  // commenting a course out of `bot_config.yml` (CFG-1) — and is excluded
-  // from the PROJ-3 name-collision check below, the same way a course in an
-  // archived project is.
-  enabled: integer('enabled', { mode: 'boolean' }).notNull(),
-  // CFG-3 — the two Discord role names this course is taught through.
-  // PROJ-3 requires these unique across every *enabled* course in the
-  // organization; that check is conditional on other tables (which project
-  // a course belongs to, whether it is archived) and needs to name the
-  // conflicting course and project in its refusal, so it is enforced in
-  // `repos/courses.ts`, not with a SQL constraint here — see that file.
-  adminsRole: text('admins_role').notNull(),
-  studentsRole: text('students_role').notNull(),
-  // CFG-2 / D-3 — answering settings. All nullable, and nullable means "not
-  // configured, fall back to the platform default": no default value is
-  // invented here, the same reasoning D-10 already applied to the YAML
-  // schema this table mirrors. `promptId` is D-3's escape hatch — when set
-  // it wins over `instructions`.
-  promptId: text('prompt_id'),
-  instructions: text('instructions'),
-  model: text('model'),
-  vectorStoreId: text('vector_store_id'),
-  maxRequestsPerDay: integer('max_requests_per_day'),
-  createdAt: integer('created_at').notNull(),
-})
+export const courses = sqliteTable(
+  'courses',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id),
+    title: text('title').notNull(),
+    // CFG-1 — the prefix used to locate this course's roster and
+    // questionnaire CSV files.
+    filePrefix: text('file_prefix').notNull(),
+    // A disabled course routes nothing — the database equivalent of
+    // commenting a course out of `bot_config.yml` (CFG-1) — and is excluded
+    // from the PROJ-3 name-collision check below, the same way a course in an
+    // archived project is.
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    // CFG-3 — the two Discord role names this course is taught through.
+    // PROJ-3 requires these unique across every *enabled* course in the
+    // organization; that check is conditional on other tables (which project
+    // a course belongs to, whether it is archived) and needs to name the
+    // conflicting course and project in its refusal, so it is enforced in
+    // `repos/courses.ts`, not with a SQL constraint here — see that file.
+    adminsRole: text('admins_role').notNull(),
+    studentsRole: text('students_role').notNull(),
+    // CFG-2 / D-3 — answering settings. All nullable, and nullable means "not
+    // configured, fall back to the platform default": no default value is
+    // invented here, the same reasoning D-10 already applied to the YAML
+    // schema this table mirrors. `promptId` is D-3's escape hatch — when set
+    // it wins over `instructions`.
+    promptId: text('prompt_id'),
+    instructions: text('instructions'),
+    model: text('model'),
+    vectorStoreId: text('vector_store_id'),
+    maxRequestsPerDay: integer('max_requests_per_day'),
+    // CONV-1 / D-4 — see `CONVERSATION_SCOPES` above. Defaulted at the
+    // database level (unlike every other column here) because it is added
+    // by a later migration onto a table that may already hold rows, and
+    // every one of them means "the default behaviour", not "unset".
+    conversationScope: text('conversation_scope', {
+      enum: CONVERSATION_SCOPES,
+    })
+      .notNull()
+      .default('course'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    check(
+      'courses_conversation_scope_check',
+      sql`${table.conversationScope} in ('course', 'course_surface')`
+    ),
+  ]
+)
 
 // CFG-4 — a Discord category belonging to a course. `ordering` is the
 // position categories are declared in — the YAML list's order today — kept
@@ -216,3 +244,238 @@ export const courseChannels = sqliteTable('course_channels', {
   ordering: integer('ordering').notNull(),
   createdAt: integer('created_at').notNull(),
 })
+
+// PPL-2 / CONV-1 / CONV-2 — the surfaces a person can be reached through, or
+// a conversation or message can have occurred on. One source for the
+// TypeScript `enum` columns below and the `CHECK` constraints that back
+// them, the same reasoning `MEMBERSHIP_ROLES` already applies.
+export const SURFACES = ['discord', 'web', 'mcp'] as const
+export type Surface = (typeof SURFACES)[number]
+
+// PPL-1 — a person is the human a course serves, distinct from the account
+// that signs in to administer a tenant (`accounts`, above). Every field but
+// the id, organization and `createdAt` is nullable: PPL-3 creates a person
+// with none of them set, on the first message from an identity nobody has
+// seen, and they are filled in later — `firstName`/`lastName`/`email`/
+// `githubHandle` when a roster is imported, `displayName` from whatever
+// surface first names them — never invented here (D-10's "no default value
+// is invented" reasoning applies the same way to "no roster data is
+// invented").
+export const people = sqliteTable('people', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  displayName: text('display_name'),
+  email: text('email'),
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  githubHandle: text('github_handle'),
+  createdAt: integer('created_at').notNull(),
+})
+
+// PPL-2 — a person is reached through identities, one per surface: a
+// Discord snowflake, an email address, a web account id. Unique per
+// (organization, surface, external id) so the same Discord account cannot
+// resolve to two people in one organization — enforced structurally, the
+// same "let the database refuse it" approach `projects`' partial unique
+// index takes for PROJ-2, rather than trusted to an application check.
+export const personIdentities = sqliteTable(
+  'person_identities',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    surface: text('surface', { enum: SURFACES }).notNull(),
+    externalId: text('external_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('person_identities_org_surface_external_unique').on(
+      table.organizationId,
+      table.surface,
+      table.externalId
+    ),
+    check(
+      'person_identities_surface_check',
+      sql`${table.surface} in ('discord', 'web', 'mcp')`
+    ),
+  ]
+)
+
+// CONV-1 — the continuity of one person's exchange with one course, keyed on
+// the course and the person rather than on the surface account it arrived
+// through. `surface` is null when the owning course's `conversationScope`
+// is `course` (the default: one conversation per person per course across
+// every surface) and set to the arrival surface when it is `course_surface`
+// (`repos/conversations.ts#getOrCreateConversation` is the only place that
+// decides which). `upstreamThreadId` is nullable: the model thread this
+// conversation resumes is only known once the first request to it is made.
+//
+// Structural uniqueness needs two partial indexes, not one plain unique
+// index on `(organizationId, courseId, personId, surface)`: SQL treats every
+// `NULL` in a unique index as distinct from every other `NULL` (standard
+// behaviour, not a SQLite quirk — Postgres does the same), so a plain index
+// would let an unbounded number of `course`-scoped (surface-`null`) rows
+// through for the same person and course, exactly the case CONV-1 requires
+// to be a single row. Splitting the constraint on `surface IS NULL` closes
+// that: at most one `course`-scoped conversation per (organization, course,
+// person), and at most one `course_surface`-scoped conversation per
+// (organization, course, person, surface) — both partial unique indexes,
+// portable SQL Postgres supports too (D-2), the same device `projects`' own
+// `archivedAt IS NULL` index already uses for PROJ-2.
+export const conversations = sqliteTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    surface: text('surface', { enum: SURFACES }),
+    upstreamThreadId: text('upstream_thread_id'),
+    createdAt: integer('created_at').notNull(),
+    lastMessageAt: integer('last_message_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('conversations_org_course_person_unscoped_unique')
+      .on(table.organizationId, table.courseId, table.personId)
+      .where(sql`${table.surface} is null`),
+    uniqueIndex('conversations_org_course_person_surface_unique')
+      .on(table.organizationId, table.courseId, table.personId, table.surface)
+      .where(sql`${table.surface} is not null`),
+    check(
+      'conversations_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
+    ),
+  ]
+)
+
+// CONV-2 — every message, in both directions. `personId` and `courseId` are
+// carried alongside `conversationId` (denormalized, but always consistent
+// with the conversation they belong to — `repos/conversations.ts#appendMessage`
+// derives them from the conversation itself rather than trusting a caller's
+// copy) so a query keyed on a person or a course, like the usage counters
+// below, never has to join through `conversations` to reach them.
+// `channelRef`/`categoryRef` are nullable: DATA-4's Discord `category` and
+// `channel` context, present on Discord messages and absent on every other
+// surface. Indexed by conversation (a transcript read) and by `createdAt`
+// (the analytics notebook's other axis, DATA-4). There is no delete path
+// for this table anywhere in this package (TEN-6): a transcript is a record
+// an instructor may be required to retain.
+export const MESSAGE_DIRECTIONS = ['from_person', 'to_person'] as const
+export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number]
+
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    direction: text('direction', { enum: MESSAGE_DIRECTIONS }).notNull(),
+    content: text('content').notNull(),
+    surface: text('surface', { enum: SURFACES }),
+    channelRef: text('channel_ref'),
+    categoryRef: text('category_ref'),
+    // CONV-2 — `createdAt` alone does not order a transcript: it is
+    // millisecond precision, `appendMessage` can be called for several
+    // messages within the same millisecond, and SQL does not define an
+    // order among rows tied on the `ORDER BY` column. `sequence` is a
+    // monotonic counter assigned per conversation inside `appendMessage`'s
+    // own transaction (`repos/conversations.ts`), so it is what
+    // `getTranscript` actually orders by — `createdAt` stays for display and
+    // for the DATA-4 analytics index below, not for ordering.
+    sequence: integer('sequence').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('messages_conversation_id_idx').on(table.conversationId),
+    index('messages_created_at_idx').on(table.createdAt),
+    check(
+      'messages_direction_check',
+      sql`${table.direction} in ('from_person', 'to_person')`
+    ),
+    check(
+      'messages_surface_check',
+      sql`${table.surface} is null or ${table.surface} in ('discord', 'web', 'mcp')`
+    ),
+  ]
+)
+
+// CONV-3 — a person's daily allowance, counted per course per calendar day.
+// `day` is an explicit `YYYY-MM-DD` string set by the repo layer from a
+// caller-supplied value, never derived from `createdAt` when the row is
+// read — that derivation-on-read is the exact defect BOT-11 fixed in the
+// Python bot (a boundary check that trusted an in-memory counter's own idea
+// of "today" instead of re-deriving it). The primary key is the same
+// four-part composite the two partial unique indexes on `conversations`
+// approximate with `NULL`-splitting, except every column here is always
+// set, so a single composite primary key is enough — no partial index
+// needed.
+export const usageCounters = sqliteTable(
+  'usage_counters',
+  {
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    day: text('day').notNull(),
+    count: integer('count').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.organizationId,
+        table.courseId,
+        table.personId,
+        table.day,
+      ],
+    }),
+    // BOT-11's class of defect, closed a second way: `repos/usage.ts`
+    // already refuses a `day` that is not `YYYY-MM-DD` before it ever
+    // reaches SQL, but a `CHECK` is what stops a future direct writer that
+    // skips the repo layer from creating a counter row under a malformed
+    // day string — which `incrementUsage`'s `ON CONFLICT` target would then
+    // never match again, silently bypassing `max_requests_per_day`. Written
+    // with `length`/`substr`/`BETWEEN` rather than a SQLite-only `GLOB` or a
+    // Postgres-only `~`, so it stays inside D-2's portable subset.
+    check(
+      'usage_counters_day_check',
+      sql`length(${table.day}) = 10
+        and substr(${table.day}, 1, 1) between '0' and '9'
+        and substr(${table.day}, 2, 1) between '0' and '9'
+        and substr(${table.day}, 3, 1) between '0' and '9'
+        and substr(${table.day}, 4, 1) between '0' and '9'
+        and substr(${table.day}, 5, 1) = '-'
+        and substr(${table.day}, 6, 1) between '0' and '9'
+        and substr(${table.day}, 7, 1) between '0' and '9'
+        and substr(${table.day}, 8, 1) = '-'
+        and substr(${table.day}, 9, 1) between '0' and '9'
+        and substr(${table.day}, 10, 1) between '0' and '9'`
+    ),
+  ]
+)

@@ -132,6 +132,16 @@ export const FAMILY_LABEL = {
     color: '1a7f37',
     description: 'Projects: the per-term grouping of courses',
   },
+  PPL: {
+    name: 'area:people',
+    color: 'c2e0c6',
+    description: 'People, identities & roster fields',
+  },
+  CONV: {
+    name: 'area:conversations',
+    color: '0075ca',
+    description: 'Conversations, transcripts & daily usage counters',
+  },
   SURF: {
     name: 'area:surfaces',
     color: 'd93f0b',

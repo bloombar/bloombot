@@ -1020,3 +1020,54 @@ adapter, exactly as the running bot strips them today.
 The provider's base URL is configuration, never a literal in a client, and the test suite
 runs against a fake upstream in-process. No test needs an API key, and a test run costs
 nothing and reaches no network.
+
+### 22. Discord Surface
+
+#### SURF-1 The bot process holds the only gateway connection
+
+One process connects to the Discord gateway. The API and the background worker reach
+Discord over REST with the same token, so there is no inter-process coordination to get
+wrong and no second connection competing for the same session. The process is
+single-instance by design: two gateway connections on one token is an error rather than
+redundancy.
+
+#### SURF-2 Only a direct mention is answered
+
+The bot answers a message that mentions it, ignores its own messages and those of other
+bots, and rewrites the mention into a readable name before the question reaches the
+model, so the model sees a sentence rather than a numeric reference. What the student
+actually typed is what the transcript records.
+
+#### SURF-3 A server that is not bound to an organization is ignored
+
+An incoming message is answered only when its Discord server resolves to an organization
+through the binding record. A message from an unbound server is logged and dropped
+rather than answered, so a bot added to a server by someone who has not installed it
+through the platform does nothing at all.
+
+#### SURF-4 A person is recognized by their Discord account
+
+The author's snowflake resolves to a person in that organization, and to a new person and
+identity the first time they are seen. The bot therefore fills its own roster as students
+arrive, and a student who later reaches the same course from the web is the same person
+with the same history.
+
+#### SURF-5 The answer is a reply, and a long answer is split rather than lost
+
+The bot replies to the message it is answering, so a busy channel stays legible. An answer
+longer than Discord's message limit is split on a boundary that keeps it readable and sent
+in order, rather than truncated or dropped by the platform.
+
+#### SURF-6 Every outcome reaches the student or the log, and none reaches neither
+
+Each outcome the answering core can return has a rendering: an answer, an answer carrying
+the day's-last notice, a refusal when the allowance is spent, an apology when the model
+fails, and — for a course configured to answer nothing, or a message that matches no
+course — a log line naming the cause rather than a silent drop the instructor cannot see.
+
+#### SURF-7 The process starts, reports its health, and stops cleanly
+
+The bot exposes a health endpoint that reports whether the gateway is connected, so a
+supervisor can tell "running" from "connected". On shutdown it closes the gateway and the
+database rather than leaving the socket to time out, and it refuses to start on an
+environment that does not validate.

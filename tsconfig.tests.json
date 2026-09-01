@@ -7,7 +7,11 @@
     "outDir": "./.tsbuild/tests",
     "emitDeclarationOnly": true
   },
-  "include": ["packages/*/tests/**/*.ts", "vitest.config.ts"],
+  "include": [
+    "packages/*/tests/**/*.ts",
+    "apps/*/tests/**/*.ts",
+    "vitest.config.ts"
+  ],
   "references": [
     { "path": "./packages/config" },
     { "path": "./packages/logger" },
@@ -15,6 +19,8 @@
     { "path": "./packages/db" },
     { "path": "./packages/legacy-import" },
     { "path": "./packages/core" },
-    { "path": "./packages/openai" }
+    { "path": "./packages/openai" },
+    { "path": "./packages/discord" },
+    { "path": "./apps/bot" }
   ]
 }

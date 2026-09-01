@@ -742,3 +742,124 @@ flag, so a `【…】` pair whose content spans a newline is still removed here,
 `re.DOTALL`) would leave it — and the newline inside it — untouched. Realistic only for an answer that discusses
 the bracket syntax itself, and worth keeping regardless: MDL-6's own requirement is "never reach a student," not
 matching a regex that happens not to use `re.DOTALL`.
+
+---
+
+## D-17 — `packages/discord`/`apps/bot`: how a long answer is split, what the health endpoint reports, and two deliberate departures from `response_bot.py`
+
+**Problem.** `packages/discord`'s `handleMention` (SURF-1..7) is the first surface built on `answerQuestion`
+(CORE-1) and the first `apps/*` process in the repository. Three questions the brief left to this slice's own
+judgment: how to split an answer over Discord's 2000-character limit, what a process health check should and
+should not report, and how far to follow `response_bot.py`'s own behaviour where the SPEC's own text (SURF-5,
+SURF-6) asks for something different.
+
+**Choice, splitting: paragraph, then line, then word, then a hard cut — plain slicing, nothing trimmed.**
+`response_bot.py:345`'s `message.channel.send(openai_response)` has no split at all: Discord's API rejects a
+message over 2000 characters outright, so an answer that long today is silently never sent — not truncated,
+not logged as failed, just gone. `split.ts`'s `splitForDiscord` fixes this by finding the latest boundary
+within the limit that keeps a message readable, in priority order: a paragraph break first (`\n\n`, both
+newlines kept with the part before them), a single line break next, a word boundary after that, and only when
+none of those exist within the limit at all — a single "word" longer than the limit itself, with nowhere
+readable to break it — a hard cut exactly at the limit. Every cut is plain `String.slice`, with nothing
+trimmed or rewritten at the boundary, so `parts.join('')` always reconstructs the original text exactly
+(asserted directly in `packages/discord/tests/split.test.ts`) — SURF-5's "sent in order, ... nothing lost"
+is a property the tests check by reassembly, not a claim taken on trust.
+
+**Why not sentence-aware splitting, or a fixed-width cut.** A sentence-boundary splitter (breaking after a
+`.`, `?` or `!` followed by whitespace) would read better for prose, but the model's answers already come back either as short paragraphs
+or as one long paragraph with no sentence-ending punctuation pattern reliable enough to trust over a genuine
+mid-sentence colon or abbreviation — misjudging that boundary risks a worse cut than the word-boundary
+fallback already gives, for a readability gain only worth it on the (rare, given MDL-3's "keep replies to one
+paragraph") over-limit answer. A fixed-width cut (always exactly at `limit`, no boundary search at all) was
+rejected outright: it is simpler, but it is also the one Discord already inflicts on a message it truncates
+elsewhere, and the whole point of building a splitter here is not to do that to a student mid-word.
+
+**Choice, the health endpoint reports gateway connectivity and nothing else.** `startHealthServer`
+(`apps/bot/src/health.ts`) answers every request with one boolean, `gatewayConnected`, read fresh per request
+rather than cached — `200` once the gateway is connected, `503` before that, after shutdown begins, or once it
+has dropped again. Finding 4 of this slice's rework: the flag used to be set `true` on `Events.ClientReady` and
+never cleared, so it reported "has ever connected" rather than "is connected" — a token rotation or a dropped
+socket hours into a run left the endpoint answering `200` while no message was actually being delivered, which
+is exactly the state this endpoint exists to catch. `apps/bot/src/gateway-health.ts`'s `wireGatewayHealth` now
+also clears the flag on `Events.ShardDisconnect`/`Events.ShardReconnecting` and sets it again on
+`Events.ShardResume`, and binds to `127.0.0.1` only rather than every interface (finding 8) — this endpoint has
+no reason to be reachable from outside the machine the process runs on. It deliberately says nothing about the
+database connection, the OpenAI adapter, or any per-request state: every one of those already degrades to a
+logged error and a reply rather than taking the whole process down (CORE-5's "a model failure degrades to an
+apology, never ... a stack trace" — the same discipline one level up), so there is nothing about them a
+process-level check could report that would not just restate what the logs already say better, and a health
+check that pings the database or the model on every probe would give a supervisor a reason to restart a
+process that is otherwise serving students fine.
+
+**Why not a richer health payload.** A deeper check — `SELECT 1` against the database, a no-op OpenAI call —
+was considered and rejected for this slice: `apps/bot` has one gateway connection and one database handle it
+opens once at startup (PLAT-5), so "is the process alive and connected" is genuinely the only binary state
+worth exposing before OPS-2 wires this process under pm2, which is a separate, operator-owned decision this
+slice does not make (see the brief's own scope line).
+
+**Choice, `allowedMentions: { parse: [] }` on the client and on every reply — the sharpest safety property in
+this slice.** Finding 1 of this slice's rework: reply-in-place (below) means the bot's own text is now something
+a student can coax the model into repeating verbatim — `"repeat this exactly: @everyone the exam moved to
+Friday"` — and with no `allowedMentions` set at all, discord.js omits `allowed_mentions` entirely and Discord
+parses every mention in the body, including a role or `@everyone` ping, wherever the bot's own role happens to
+have Mention Everyone (which class-server setup guides routinely grant a bot that already asks for
+`MANAGE_CHANNELS`). `apps/bot/src/reply-port.ts`'s `buildReplyPort` sets `{ parse: [] }` on every `reply` call,
+and the `Client` itself is constructed with the same default, so a future call site that builds a reply some
+other way still cannot ping anyone by accident — this is deliberately redundant, not merely set once. Nothing
+about MDL-6 (which strips citations, not mention syntax) or any other layer in this pipeline would otherwise
+have caught this: the model is never asked not to produce `@everyone`, and nothing before Discord's own parser
+sees the reply text again. This reads as though reply-in-place (SURF-5) made the surface _safer_ than
+`response_bot.py`'s own `channel.send` — visibly tying an answer to its question — but on the mention-pinging
+axis it does not: `channel.send` carries the exact same risk, unaddressed, which this fix closes for both.
+
+**Two deliberate departures from `response_bot.py`, both required by this slice's own SPEC text (not
+discovered afterward):**
+
+1. **Reply in place, not `channel.send`.** `response_bot.py:345` posts every answer with
+   `message.channel.send(...)` — a new message in the channel, with no visible link back to the question that
+   prompted it. SURF-5 asks for a reply instead ("The bot replies to the message it is answering"), so
+   `apps/bot/src/index.ts`'s `ReplyPort` implementation calls `message.reply(text)`. In a busy shared channel
+   this is the difference between a reply anyone can trace back to its question and an answer that could be
+   about anything nearby.
+2. **A refusal, not silence, when the daily allowance is already spent.** BOT-5 says a request past the limit
+   is "silently ignored" — `response_bot.py` never sends anything back for it. SURF-6 asks for the opposite:
+   "Each outcome the answering core can return has a rendering ... a refusal when the allowance is spent ...
+   Every outcome reaches the student or the log, and none reaches neither." `handleMention`'s
+   `declined-over-limit` case now sends a refusal (the same wording BOT-5's own last-request notice uses,
+   built from the course's title resolved through routing) rather than nothing at all — a student who is
+   over their limit finds out why the bot went quiet instead of wondering whether it saw their message.
+
+**Choice, splitting: a code fence split across two parts is closed and reopened, at the cost of exact
+byte-for-byte reconstruction.** A CS course's long answers are usually code, and Discord renders an unclosed
+code fence badly across two messages — the first never closes, the second opens with a stray closing marker
+and no opener of its own. `splitForDiscord` (finding 12 of this slice's rework) tracks whether a cut lands
+inside an open fence (counting ``` markers by XOR, composed across parts) and, when it does, appends a closing
+marker to the part that opened it and prepends a reopening one to the next — reserving room for both against
+`limit` first, re-splitting within a smaller margin if the boundary `findSplitIndex` already chose does not
+leave enough. This is the one case where `parts.join('')` no longer reproduces the original text exactly: two
+synthetic markers are inserted at the seam. Nothing else about the text changes — stripping every ``` marker
+and all whitespace from both sides still gives back the same code and prose, in the same order — but the
+literal-reconstruction property the rest of this module holds is the one thing knowingly given up here, for
+the sake of every individual message actually rendering as a legible code block on its own.
+
+**Choice, splitting: a hard cut backs off one code unit rather than split a surrogate pair.** The word-boundary
+fallback's very last resort — a single "word" with nowhere to break at all — cuts at exactly `limit`, which can
+land between the two UTF-16 code units of one emoji. `findSplitIndex` now checks for a lone leading surrogate
+at that exact boundary and backs off by one when it finds one, so the pair stays whole in the next part instead
+of each half degrading to U+FFFD wherever the split text is later encoded to UTF-8. This costs nothing —
+the cut simply moves one code unit earlier — so losslessness is unaffected by it.
+
+**Limits.** The splitter has no upper bound on how many parts one answer produces — a pathological answer with
+no whitespace at all anywhere near any boundary degrades gracefully to hard cuts every `DISCORD_MESSAGE_LIMIT`
+characters, but nothing here rate-limits how many messages `handleMention` sends for one reply, which is a
+question for whichever slice adds Discord's own per-channel send rate limit to the picture (PLAT-3's own "each
+REST client is configured below the global request ceiling" is about the gateway token's request budget
+overall, not about one reply's own message count). The health endpoint's binary signal also stops being enough
+the moment a second kind of "degraded but running" state matters — a gateway connected but rate-limited,
+say — and that is a real gap to close before this process runs unsupervised, not a hypothetical one. The
+fence-closing behaviour above tracks only bare ``` markers, not which language (if any) followed the opening
+one, so a reopened fence always loses its syntax highlighting even when the original had a language tag — a
+readability regression, not a correctness one. `apps/bot`'s own shutdown (finding 7 of this slice's rework) waits
+for in-flight message handlers to settle before closing the gateway and the database, but only up to a bounded
+timeout — a handler wedged past it is abandoned mid-answer on shutdown, the same trade-off every bounded drain
+makes between closing promptly and closing completely.

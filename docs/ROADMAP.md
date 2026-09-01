@@ -59,7 +59,7 @@ workspaces, the shared zod contract, the tenant-scoped data layer, and a real mi
 tool. Production is untouched — it keeps running the Python bot, and the legacy import
 runs against a copy of the live database rather than the database itself.
 
-**In scope:** PLAT-1..5, QA-1..6, TEN-1..3, PROJ-1..3, BOARD-4, PPL-1..3, CONV-1..3, MIG-1..4
+**In scope:** PLAT-1/2/5, QA-1..6, TEN-1..3, PROJ-1..3, BOARD-4, PPL-1..3, CONV-1..3, MIG-1..4
 
 ## Phase 4 — Conversation core & Discord surface
 
@@ -68,7 +68,11 @@ programme and the only component already serving real students, so it happens be
 web work rather than after: the behaviour it must preserve is easiest to verify while it
 is still the only thing running. Requirement ids land with this phase's SPEC sections.
 
-**In scope:** CORE-1..6, MDL-1..7
+PLAT-3/4 move here from phase 3: a single gateway connection and the four-process
+topology are properties this phase's own `apps/bot` is what actually satisfies them, not
+the monorepo scaffold phase 3 built before any process existed to connect at all.
+
+**In scope:** CORE-1..6, MDL-1..7, SURF-1..7, PLAT-3/4
 
 ## Phase 5 — API, action layer & authentication
 

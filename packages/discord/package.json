@@ -1,0 +1,30 @@
+{
+  "name": "@bloombot/discord",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Discord surface (SURF-1..7): turns an incoming mention into a call to @bloombot/core's answerQuestion and its result into a reply. No discord.js import here — that lives in apps/bot alone (PLAT-3, PLAT-4).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@bloombot/core": "*",
+    "@bloombot/db": "*",
+    "@bloombot/logger": "*"
+  },
+  "devDependencies": {
+    "@bloombot/openai": "*"
+  }
+}

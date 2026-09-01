@@ -1775,3 +1775,127 @@ because it rewrites who owns a transcript.
 happens when a person genuinely loses access to a connected surface account and needs an instructor to
 re-link them (an audited action nobody has specified), and whether a merge is ever reversible. Neither is
 needed to build `LINK-1..5`, and guessing at them now would be inventing requirements.
+
+---
+
+## D-29 — `packages/db`/`packages/jobs`/`apps/worker`/`packages/core`: a queue in SQLite, the lease and backoff numbers, and where admission sits relative to the allowance
+
+**Problem.** `JOB-1..5` need a queue a worker can claim from without two workers ever running the same job
+twice, a retry policy that stops rather than spins forever, and a bound on concurrent model calls (`JOB-4`)
+applied somewhere in `packages/core`'s answering path — which, combined with `CORE-3`'s existing allowance
+reservation, raises a question neither requirement answers on its own: which happens first?
+
+**Choice, on the queue itself.** `jobs` is a plain table (`packages/db/src/schema.ts`), and claiming a row is
+one conditional `UPDATE` whose own `WHERE` re-asserts the exact eligibility the candidate `SELECT` picked it
+under (`repos/jobs.ts#claimNextJob`) — the same select-then-conditional-write shape `claimDiscordServerBinding`
+already uses for `TEN-3`, not a new device. `D-2`'s own "Limits" paragraph names "the job-claim dialect split
+isolated behind one repo function" as one of the rules that keeps the portable-subset claim honest, and this
+is exactly that: `claimNextJob` is the one function that would need a Postgres-specific rewrite (`SELECT ...
+FOR UPDATE SKIP LOCKED` is the idiomatic form there), and every other function in `repos/jobs.ts` is the same
+portable `and`/`or`/`eq` query-builder SQL every other repo in this package already writes. A queue is not
+generally something SQLite is good at under real write concurrency — but this platform has exactly one writer
+of this table at a time by construction (`apps/worker` is single-instance, `JOB-5`/`PLAT-4`), so the case D-2
+actually has to hold up under is "one worker claiming, one enqueuing caller at a time," not the many-consumer
+throughput a queue usually implies. If a second worker instance is ever intentionally run, this is the file
+to revisit first.
+
+**Choice, on the lease.** `JOB_CLAIM_LEASE_MS` defaults to five minutes. A worker crash mid-job has to make the
+claim reclaimable again in a bounded time (`JOB-3`'s "releases its claim"), and the jobs this queue is built
+for — provisioning a course's Discord channels, importing a roster, attaching a knowledge file — make more
+than a handful of rate-limited Discord/OpenAI calls each; a lease shorter than the slowest of those risks a
+second worker reclaiming and re-running a job that is still legitimately in progress, which is worse than
+waiting a few extra minutes to notice a genuine crash. Five minutes is a guess bounded on both sides (long
+enough for the slowest job this slice anticipates, short enough that a crash is not invisible for an entire
+class period) rather than a measurement — there is no real job to time yet, since none is wired to the queue
+in this slice. Revisit once phase 9/10 lands real handlers and their actual running time is known.
+
+**Rework finding 5 — `JOB_HANDLER_TIMEOUT_MS`, and what a fired timeout means for idempotency.** Before this,
+`runner.ts` awaited a handler call unbounded, and `apps/worker` runs one job at a time (`loop.ts`'s own module
+comment) — a handler that never settled would stall every later claim indefinitely, invisibly, since the
+lease alone does not reclaim a job while the very worker that claimed it is the one still "holding" it, wedged
+mid-`await`. `JOB_HANDLER_TIMEOUT_MS` (default 240s, deliberately under `JOB_CLAIM_LEASE_MS`'s own 300s
+default, so the timeout is the thing that actually fires and this worker can move on to its next claim while
+the lease it holds the stuck job under is still comfortably unexpired) bounds that wait
+(`packages/jobs/src/runner.ts#runHandlerWithTimeout`); past it, the attempt fails (or retries) with a clear
+reason rather than hanging. What it does *not* do: stop the handler. JavaScript has no cooperative cancellation
+for a `Promise` already in flight (`apps/worker/src/shutdown.ts`'s own module comment already says this about
+shutdown, for the same underlying reason) — a handler still running underneath a fired timeout keeps running,
+and may still write, call an upstream API, or otherwise act *after* `runNextJob` has already told the row it
+failed or is due for retry. Nothing in this slice's own registry is real yet to make that concrete, but the
+obligation lands on phase 9/10's own handlers: a handler that can be timed out here must tolerate being invoked
+again (by a retry, or by a second worker reclaiming the row once the lease lapses) while its own earlier,
+"timed-out" invocation might still be mid-flight — the same idempotency discipline `JOB-3`'s "a job runs once,
+even with a worker restart in the middle" already asks of every handler, just triggered by a timeout rather
+than a crash.
+
+**Choice, on the backoff.** `JOB_RETRY_BASE_DELAY_MS` defaults to 1000 and `JOB_RETRY_BACKOFF_FACTOR` to 2 —
+exponential backoff (`packages/jobs/src/retry.ts#backoffDelayMs`) from one second, doubling each attempt: 1s,
+2s, 4s, 8s before whichever attempt is a job's last. This is the ordinary shape for a transient-failure retry
+(a rate limit, a momentary network blip) without a real workload to tune against yet; each is its own
+environment variable rather than folded into one "retry policy" constant, so a later phase that finds the
+schedule too aggressive (or too gentle) for, say, a large roster import can raise it without touching code.
+
+**Rework finding 4 — the bound on attempts is `job.maxAttempts`, not a policy field.** The row itself carries
+its own bound (`repos/jobs.ts#NewJob.maxAttempts`, required per-enqueue, checked against `job.attempts` in
+`runner.ts`), not a shared `RetryPolicy` default: `RetryPolicy` originally also carried a `maxAttempts` field,
+alongside its own `JOB_MAX_ATTEMPTS` environment variable defaulting to 5, but `runner.ts` never actually read
+either — the bound it enforced was always `job.maxAttempts` on the row. An operator raising `JOB_MAX_ATTEMPTS`
+to give a large roster import more headroom would have changed nothing, silently. Both were deleted rather
+than wired up as a default: nothing in this slice enqueues a job yet (`apps/worker`'s own module comment — the
+registry is empty), so there was no real call site to default from, and `NewJob.maxAttempts`'s own comment
+had already settled the bound as "required, not defaulted" per-enqueue policy, not something a shared default
+should quietly override.
+
+**Choice, on where admission sits relative to the allowance.** `JOB-4`'s admission gate is acquired in
+`answerQuestion` *before* `usage.reserveUsageSlot`, not around `model.ask` alone. The alternative — reserve the
+allowance, then wait behind admission — was rejected because `usage.ts` has no operation that gives an
+already-reserved slot back: a request that reserved a day's allowance and then timed out waiting for an
+admission slot would have spent that allowance on nothing, and the next answer that same person could actually
+get would count as slot two, not slot one, for something they were never actually given. Waiting first costs
+nothing when the wait itself is what fails (`declined-busy` reserves no slot, records no message, calls no
+model — the same "costs nothing" shape `declined-over-limit` already has), which is the same principle CORE-3
+already applies to the allowance check itself, carried one step earlier.
+
+**What that ordering costs.** A course's daily limit is enforced by counting *admitted* requests, not
+*arrived* ones — a request that is still queued behind admission has reserved nothing yet, so in principle more
+distinct people could be mid-wait for a very busy course than its `maxRequestsPerDay` alone would suggest,
+each waiting a turn rather than one holding a reservation while the rest are refused outright on arrival.
+`JOB-4`'s own text — "requests wait for a slot rather than failing, up to a bound" — is exactly this trade,
+made on purpose: a wait is not a failure, and nobody's allowance is spent on a wait that goes nowhere.
+
+**Why the bound and the ceiling are both configuration.** `MODEL_ADMISSION_LIMIT` (default 5) and
+`MODEL_ADMISSION_WAIT_MS` (default 15s) are `@bloombot/config` environment variables — `JOB-4`'s own text is
+explicit ("The bound is configuration, not a constant compiled into a client"), and a droplet's real ceiling on
+concurrent OpenAI calls is an operational fact (rate limits, the host's own capacity) nobody can know at the
+time this code is written.
+
+**Why `packages/core` itself never reads `CONFIG`, and where the real gate is actually built.** The first
+version of this built the real, configured `AdmissionGate` lazily inside `answer.ts` on first use, the same
+"nothing runs at import time, reading it is cheap forever after" shape `CONFIG` itself is built with (`PLAT-5`).
+That broke on contact with the rest of the test suite: `CONFIG` validates the *whole* environment schema on any
+property read, not only the one accessed, so every existing test that calls `answerQuestion` or `handleMention`
+directly — every test in `packages/core`, `packages/discord`'s own suite, `packages/openai`'s integration test —
+would have had to satisfy `PUBLIC_APP_URL` and everything else `CONFIG` requires just to answer a question
+against a `FakeModelClient` with no concurrency at all. That is exactly the coupling `CORE-4`'s "dependencies as
+arguments" rule exists to prevent, and it is a defect this build actually hit while wiring this in, not a
+hypothetical. The fix: `deps.admission` defaults to `NO_ADMISSION_LIMIT`, a stateless gate that always grants
+immediately and touches nothing — `packages/core` does not depend on `@bloombot/config` at all. The *real*
+gate is built once, from `CONFIG`, by whichever process actually runs concurrent traffic — `apps/bot`'s own
+`main()`, the same "read `CONFIG` once at startup" discipline it already uses for `model` — and handed down
+through `@bloombot/discord`'s `HandleMentionDependencies.admission`. `packages/core` only has to expose the
+seam (`AnswerDependencies.admission`, typed against `packages/jobs`'s `AdmissionGate`); it does not have to
+decide when the seam is real.
+
+**Why the gate's implementation lives in `packages/jobs`, not `packages/core`.** It has nothing to do with the
+job queue mechanically — it is a plain counting semaphore, dependency-free — but it is part of the same
+`JOB-1..5` requirement family and the same phase. Keeping it there rather than duplicating a semaphore inside
+`packages/core` avoids a second implementation of the same small, easy-to-get-wrong (release-on-timeout,
+FIFO-vs-not) piece of code; `packages/core` only imports its `AdmissionGate` *type*.
+
+**Limits.** `apps/bot` is the only process wired to a real gate in this slice — `apps/api` answers nothing
+today (`API-1..6` carries no answering path), and a future MCP process or `apps/api` route that does will need
+its own `createAdmissionGate(...)` built at its own startup, the same way. Each process's gate is
+process-local, in-memory state: the real ceiling on concurrent model calls *platform-wide* is the sum across
+every process that answers, not `MODEL_ADMISSION_LIMIT` alone. Acceptable for the single-droplet, few-process
+topology this platform runs today (`D-2`'s own "single-host" scope); revisit if answering ever runs from more
+than one process concurrently, or if the ceiling needs to be enforced platform-wide rather than per process.

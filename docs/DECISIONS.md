@@ -2791,3 +2791,120 @@ are still unwired from any live surface (rework finding 4's own "nothing calls i
 adds a `POST /join` route (web) or a Discord-side redemption is the one that has to bind
 `callerAssertedPersonId` to a real, already-authenticated identity; neither function can do that itself from a
 secret and a bare id.
+
+---
+
+## D-35 — `packages/db`/`packages/auth`/`packages/core`/`packages/discord`: what a merge does with two conversations on one course, what it does with usage and cost, whether it can be undone, and what changed in routing
+
+**Problem.** LINK-1..5/PPL-4/5 build the mechanism D-28 already designed: an unattributed identity is invited,
+not answered (LINK-1/LINK-2); a Discord or MCP identity is proven, not asserted (LINK-3, PPL-4); proving a
+second identity that already belongs to someone merges the two (LINK-4); and, once merged, one allowance and
+one conversation follow the person across every surface (LINK-5).
+
+**Choice — `connectedAt`, not identity count, is LINK-1's own gate.** `people.connectedAt` (nullable) is set
+exactly once, by `mergePeople`, the moment a *proof* first attaches a second identity onto a person — never by
+`resolvePersonByIdentity` (PPL-3's own first-sight creation) and never by a roster import
+(`mergeRosterFields`/`overwriteRosterFields`, neither of which touches it). `answerQuestion`
+(`packages/core/src/answer.ts`) declines with `not-connected` before admission, the spending cap or the
+allowance are ever touched whenever `connectedAt` is `null` — LINK-1's own "no model call, no allowance spent"
+is true by construction, not by a caller remembering to check first, because the gate sits in the one pipeline
+every surface already calls (CORE-1's own "one pipeline every surface calls" is what carries LINK-1 to Discord
+today and to the web chat and MCP surfaces automatically once they call `answerQuestion` too).
+
+**Cost, stated plainly, the same way D-28 already does.** Every brand-new person's *first* message, on any
+surface — not merely a second surface — now gets the invitation instead of an answer, because `resolvePersonByIdentity`
+never sets `connectedAt`. This is D-28's own trade, not a new one introduced here: "the alternative — answer on
+the first surface, require connecting only for a second — leaves a window where a person has an unattributed
+allowance ... that is D-4's evasion, reintroduced." The whole existing Discord regression suite exercises this
+directly: `packages/discord/tests/helpers/seed.ts#seedBoundServerWithCourse` now connects a person under the
+default `authorId` before most tests run (a real, if throwaway, merge — not a raw column write), and the
+handful of tests that specifically exercise identity *creation* (SURF-4, the D-31 rework) opt out
+(`connectDefaultAuthor: false`) since they assert on `people.listPeople`'s own count, not on whether the
+message was answered.
+
+**Choice — what a merge does with two conversations on the same course.** `conversations` has two partial
+unique indexes (`schema.ts`, CONV-1) that a plain "reassign the loser's conversation to the survivor" would
+violate the moment both people already have one for the same `(course, surface-scope)` — this is the "unique
+constraints you will hit" case the brief names directly. `mergePeople` (`packages/db/src/repos/people.ts`)
+resolves it by *combining* the two transcripts into the survivor's own conversation row: every message from
+both, interleaved back into the order they actually happened (`mergeMessagesByCreatedAt`, a stable merge on
+`createdAt` — both inputs are already each internally ordered by their own `sequence`, CONV-2's own ordering
+column), re-sequenced 0..N-1, and re-pointed at the survivor's conversation and person id. Nothing is dropped —
+CONV-2's "no delete path for a message" holds through a merge exactly as it does everywhere else. The loser's
+own conversation row is left in place, now empty, rather than reassigned (which would recreate the exact
+collision this branch avoids) or deleted (nothing in this package deletes a conversation row, and `mergePeople`
+does not start). `upstreamThreadId` keeps the survivor's own value when it already has one — never overwritten
+by the loser's, so a live model-thread resumption is never silently swapped for a different one mid-merge.
+
+**Choice — what a merge does with the day's usage.** LINK-4's own text is explicit that this is a requirement,
+not a suggestion: "the day's usage is combined rather than restarted." `mergePeople` adds the loser's own count,
+for every `(course, day)` it has one, onto the survivor's row for the same pair (creating one if the survivor
+had none) — the same `ON CONFLICT DO UPDATE ... count + excluded` shape `usage.ts#incrementUsage` already uses,
+just summing an arbitrary amount rather than incrementing by one. The loser's own row is left exactly as it
+was: harmless history nothing reads through the loser's id again, since every identity that used to resolve to
+the loser now resolves to the survivor. Tested directly (`packages/db/tests/people-merge.test.ts`) against the
+brief's own suspicion — the combined count is asserted to be the *sum*, not the larger of the two and not a
+reset.
+
+**Choice — enrolments follow the same "one active row wins, nothing is silently dropped" shape.** An *ended*
+enrolment moves to the survivor outright (no unique constraint to collide with). An *active* one moves only if
+the survivor holds no active enrolment for that course already; when it does, the loser's row is *ended*
+instead of moved — `enrolments_org_course_person_active_unique` permits at most one active row per
+`(organization, course, person)`, and the survivor's own enrolment (whichever one it already had) is what the
+merged person keeps. The loser's now-ended row stays as the historical record of how they were originally
+admitted, the same "ended, not deleted" discipline ENRL-6 already holds every other enrolment row to.
+
+**Choice — cost ledger entries are deliberately left alone.** `cost_ledger_entries` rows are not reassigned to
+the survivor during a merge, unlike identities, conversations, enrolments and usage. They are a historical
+attribution of what was actually spent, by which id, at the time the call was made — not a live balance a
+merge needs to keep correct the way a daily allowance is (nothing reads `cost_ledger_entries` by `personId`
+to decide whether to answer the *next* request; `hasReachedSpendingCap`/`listOrganizationTotals` are both
+organization-wide sums, indifferent to which person a row names). Reassigning them would rewrite history
+("this person spent this" becomes false the moment it is reassigned) for no read that needs it to be true. If
+a future requirement needs "how much has this merged person's *whole* history cost, across every id they were
+ever known by," that reader can already resolve it by following `mergedIntoPersonId` back through
+`people`, the same chain COST-4's own instructor-facing read would have to walk regardless of how the ledger
+rows are attributed.
+
+**Choice — a merge is not undone by anything in this slice.** `mergedIntoPersonId`/`mergedAt` record *that* a
+merge happened and which person survived it, but there is no `unmergePeople` and no code path that ever clears
+either column. D-28's own "Limits" paragraph named this as one of the two questions deliberately left open —
+"whether a merge is ever reversible" — and nothing in LINK-1..5's own text requires an answer here: undoing a
+merge would mean re-splitting interleaved messages back into two conversations, reversing a usage sum with no
+record of which half came from which side once further requests have landed on top of it, and deciding which
+of two now-identical-looking enrolment histories to revive — none of which this slice's brief asks for, and
+guessing at the shape now would be inventing a requirement the way D-28 already warned against.
+
+**Choice — what changed in routing for Discord (D-34's own unfinished business, closed here).**
+`packages/discord/src/handle-mention.ts` now calls `enrolments.enrolViaDiscordRole` once a message resolves to
+a matched course, before `answerQuestion` runs — exactly the change D-34's own "what the linking slice should
+change in routing" named: "holds the role, so route it" becomes "holds the role, so admit them once, then
+route through the stored enrolment." Concretely, for Discord: a role holder's *first* message used to route and
+answer with no `enrolments` row behind it at all; every message now leaves one behind (idempotently —
+`enrolViaDiscordRole`'s own no-op when an active enrolment already exists, or when the author does not hold the
+course's `studentsRole`, makes this safe to call on every matched message, not only the first). This does
+**not** change *whether* a message is answered — `routeMessage`'s own category-or-role match, unchanged, is
+still the only thing that decides that; a person routed by category alone, holding no relevant role, still gets
+an enrolment write attempt that quietly does nothing (`enrolViaDiscordRole` returns `undefined`, caught and
+logged, never surfaced to the student). The gap this leaves open, on purpose: an instructor who explicitly
+`enrolments.end`s a role holder's enrolment (ENRL-6) will find it silently revived on that student's very next
+message, because `enrolViaDiscordRole` was already written (D-34, the previous slice) with `reviveEnded: true`
+— "holding the role is an ongoing, re-checked fact ... so a prior ended enrolment does not block a fresh one
+here either." This slice does not change that inherited behaviour; changing it would mean either gating
+`answerQuestion` on the enrolment record instead of on `routeMessage`'s own decision (a materially larger
+change than "admit them once, then route through the stored enrolment" describes, and one with its own
+join-link and roster interactions this brief does not ask this slice to work out) or changing
+`enrolViaDiscordRole`'s own `reviveEnded` choice (out of this slice's stated scope: it touches ENRL-3's own
+admission semantics, not LINK-1..5's). Left for whichever slice actually needs "an instructor's `end` sticks
+even for a role holder" to specify.
+
+**Limits.** The web chat and MCP surfaces get LINK-1's own gate for free (`answerQuestion` is the one place it
+lives), but neither surface exists yet to call `beginDiscordPersonLink`/`issueMcpPersonLinkToken`/
+`completeDiscordPersonLink`/`completeMcpPersonLink` (`packages/auth/src/person-link.ts`) — this slice's own
+brief is explicit that it "provides the token mechanism, not the server." The actual Discord OAuth token
+exchange (`code` → an access token → `/users/@me`'s own snowflake) is not built here either, the same way
+`discord-install.ts` leaves Discord's own REST calls to `@bloombot/discord-rest` and `apps/api`'s own routes —
+whichever slice wires the web panel's connect screens is the one that completes that round trip and calls
+`completeDiscordPersonLink` with the snowflake it got back. `people.ts#hasVerifiedAddress` (PPL-5) has no
+caller yet either — there is no transcript-read or export action in this platform today (`ADMIN-1..5`, not yet
+built) — it exists ahead of its own caller so that phase does not have to invent the check when it lands.

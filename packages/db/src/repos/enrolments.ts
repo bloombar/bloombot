@@ -137,6 +137,9 @@ export function listPeopleForCourse(
       firstName: people.firstName,
       lastName: people.lastName,
       githubHandle: people.githubHandle,
+      connectedAt: people.connectedAt,
+      mergedIntoPersonId: people.mergedIntoPersonId,
+      mergedAt: people.mergedAt,
       createdAt: people.createdAt,
     })
     .from(enrolments)

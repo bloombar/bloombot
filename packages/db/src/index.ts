@@ -33,3 +33,4 @@ export * as courseInstructionRevisions from './repos/course-instruction-revision
 export * as costLedger from './repos/cost-ledger.js'
 export * as enrolments from './repos/enrolments.js'
 export * as courseJoinLinks from './repos/course-join-links.js'
+export * as personLinkChallenges from './repos/person-link-challenges.js'

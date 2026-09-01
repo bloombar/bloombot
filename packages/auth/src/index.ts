@@ -57,3 +57,17 @@ export {
   type RecordedEmail,
   RecordingEmailSender,
 } from './email.js'
+
+export {
+  beginDiscordPersonLink,
+  consumeDiscordPersonLink,
+  completeDiscordPersonLink,
+  issueMcpPersonLinkToken,
+  consumeMcpPersonLinkToken,
+  completeMcpPersonLink,
+  DEFAULT_PERSON_LINK_TTL_MS,
+  type BeginDiscordPersonLink,
+  type ConsumedDiscordPersonLink,
+  type IssuedMcpPersonLinkToken,
+  type ConsumedMcpPersonLinkToken,
+} from './person-link.js'

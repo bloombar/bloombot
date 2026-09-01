@@ -64,7 +64,14 @@ describe('handleMention wired to the real answerQuestion and OpenAI adapter (end
         guildId,
         text: `<@${BOT_ID}> When is the midterm?`,
       }),
-      { db: testDb.db, model, logger, reply, day: '2026-08-31' }
+      {
+        db: testDb.db,
+        model,
+        logger,
+        reply,
+        day: '2026-08-31',
+        connectUrl: 'https://app.bloombot.test',
+      }
     )
 
     expect(result.kind).toBe('answered')

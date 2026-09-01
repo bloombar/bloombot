@@ -54,6 +54,7 @@ import {
   discordServers,
   memberships,
   openDatabase,
+  people,
   projects,
 } from '@bloombot/db'
 import { handleMention, type InboundMention } from '@bloombot/discord'
@@ -151,6 +152,29 @@ test('a project and course defined entirely in the panel route and answer a matc
     const reply = new FakeReplyPort()
     const logger = createFakeLogger()
     const botId = 'e2e-bot'
+    const studentDiscordId = `e2e-student-${suffix}`
+
+    // LINK-1 — an unconnected identity is invited to connect, not answered;
+    // this test is proving CORE-2/CORE-1's routing and answering pipeline
+    // (QA-8's own scope, this file's own module comment), not LINK-1 itself,
+    // so the student is connected the same way a real proof would leave
+    // them (`@bloombot/db`'s `people.ts#mergePeople`, called by
+    // `@bloombot/auth`'s `person-link.ts` once a real proof succeeds) —
+    // merging a second, throwaway identity onto the Discord one this
+    // mention is about to arrive under.
+    const student = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: studentDiscordId },
+      db
+    )
+    const other = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'web', externalId: `e2e-web-${suffix}` },
+      db
+    )
+    const merged = people.mergePeople(organizationId, student.id, other.id, db)
+    if (!merged)
+      throw new Error('setup failed: could not connect the e2e student')
 
     // authorRoleNames is deliberately empty: the requirement under test is
     // that a message in *this course's own category* is routed to it, and
@@ -163,7 +187,7 @@ test('a project and course defined entirely in the panel route and answer a matc
       guildId,
       channelName: 'announcements',
       categoryName,
-      authorId: `e2e-student-${suffix}`,
+      authorId: studentDiscordId,
       authorDisplayName: 'QA Student',
       authorRoleNames: [],
       text: `<@${botId}> When is the midterm?`,
@@ -178,6 +202,7 @@ test('a project and course defined entirely in the panel route and answer a matc
       logger,
       reply,
       day: '2026-09-01',
+      connectUrl: 'https://e2e.bloombot.test',
     })
 
     // Routed to, and answered by, exactly the course this test just defined

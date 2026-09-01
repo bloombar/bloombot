@@ -84,7 +84,11 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
       me.body as {
         account: {
           id: string
-          memberships: { organizationId: string; role: string }[]
+          memberships: {
+            organizationId: string
+            organizationName: string
+            role: string
+          }[]
         } | null
       }
     ).account
@@ -92,6 +96,11 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
     expect(meAccount!.memberships).toHaveLength(1)
     expect(meAccount!.memberships[0]).toMatchObject({ role: 'owner' })
     expect(meAccount!.memberships[0]!.organizationId).toBeTruthy()
+    // TEN-7: a first-time sign-in's personal organization is named after the
+    // account — `displayNameFromEmail('student@example.edu')`
+    // (`@bloombot/auth`'s `sign-in.ts`) — not an opaque id, and `/auth/me`
+    // (D-22's gap 1) is where the panel reads that name from.
+    expect(meAccount!.memberships[0]!.organizationName).toBe('Student')
 
     // 4. Sign out — revokes server-side, not merely clears the cookie.
     const signOut = await request(app)

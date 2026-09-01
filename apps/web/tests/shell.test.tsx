@@ -31,8 +31,12 @@ vi.mock('../src/api/client.js', async () => {
 const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-1',
   memberships: [
-    { organizationId: 'org-1', role: 'owner' },
-    { organizationId: 'org-2', role: 'assistant' },
+    { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
+    {
+      organizationId: 'org-2',
+      organizationName: 'Org Two',
+      role: 'assistant',
+    },
   ],
 }
 

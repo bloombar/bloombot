@@ -781,6 +781,19 @@ organization's courses, rosters or transcripts. A re-installation restores a wor
 setup, and transcripts are records an instructor may be required to retain. Deleting that
 data is a separate, explicitly confirmed, audited action.
 
+#### TEN-7 An organization has a name a person recognizes
+
+An organization carries a display name, shown wherever a person has to choose which one
+they are acting in. A personal organization created at sign-up is named after the account
+that owns it, so the choice is never between two identifiers.
+
+#### TEN-8 A server binding is visible to the organization that holds it
+
+An organization can list the Discord servers bound to it, so the panel can show what is
+already installed rather than only what this browser session happened to install. The
+listing is scoped like every other read: a server bound to another organization is not in
+it, and its existence is not disclosed.
+
 ### 16. Projects
 
 #### PROJ-1 Courses are grouped into projects
@@ -810,6 +823,13 @@ A project can be copied into a new one, bringing its courses, categories, channe
 instructions and knowledge-file attachments, and leaving rosters empty. Rolling a course
 forward to the next term is the largest piece of recurring manual work in the current
 system.
+
+#### PROJ-5 The panel reads through the same layer it writes through
+
+Everything the control panel displays about projects and courses is read through the
+action layer, not through a route that reaches the database on its own. A read is an
+action with a policy like any other, so a screen cannot show a record the caller would not
+have been allowed to open, and the audit index covers reading as well as writing.
 
 ### 17. Quality, Types & Tooling
 

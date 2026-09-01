@@ -4,11 +4,12 @@
  * a person who teaches in two places cannot act in one while believing
  * they are in the other.
  *
- * There is no route today that turns an organization id into a name
- * (`GET /auth/me` returns only `{ organizationId, role }` per membership —
- * see `docs/DECISIONS.md`), so this shows the id itself and the caller's
- * role in it. That is a real gap, recorded there rather than papered over
- * with a name this app made up.
+ * Finding 4 (rework pass): shows `organizationName`, not the raw id —
+ * `GET /auth/me` has carried `{ organizationId, organizationName, role }`
+ * per membership since TEN-7 closed that gap (`docs/DECISIONS.md` D-23),
+ * this component just did not read the name back yet. Before this fix, an
+ * account in two organizations picked between two UUIDs — exactly the case
+ * TEN-7 exists for.
  */
 
 import type { MembershipSummary } from '../api/types.js'
@@ -35,7 +36,7 @@ export function OrganizationSwitcher({
     return (
       <p className="organization-switcher" data-testid="organization-switcher">
         Acting in{' '}
-        <strong>{active?.organizationId ?? activeOrganizationId}</strong>
+        <strong>{active?.organizationName ?? activeOrganizationId}</strong>
         {active ? ` (${active.role})` : ''}
       </p>
     )
@@ -57,7 +58,7 @@ export function OrganizationSwitcher({
             key={membership.organizationId}
             value={membership.organizationId}
           >
-            {membership.organizationId} ({membership.role})
+            {membership.organizationName} ({membership.role})
           </option>
         ))}
       </select>

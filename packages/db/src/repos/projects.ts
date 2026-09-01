@@ -9,7 +9,7 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNull, isNotNull } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { findProjectUnarchiveConflict } from './courses.js'
 import type { CourseNameConflict } from './courses.js'
 import { projects } from '../schema.js'
@@ -103,11 +103,16 @@ function findActiveProjectConflict(
  * before this call, so there is no "was this reused" question a caller
  * needs answered — and this function's many existing callers already treat
  * its return value as a `Project`, not a result to unwrap.
+ *
+ * `db` accepts `Executor`, not just `Database`: `actions/projects.ts#duplicateProjectAction`
+ * (finding 1 of the PROJ-4/5/TEN-7/8 rework) calls this from inside its own
+ * transaction, so the new project and every course copied into it commit or
+ * roll back together.
  */
 export function createProject(
   organizationId: string,
   input: NewProject,
-  db: Database
+  db: Executor
 ): Project {
   return db
     .insert(projects)
@@ -146,10 +151,14 @@ export function getProject(
  * Excludes archived projects by default (PROJ-2) — the common case is
  * "what is currently in use" — pass `includeArchived: true` to see
  * everything, e.g. for an admin view that lists past terms too.
+ *
+ * `db` accepts `Executor`, not just `Database`: `actions/projects.ts#duplicateProjectAction`
+ * (finding 1 of the PROJ-4/5/TEN-7/8 rework) calls this from inside its own
+ * transaction, to find the row a name collision refused.
  */
 export function listProjects(
   organizationId: string,
-  db: Database,
+  db: Executor,
   options?: { includeArchived?: boolean }
 ): Project[] {
   const conditions = [eq(projects.organizationId, organizationId)]

@@ -20,7 +20,7 @@ import {
   type EmailSender,
   type GoogleIdTokenVerifier,
 } from '@bloombot/auth'
-import { memberships, type Database } from '@bloombot/db'
+import { memberships, organizations, type Database } from '@bloombot/db'
 
 import { clearSessionCookie, setSessionCookie } from '../middleware/session.js'
 
@@ -138,6 +138,17 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * for the same documented reason `accounts.getAccountByEmail` is: an
    * account exists across organizations, so nothing here can be scoped to
    * one until this call names it.
+   *
+   * TEN-7 (D-22's gap 1): each membership also carries the organization's
+   * own `name` — `@bloombot/auth`'s `sign-in.ts` already names a personal
+   * organization after the account that owns it, but nothing surfaced that
+   * name anywhere a caller could read it back, so `OrganizationSwitcher.tsx`
+   * (`apps/web`) could only ever show an id. `getOrganizationById` per
+   * membership, not a join in `memberships.ts` itself: this route is the
+   * one place that needs an organization's name alongside its id, and
+   * TEN-2's own convention keeps a repo function scoped to one table's
+   * concern rather than reaching across into `organizations` for every
+   * caller whether or not it wants a name.
    */
   router.get('/me', (req, res) => {
     if (!req.session) {
@@ -151,10 +162,21 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
     res.status(200).json({
       account: {
         id: req.session.accountId,
-        memberships: accountMemberships.map((membership) => ({
-          organizationId: membership.organizationId,
-          role: membership.role,
-        })),
+        memberships: accountMemberships.map((membership) => {
+          const organization = organizations.getOrganizationById(
+            membership.organizationId,
+            deps.db
+          )
+          return {
+            organizationId: membership.organizationId,
+            // Unreachable in practice — a membership's own foreign key
+            // guarantees its organization exists — but a session outlives
+            // neither, so this falls back rather than throwing on a race
+            // nothing in this codebase causes on purpose.
+            organizationName: organization?.name ?? membership.organizationId,
+            role: membership.role,
+          }
+        }),
       },
     })
   })

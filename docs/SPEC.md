@@ -600,6 +600,19 @@ title; and an existing id must never be changed, since renaming or
 renumbering orphans the issue it keys and creates a duplicate. The contract is restated
 in `.claude/CLAUDE.md` so it survives contributor turnover.
 
+#### BOARD-4 Card status follows the slice
+
+A requirement's card shows where its work actually is: `In progress` when a slice starts,
+`In review` when its pull request opens, and `Done` when that pull request merges. GitHub's
+own closing keywords cannot do this here: `Closes #N` fires only for a pull request merged
+into the repository's default branch, and every branch in the platform build targets the
+long-lived integration branch instead, so nothing would ever close and every card would sit
+in Backlog while the work happened. `scripts/board/status.mjs` is the explicit substitute —
+it writes the status into `manifest.yaml`, which is the board's source of truth, and
+reconciles the board with it. Pull requests still carry `Closes #N`, so the link between a
+change and the requirement it satisfies survives in the history and fires automatically on
+the eventual merge to the default branch.
+
 ### 12. Platform Architecture
 
 #### PLAT-1 Monorepo layout

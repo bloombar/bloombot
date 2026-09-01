@@ -15,6 +15,7 @@
     "board:derive": "node scripts/board/derive.mjs",
     "board:sync": "node scripts/board/sync.mjs",
     "board:sync:dry": "node scripts/board/sync.mjs --dry-run",
+    "board:status": "node scripts/board/status.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

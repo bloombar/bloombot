@@ -16,37 +16,36 @@ sequence is `docs/ROADMAP.md` phases 3–15, and every judgment call is in `docs
 
 ## Done
 
-| PR  | what                                                                                                                                 |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| #74 | supervisor/developer agent workflow, tested `PreToolUse` guard, hooks, skills, `CONTRIBUTING.md`, `PROJECT_BOARD.md`, `DECISIONS.md` |
-| #76 | SPEC §12–17 (31 requirements across PLAT/ACT/AUTH/TEN/PROJ/QA), roadmap phases 3–15, board config for 15 phases and 14 families      |
+| PR   | what                                                                                                                                |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| #74  | supervisor/developer agent workflow, tested `PreToolUse` guard, hooks, skills, `CONTRIBUTING.md`, `PROJECT_BOARD.md`, `DECISIONS.md` |
+| #76  | SPEC §12–17 (31 requirements across PLAT/ACT/AUTH/TEN/PROJ/QA), roadmap phases 3–15, board config for 15 phases and 14 families      |
+| #108 | Phase 3 slice 1 — npm workspaces, `packages/config`, `packages/logger`, `packages/schemas`, TS project references, vitest, CI gates  |
+| #109 | Phase 3 slice 2 — `packages/db`: SQLite engine, migrations, and the tenant-scoped repos for organizations, accounts, memberships and Discord-server bindings (TEN-1..3) |
+
+The board issues for the platform requirements now exist (#77–#107): PLAT-1..5 are #77–#81, QA-1..6
+#82–#87, ACT-1..6 #88–#93, AUTH-1..4 #94–#97, TEN-1..6 #98–#103, PROJ-1..4 #104–#107. `npm run board:sync`
+had never been run since the SPEC merged, so there was nothing for a PR to close.
+
+`master` was merged into this branch on 2026-08-31 (D-6's rule about not letting the promotion become a
+conflict resolution). Its roadmap had collapsed to two phases and its `scripts/board/config.mjs` to two
+milestones — both predate the fifteen-phase plan, so the conflict was resolved in favour of this branch's
+structure, keeping master's newer status facts.
 
 ## In flight
 
-**`feat/PLAT-3-monorepo-scaffold`** (commit `18744a4`, pushed, **no PR yet**) — Phase 3 slice 1: npm
-workspaces, `packages/config`, `packages/logger`, `packages/schemas`. Implementer reports lint, prettier,
-typecheck clean; 23 node-test assertions plus 45 vitest tests passing; board manifest unchanged.
-
-**Next action: review it before opening the PR.** Run `/code-review` and the `spec-reviewer` agent against
-`git diff origin/feat/PLAT-1-multi-surface-platform...feat/PLAT-3-monorepo-scaffold`. Points to weigh:
-
-1. Does `npm test` still run `.claude/hooks/*.test.mjs`? Those tests protect the live student database;
-   silently dropping them is a serious finding. Verify from the output, not the script.
-2. Is `isAdminEmail` genuinely per-call? A module-level cache defeats AUTH-4.
-3. Does anything run at import time in the three packages (PLAT-5)? `CONFIG` is a Proxy for this reason —
-   check the Proxy does not evaluate eagerly.
-4. `packages/schemas` must depend on zod and nothing else in the workspace.
-5. It added `.prettierignore` covering 11 pre-existing files it did not author. Judge whether that is
-   justified or hides a real formatting problem. `scripts/board/manifest.yaml` genuinely must stay
-   byte-identical or the board diff check fails.
+Nothing. Phase 3 slice 3 is the next thing to start.
 
 ## Queued follow-ups
 
-- **The PLAT-2 boundary lint rule has no regression test.** It was verified by live `eslint --stdin` output,
-  but a silent regression in it is exactly the QA-5 failure mode. Needs a vitest project outside
-  `packages/*`.
-- Phase 3 slice 2: `packages/db` — Drizzle schema, migrations, org-scoped repos.
-- Phase 3 slice 3: `legacy:import` bringing `bot_config.yml` and a **copy** of `data/data.db` in as tenant 1.
+- **The PLAT-2 boundary lint rule now covers `packages/schemas` as well as `apps/web`** — that gap was
+  found in review of #108 and closed. It still has no regression test of its own (a vitest project outside
+  `packages/*` running `eslint --stdin`), which is the QA-5 failure mode.
+- Phase 3 slice 3: projects and courses — the schema and org-scoped repos behind PROJ-1/2/3. Move those
+  ids into phase 3 in the ROADMAP when the slice lands, the way TEN-1..3 were.
+- Phase 3 slice 4: people, conversations and messages — the tables the conversation core needs.
+- Phase 3 slice 5: `legacy:import`, bringing `bot_config.yml` and a **copy** of `data/data.db` in as
+  tenant 1. Never the live file.
 - Phases 4 and 8–15 carry roadmap narrative but no requirement ids yet; their SPEC sections land with them.
 
 ## Working notes
@@ -55,4 +54,9 @@ typecheck clean; 23 node-test assertions plus 45 vitest tests passing; board man
   agent switches the supervisor's branch out from under it.
 - Agent definitions in `.claude/agents/` load at session start. Creating one mid-session does not register
   it; the fallback is `general-purpose` with the role inlined, which works.
+- Run implementers **in the main checkout, one at a time**, and reviewers in isolated worktrees. Worktree
+  isolation gives an agent its own branch, which is wrong for an implementer whose diff the supervisor has
+  to commit on the slice branch. Remove a reviewer's worktree when it reports (`git worktree remove`).
+- Check the issue number before writing `Closes #N`. The board issues are not numbered in family order —
+  #88–#93 are ACT, not TEN — and a wrong number closes somebody else's requirement on merge.
 - `.claude/settings.local.json` is globally gitignored, so permissions are per-machine and not shared.

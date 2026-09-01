@@ -197,6 +197,11 @@ export const FAMILY_LABEL = {
     color: '8b0000',
     description: 'Platform administration, audit & export',
   },
+  LINK: {
+    name: 'area:account-linking',
+    color: 'fbca04',
+    description: 'Connecting a person across Discord, web and MCP',
+  },
   QA: {
     name: 'area:quality',
     color: '2ea043',

@@ -28,11 +28,18 @@ export interface JobContext {
  * `repos/jobs.ts`'s own module comment holds the database layer to. A
  * handler that throws is treated as a failed attempt (JOB-2); a handler
  * that resolves is treated as succeeded.
+ *
+ * SRV-6..8 — whatever a handler resolves with is its own report, and
+ * `runNextJob` (`runner.ts`) passes it straight through to
+ * `repos/jobs.ts#completeJob`'s own `result` argument, the same "opaque to
+ * the queue" treatment `payload` already gets — a handler that returns
+ * nothing (`Promise<void>`, still fine, still the common case for a job
+ * with no report worth keeping) simply leaves the row's `result` `null`.
  */
 export type JobHandler = (
   payload: unknown,
   context: JobContext
-) => Promise<void>
+) => Promise<unknown>
 
 /**
  * A kind-to-handler map, plus the list of kinds it can run — what

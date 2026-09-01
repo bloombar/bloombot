@@ -61,6 +61,15 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // all) — resolves the organization itself, read, the same shape
   // `projects.list` uses.
   'discordServers.list': { resource: 'organization', access: 'read' },
+  // SRV-6: resolves the course this scaffold job runs against, write —
+  // `execute` reaches no Discord state at all (it only enqueues), but the
+  // course it names is what a write grant against `'course'` already
+  // protects everywhere else in this table (`courses.enable`/`.disable`).
+  'discordServers.scaffold': { resource: 'course', access: 'write' },
+  // Resolves the job itself, read — a job id belonging to another
+  // organization resolves to nothing (TEN-5), the same as every other
+  // scoped read in this table.
+  'jobs.get': { resource: 'job', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

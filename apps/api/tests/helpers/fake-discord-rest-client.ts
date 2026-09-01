@@ -9,9 +9,11 @@
  */
 
 import type {
+  DiscordChannel,
   DiscordGuildSummary,
   DiscordOAuthToken,
   DiscordRestClient,
+  DiscordRole,
 } from '@bloombot/discord-rest'
 
 export interface ExchangeCall {
@@ -71,6 +73,33 @@ export function createFakeDiscordRestClient(
     getBotGuilds(botToken): Promise<DiscordGuildSummary[]> {
       getBotGuildsCalls.push(botToken)
       return Promise.resolve(options.botGuilds ?? [])
+    },
+
+    // SRV-6's four guild-write calls — `apps/api` never scaffolds a server
+    // itself (that is `apps/worker`'s own handler, over the queue), so
+    // nothing in this app's routes calls these; they exist only so this
+    // fake keeps satisfying `DiscordRestClient` as that port grows.
+    listGuildChannels(): Promise<DiscordChannel[]> {
+      return Promise.resolve([])
+    },
+    listGuildRoles(): Promise<DiscordRole[]> {
+      return Promise.resolve([])
+    },
+    createGuildCategory(_botToken, _guildId, input): Promise<DiscordChannel> {
+      return Promise.resolve({
+        id: 'fake-category-id',
+        type: 4,
+        name: input.name,
+        parentId: null,
+      })
+    },
+    createGuildChannel(_botToken, _guildId, input): Promise<DiscordChannel> {
+      return Promise.resolve({
+        id: 'fake-channel-id',
+        type: 0,
+        name: input.name,
+        parentId: input.parentId,
+      })
     },
   }
 }

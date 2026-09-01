@@ -3,13 +3,17 @@
  * deleting anything, refuses another organization's binding the same
  * not-found-shaped way every other action does (TEN-5), and is proven not
  * to touch courses, conversations or messages at all — counted before and
- * after, not merely "the binding row still resolves".
+ * after, not merely "the binding row still resolves". `discordServers.scaffold`
+ * (SRV-6): enqueues rather than working inline — dispatching it creates a
+ * job row and reaches no Discord state at all, since this package holds no
+ * Discord client to reach one with in the first place.
  */
 
 import {
   conversations,
   courses,
   discordServers,
+  jobs,
   people,
   projects,
   schema,
@@ -17,7 +21,10 @@ import {
 } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { removeDiscordServerAction } from '../src/actions/discord-servers.js'
+import {
+  removeDiscordServerAction,
+  scaffoldDiscordServerAction,
+} from '../src/actions/discord-servers.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionRefusedError } from '../src/errors.js'
 import { seedOrganizationWithBoundServer } from './helpers/seed.js'
@@ -78,6 +85,30 @@ function seedCourseConversationAndMessages(
     { direction: 'to_person', content: 'Hi there' },
     db
   )
+}
+
+/** One bare course, no categories — enough for `discordServers.scaffold`'s own policy to resolve. */
+function seedCourse(organizationId: string, db: Database): string {
+  const project = projects.createProject(
+    organizationId,
+    { name: 'Test Term' },
+    db
+  )
+  const courseResult = courses.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: 'Test Course',
+      filePrefix: 'tc',
+      enabled: true,
+      adminsRole: 'admins-tc',
+      studentsRole: 'students-tc',
+      categories: [{ name: 'Week 1', channels: [] }],
+    },
+    db
+  )
+  if (!courseResult.ok) throw new Error('setup failed: unexpected conflict')
+  return courseResult.course.id
 }
 
 /** Row counts across the tables TEN-6 promises removal never touches. */
@@ -197,3 +228,66 @@ describe('discordServers.remove', () => {
     expect(countRows(testDb.db)).toEqual(before)
   })
 })
+
+describe('discordServers.scaffold (SRV-6)', () => {
+  // The action enqueues rather than working inline: dispatching it creates
+  // exactly one job row, naming the course, and reaches no Discord state at
+  // all — this package holds no Discord client to reach one with.
+  it('enqueues a discordServers.scaffold job naming the course, without doing any work inline', async () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithBoundServer(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+    const before = countJobRows(testDb.db)
+
+    const result = await dispatch(
+      scaffoldDiscordServerAction,
+      { courseId },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result.jobId).toEqual(expect.any(String))
+    const rows = allJobRows(testDb.db)
+    expect(rows).toHaveLength(before + 1)
+    const created = rows.find((row) => row.id === result.jobId)
+    expect(created).toMatchObject({
+      organizationId,
+      kind: 'discordServers.scaffold',
+      status: 'pending',
+    })
+    expect(JSON.parse(created?.payload ?? '{}')).toEqual({ courseId })
+  })
+
+  // TEN-5: refuses another organization's course the same not-found-shaped
+  // way every other action does, enqueueing nothing.
+  it("refuses to scaffold another organization's course", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithBoundServer(
+      testDb.db,
+      'Org A'
+    )
+    const courseId = seedCourse(orgA, testDb.db)
+    const { organizationId: orgB } = seedOrganizationWithBoundServer(
+      testDb.db,
+      'Org B'
+    )
+
+    await expect(
+      dispatch(
+        scaffoldDiscordServerAction,
+        { courseId },
+        { organizationId: orgB, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(allJobRows(testDb.db)).toHaveLength(0)
+  })
+})
+
+/** `schema.jobs` row count — a small local helper rather than pulling in `jobs.countQueuedJobs` (which excludes terminal states this test does not create anyway). */
+function countJobRows(db: Database): number {
+  return db.select().from(schema.jobs).all().length
+}
+
+function allJobRows(db: Database): jobs.Job[] {
+  return db.select().from(schema.jobs).all()
+}

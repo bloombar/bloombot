@@ -53,6 +53,33 @@ export function openDatabase(path: string = CONFIG.DATABASE_PATH): Database {
 }
 
 /**
+ * The subset of `Database`'s query methods a repo function needs when it may
+ * be called either with a top-level connection, or from inside a caller's
+ * already-open transaction — `db.transaction(...)`'s own callback parameter
+ * lacks `$client` (it is not a connection you can close), so it does not
+ * satisfy `Database` itself, but it does satisfy this. Mirrors the
+ * module-private `Executor` type `repos/courses.ts` already defines for its
+ * own internal helpers; this one is exported because AUTH-1/AUTH-3's
+ * cross-table atomicity (`@bloombot/auth`'s `sign-in.ts`) needs the same
+ * shape from *outside* this package, composing `organizations.ts` and
+ * `accounts.ts` inside a transaction it owns.
+ */
+export type Executor = Pick<Database, 'select' | 'insert' | 'update' | 'delete'>
+
+/**
+ * `Executor` plus `transaction` — for a repo function that opens its own
+ * nested transaction (a savepoint, when `db` is already inside one) rather
+ * than only reading and writing rows directly. `accounts.ts#createAccount`
+ * is the one function in this package that needs it: called with a
+ * top-level `Database` it behaves exactly as before (a real transaction);
+ * called with another transaction's own `tx` (from `@bloombot/auth`'s
+ * `sign-in.ts`, composing a first-time sign-in's organization, account and
+ * session in one atomic unit — TEN-1) it opens a savepoint instead, so a
+ * later failure in that same outer transaction rolls this back too.
+ */
+export type TransactingExecutor = Executor & Pick<Database, 'transaction'>
+
+/**
  * Release the underlying file handle.
  *
  * Tests open a throwaway database per file and must be able to close it

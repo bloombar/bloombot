@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { accounts, organizations } from '@bloombot/db'
+import { accounts, organizations, sessions } from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -121,5 +121,83 @@ describe('accounts repo', () => {
     expect(
       accounts.getAccountByEmail('orphan@example.edu', testDb.db)
     ).toBeUndefined()
+  })
+
+  // Finding 3 of the AUTH-1..4 rework: disabling and revocation are one
+  // operation, so a caller cannot set `disabled_at` without also ending
+  // every session already open on the account.
+  describe('disableAccount', () => {
+    it('sets disabledAt and revokes every session the account holds', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const account = accounts.createAccount(
+        orgA,
+        { email: 'suspect@example.edu', displayName: 'Suspect', role: 'owner' },
+        testDb.db
+      )
+      sessions.createSession(
+        {
+          accountId: account.id,
+          tokenHash: 'hash-1',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+      sessions.createSession(
+        {
+          accountId: account.id,
+          tokenHash: 'hash-2',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+
+      const disabled = accounts.disableAccount(account.id, testDb.db)
+
+      expect(disabled?.disabledAt).not.toBeNull()
+      expect(
+        sessions.validateSession('hash-1', Date.now(), testDb.db)
+      ).toBeUndefined()
+      expect(
+        sessions.validateSession('hash-2', Date.now(), testDb.db)
+      ).toBeUndefined()
+    })
+
+    it('does not disable — or touch any session of — a different account', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const untouched = accounts.createAccount(
+        orgA,
+        {
+          email: 'untouched@example.edu',
+          displayName: 'Untouched',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      sessions.createSession(
+        {
+          accountId: untouched.id,
+          tokenHash: 'hash-untouched',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+
+      accounts.disableAccount(randomUUID(), testDb.db)
+
+      expect(
+        accounts.getAccountByEmail('untouched@example.edu', testDb.db)
+      ).toMatchObject({ disabledAt: null })
+      expect(
+        sessions.validateSession('hash-untouched', Date.now(), testDb.db)
+      ).toMatchObject({ accountId: untouched.id })
+    })
+
+    it('returns undefined for an account id that does not exist', () => {
+      testDb = createTestDatabase()
+
+      expect(accounts.disableAccount(randomUUID(), testDb.db)).toBeUndefined()
+    })
   })
 })

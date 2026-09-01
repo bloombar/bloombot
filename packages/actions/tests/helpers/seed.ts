@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   accounts,
+  courses,
   discordServers,
   organizations,
   projects,
@@ -62,4 +63,40 @@ export function seedOrganizationWithProject(
     db
   )
   return { organizationId, projectId: project.id }
+}
+
+/** One organization with one owner account and one enabled course — ENRL-1..6's own scenario: a join link, a grant, or an enrolment all need somewhere to attach. */
+export function seedOrganizationWithCourse(
+  db: Database,
+  overrides: Partial<{ adminsRole: string; studentsRole: string }> = {}
+): {
+  organizationId: string
+  ownerId: string
+  course: courses.CourseWithCategories
+} {
+  const { organizationId, projectId } = seedOrganizationWithProject(db)
+  const owner = accounts.createAccount(
+    organizationId,
+    {
+      email: `${randomUUID()}@example.edu`,
+      displayName: 'Owner',
+      role: 'owner',
+    },
+    db
+  )
+  const result = courses.createCourse(
+    organizationId,
+    {
+      projectId,
+      title: 'Web Design',
+      filePrefix: 'wd',
+      enabled: true,
+      adminsRole: overrides.adminsRole ?? `admins-${randomUUID()}`,
+      studentsRole: overrides.studentsRole ?? `students-${randomUUID()}`,
+      categories: [],
+    },
+    db
+  )
+  if (!result.ok) throw new Error('setup failed: unexpected conflict')
+  return { organizationId, ownerId: owner.id, course: result.course }
 }

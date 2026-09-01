@@ -106,6 +106,32 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // itself is the resource, read rather than written, the same shape
   // `discordServers.list`/`projects.list` already use above.
   'costLedger.organizationUsage': { resource: 'organization', access: 'read' },
+  // ENRL-3/ENRL-4: resolves the course a join link is issued against, write —
+  // the same "the course it names is what a write grant already protects"
+  // shape `roster.import`/`discordServers.scaffold` both use above.
+  'courseJoinLinks.create': { resource: 'course', access: 'write' },
+  // ENRL-4: resolves the link itself, write — a link belonging to another
+  // organization resolves to nothing (TEN-5), the same as every other
+  // scoped write in this table. Redeeming a link is not an action at all
+  // (`actions/course-join-links.ts`'s own module comment) — it needs no
+  // organization id in advance, which every dispatched action here is
+  // given.
+  'courseJoinLinks.revoke': { resource: 'courseJoinLink', access: 'write' },
+  // ENRL-2: resolves the person whose enrolments are being listed, read.
+  'enrolments.listForPerson': { resource: 'person', access: 'read' },
+  // ENRL-2: the policy *is* the check — it resolves the active enrolment
+  // itself, so "not enrolled" and "does not exist" already refuse
+  // identically (ACT-3) before `execute` runs at all.
+  'enrolments.checkAccess': { resource: 'enrolment', access: 'read' },
+  // ENRL-6: resolves the enrolment being ended, write.
+  'enrolments.end': { resource: 'enrolment', access: 'write' },
+  // ENRL-5: no existing membership to resolve on a first grant — the
+  // organization itself is the resource, the same "no existing record to
+  // resolve on create" shape `projects.create` uses above. *Who* may call
+  // this (an existing owner, never themselves) is `execute`'s own check,
+  // not the policy's — `policy.ts`'s own module comment on why a policy
+  // cannot see the caller's account id at all.
+  'memberships.grant': { resource: 'organization', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

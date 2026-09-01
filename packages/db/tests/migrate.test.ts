@@ -67,9 +67,11 @@ describe('runMigrations', () => {
       'course_categories',
       'course_channels',
       'course_instruction_revisions',
+      'course_join_links',
       'courses',
       'discord_install_states',
       'discord_server_bindings',
+      'enrolments',
       'jobs',
       'memberships',
       'messages',
@@ -98,6 +100,8 @@ describe('runMigrations', () => {
     expect(schema.memberships).toEqual([
       'account_id',
       'created_at',
+      'granted_at',
+      'granted_by_account_id',
       'organization_id',
       'role',
     ])

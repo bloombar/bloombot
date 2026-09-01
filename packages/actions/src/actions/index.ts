@@ -46,6 +46,16 @@ import {
 import { getJobAction } from './jobs.js'
 import { importRosterAction } from './roster.js'
 import { organizationUsageAction } from './cost-ledger.js'
+import {
+  createCourseJoinLinkAction,
+  revokeCourseJoinLinkAction,
+} from './course-join-links.js'
+import {
+  checkEnrolmentAccessAction,
+  endEnrolmentAction,
+  listEnrolmentsForPersonAction,
+} from './enrolments.js'
+import { grantMembershipAction } from './memberships.js'
 
 export {
   archiveProjectAction,
@@ -82,6 +92,18 @@ export {
   organizationUsageAction,
   type OrganizationUsageReport,
 } from './cost-ledger.js'
+export {
+  createCourseJoinLinkAction,
+  revokeCourseJoinLinkAction,
+  redeemCourseJoinLink,
+  type CreatedCourseJoinLink,
+} from './course-join-links.js'
+export {
+  checkEnrolmentAccessAction,
+  endEnrolmentAction,
+  listEnrolmentsForPersonAction,
+} from './enrolments.js'
+export { grantMembershipAction } from './memberships.js'
 
 /**
  * Every action this slice ports, registered once.
@@ -142,5 +164,11 @@ export function createPlatformRegistry(options?: {
   registry.register(listCourseInstructionRevisionsAction)
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
+  registry.register(createCourseJoinLinkAction)
+  registry.register(revokeCourseJoinLinkAction)
+  registry.register(listEnrolmentsForPersonAction)
+  registry.register(checkEnrolmentAccessAction)
+  registry.register(endEnrolmentAction)
+  registry.register(grantMembershipAction)
   return registry
 }

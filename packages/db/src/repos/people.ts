@@ -88,11 +88,18 @@ export function createPerson(
     .get()
 }
 
-/** Look up a person by id, scoped to `organizationId`. */
+/**
+ * Look up a person by id, scoped to `organizationId`.
+ *
+ * `db` accepts `Executor`, not just `Database`: `repos/enrolments.ts#admit`
+ * (rework finding 2/6) calls this — to refuse a foreign `personId` before an
+ * enrolment is written — from inside `repos/course-join-links.ts#redeemJoinLink`'s
+ * own transaction.
+ */
 export function getPerson(
   organizationId: string,
   personId: string,
-  db: Database
+  db: Executor
 ): Person | undefined {
   return db
     .select()

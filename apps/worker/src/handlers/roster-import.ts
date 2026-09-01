@@ -5,6 +5,15 @@
  * organization-scoped, and reporting rather than printing to a console an
  * instructor never sees.
  *
+ * **Enrolment (ENRL-3)**: a roster row is one of the three admission
+ * decisions this platform recognizes — every row this handler resolves to a
+ * person (whether newly created or merged onto an existing one) is enrolled
+ * in the course via `@bloombot/db`'s `enrolments.enrolViaRoster`, recording
+ * `source: 'roster'`. A re-import of the same roster does not duplicate the
+ * enrolment (`enrolViaRoster`'s own idempotency), and does not resurrect one
+ * an instructor has since ended (ENRL-6) — `enrolViaRoster`'s own doc
+ * comment has the reasoning (rework finding 3).
+ *
  * **Scope**: the CSV this handler parses is the *merged* five-column shape
  * `roster_create_channels.py` itself reads (`Last`, `First`, `Email`,
  * `GitHub`, `Discord` — `@bloombot/schemas`' `parseRosterCsv`), not the
@@ -76,7 +85,7 @@
  * (`RosterImportReport.limitations`), not only in `docs/DECISIONS.md`.
  */
 
-import { courses, discordServers, people } from '@bloombot/db'
+import { courses, discordServers, enrolments, people } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import { parseRosterCsv, type RosterParseError } from '@bloombot/schemas'
 import {
@@ -552,6 +561,20 @@ export function createRosterImportHandler(
         context.organizationId,
         person.id,
         desiredFields,
+        context.db
+      )
+      // ENRL-3: a roster row is one of the three admission decisions — this
+      // is what actually enrols the row's person into the course, recording
+      // `source: 'roster'`. Idempotent the same way person resolution above
+      // is (`enrolments.ts#admit`): a re-import of the same roster leaves
+      // an already-active enrolment exactly as it found it, rather than
+      // erroring or duplicating it. Rework finding 3: it also leaves an
+      // *ended* enrolment (ENRL-6) exactly as ended — `enrolViaRoster`'s own
+      // doc comment — so re-importing the term's roster after an instructor
+      // has removed a student does not quietly bring them back.
+      enrolments.enrolViaRoster(
+        context.organizationId,
+        { courseId: course.id, personId: person.id },
         context.db
       )
       // Rework finding 13 (first bullet): `mergeRosterFields` only ever

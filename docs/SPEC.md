@@ -949,6 +949,48 @@ course and never resettable by switching surface. The day the counter belongs to
 on the row rather than derived when it is read, which is the defect BOT-11 fixed in the
 Python bot.
 
+### 25. Account Linking Across Surfaces
+
+#### LINK-1 An unrecognized person is invited to connect, not answered
+
+The first message from an identity the platform cannot attribute to a connected account is
+answered with an invitation to connect, and nothing else. No model call is made and no
+allowance is spent. Attribution is therefore complete from the first message rather than
+reconstructed later, which is what makes usage across surfaces countable at all.
+
+#### LINK-2 The invitation carries no secret
+
+The reply is the control panel's own address and nothing more. A course channel is public,
+so a link carrying a claim token is a token anybody can spend: whoever opens it first binds
+their account to that student's identity, and inherits their conversations, their transcript
+and their allowance. What travels in public is an address; what proves anything happens
+after signing in.
+
+#### LINK-3 Proof is the surface's own sign-in, or a token that never left a private channel
+
+A surface with a sign-in of its own is proven with it — connecting Discord means signing in
+with Discord, which proves the account the bot already saw. A surface without one is proven
+with a single-use, expiring token delivered where only that caller can read it: the MCP tool
+result, or a direct message. A token is never posted where a third party can read it, and an
+identity is never bound on a visit alone — the page names the account being connected and
+waits to be told to proceed.
+
+#### LINK-4 Connecting merges, and merging never resets
+
+A person exists before they connect, because one is created the first time a course sees
+them. Connecting therefore merges two records: identities move to the surviving person,
+conversations and transcripts are preserved rather than dropped, and the day's usage is
+combined rather than restarted. A merge that handed back a fresh allowance would make
+connecting the cheapest way to double it. The operation is idempotent and recorded, because
+it rewrites who owns a transcript.
+
+#### LINK-5 One person, one allowance, across every surface
+
+After connecting, a person's daily allowance and conversation follow the person, not the
+surface they arrived on. Asking in Discord, in the web chat and through an assistant draws
+on one count and continues one conversation, so a cap cannot be evaded by changing surface
+and an instructor sees one student rather than three.
+
 ### 19. Legacy Import
 
 #### MIG-1 The import reads a copy, never the live database

@@ -1734,3 +1734,44 @@ party — good corroboration, poor authority — and it strands every student wh
 right, and the guard rails `TEN-4` already established (single-use state, PKCE, discard the token) apply
 there too. A person who genuinely loses access to their Discord account needs an instructor-initiated
 re-link, which is an audited action nobody has specified yet.
+
+---
+
+## D-28 — Connecting an account: invite first, prove on the web, and merge without resetting
+
+**Problem.** Three surfaces are planned — Discord, the web chat and MCP — and usage has to be monitored,
+logged and capped per person across all three. `CONV-3` already keys the daily count on (course, person,
+day), so the counting works the moment the surfaces agree on who the person is. Agreeing is the problem.
+
+**Choice.** An identity the platform cannot attribute is **invited, not answered** (`LINK-1`). The invitation
+is the panel's address and nothing else (`LINK-2`); proof happens after signing in, using the surface's own
+sign-in where it has one, or a single-use token delivered somewhere only that caller can read it
+(`LINK-3`).
+
+**Why the invitation carries no secret.** A course channel is public. A claim link with a token in it is a
+token anybody in the channel can spend — the first person to open it binds their account to that student's
+Discord identity and inherits their conversations, their transcript and their allowance. Discord's own
+OAuth proves the same snowflake with nothing secret in transit, which is `PPL-4` applied to the direction a
+student actually travels. MCP is the exception that needs a token: its tool result is private to the calling
+client, and the surface has no sign-in of its own to lean on.
+
+**Why nobody is answered before connecting.** The alternative — answer on the first surface, require
+connecting only for a second — leaves a window where a person has an unattributed allowance, and a student
+who never connects keeps one per surface. That is `D-4`'s evasion, reintroduced. Refusing the first answer
+costs a step of friction and buys complete attribution from message one.
+
+**Cost, stated plainly.** This is friction exactly where `PPL-3` deliberately removed it: today nothing
+stands between a student and their first answer. Instructors will feel it at the start of term, when thirty
+students each meet a connect prompt instead of a reply. It is the price of counting honestly across three
+surfaces, and it is reversible per course later if it proves worse than the evasion it prevents.
+
+**The merge is the hard part, not the linking.** A person already exists when they connect, so connecting
+merges two records. The rules are `LINK-4`'s: identities move to the survivor, conversations and transcripts
+are preserved rather than dropped, and the day's usage is **combined, never restarted** — a merge that reset
+the count would make connecting the cheapest way to double an allowance. It is idempotent and recorded,
+because it rewrites who owns a transcript.
+
+**Limits.** Two questions are deliberately unanswered here and belong to the slice that builds this: what
+happens when a person genuinely loses access to a connected surface account and needs an instructor to
+re-link them (an audited action nobody has specified), and whether a merge is ever reversible. Neither is
+needed to build `LINK-1..5`, and guessing at them now would be inventing requirements.

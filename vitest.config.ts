@@ -25,6 +25,7 @@ export default defineConfig({
       '@bloombot/discord': sourceEntry('discord'),
       '@bloombot/discord-rest': sourceEntry('discord-rest'),
       '@bloombot/actions': sourceEntry('actions'),
+      '@bloombot/jobs': sourceEntry('jobs'),
     },
   },
   test: {
@@ -67,7 +68,14 @@ export default defineConfig({
     // percentage over markup buys assertions about DOM structure at the
     // cost of attention to logic (QA-4's own wording). Its tests
     // (`apps/web/tests`) still run as part of `npm test`, just not gated by
-    // a number here.
+    // a number here. `packages/jobs` joins the floor too (JOB-1..4): the
+    // claim/retry/admission logic every background job and the model
+    // concurrency bound run through, exactly the kind of logic-that-matters
+    // this floor exists to hold — `apps/worker` (JOB-5) stays outside it,
+    // the same thin-process call already made for `apps/bot`/`apps/api`
+    // above: claim, run, complete or fail, sleep, repeat around
+    // `packages/jobs`'s own `runNextJob`, tested in `apps/worker/tests` but
+    // not gated by a number here.
     coverage: {
       provider: 'v8',
       include: [
@@ -78,6 +86,7 @@ export default defineConfig({
         'packages/actions/src/**/*.ts',
         'packages/auth/src/**/*.ts',
         'packages/discord-rest/src/**/*.ts',
+        'packages/jobs/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,
@@ -189,6 +198,15 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'jobs',
+          root: './packages/jobs',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'bot',
           root: './apps/bot',
           environment: 'node',
@@ -200,6 +218,15 @@ export default defineConfig({
         test: {
           name: 'api',
           root: './apps/api',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'worker',
+          root: './apps/worker',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

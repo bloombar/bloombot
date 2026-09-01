@@ -67,6 +67,7 @@ describe('runMigrations', () => {
       'courses',
       'discord_install_states',
       'discord_server_bindings',
+      'jobs',
       'memberships',
       'messages',
       'organizations',

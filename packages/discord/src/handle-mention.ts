@@ -17,6 +17,7 @@ import {
   type RoutableCourse,
 } from '@bloombot/core'
 import { courses, discordServers, people, type Database } from '@bloombot/db'
+import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import type { InboundMention, ReplyPort } from './dto.js'
@@ -42,6 +43,16 @@ export interface HandleMentionDependencies {
   day: string
   /** The bare name (no `@`) BOT-6 rewrites a mention to. Defaults to `'Bloombot'`; `apps/bot` passes the gateway client's own username instead of hardcoding it here. */
   botDisplayName?: string
+  /**
+   * JOB-4's bound on concurrent model calls, passed straight through to
+   * `answerQuestion`'s own `AnswerDependencies.admission`. Optional, the
+   * same reason it is optional there: `apps/bot`'s own `main()` builds the
+   * real, configured gate once (from `CONFIG.MODEL_ADMISSION_LIMIT`/
+   * `MODEL_ADMISSION_WAIT_MS`) and passes it here; a caller — a test, or a
+   * future surface with no admission story yet — that omits it gets
+   * `answerQuestion`'s own no-bound default.
+   */
+  admission?: AdmissionGate
 }
 
 /**
@@ -65,6 +76,7 @@ export type HandleMentionResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'declined-over-limit' }
+  | { kind: 'declined-busy' }
   | { kind: 'answered'; conversationId: string; messageCount: number }
   | {
       kind: 'answered-last-request'
@@ -235,7 +247,12 @@ export async function handleMention(
   // transcript records via `answerQuestion`'s own `text`/`modelText` split.
   const modelText = rewriteMention(input.text, input.botId, botDisplayName)
 
-  const answerDeps: AnswerDependencies = { db, model, logger }
+  const answerDeps: AnswerDependencies = {
+    db,
+    model,
+    logger,
+    ...(deps.admission ? { admission: deps.admission } : {}),
+  }
   const result = await answerQuestion(
     {
       organizationId,
@@ -298,6 +315,20 @@ export async function handleMention(
         'handleMention: dropped, course is not configured to answer'
       )
       return { kind: result.kind }
+    }
+    case 'declined-busy': {
+      // JOB-4 — no admission slot became free within the wait ceiling.
+      // SURF-6 is satisfied by the log line below ("reaches the student or
+      // the log"); this slice's own brief is `packages/jobs`/`apps/worker`
+      // and the admission gate itself, not this surface's wording — whether
+      // a busy student should also get a reply here (JOB-4's own text: "a
+      // student who waits is told they are waiting") is left to whichever
+      // slice owns SURF-6's rendering choices, not decided by this one.
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: dropped, no admission slot became free within the wait ceiling'
+      )
+      return { kind: 'declined-busy' }
     }
   }
 }

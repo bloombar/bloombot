@@ -47,9 +47,35 @@ export const envSchema = z.object({
   // Port the Discord bot's health endpoint listens on.
   BOT_HEALTH_PORT: port(3001),
 
+  // Port apps/worker's health endpoint listens on (JOB-5).
+  WORKER_HEALTH_PORT: port(3002),
+
   // Comma-separated platform administrator emails (AUTH-4). May be empty.
   // Read through `isAdminEmail`, never from here — see the note in admin.ts.
   ADMIN_EMAILS: z.string().default(''),
+
+  // JOB-2..3: the background queue's own policy. See docs/DECISIONS.md for
+  // why these particular numbers. `@bloombot/jobs` takes every one of these
+  // as an explicit argument rather than reading `CONFIG` itself (CORE-4's
+  // "dependencies as arguments" discipline) — `apps/worker` is the one place
+  // that reads them, at startup, the same as every other `CONFIG` value
+  // apps/bot and apps/api already read once in their own `main()`.
+  JOB_CLAIM_LEASE_MS: z.coerce.number().int().min(1).default(300_000),
+  JOB_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
+  JOB_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1_000),
+  JOB_RETRY_BACKOFF_FACTOR: z.coerce.number().min(1).default(2),
+  // How long apps/worker sleeps between claim attempts once the queue is
+  // found empty.
+  JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2_000),
+
+  // JOB-4: the bound on concurrent model calls, and how long a request
+  // waits for a slot before it is told plainly it could not be served —
+  // both configuration, not a constant compiled into a client (JOB-4's own
+  // text). Read lazily by `@bloombot/core`'s `answer.ts`, the one place
+  // JOB-4 applies (see docs/DECISIONS.md for the default and the ordering
+  // decision this bound is part of).
+  MODEL_ADMISSION_LIMIT: z.coerce.number().int().min(1).default(5),
+  MODEL_ADMISSION_WAIT_MS: z.coerce.number().int().min(0).default(15_000),
 
   // Upstream base URLs. These exist so tests can point every outbound call at a
   // fake upstream and no vendor host is ever hardcoded in a client (QA-2).

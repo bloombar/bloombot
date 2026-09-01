@@ -454,4 +454,96 @@ describe('listGuildMembers (ROST-10/ROST-11)', () => {
       { id: '1', username: 'adalovelace', displayName: 'adalovelace' },
     ])
   })
+
+  // Rework finding 9: a malformed entry landing on an otherwise-*full* page
+  // used to end pagination early — the loop compared the parsed (already
+  // filtered) page length against the limit, so one bad entry made a full
+  // page of 1000 look like a short 999-entry page and the walk stopped
+  // there. A 1200-member guild lost its entire second page this way.
+  it('keeps paging past a page that only looks short because one of its entries was malformed', async () => {
+    const fullList: unknown[] = Array.from({ length: 1200 }, (_, i) => ({
+      user: { id: String(i + 1).padStart(4, '0'), username: `member-${i + 1}` },
+    }))
+    // The last entry of the first raw page (index 999) is malformed — no
+    // `user` object at all — so `parseGuildMemberList` drops it, leaving
+    // 999 *parsed* entries on a page Discord itself sent as a full 1000.
+    const withOneMalformedEntry = [...fullList]
+    withOneMalformedEntry[999] = { nick: 'malformed — no user object' }
+    server.setGuildMembers('guild-1', withOneMalformedEntry)
+
+    const members = await client.listGuildMembers('bot-token', 'guild-1')
+
+    // 1200 raw entries, one dropped — 1199 usable members, not 999.
+    expect(members).toHaveLength(1199)
+    const memberRequests = server.requests.filter((r) =>
+      r.path.startsWith('/guilds/guild-1/members')
+    )
+    // Still two requests — the malformed entry did not make the walk stop
+    // after the first.
+    expect(memberRequests).toHaveLength(2)
+  })
+})
+
+// Rework finding 5 of the ROST-9..12 rework — `client.ts`'s one deliberate
+// exception to "this package only ever `GET`s or `POST`s a guild write",
+// added for ROST-5's late-joining student. Proven at the REST layer here,
+// one level below `roster-import.ts`'s own use of it.
+describe('grantChannelMemberAccess (rework finding 5)', () => {
+  it('PUTs exactly one member overwrite onto the named channel, with the same bits a channel gets at creation', async () => {
+    const createdChannel = await client.createGuildCategory(
+      'bot-token',
+      'guild-1',
+      { name: 'Week 1', permissionOverwrites: [] }
+    )
+    server.requests.length = 0 // Only this call's own request matters below.
+
+    await client.grantChannelMemberAccess(
+      'bot-token',
+      createdChannel.id,
+      'student-42'
+    )
+
+    expect(server.requests).toHaveLength(1)
+    expect(server.requests[0]).toMatchObject({
+      method: 'PUT',
+      path: `/channels/${createdChannel.id}/permissions/student-42`,
+      headers: expect.objectContaining({
+        authorization: 'Bot bot-token',
+        'content-type': 'application/json',
+      }) as unknown,
+    })
+    // The same `allow`/`deny`/`type` a channel is created with, via
+    // `allowMemberOverwrite` — this grants nothing wider, only later.
+    expect(server.requests[0]?.body).toEqual({
+      type: 1,
+      allow: (0x400n | 0x800n).toString(),
+      deny: '0',
+    })
+  })
+
+  it('throws DiscordRequestError for a non-2xx response, the same as every other write in this package', async () => {
+    server.respondToChannelPermissionPut({
+      status: 403,
+      body: { message: 'Missing Permissions' },
+    })
+
+    await expect(
+      client.grantChannelMemberAccess('bot-token', 'chan-1', 'student-42')
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
+    )
+  })
+
+  // Structural proof this narrow write cannot become a general edit verb:
+  // nothing this package sends to `PUT /channels/{id}/permissions/{id}`
+  // carries a channel's own `name`/`parent_id` at all — there is no method
+  // on `DiscordRestClient` that could, and this asserts the one PUT this
+  // package does make stays that narrow in practice, not just in the type
+  // signature.
+  it('sends nothing but the one member overwrite — no channel name, no parent, no other target', async () => {
+    await client.grantChannelMemberAccess('bot-token', 'chan-1', 'student-42')
+
+    const body = server.requests[0]?.body as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual(['allow', 'deny', 'type'])
+  })
 })

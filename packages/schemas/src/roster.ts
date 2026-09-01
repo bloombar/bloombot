@@ -38,11 +38,23 @@ export const rosterRowSchema = z.object({
   // Mirrors the Python reader's own check (`"@" in email`), not a full
   // email-format validation it never performed either — see this file's
   // own module comment.
+  //
+  // Rework finding 7: `"@" in email` alone lets `@example.edu` through —
+  // a local part of `''`. The Python script never had to care (it never
+  // derived a channel name from the local part); this platform does
+  // (`roster-import.ts`'s `channelNameForEmail`), and a channel named `''`
+  // is a 400 Discord rejects at creation. Caught here, at the schema, so
+  // it is reported against its own row rather than surfacing as an opaque
+  // channel-creation failure three steps later.
   email: z
     .string()
     .trim()
     .min(1, 'Email is required')
-    .refine((value) => value.includes('@'), 'Email must contain "@"'),
+    .refine((value) => value.includes('@'), 'Email must contain "@"')
+    .refine(
+      (value) => (value.split('@')[0] ?? '').length > 0,
+      'Email must have a non-empty local part before "@"'
+    ),
   discord: z.string().trim().min(1, 'Discord handle is required'),
   github: z.string().trim().default(''),
 })
@@ -70,6 +82,38 @@ export interface RosterParseResult {
   errors: RosterParseError[]
 }
 
+/** One physical record this scanner produced — its own fields, and the physical line (1-indexed) it *started* on (rework finding 3, below). */
+interface CsvRecord {
+  startLine: number
+  fields: string[]
+}
+
+/**
+ * Find the `"` that closes a quoted field opened at `text[openIndex]`
+ * (`openIndex` itself), skipping over every escaped `""` pair along the way
+ * — the index of the real closing quote, or `-1` when none exists anywhere
+ * in the rest of `text`. Used by `parseCsvRows` to decide, *before*
+ * committing to quoted-field mode, whether a field's opening quote is
+ * genuine or a typo (rework finding 1, below): a lookahead rather than a
+ * single-character peek, because the field can legitimately span more of
+ * `text` than one line (an embedded newline inside a quoted field is valid
+ * RFC 4180, not itself the bug).
+ */
+function findClosingQuote(text: string, openIndex: number): number {
+  let i = openIndex + 1
+  while (i < text.length) {
+    if (text[i] === '"') {
+      if (text[i + 1] === '"') {
+        i += 2
+        continue
+      }
+      return i
+    }
+    i++
+  }
+  return -1
+}
+
 /**
  * A minimal RFC 4180 CSV line splitter — quoted fields, embedded commas and
  * escaped `""` quotes within them, `\r\n` or `\n` line endings. Deliberately
@@ -77,57 +121,102 @@ export interface RosterParseResult {
  * `package.json` is explicit that it "depends on zod alone so it can be
  * bundled into the browser" (PLAT-2), and a roster is, in practice, a small
  * text file — nothing here needs a streaming parser.
+ *
+ * Rework finding 1: a `"` is only ever the *start* of a quoted field when it
+ * is a field's very first character (RFC 4180 §2.5) — the previous version
+ * toggled quoted mode on *any* `"`, so a typo like `O"Brien` (a stray quote
+ * mid-field, not one opening a field) put the scanner into quoted mode with
+ * no real closing quote anywhere in the rest of the file, and the entire
+ * remainder collapsed into one field: every row after it silently vanished.
+ * Two changes fix this: a `"` with `field` already non-empty is now just a
+ * literal character (the `O"Brien` case never reaches quoted mode at all),
+ * and a `"` that *does* open a field is verified, via `findClosingQuote`,
+ * to actually close somewhere in the rest of the text before this scanner
+ * commits to reading it as one — if it never closes, that one record is
+ * abandoned (reported by `parseRosterCsv`, not this function, which only
+ * signals it through `unterminatedQuoteErrors`) and scanning resumes at the
+ * next physical line, so the rest of the file still imports.
  */
-function parseCsvRows(text: string): string[][] {
-  const rows: string[][] = []
-  let row: string[] = []
-  let field = ''
-  let inQuotes = false
+function parseCsvRows(text: string): {
+  records: CsvRecord[]
+  /** A record whose opening quote never closed anywhere in the rest of the file — `line` is the physical line that record started on. `parseRosterCsv` turns each of these into a `RosterParseError`. */
+  unterminatedQuoteErrors: { line: number }[]
+} {
   // Normalize line endings up front so the character-by-character scan
   // below only ever has to treat `\n` as a row boundary.
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const length = normalized.length
 
-  function endField(): void {
-    row.push(field)
-    field = ''
-  }
-  function endRow(): void {
-    endField()
-    rows.push(row)
-    row = []
-  }
+  const records: CsvRecord[] = []
+  const unterminatedQuoteErrors: { line: number }[] = []
 
-  for (let i = 0; i < normalized.length; i++) {
-    const char = normalized[i]
-    if (inQuotes) {
-      if (char === '"') {
-        if (normalized[i + 1] === '"') {
-          field += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        field += char
+  let i = 0
+  let physicalLine = 1 // Rework finding 3 — the *physical* line, not the record count; see this function's own module comment.
+
+  while (i < length) {
+    const recordStartLine = physicalLine
+    const row: string[] = []
+    let field = ''
+    let abandoned = false
+
+    for (;;) {
+      if (i >= length) {
+        row.push(field)
+        break
       }
-      continue
-    }
-    if (char === '"') {
-      inQuotes = true
-    } else if (char === ',') {
-      endField()
-    } else if (char === '\n') {
-      endRow()
-    } else {
-      field += char
-    }
-  }
-  // A trailing row with no final newline still needs to be flushed; a file
-  // ending in a newline leaves `field`/`row` both empty, which would
-  // otherwise append a spurious blank row.
-  if (field.length > 0 || row.length > 0) endRow()
+      const char = normalized[i]
 
-  return rows
+      if (char === '"' && field.length === 0) {
+        // A quote at a field's own start (RFC 4180 §2.5) — but only a
+        // genuine quoted field if it actually closes somewhere ahead;
+        // otherwise this is the unterminated-quote case this rework fixes.
+        const closeIndex = findClosingQuote(normalized, i)
+        if (closeIndex === -1) {
+          unterminatedQuoteErrors.push({ line: recordStartLine })
+          // Recovery: abandon this record (its fields are unusable — there
+          // is no principled way to say where they were meant to end) and
+          // resync scanning at the next physical line, so every row after
+          // it still imports, exactly this rework's own "one bad row never
+          // costs an instructor the whole roster" for a bad *quote* too.
+          let j = i
+          while (j < length && normalized[j] !== '\n') j++
+          i = j < length ? j + 1 : j
+          physicalLine++
+          abandoned = true
+          break
+        }
+        for (let k = i + 1; k < closeIndex; k++) {
+          if (normalized[k] === '"') {
+            field += '"' // An escaped `""` pair inside the quoted field.
+            k++
+          } else {
+            if (normalized[k] === '\n') physicalLine++ // A legitimate embedded newline.
+            field += normalized[k]
+          }
+        }
+        i = closeIndex + 1
+        continue
+      }
+      if (char === ',') {
+        row.push(field)
+        field = ''
+        i++
+        continue
+      }
+      if (char === '\n') {
+        row.push(field)
+        i++
+        physicalLine++
+        break
+      }
+      field += char
+      i++
+    }
+
+    if (!abandoned) records.push({ startLine: recordStartLine, fields: row })
+  }
+
+  return { records, unterminatedQuoteErrors }
 }
 
 /**
@@ -137,10 +226,36 @@ function parseCsvRows(text: string): string[][] {
  * one bad row never costs an instructor the whole roster.
  */
 export function parseRosterCsv(text: string): RosterParseResult {
-  const csvRows = parseCsvRows(text)
+  // Rework finding 2: Excel's "CSV UTF-8" export — the default a
+  // registrar's file goes through — writes a leading byte-order mark
+  // (U+FEFF). Left in place, it silently becomes part of the first
+  // header's own name (a `First` with an invisible character glued to its
+  // front), so a file that plainly contains `First` is reported as missing
+  // it. Stripped here, once, before any scanning — never a defaulted or
+  // invented column, just the one character Excel adds that this format has
+  // no use for. Written as an escape, not the literal character, so this
+  // file itself stays free of the irregular whitespace ESLint's own
+  // `no-irregular-whitespace` rule (correctly) flags.
+  const BOM = '\uFEFF'
+  const withoutBom = text.startsWith(BOM) ? text.slice(BOM.length) : text
+
+  const { records, unterminatedQuoteErrors } = parseCsvRows(withoutBom)
   const result: RosterParseResult = { rows: [], errors: [] }
 
-  const headerRow = csvRows[0]
+  // Rework finding 1 — the header row (always the file's first record,
+  // always physical line 1) can itself be the one an unterminated quote
+  // abandoned; nothing meaningful follows without a header to read columns
+  // by, so this is reported the same way an actually-empty file already is.
+  const headerBroke = unterminatedQuoteErrors.some((error) => error.line === 1)
+  if (headerBroke) {
+    result.errors.push({
+      line: 1,
+      message: 'The header row has an unterminated quoted field.',
+    })
+    return result
+  }
+
+  const headerRow = records[0]?.fields
   if (!headerRow) {
     result.errors.push({ line: 1, message: 'The roster file is empty.' })
     return result
@@ -156,26 +271,40 @@ export function parseRosterCsv(text: string): RosterParseResult {
     return result
   }
 
-  for (let i = 1; i < csvRows.length; i++) {
-    const line = i + 1 // 1-indexed, header is line 1.
-    const values = csvRows[i]
-    if (!values) continue
+  // Every data-row unterminated-quote error, reported against the line it
+  // started on — interleaved with the schema errors below in whatever order
+  // they naturally land; nothing here promises the *combined* list is
+  // sorted by line, only that every malformed row (a bad quote, or a bad
+  // value) is named once, with its own line.
+  for (const error of unterminatedQuoteErrors) {
+    if (error.line === 1) continue // The header case is handled above.
+    result.errors.push({
+      line: error.line,
+      message: 'Unterminated quoted field.',
+    })
+  }
+
+  for (let i = 1; i < records.length; i++) {
+    const record = records[i]
+    if (!record) continue
+    const line = record.startLine
+    const values = record.fields
     // A line that is entirely blank (a trailing newline, an extra blank
     // line an instructor's spreadsheet tool left in the middle of the
     // file) carries nothing to report — skipped, not reported as an error.
     if (values.length === 1 && values[0] === '') continue
 
-    const record: Record<string, string> = {}
+    const rowRecord: Record<string, string> = {}
     headerRow.forEach((header, index) => {
-      record[header] = values[index] ?? ''
+      rowRecord[header] = values[index] ?? ''
     })
 
     const parsed = rosterRowSchema.safeParse({
-      first: record['First'],
-      last: record['Last'],
-      email: record['Email'],
-      discord: record['Discord'],
-      github: record['GitHub'],
+      first: rowRecord['First'],
+      last: rowRecord['Last'],
+      email: rowRecord['Email'],
+      discord: rowRecord['Discord'],
+      github: rowRecord['GitHub'],
     })
     if (parsed.success) {
       result.rows.push({ line, row: parsed.data })

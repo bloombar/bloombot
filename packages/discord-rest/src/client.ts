@@ -31,12 +31,38 @@
  * this slice's only caller of the four guild-write calls below, and it is
  * refused the means to delete anything by this file, not merely asked
  * nicely not to.
+ *
+ * `grantChannelMemberAccess` (rework finding 5 of the ROST-9..12 rework) is
+ * this file's one deliberate exception, added for `roster-import.ts`'s own
+ * ROST-5: a student who joins the Discord server *after* their channel was
+ * created (the common case — ROST-3's own workflow is channels ahead of
+ * arrival) must still end up with read/send access on it once they do,
+ * which needs *some* write to a channel this client did not just create.
+ * The exception is deliberately as narrow as Discord's own API allows it to
+ * be: `PUT /channels/{id}/permissions/{overwriteId}` sets exactly one
+ * target's own `allow`/`deny` bits and nothing else about the channel —
+ * not its name, not its parent category, not any other target's own
+ * overwrite. It cannot rename, move, archive or delete a channel or
+ * category, so SRV-8's own guarantee (a channel or category's *shape and
+ * existence*, once created, are never rewritten or removed through this
+ * client) is unbroken; what SRV-8 never covered in the first place is *who
+ * can read* a channel already granted to admins, and that is exactly the
+ * one thing this method now can, narrowly, change. See `docs/DECISIONS.md`
+ * for the fuller reasoning, including why the alternative (refusing ROST-5
+ * outright) was rejected.
  */
 
 import { CONFIG } from '@bloombot/config'
 
+import { allowMemberOverwrite } from './channel-overwrites.js'
 import type { DiscordPermissionOverwrite } from './channel-overwrites.js'
-import { getJson, postForm, postJson, type RequestOptions } from './http.js'
+import {
+  getJson,
+  postForm,
+  postJson,
+  putJson,
+  type RequestOptions,
+} from './http.js'
 import type { DiscordGuildSummary } from './permissions.js'
 
 /** What a successful token exchange returns. */
@@ -195,6 +221,27 @@ export interface DiscordRestClient {
       permissionOverwrites?: DiscordPermissionOverwrite[]
     }
   ): Promise<DiscordChannel>
+
+  /**
+   * Grant one guild member read/send access on a channel that already
+   * exists (ROST-5, rework finding 5) — `PUT
+   * /channels/{channelId}/permissions/{memberId}`, Discord's own "Edit
+   * Channel Permissions" call, scoped here to exactly a member overwrite
+   * (`channel-overwrites.ts`'s own `allowMemberOverwrite` bits, `type: 1`):
+   * no `name`, no `parentId`, nothing that could rename, move or otherwise
+   * touch the channel itself. This file's own module comment has the fuller
+   * reasoning for why this one write does not reopen SRV-8's "never delete
+   * or edit a category or channel". `roster-import.ts` is this package's
+   * only caller: a re-import that finds a student's channel already
+   * present, and can now resolve a handle it could not at creation time,
+   * uses this to repair the one thing "never delete or edit" left
+   * permanently broken for a student who joined the server late.
+   */
+  grantChannelMemberAccess(
+    botToken: string,
+    channelId: string,
+    memberId: string
+  ): Promise<void>
 }
 
 export interface CreateDiscordRestClientOptions {
@@ -515,9 +562,23 @@ export function createDiscordRestClient(
         if (!response.ok) {
           throw new DiscordRequestError(response.status, response.body)
         }
+        // Rework finding 9: `parseGuildMemberList` drops (never throws on) a
+        // malformed entry — the right behavior for the *list* this method
+        // returns, but comparing that already-filtered length against
+        // `GUILD_MEMBER_PAGE_LIMIT` was the wrong question: one bad entry on
+        // an otherwise-full page made it read as a short page, and
+        // pagination stopped a page early — a 1200-member guild with one
+        // malformed entry on its first page returned 999 members, not 1200,
+        // with nothing in the result saying so. `rawPageLength` is the page
+        // Discord actually sent, before this package's own filtering; that,
+        // not the parsed count, is what decides whether another page might
+        // still be waiting.
+        const rawPageLength = Array.isArray(response.body)
+          ? response.body.length
+          : 0
         const pageMembers = parseGuildMemberList(response.body)
         members.push(...pageMembers)
-        if (pageMembers.length < GUILD_MEMBER_PAGE_LIMIT) break
+        if (rawPageLength < GUILD_MEMBER_PAGE_LIMIT) break
         after = pageMembers[pageMembers.length - 1]?.id
         // No `id` to page from — nothing left to ask for, however this page
         // came to be exactly `GUILD_MEMBER_PAGE_LIMIT` long.
@@ -575,6 +636,32 @@ export function createDiscordRestClient(
         throw new DiscordRequestError(response.status, response.body)
       }
       return parseChannel(response.body)
+    },
+
+    async grantChannelMemberAccess(
+      botToken,
+      channelId,
+      memberId
+    ): Promise<void> {
+      // The exact same bits a channel is created with (`createGuildChannel`'s
+      // own `allowMemberOverwrite(member.id)` call in `roster-import.ts`) —
+      // this method grants nothing wider than a channel already gets at
+      // creation time, only later, for a member who was not yet resolvable
+      // then.
+      const overwrite = allowMemberOverwrite(memberId)
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${memberId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
     },
   }
 }

@@ -99,6 +99,21 @@ function busyRefusalText(): string {
   return `Bloombot is busy right now. Please try again shortly.`
 }
 
+/**
+ * Strips anything after a `#` and lowercases — the same cleanup
+ * `roster-import.ts`'s own `normalizeHandle` applies to a roster's
+ * self-reported `Discord` handle before keying a `handle:`-prefixed
+ * identity on it (ROST-10, D-31). Duplicated rather than imported: this
+ * package and `apps/worker` are on opposite sides of the app/package
+ * boundary this repo does not cross for a two-line helper neither owns,
+ * the same convention `roster-import.ts`'s own `normalizeName`/
+ * `normalizeChannelName` (duplicated from `discord-scaffold.ts`) already
+ * holds itself to.
+ */
+function normalizeRosterHandle(handle: string): string {
+  return (handle.split('#')[0] ?? handle).trim().toLowerCase()
+}
+
 /** SURF-5 — send `text` through `reply`, split first if it is over Discord's limit, each part awaited in order so the parts cannot arrive out of sequence. Returns how many messages were sent. */
 async function sendReply(reply: ReplyPort, text: string): Promise<number> {
   const parts = splitForDiscord(text)
@@ -191,16 +206,51 @@ export async function handleMention(
   }
   const organizationId = binding.organizationId
 
-  // SURF-4 — the author's snowflake resolves to a person, created together
-  // with a new identity the first time they are seen (PPL-3). Their current
-  // Discord display name is merged in now rather than waiting for a roster
-  // import: `mergeRosterFields` only fills a field that is still `null`, so
-  // a name a later roster import supplies is never overwritten by this.
-  const person = people.resolvePersonByIdentity(
+  // SURF-4 / D-31 rework — a roster imported *before* this student ever
+  // joined the server may already have created a person for them, kept
+  // under a synthetic `handle:`-keyed identity (`roster-import.ts`'s own
+  // ROST-10 fallback, D-31) rather than the real snowflake, which was not
+  // resolvable yet at import time. Left alone, this student's first message
+  // would resolve by snowflake, find nothing, and `resolvePersonByIdentity`
+  // would mint a *second* person — a second conversation, a second daily
+  // allowance, and the roster's own fields stranded on the orphan. Checking
+  // for that `handle:`-keyed person first (only when the snowflake itself
+  // is not yet known) reuses it instead: same person, same conversation,
+  // same allowance, from this student's very first message on. See
+  // `docs/DECISIONS.md`'s own entry on this rework for why this does not
+  // also rewrite the `handle:` row's own external id to the snowflake — a
+  // further step this fix deliberately does not take, and why that is
+  // still sound.
+  const bySnowflake = people.resolveIdentity(
     organizationId,
     { surface: 'discord', externalId: input.authorId },
     db
   )
+  const byRosterHandle = bySnowflake
+    ? undefined
+    : people.resolveIdentity(
+        organizationId,
+        {
+          surface: 'discord',
+          externalId: `handle:${normalizeRosterHandle(input.authorDisplayName)}`,
+        },
+        db
+      )
+
+  // SURF-4 — the author's snowflake resolves to a person, created together
+  // with a new identity the first time they are seen (PPL-3), unless the
+  // roster-handle fallback just above already found one. Their current
+  // Discord display name is merged in now rather than waiting for a roster
+  // import: `mergeRosterFields` only fills a field that is still `null`, so
+  // a name a later roster import supplies is never overwritten by this.
+  const person =
+    bySnowflake ??
+    byRosterHandle ??
+    people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: input.authorId },
+      db
+    )
   people.mergeRosterFields(
     organizationId,
     person.id,

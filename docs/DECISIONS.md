@@ -2139,3 +2139,120 @@ individual student be able to read their own channel.
   permissions repaired by importing the same roster again — only a genuinely new channel is ever written to.
   Fixing a channel's permissions after the fact needs the same edit capability `D-30`'s own "what a wrong
   observed value means for an instructor" section already declines to add, for the same reason.
+
+  **Superseded below** — a first review round found this refusal cost ROST-3's own primary workflow (channels
+  created ahead of arrival, then nobody's access ever repaired once they showed up); see "Decide and record —
+  the narrow permission-overwrite write (rework finding 5)" below for the narrowly-scoped exception this
+  rework adds instead.
+
+**Update — a rework pass on `ROST-9..12`: the parser, a narrow permission-overwrite write, and the identity
+gap this entry originally only named.** Two reviewers went over this slice after it first shipped, one exercising the parser and the REST client
+directly. Thirteen findings came back; what follows is the substance — the parser's own robustness, the one
+narrowly-scoped write added to `packages/discord-rest`, and the identity-model gap this entry's own
+"what this does not do" section above already named but left open. The remaining findings (report gaps,
+missing coverage) are smaller and are not each re-argued here; they are traceable in the diff and the test
+files by the same "rework finding N" comment this section and the code both use.
+
+**Update (rework findings 1-3) — the CSV scanner's own bugs, not this package's original design.**
+`parseCsvRows` (`packages/schemas/src/roster.ts`) had three defects a hand-rolled RFC 4180 splitter is
+exactly the kind of code that hides them in: a `"` toggled quoted mode wherever it appeared, not only at a
+field's own start, so a typo like `O"Brien` put the scanner into quoted mode with no real closing quote
+anywhere in the rest of the file — three valid rows collapsed to zero rows and one uninformative error, with
+two students lost and nothing naming them (finding 1); Excel's own "CSV UTF-8" export — the default a
+registrar's file goes through — writes a leading byte-order mark, so the first header silently became a
+`First` with an invisible byte-order-mark character glued to its front, and a file that plainly contained
+`First` was reported as missing it (finding 2); and a reported line number was the _record's own index_, not
+its _physical line_, so a row with a legally embedded
+newline (RFC 4180 permits one inside a quoted field) threw off every line number reported after it (finding
+3). All three are now fixed at the scanner itself (`findClosingQuote`'s own lookahead, a `field.length === 0`
+check before a `"` is ever treated as opening a field, a leading BOM stripped before scanning, and
+`physicalLine` tracked as newlines are actually consumed) — see that file's own module and function comments
+for the mechanics. None of the three needed `packages/schemas` to stop being "zod alone" (PLAT-2); this was a
+correctness gap in the hand-rolled parser, not a reason to reach for a dependency.
+
+**Decide and record — the narrow permission-overwrite write (rework finding 5).** Every channel this handler
+creates is built _before_ the student who owns it has necessarily joined the server (`ROST-3`'s own workflow
+is channels ahead of arrival), so `resolveMember` returns nothing for essentially the whole roster at import
+time, and — per the refusal this entry originally recorded above — a re-import after the student joins
+matched the channel by name, filed it under `channelsAlreadyPresent`, and `continue`d _before any overwrite
+was built at all_. The student's own channel stayed admin-only forever; no re-run of anything would ever fix
+it. `roster_create_channels.py:219-229` (the tool this replaces) calls `channel.edit(overwrites=...)` on both
+its "create" and "already exists" branches for exactly this reason — that is how a late-joining student got
+access in the tool this platform is replacing.
+
+Two ways to close this were weighed:
+
+- **Refuse ROST-5 outright** — leave every channel admin-only until the _next_ roster import happens to
+  re-create... nothing, since the channel already exists, so in practice this means ROST-5 (`the individual
+  student can read their own channel`) is simply never delivered for the — likely majority — of students who
+  join _after_ their channel is created. `docs/DECISIONS.md`'s own report would have to say so per student,
+  every run, forever. This was rejected: `ROST-3`'s whole premise (channels ahead of arrival) makes "student
+  joins after their channel exists" the _common_ case, not an edge one, so refusing ROST-5 here means refusing
+  it for most of a course's own roster.
+- **A narrowly-scoped permission-overwrite write** — `packages/discord-rest` gains exactly one new method,
+  `DiscordRestClient#grantChannelMemberAccess(botToken, channelId, memberId)`, a `PUT
+  /channels/{id}/permissions/{memberId}` (Discord's own "Edit Channel Permissions" call) that sets one
+  target's own `allow`/`deny` bits and nothing else about the channel — no `name`, no `parentId`, no route to
+  rename, move, archive or delete anything. This was chosen.
+
+**Why the narrow write does not reopen `SRV-8`.** `SRV-8`'s own guarantee, as `client.ts`'s module comment and
+`D-30` both state it, is structural: _a category or channel this client creates cannot later be renamed or
+deleted through it_. That guarantee is about a channel's own **shape and existence** — it says nothing about
+_who can read_ a channel already granted to admins, because nothing before this rework needed to change that
+without also being able to change the channel itself. `grantChannelMemberAccess` cannot rename, move, archive
+or delete a channel or category — there is no field in its own request body for any of those, and no other
+method reachable from it that could. It is the read-side twin of `overwriteAllowsView`/`overwriteDeniesView`
+(`channel-overwrites.ts`, finding 4 of the `SRV-6..8` rework) turned into the one narrow write those
+finding-4 read helpers were always going to need a counterpart to eventually: a channel's _privacy_ was
+already something this package could observe without editing the channel; now it is also something this
+package can _repair_ for one member, without editing the channel either. `roster-import.ts`'s own use of it is
+itself narrow: only for a channel `alreadyPresent` (never one this run just created, where the grant is
+already baked into the create call), and only when `memberAlreadyGranted` says the resolved member does not
+already have it — an idempotent write attempted only when there is something to repair, not on every re-run
+regardless. The extended "no mutating verb" test (`apps/worker/tests/handlers/roster-import.test.ts`, the
+`rework finding 5` describe block) asserts, the same structural way `discord-scaffold.test.ts` already does
+for `DELETE`/`PATCH`, that no `DELETE` or `PATCH` ever reaches the fake and that the one `PUT` this handler
+does send matches exactly the narrow `/channels/{id}/permissions/{id}` path — never a general channel edit.
+
+**Decide and record — the identity-model gap (`ROST-10`/`PPL-3`).** This entry's own "what this does not do"
+section above named the gap precisely: a `handle:`-keyed person a roster import creates before a student
+joins is never reconciled with the snowflake-keyed identity `PPL-3` creates once that student's first live
+message actually arrives — the two stayed two different `person_identities` rows (and, absent anything else
+merging them, two different people), with the roster's own fields sitting on the now-orphaned `handle:`-keyed
+one and the report saying `peopleCreated` twice for what was genuinely one student.
+
+Two ways to close it were on the table, matching this rework's own brief: reconcile on the message path (look
+for a `handle:` identity matching the author's own username/display name before creating a person, and
+either re-point it at the snowflake or resolve to it directly), or refuse to create the `handle:`-keyed person
+at all and report the roster row as deferred until the student is seen live. **Reconciliation on the message
+path was chosen** — `packages/discord`'s `handle-mention.ts` is the one file this change touches (`packages/core`
+needed no change at all: `answerQuestion` already takes a resolved `personId` as input, and nothing about
+_how_ that id was resolved belongs in the answering pipeline). Refusing to create the `handle:`-keyed person
+was rejected outright: it is `D-31`'s own "kept, so the person is recognized when they first appear" (`ROST-10`'s
+own text) undone — a roster row that resolves to nobody at import time would simply vanish from every report
+this handler produces, with no way for an instructor to tell "the roster imported cleanly" from "half the
+class silently was not kept."
+
+**What "reconcile" means here, concretely, and what it deliberately still does not do.** Before resolving (or
+creating) a person by the message's own snowflake identity, `handleMention` now checks — only when the
+snowflake itself does not yet resolve to anyone — for a `handle:`-keyed identity matching the message's own
+`authorDisplayName`, normalized the same way `roster-import.ts`'s own `normalizeHandle` normalizes a roster
+row's handle (`normalizeRosterHandle`, duplicated rather than shared, the same convention this file already
+holds itself to for `normalizeName`/`normalizeChannelName` between `discord-scaffold.ts` and
+`roster-import.ts`). A match resolves the message to that same person — same conversation, same daily
+allowance, the roster's own fields intact — instead of `resolvePersonByIdentity` minting a second one under
+the snowflake. This is deliberately **resolution, not a physical re-point**: the `handle:`-keyed
+`person_identities` row itself is left exactly as it was; nothing in `packages/db`'s own `people.ts` gained a
+new write for this rework, and `packages/db` is not in this rework's own touched-files list at all. The
+trade-off this accepts: every _subsequent_ message from that same student still repeats the same
+handle-fallback lookup (the snowflake identity is never created either, since creating a _second_ identity
+row for one person the way this package's own repo functions are shaped today is its own, larger change this
+rework's brief did not ask for) — a small, repeated read, not a correctness gap, as long as the student's own
+`authorDisplayName` keeps normalizing the same way. If a student's own nickname changes _before_ their first
+message (matching the roster's own handle) but _after_ it (breaking the match on a later one), a later message
+would fail to find the `handle:` row and — since the snowflake still resolves nothing by then either, unless
+an earlier message already created it — mint a person the ordinary way; this is a narrower version of the
+same gap this entry's own "what this does not do" section already accepted for the original ROST-10 fallback,
+not a new one this rework introduces. `handle-mention.test.ts`'s own `D-31 rework` describe block proves both
+the reconciliation and its own boundary: a `handle:` identity that does not match the author's own display
+name still creates a new person, rather than this fallback ever guessing.

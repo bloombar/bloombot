@@ -21,8 +21,17 @@
  * idempotence test assert against this fake's own recorded requests (zero
  * creates on a second run), not only against the handler's own report.
  * This fake implements no route that edits or deletes a channel or
- * category — SRV-8's "never delete" has nothing to call even if a test
- * wanted to prove otherwise by accident.
+ * category *as a whole* — SRV-8's "never delete" has nothing to call even
+ * if a test wanted to prove otherwise by accident. Its one exception, `PUT
+ * /channels/{id}/permissions/{overwriteId}` (rework finding 5 of the
+ * ROST-9..12 rework), is as narrow at this layer as
+ * `DiscordRestClient#grantChannelMemberAccess` is at `client.ts`'s own —
+ * it rewrites only the named target's own overwrite entry on a channel
+ * already in this fake's own store, never the channel's
+ * `name`/`parent_id`/anything else. `failNextChannelCreate`/
+ * `failNextPermissionPut` let a test prove this handler catches and reports
+ * a failed write per row (rework findings 4/5) rather than throwing out of
+ * the whole run.
  *
  * Finding 1 of the SRV-6..8 rework: a created `GUILD_TEXT` channel's own
  * `name` is slugged before it is stored and echoed back — lowercased, each
@@ -65,6 +74,8 @@ export class FakeDiscordGuildServer {
   private guildRoles = new Map<string, unknown[]>()
   private guildMembers = new Map<string, unknown[]>()
   private nextChannelId = 1
+  private channelCreateFailureQueue: { status: number; body: unknown }[] = []
+  private permissionPutFailureQueue: { status: number; body: unknown }[] = []
 
   private constructor(server: Server) {
     this.server = server
@@ -112,6 +123,16 @@ export class FakeDiscordGuildServer {
     this.guildMembers.set(guildId, members)
   }
 
+  /** Queue one failure response for the next `POST /guilds/{id}/channels` (create), whichever guild it targets — rework finding 4: proves a handler catches one failed create per row rather than throwing out of the whole run. */
+  failNextChannelCreate(status: number, body: unknown): void {
+    this.channelCreateFailureQueue.push({ status, body })
+  }
+
+  /** Queue one failure response for the next `PUT /channels/{id}/permissions/{id}` — rework finding 5: proves a failed access-repair is caught and reported per row, the same as a failed create. */
+  failNextPermissionPut(status: number, body: unknown): void {
+    this.permissionPutFailureQueue.push({ status, body })
+  }
+
   /** `guildId`'s channels/categories as they stand right now — including anything a create call has appended since `setGuildChannels`, and with a `GUILD_TEXT` channel's name already slugged — the same escape hatch `packages/discord-rest`'s own `FakeDiscordServer#guildChannelsFor` provides, for a test that wants to assert on the guild's actual state rather than only on `requests`/`writeRequests()`. */
   guildChannelsFor(guildId: string): unknown[] {
     return this.guildChannels.get(guildId) ?? []
@@ -151,6 +172,11 @@ export class FakeDiscordGuildServer {
         return
       }
       if (req.method === 'POST') {
+        const queuedFailure = this.channelCreateFailureQueue.shift()
+        if (queuedFailure) {
+          this.respondJson(res, queuedFailure.status, queuedFailure.body)
+          return
+        }
         const postedName = parsedBody?.['name']
         const postedType = parsedBody?.['type']
         const created = {
@@ -199,6 +225,55 @@ export class FakeDiscordGuildServer {
         startIndex = index === -1 ? full.length : index + 1
       }
       this.respondJson(res, 200, full.slice(startIndex, startIndex + limit))
+      return
+    }
+
+    // Rework finding 5 — Discord's own "Edit Channel Permissions" call,
+    // `client.ts`'s one deliberate exception to "only ever `GET`/`POST`"
+    // (see that file's own module comment). Narrow at this fake's own
+    // layer too, matching `packages/discord-rest/tests/helpers/fake-discord-server.ts`'s
+    // own route for the same endpoint: it only ever rewrites the named
+    // target's own entry in the matched channel's `permission_overwrites`.
+    const permissionOverwriteMatch =
+      /^\/channels\/([^/]+)\/permissions\/([^/]+)$/.exec(pathname ?? '')
+    if (req.method === 'PUT' && permissionOverwriteMatch) {
+      const queuedFailure = this.permissionPutFailureQueue.shift()
+      if (queuedFailure) {
+        this.respondJson(res, queuedFailure.status, queuedFailure.body)
+        return
+      }
+      const channelId = permissionOverwriteMatch[1] ?? ''
+      const targetId = permissionOverwriteMatch[2] ?? ''
+      const overwrite = {
+        id: targetId,
+        type: parsedBody?.['type'],
+        allow: parsedBody?.['allow'],
+        deny: parsedBody?.['deny'],
+      }
+      for (const [guildId, channels] of this.guildChannels) {
+        const index = channels.findIndex(
+          (channel) => (channel as { id?: string }).id === channelId
+        )
+        if (index === -1) continue
+        const channel = channels[index] as Record<string, unknown>
+        const existingOverwrites = Array.isArray(
+          channel['permission_overwrites']
+        )
+          ? (channel['permission_overwrites'] as unknown[])
+          : []
+        const withoutTarget = existingOverwrites.filter(
+          (entry) => (entry as { id?: string }).id !== targetId
+        )
+        const updatedChannels = [...channels]
+        updatedChannels[index] = {
+          ...channel,
+          permission_overwrites: [...withoutTarget, overwrite],
+        }
+        this.guildChannels.set(guildId, updatedChannels)
+        break
+      }
+      res.writeHead(204)
+      res.end()
       return
     }
 

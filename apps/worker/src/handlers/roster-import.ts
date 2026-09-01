@@ -28,13 +28,14 @@
  * under a synthetic identity keyed by the handle itself
  * (`handle:<normalized handle>`), so a re-import of the same roster (or a
  * correction to the same handle) still recognizes the same person and merges
- * onto it rather than creating a duplicate. `docs/DECISIONS.md` is explicit
- * about what this does *not* do: nothing here reconciles a `handle:`-keyed
- * person with the snowflake-keyed identity PPL-3 creates once that student
- * actually messages the bot — that reconciliation is out of this slice's
- * scope (it would mean teaching message-time resolution, in `packages/core`/
- * `apps/bot`, to also try a roster-handle fallback, and neither is named in
- * this slice's brief).
+ * onto it rather than creating a duplicate. Rework (D-31's own "identity-model
+ * gap" update): this `handle:`-keyed person *is* reconciled with the one
+ * PPL-3 would otherwise separately create the moment that student's first
+ * live message arrives — `packages/discord`'s `handleMention` now checks for
+ * a matching `handle:`-keyed identity before minting a new person for an
+ * unresolved snowflake. Nothing in this file changed to make that true; see
+ * `handle-mention.ts`'s own module comment and `docs/DECISIONS.md` for the
+ * mechanics and what it deliberately still does not do.
  *
  * **Roster fields are merged, never overwritten (PPL-4)**: `mergeRosterFields`
  * fills in only what a surface has not already proven about this person —
@@ -61,14 +62,18 @@
  * category, by its slugged name (`normalizeChannelName`, the same transform
  * `discord-scaffold.ts` applies for the same Discord-side-slugging reason —
  * see that file's own module comment) before this handler creates anything
- * — already-present is reported, never duplicated, and (SRV-8, carried over
- * unchanged from the scaffold handler) never has its permissions rewritten
- * on a re-run: `DiscordRestClient` still has no edit verb, and this handler
- * does not add one. ROST-6's own "re-runs update permissions on existing
- * channels" is therefore *not* carried over — `docs/DECISIONS.md` says so
- * explicitly, alongside the welcome message, which this handler does not
- * send or pin at all (no verb for it either — see `docs/DECISIONS.md` and
- * this slice's own report).
+ * — already-present is reported, never duplicated. Rework finding 5: an
+ * already-present channel's permissions are *not* frozen forever the way
+ * `discord-scaffold.ts`'s own SRV-8 discipline freezes a course's shared
+ * channels — a re-import that can now resolve a handle it could not at
+ * creation time (the student has since joined the server) grants that one
+ * student read/send access on their own already-existing channel, through
+ * `DiscordRestClient#grantChannelMemberAccess`, this rework's narrowly
+ * scoped exception to "no edit verb" (see that method's own doc comment and
+ * `docs/DECISIONS.md` for why this does not reopen SRV-8). The welcome
+ * message ROST-6 also describes is still not sent or pinned at all — no
+ * verb for it exists, and this run says so plainly in its own report
+ * (`RosterImportReport.limitations`), not only in `docs/DECISIONS.md`.
  */
 
 import { courses, discordServers, people } from '@bloombot/db'
@@ -78,6 +83,8 @@ import {
   allowMemberOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
+  DiscordRequestError,
+  overwriteAllowsView,
   type DiscordChannel,
   type DiscordGuildMember,
   type DiscordPermissionOverwrite,
@@ -134,6 +141,15 @@ export interface UnresolvedHandleEntry {
   email: string
 }
 
+/** Rework finding 8: more than one guild member's own nickname/display name matches a row's handle — resolving to either one would be a guess, and the wrong guess hands that student's channel access and roster fields to a stranger. Reported instead, the same "refuse rather than guess" treatment `resolveIdentity`'s own module comment (`people.ts`) holds itself to. */
+export interface AmbiguousHandleEntry {
+  line: number
+  discord: string
+  email: string
+  /** Every member whose display name matched — named so an instructor can tell the two students apart and correct the roster's own handle. */
+  matchedDisplayNames: string[]
+}
+
 export interface ChannelReportEntry {
   line: number
   email: string
@@ -147,6 +163,34 @@ export interface ChannelNotCreatedEntry {
   reason: string
 }
 
+/** Rework finding 4: a channel this run tried and failed to create — Discord's own error, not this row's fault, and not a reason to abort the rest of the roster. */
+export interface ChannelFailedEntry {
+  line: number
+  email: string
+  channelName: string
+  category: string
+  reason: string
+}
+
+/** Rework finding 6: two different rows' emails slug to the same channel name (`ada@school.edu`/`ada@gmail.com` both to `ada`) — the second is refused a channel entirely rather than silently sharing (or failing to reach) the first's, since this handler has no way to tell which student a shared name actually belongs to. */
+export interface ChannelNameCollisionEntry {
+  line: number
+  email: string
+  channelName: string
+  /** The row that claimed `channelName` first, this run — named so an instructor knows which two rows to go correct. */
+  collidesWithLine: number
+  collidesWithEmail: string
+}
+
+/** Rework finding 13 (first bullet): a field `mergeRosterFields` declined to change because a surface already proved a different value for this person — named so an instructor who re-imports a corrected roster row can tell the correction did not take, rather than reading `peopleMerged` as unqualified success. */
+export interface RosterFieldsDeclinedEntry {
+  line: number
+  discord: string
+  personId: string
+  /** Which of `firstName`/`lastName`/`email`/`githubHandle` the roster's own value for this row did not end up stored as (PPL-4's "corroborates, does not overwrite"). */
+  fields: string[]
+}
+
 /** ROST-9..12's own report — what `@bloombot/actions`' `jobs.get` read action hands back once an import job succeeds. */
 export interface RosterImportReport {
   courseId: string
@@ -157,17 +201,41 @@ export interface RosterImportReport {
   peopleCreated: PersonReportEntry[]
   /** A row whose handle matched an existing person — the roster's fields were merged onto them (ROST-10, PPL-4). */
   peopleMerged: PersonReportEntry[]
+  /** Rework finding 13 (first bullet): every field a merged row's roster value did not end up stored as, because a surface already proved a different one — see `RosterFieldsDeclinedEntry`'s own doc comment. */
+  rosterFieldsDeclined: RosterFieldsDeclinedEntry[]
   /** ROST-12: a row's Discord handle did not resolve to a member of the bound guild — the row is still imported (person created/merged, channel still attempted), just without the individual student's own permission grant. */
   unresolvedHandles: UnresolvedHandleEntry[]
+  /** Rework finding 8: a row's handle matched more than one guild member's own display name — nobody's channel access or roster fields are guessed at; see `AmbiguousHandleEntry`'s own doc comment. */
+  ambiguousHandles: AmbiguousHandleEntry[]
   /** ROST-11: a channel newly created this run. */
   channelsCreated: ChannelReportEntry[]
-  /** ROST-12: "students already present" — a channel for this student already existed (in a matched student category), so nothing was created or rewritten (SRV-8). */
+  /** ROST-12: "students already present" — a channel for this student already existed (in a matched student category) and needed no repair (SRV-8; the handle either does not resolve, or the resolved member already had access). */
   channelsAlreadyPresent: ChannelReportEntry[]
+  /** Rework finding 5: a channel for this student already existed, and this run granted the newly-resolved member read/send access on it through `DiscordRestClient#grantChannelMemberAccess` — a late-joining student's channel, repaired rather than left admin-only forever. */
+  channelAccessGranted: ChannelReportEntry[]
+  /** Rework finding 5: this run tried and failed to repair an already-present channel's access for a newly-resolved member — Discord's own error, and not a reason to abort the rest of the roster. */
+  channelAccessGrantFailed: ChannelFailedEntry[]
   /** ROST-12: a channel this run could not create, and why (every matched student category was full, or none exist yet). */
   channelsNotCreated: ChannelNotCreatedEntry[]
+  /** Rework finding 4: a channel this run tried and failed to create — Discord's own error (a 429, 403 or 400, say), caught per row so the rest of the roster still imports; see `ChannelFailedEntry`'s own doc comment. */
+  channelsFailed: ChannelFailedEntry[]
+  /** Rework finding 6: two rows whose emails slug to the same channel name — see `ChannelNameCollisionEntry`'s own doc comment. */
+  channelNameCollisions: ChannelNameCollisionEntry[]
   /** A course role name that did not resolve in the guild — the admins overwrite this run applied is missing that grant for every channel it created, the same "skipped rather than fatal" treatment SRV-2 gives `discord-scaffold.ts`'s own role resolution. */
   unresolvedRoles: string[]
+  /**
+   * Rework finding 13 (second bullet): what this handler structurally
+   * cannot do, stated plainly on every run's own report rather than living
+   * only in `docs/DECISIONS.md`, which a reader of one run's own results
+   * has no reason to have open. Always present, not conditional on anything
+   * this particular run happened to encounter.
+   */
+  limitations: string[]
 }
+
+/** Rework finding 13's own text for `limitations` — one entry today (ROST-6's pinned welcome message), kept as a named constant so the report and `docs/DECISIONS.md` can be grepped for the same wording. */
+const WELCOME_MESSAGE_NOT_SENT =
+  "This run does not send or pin ROST-6's welcome message into a student's channel — packages/discord-rest has no postMessage/pinMessage verb yet. See docs/DECISIONS.md's own entry on this rework."
 
 function parsePayload(raw: unknown): { courseId: string; csvText: string } {
   if (
@@ -225,23 +293,80 @@ function normalizeHandle(handle: string): string {
   return (handle.split('#')[0] ?? handle).trim().toLowerCase()
 }
 
-/** Resolve a roster row's `Discord` handle to a guild member — username or display name, case-insensitively (`discord_manager.py`'s own `get_user_id(match_display_names=True)`, which `roster_create_channels.py` always passes). `undefined` when nothing in `members` matches — ROST-12's "handle does not resolve", the caller's to report. */
+/** What `resolveMember` found — a discriminated result rather than `undefined | DiscordGuildMember`, so an ambiguous match (rework finding 8) cannot be mistaken for "resolved" or silently collapsed into "unresolved" by a caller that only checks for a member. */
+export type MemberResolution =
+  | { kind: 'resolved'; member: DiscordGuildMember }
+  | { kind: 'unresolved' }
+  | { kind: 'ambiguous'; matches: DiscordGuildMember[] }
+
+/**
+ * Resolve a roster row's `Discord` handle to a guild member — username or
+ * display name, case-insensitively (`discord_manager.py`'s own
+ * `get_user_id(match_display_names=True)`, which `roster_create_channels.py`
+ * always passes).
+ *
+ * Rework finding 8: a plain "username or display name" match gave no
+ * precedence to either — a member nicknamed `bob` could match a *different*
+ * row's own username `bob`, handing that row's channel access and roster
+ * fields to the wrong student. Two changes fix this:
+ *
+ * - An exact **username** match is tried first and wins outright — a guild
+ *   member's own username is unique within a guild (Discord's own
+ *   constraint, not this package's), so at most one member can ever match
+ *   this way, and a roster's own handle is far more likely to be a
+ *   self-reported username than a nickname somebody else assigned them.
+ * - Only when no username matches does a **display name** match count —
+ *   and if more than one member's own display name matches (two students
+ *   who both picked the nickname `bob`, say), that is reported as
+ *   `'ambiguous'` rather than this function guessing which one the roster
+ *   row meant.
+ */
 function resolveMember(
   handle: string,
   members: DiscordGuildMember[]
-): DiscordGuildMember | undefined {
+): MemberResolution {
   const target = normalizeHandle(handle)
-  return members.find(
-    (member) =>
-      member.username.toLowerCase() === target ||
-      member.displayName.toLowerCase() === target
+
+  const byUsername = members.find(
+    (member) => member.username.toLowerCase() === target
   )
+  if (byUsername) return { kind: 'resolved', member: byUsername }
+
+  const byDisplayName = members.filter(
+    (member) => member.displayName.toLowerCase() === target
+  )
+  if (byDisplayName.length > 1) {
+    return { kind: 'ambiguous', matches: byDisplayName }
+  }
+  const [onlyMatch] = byDisplayName
+  if (onlyMatch) return { kind: 'resolved', member: onlyMatch }
+
+  return { kind: 'unresolved' }
 }
 
 /** ROST-3: a channel is named after the local part of the student's email address — a stable, recognizable name that does not depend on the student's own (self-reported, frequently wrong) Discord handle. Slugged the same way every other channel name this app creates is (`normalizeChannelName`), so a later `listGuildChannels` match is comparing like with like. */
 function channelNameForEmail(email: string): string {
   const localPart = email.split('@')[0] ?? email
   return normalizeChannelName(localPart)
+}
+
+/** Rework finding 5: does `channel`'s own `permissionOverwrites` already grant `memberId` view access? Read from whatever `listGuildChannels` (or this run's own `createGuildChannel`) last returned for it — never re-fetched — so a channel this run already granted access to earlier in the same loop, or one that was created *with* the grant already baked in (the ordinary, non-late-joining case), is not sent a second, redundant `grantChannelMemberAccess` write. */
+function memberAlreadyGranted(
+  channel: DiscordChannel,
+  memberId: string
+): boolean {
+  const overwrite = (channel.permissionOverwrites ?? []).find(
+    (entry) => entry.type === 1 && entry.id === memberId
+  )
+  return overwrite !== undefined && overwriteAllowsView(overwrite)
+}
+
+/** Rework finding 4/5: a human-readable reason for a failed Discord write, without leaking whatever `DiscordRequestError.body` carries (that class's own doc comment explains why it stays out of `.message`) into a report a browser or log line will show verbatim. */
+function describeDiscordError(error: unknown): string {
+  if (error instanceof DiscordRequestError) {
+    return `Discord responded with status ${error.status}`
+  }
+  return error instanceof Error ? error.message : 'an unknown error'
 }
 
 /** One student category this run can place a channel into — its declared name, its real Discord category id, and the channels already inside it (mutated locally as this run creates more, so a later row in the same roster sees an up-to-date count). */
@@ -365,22 +490,42 @@ export function createRosterImportHandler(
       parseErrors,
       peopleCreated: [],
       peopleMerged: [],
+      rosterFieldsDeclined: [],
       unresolvedHandles: [],
+      ambiguousHandles: [],
       channelsCreated: [],
       channelsAlreadyPresent: [],
+      channelAccessGranted: [],
+      channelAccessGrantFailed: [],
       channelsNotCreated: [],
+      channelsFailed: [],
+      channelNameCollisions: [],
       unresolvedRoles,
+      limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
+
+    // Rework finding 6: which row, this run, first claimed a given slugged
+    // channel name — so a second row with a *different* email but the same
+    // local part (`ada@school.edu`/`ada@gmail.com`, both `ada`) is reported
+    // as a collision instead of silently sharing (or failing to reach) the
+    // first row's own channel. Keyed purely from the CSV's own data, before
+    // any Discord call, so a collision is caught even for a row whose own
+    // channel creation later fails or has no room (`channelsFailed`/
+    // `channelsNotCreated`).
+    const channelNameOwners = new Map<string, { line: number; email: string }>()
 
     for (const row of rows) {
       // ---- ROST-10: person resolution, merged never overwritten (PPL-4) ----
-      const member = resolveMember(row.discord, members)
+      const resolution = resolveMember(row.discord, members)
+      const member =
+        resolution.kind === 'resolved' ? resolution.member : undefined
       // See this file's own module comment: a resolved member's real
       // snowflake is used when available (recognized by any later message
-      // from that same account); an unresolved handle falls back to a
-      // synthetic, handle-keyed identity so the row is still kept and a
-      // re-import still recognizes it, at the cost of not yet reconciling
-      // with a snowflake identity established later.
+      // from that same account); an unresolved (or ambiguous — rework
+      // finding 8) handle falls back to a synthetic, handle-keyed identity
+      // so the row is still kept and a re-import still recognizes it, at
+      // the cost of not yet reconciling with a snowflake identity
+      // established later.
       const identity = {
         surface: 'discord' as const,
         externalId: member
@@ -397,17 +542,46 @@ export function createRosterImportHandler(
         identity,
         context.db
       )
-      people.mergeRosterFields(
+      const desiredFields = {
+        firstName: row.first || null,
+        lastName: row.last || null,
+        email: row.email || null,
+        githubHandle: row.github || null,
+      } as const
+      const mergedPerson = people.mergeRosterFields(
         context.organizationId,
         person.id,
-        {
-          firstName: row.first || null,
-          lastName: row.last || null,
-          email: row.email || null,
-          githubHandle: row.github || null,
-        },
+        desiredFields,
         context.db
       )
+      // Rework finding 13 (first bullet): `mergeRosterFields` only ever
+      // fills a field that was `null` (PPL-4) — a field the roster asked
+      // for but that did not end up stored as the roster's own value was
+      // declined because a surface already proved a different one, not
+      // because anything failed. Compared against what actually landed,
+      // not merely re-asserted from `desiredFields`, so a re-import of a
+      // corrected roster row can tell the correction did not take.
+      const declinedFields = (
+        [
+          ['firstName', desiredFields.firstName],
+          ['lastName', desiredFields.lastName],
+          ['email', desiredFields.email],
+          ['githubHandle', desiredFields.githubHandle],
+        ] as const
+      )
+        .filter(
+          ([field, desired]) =>
+            desired !== null && mergedPerson?.[field] !== desired
+        )
+        .map(([field]) => field)
+      if (declinedFields.length > 0) {
+        report.rosterFieldsDeclined.push({
+          line: row.line,
+          discord: row.discord,
+          personId: person.id,
+          fields: declinedFields,
+        })
+      }
       const personEntry: PersonReportEntry = {
         line: row.line,
         discord: row.discord,
@@ -418,16 +592,39 @@ export function createRosterImportHandler(
       } else {
         report.peopleCreated.push(personEntry)
       }
-      if (!member) {
+      if (resolution.kind === 'unresolved') {
         report.unresolvedHandles.push({
           line: row.line,
           discord: row.discord,
           email: row.email,
         })
+      } else if (resolution.kind === 'ambiguous') {
+        report.ambiguousHandles.push({
+          line: row.line,
+          discord: row.discord,
+          email: row.email,
+          matchedDisplayNames: resolution.matches.map((m) => m.displayName),
+        })
       }
 
       // ---- ROST-11/ROST-12: the student's private channel ----
       const channelName = channelNameForEmail(row.email)
+
+      // Rework finding 6 — see `channelNameOwners`'s own comment above.
+      const owner = channelNameOwners.get(channelName)
+      if (owner && owner.email !== row.email) {
+        report.channelNameCollisions.push({
+          line: row.line,
+          email: row.email,
+          channelName,
+          collidesWithLine: owner.line,
+          collidesWithEmail: owner.email,
+        })
+        continue
+      }
+      if (!owner)
+        channelNameOwners.set(channelName, { line: row.line, email: row.email })
+
       const alreadyPresent = categoryStates
         .flatMap((state) =>
           state.channels.map((channel) => ({ channel, category: state.name }))
@@ -436,12 +633,44 @@ export function createRosterImportHandler(
           ({ channel }) => normalizeChannelName(channel.name) === channelName
         )
       if (alreadyPresent) {
-        report.channelsAlreadyPresent.push({
-          line: row.line,
-          email: row.email,
-          channelName,
-          category: alreadyPresent.category,
-        })
+        // Rework finding 5: a channel that already exists is no longer
+        // frozen forever for the one student it belongs to — a handle that
+        // now resolves (the student has since joined the server) gets its
+        // access repaired, through the one narrowly-scoped write this
+        // package makes to a channel it did not just create.
+        if (
+          member &&
+          !memberAlreadyGranted(alreadyPresent.channel, member.id)
+        ) {
+          try {
+            await deps.discordRestClient.grantChannelMemberAccess(
+              deps.botToken,
+              alreadyPresent.channel.id,
+              member.id
+            )
+            report.channelAccessGranted.push({
+              line: row.line,
+              email: row.email,
+              channelName,
+              category: alreadyPresent.category,
+            })
+          } catch (error) {
+            report.channelAccessGrantFailed.push({
+              line: row.line,
+              email: row.email,
+              channelName,
+              category: alreadyPresent.category,
+              reason: describeDiscordError(error),
+            })
+          }
+        } else {
+          report.channelsAlreadyPresent.push({
+            line: row.line,
+            email: row.email,
+            channelName,
+            category: alreadyPresent.category,
+          })
+        }
         continue
       }
 
@@ -465,31 +694,48 @@ export function createRosterImportHandler(
         ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
         // ROST-5/ROST-12: a handle that did not resolve still gets a
         // channel — with admin access only, and already reported above
-        // under `unresolvedHandles` — rather than aborting the row.
+        // under `unresolvedHandles`/`ambiguousHandles` — rather than
+        // aborting the row.
         ...(member ? [allowMemberOverwrite(member.id)] : []),
       ]
 
-      const created = await deps.discordRestClient.createGuildChannel(
-        deps.botToken,
-        guildId,
-        {
-          name: channelName,
-          parentId: target.guildCategoryId,
-          permissionOverwrites: overwrites,
-        }
-      )
-      // Mutated locally so a later row in this same roster sees this
-      // channel already counted against `target`'s own cap (ROST-11's
-      // spillover) and already present (a duplicate row for the same
-      // student in one file matches it, rather than creating a second
-      // channel).
-      target.channels = [...target.channels, created]
-      report.channelsCreated.push({
-        line: row.line,
-        email: row.email,
-        channelName: created.name,
-        category: target.name,
-      })
+      // Rework finding 4: one Discord error (a 429, 403 or 400) must not
+      // abort the whole import — caught per row, recorded with its reason,
+      // and the rest of the roster still runs. Before this, a single failed
+      // create threw straight out of this handler, and with the queue's own
+      // retries and handler timeout, a large roster could end `failed` with
+      // most rows already imported and nothing readable to show for it.
+      try {
+        const created = await deps.discordRestClient.createGuildChannel(
+          deps.botToken,
+          guildId,
+          {
+            name: channelName,
+            parentId: target.guildCategoryId,
+            permissionOverwrites: overwrites,
+          }
+        )
+        // Mutated locally so a later row in this same roster sees this
+        // channel already counted against `target`'s own cap (ROST-11's
+        // spillover) and already present (a duplicate row for the same
+        // student in one file matches it, rather than creating a second
+        // channel).
+        target.channels = [...target.channels, created]
+        report.channelsCreated.push({
+          line: row.line,
+          email: row.email,
+          channelName: created.name,
+          category: target.name,
+        })
+      } catch (error) {
+        report.channelsFailed.push({
+          line: row.line,
+          email: row.email,
+          channelName,
+          category: target.name,
+          reason: describeDiscordError(error),
+        })
+      }
     }
 
     return report

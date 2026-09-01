@@ -107,5 +107,12 @@ export function createFakeDiscordRestClient(
         parentId: input.parentId,
       })
     },
+    // Rework finding 5's own narrow addition — same reasoning as the
+    // guild-management calls above: nothing in `apps/api`'s own routes
+    // calls this (it is `roster-import.ts`'s alone), so this fake only
+    // needs to keep satisfying `DiscordRestClient` as that port grows.
+    grantChannelMemberAccess(): Promise<void> {
+      return Promise.resolve()
+    },
   }
 }

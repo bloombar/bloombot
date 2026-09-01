@@ -26,10 +26,15 @@
  * what lets a test prove SRV-7's idempotence against this fake directly
  * (run a handler twice, assert the second run's create calls are zero)
  * rather than only against the handler's own report. This fake implements
- * no route that edits or deletes a channel or category at all — the same
- * structural absence `client.ts`'s own module comment describes for
+ * no route that edits or deletes a channel or category *as a whole* — the
+ * same structural absence `client.ts`'s own module comment describes for
  * `DiscordRestClient` itself (SRV-8): there is nothing for a test to call
- * even if a caller wanted to.
+ * even if a caller wanted to. Its one exception, `PUT
+ * /channels/{id}/permissions/{overwriteId}` (rework finding 5 of the
+ * ROST-9..12 rework), is as narrow at this fake's own layer as
+ * `grantChannelMemberAccess` is at `client.ts`'s: it only ever rewrites one
+ * target's own overwrite entry on a channel already in `guildChannels`,
+ * never the channel's `name`/`parentId`/anything else.
  */
 
 import {
@@ -81,6 +86,7 @@ export class FakeDiscordServer {
   // `userGuilds`/`botGuilds` above already are for `/users/@me/guilds`.
   private guildMembers = new Map<string, unknown[]>()
   private guildChannelsQueue: (FakeResponse | undefined)[] = []
+  private channelPermissionPutQueue: (FakeResponse | undefined)[] = []
   private nextChannelId = 1
 
   private constructor(server: Server) {
@@ -127,6 +133,11 @@ export class FakeDiscordServer {
   /** Queue one response for the next call to `/guilds/{id}/channels`, whichever guild it names and whether it is the `GET` (list) or `POST` (create) — for a test proving `listGuildChannels`/`createGuildCategory`/`createGuildChannel` surface a non-2xx response rather than assuming every call succeeds. */
   respondToGuildChannels(response: FakeResponse): void {
     this.guildChannelsQueue.push(response)
+  }
+
+  /** Queue one response for the next `PUT /channels/{id}/permissions/{id}` — for a test proving `grantChannelMemberAccess` (rework finding 5) surfaces a non-2xx response the same as every other write in this package. */
+  respondToChannelPermissionPut(response: FakeResponse): void {
+    this.channelPermissionPutQueue.push(response)
   }
 
   /** What `getUserGuilds` (an `Authorization: Bearer ...` call) returns for every subsequent request, until changed again. */
@@ -287,6 +298,58 @@ export class FakeDiscordServer {
         startIndex = index === -1 ? full.length : index + 1
       }
       this.respondJson(res, 200, full.slice(startIndex, startIndex + limit))
+      return
+    }
+
+    // Rework finding 5 of the ROST-9..12 rework — Discord's own "Edit
+    // Channel Permissions" call, `client.ts`'s one deliberate exception to
+    // "this package only ever `GET`s or `POST`s" (see that file's own
+    // module comment). Narrow at this fake's own layer too: it rewrites
+    // only the named target's own entry in the matched channel's
+    // `permission_overwrites`, wherever that channel happens to live —
+    // never the channel's own `name`/`parent_id`/anything else, and it does
+    // not create a channel that does not already exist.
+    const permissionOverwriteMatch =
+      /^\/channels\/([^/]+)\/permissions\/([^/]+)$/.exec(pathname ?? '')
+    if (req.method === 'PUT' && permissionOverwriteMatch) {
+      const queued = this.channelPermissionPutQueue.shift()
+      if (queued) {
+        this.respondJson(res, queued.status, queued.body)
+        return
+      }
+      const channelId = permissionOverwriteMatch[1] ?? ''
+      const targetId = permissionOverwriteMatch[2] ?? ''
+      const body = parsedBody as Record<string, unknown> | undefined
+      const overwrite = {
+        id: targetId,
+        type: body?.['type'],
+        allow: body?.['allow'],
+        deny: body?.['deny'],
+      }
+      for (const [guildId, channels] of this.guildChannels) {
+        const index = channels.findIndex(
+          (channel) => (channel as { id?: string }).id === channelId
+        )
+        if (index === -1) continue
+        const channel = channels[index] as Record<string, unknown>
+        const existingOverwrites = Array.isArray(
+          channel['permission_overwrites']
+        )
+          ? (channel['permission_overwrites'] as unknown[])
+          : []
+        const withoutTarget = existingOverwrites.filter(
+          (entry) => (entry as { id?: string }).id !== targetId
+        )
+        const updatedChannels = [...channels]
+        updatedChannels[index] = {
+          ...channel,
+          permission_overwrites: [...withoutTarget, overwrite],
+        }
+        this.guildChannels.set(guildId, updatedChannels)
+        break
+      }
+      res.writeHead(204)
+      res.end()
       return
     }
 

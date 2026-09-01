@@ -149,3 +149,33 @@ export async function postJson(
     options
   )
 }
+
+/**
+ * `PUT` a JSON body with an `Authorization` header — Discord's own "Edit
+ * Channel Permissions" call (`PUT /channels/{id}/permissions/{overwriteId}`),
+ * `client.ts`'s one deliberate exception to "this package only ever
+ * `GET`s or `POST`s" (rework finding 5 of the ROST-9..12 rework — see that
+ * file's own module comment and `docs/DECISIONS.md`). Discord answers this
+ * one `204 No Content`, not a JSON body — `runFetch`'s own `parseJsonBody`
+ * already tolerates an empty response the same way it does for any other
+ * call, so nothing here has to special-case it.
+ */
+export async function putJson(
+  url: string,
+  authorization: string,
+  body: unknown,
+  options: RequestOptions
+): Promise<JsonResponse> {
+  return runFetch(
+    url,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization,
+      },
+      body: JSON.stringify(body),
+    },
+    options
+  )
+}

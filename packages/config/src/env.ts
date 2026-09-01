@@ -38,6 +38,14 @@ export const envSchema = z.object({
   // SQLite file holding users, messages and tenancy.
   DATABASE_PATH: z.string().min(1).default('./data/data.db'),
 
+  // FILE-1..5 — where a course attachment's own bytes live on disk, keyed by
+  // an unguessable, application-generated id rather than the instructor's
+  // own filename (`@bloombot/db`'s `attachment-storage.ts` has the layout
+  // and why it is safe against path traversal). Sibling of `DATABASE_PATH`
+  // above, the same "real student/course material, never committed"
+  // reasoning — see this repository's `.gitignore`.
+  ATTACHMENT_STORAGE_DIR: z.string().min(1).default('./data/attachments'),
+
   // Public origin of the control panel, used to build links in outbound email.
   PUBLIC_APP_URL: z.url(),
 

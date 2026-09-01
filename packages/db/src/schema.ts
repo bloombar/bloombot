@@ -657,3 +657,101 @@ export const jobs = sqliteTable(
     ),
   ]
 )
+
+// FILE-1..5 — the knowledge files an instructor attaches to a course, and
+// FILE-2's own visible lifecycle for one: `pending` from the moment the
+// bytes land on disk and the job that will upload them is enqueued,
+// `ready` once `apps/worker`'s handler has uploaded the bytes to the
+// provider and attached them to the course's vector store, or `failed`
+// (with `failureReason`, the provider's own message) when the provider
+// rejects the file — a course must never look configured while an
+// attachment sits `failed` (FILE-2's own text), which is exactly why this
+// is a status a caller reads rather than something inferred from
+// `providerFileId` being null.
+export const ATTACHMENT_STATUSES = ['pending', 'ready', 'failed'] as const
+export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number]
+
+export const courseAttachments = sqliteTable(
+  'course_attachments',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    // A display value only (FILE-5) — never part of the path the bytes are
+    // actually written under (`attachment-storage.ts`'s own module
+    // comment), so nothing about what an instructor's browser calls the
+    // file can influence where it lands on disk.
+    filename: text('filename').notNull(),
+    contentType: text('content_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    status: text('status', { enum: ATTACHMENT_STATUSES }).notNull(),
+    // Set once the provider has uploaded the file and reported its own id
+    // back (FILE-1) — null until then. Recorded as soon as the upload
+    // itself succeeds (`repos/course-attachments.ts#recordProviderFileId`,
+    // a rework finding), *before* the file is attached to a vector store —
+    // so a `failed` attachment still carries it whenever the upload itself
+    // succeeded, and `courseAttachments.detach` can still reach the
+    // provider to remove it rather than stranding it there permanently.
+    providerFileId: text('provider_file_id'),
+    // The provider's own rejection message (FILE-2) — null unless
+    // `status = 'failed'`.
+    failureReason: text('failure_reason'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('course_attachments_course_id_idx').on(table.courseId),
+    index('course_attachments_organization_id_idx').on(table.organizationId),
+    check(
+      'course_attachments_status_check',
+      sql`${table.status} in ('pending', 'ready', 'failed')`
+    ),
+  ]
+)
+
+// FILE-4 / D-3 — every save of a course's instructions is kept, not just the
+// current one, so an instructor can see what the assistant was told last
+// week and restore it. `courses.instructions` (above) is always the
+// *current* text an answer is built from (D-3); this table is purely a
+// history of how it got there — restoring an earlier revision (FILE-4)
+// updates `courses.instructions` and adds a *new* row here recording the
+// restore, rather than deleting or rewriting anything: "restore" is never
+// destructive, the same "never delete" discipline SRV-8 already holds
+// scaffolding to.
+export const courseInstructionRevisions = sqliteTable(
+  'course_instruction_revisions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    instructions: text('instructions').notNull(),
+    // The account that saved this revision (FILE-4) — never null: every
+    // revision, including one created by a restore, has an author.
+    savedByAccountId: text('saved_by_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    // A real tiebreaker for `listRevisionsForCourse`'s "newest first" order
+    // — the same reason `messages.sequence` exists (that column's own
+    // comment): `createdAt` is millisecond precision, two saves can land in
+    // the same millisecond, and SQL defines no order among rows tied on the
+    // `ORDER BY` column. One more than the highest `sequence` already
+    // recorded for this course, assigned in the same transaction as the
+    // insert (`repos/course-instruction-revisions.ts#createRevision`).
+    sequence: integer('sequence').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('course_instruction_revisions_course_id_idx').on(table.courseId),
+    index('course_instruction_revisions_organization_id_idx').on(
+      table.organizationId
+    ),
+  ]
+)

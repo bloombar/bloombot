@@ -17,6 +17,20 @@ export interface JobContext {
   jobId: string
   /** Which attempt this is — 1 on a job's first run (`repos/jobs.ts#claimNextJob` increments this at claim time, before the handler runs). */
   attempts: number
+  /**
+   * The bound `attempts` is checked against (`repos/jobs.ts#NewJob.maxAttempts`,
+   * the same field `runner.ts`'s own `job.attempts >= job.maxAttempts` reads
+   * to decide `runNextJob`'s own terminal `'failed'` outcome) — a rework
+   * finding: a handler that wants to record its *own* terminal state on the
+   * row a job's `payload` names (`apps/worker`'s `courseAttachments.attach`
+   * is the first that does) needs to know, before it lets a transient
+   * failure propagate, whether this is that last attempt. Optional, not
+   * required: `runNextJob` (`runner.ts`) always supplies it, but a test that
+   * calls a handler directly, bypassing the queue entirely (most handler
+   * tests in this platform do), is not obligated to invent one it does not
+   * need — a handler that never reads this field is unaffected either way.
+   */
+  maxAttempts?: number
   db: Database
   logger: Logger
 }

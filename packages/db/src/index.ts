@@ -9,6 +9,10 @@ export {
 } from './client.js'
 export { runMigrations } from './migrate.js'
 export { resolveReal, repoDataDir, isUnderRepoData } from './path-guard.js'
+export {
+  createFilesystemAttachmentStorage,
+  type AttachmentStorage,
+} from './attachment-storage.js'
 export * as schema from './schema.js'
 
 export * as organizations from './repos/organizations.js'
@@ -24,3 +28,5 @@ export * as signInTokens from './repos/sign-in-tokens.js'
 export * as sessions from './repos/sessions.js'
 export * as discordInstallStates from './repos/discord-install-states.js'
 export * as jobs from './repos/jobs.js'
+export * as courseAttachments from './repos/course-attachments.js'
+export * as courseInstructionRevisions from './repos/course-instruction-revisions.js'

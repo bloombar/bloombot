@@ -16,6 +16,14 @@ export interface PostJsonOptions {
   baseUrl: string
   apiKey: string
   timeoutMs: number
+  /**
+   * FILE-1..3 — `postJson` now backs every JSON call this package makes,
+   * not only a `POST`: `deleteFileEndpoint`/`deleteVectorStoreFile`
+   * (`files.ts`) reach the same abort/timeout/JSON-parse machinery with a
+   * `DELETE`. Defaults to `'POST'` so every existing caller (`client.ts`,
+   * `conversations.ts`) is unaffected.
+   */
+  method?: 'POST' | 'DELETE'
 }
 
 export interface JsonResponse {
@@ -58,11 +66,15 @@ export async function postJson(
       response = await options.fetchFn(
         `${stripTrailingSlashes(options.baseUrl)}${path}`,
         {
-          method: 'POST',
+          method: options.method ?? 'POST',
           headers: {
             Authorization: `Bearer ${options.apiKey}`,
             'Content-Type': 'application/json',
           },
+          // A `DELETE` call carries no body (`files.ts`'s own callers pass
+          // `undefined` for `requestBody`) — `JSON.stringify(undefined)` is
+          // itself `undefined`, which `fetch` already treats as "no body",
+          // so nothing more than this needs to change for that case.
           body: JSON.stringify(requestBody),
           signal: controller.signal,
         }

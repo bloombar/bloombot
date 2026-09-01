@@ -59,7 +59,7 @@ workspaces, the shared zod contract, the tenant-scoped data layer, and a real mi
 tool. Production is untouched — it keeps running the Python bot, and the legacy import
 runs against a copy of the live database rather than the database itself.
 
-**In scope:** PLAT-1..5, QA-1..6, TEN-1..3, PROJ-1..3, PPL-1..3, CONV-1..3
+**In scope:** PLAT-1..5, QA-1..6, TEN-1..3, PROJ-1..3, BOARD-4, PPL-1..3, CONV-1..3
 
 ## Phase 4 — Conversation core & Discord surface
 

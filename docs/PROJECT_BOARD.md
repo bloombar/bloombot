@@ -38,6 +38,30 @@ a card you moved by hand unless you pass `--reconcile`.
 
 Flags: `--dry-run`, `--limit N`, `--reconcile`, `--prune`.
 
+## Card status through a slice's life (BOARD-4)
+
+A card should say where its work actually is. Four columns: `Backlog`, `In progress`, `In review`, `Done`.
+
+```bash
+npm run board:status -- "In progress" TEN-1 TEN-2   # slice starts
+npm run board:status -- "In review"   TEN-1 TEN-2   # PR opened
+npm run board:status -- Done          TEN-1 TEN-2   # PR merged
+npm run board:status -- Done TEN-1 --dry-run        # show what would change
+npm run board:status -- Done TEN-1 --no-sync        # manifest only, no GitHub call
+```
+
+`status.mjs` rewrites the `status:` line in `manifest.yaml` and then runs `sync.mjs --reconcile`, which
+forces the manifest's status and open/closed state back onto the board. `Done` closes the issue, because
+sync derives an issue's state from its status. **Commit the manifest change** — an uncommitted status is a
+board that disagrees with the repository, and the next `--reconcile` from a clean checkout undoes it.
+
+> **Why this is not automatic.** `Closes #N` in a pull request body only closes an issue when the pull
+> request merges into the repository's **default branch**. The platform build merges every slice into
+> `feat/PLAT-1-multi-surface-platform`, so no keyword ever fires: the issues stay open, the cards stay in
+> Backlog, and the board silently stops describing the project. PR bodies still carry `Closes #N` — it is
+> the durable link between a change and its requirement, and it will fire when the integration branch is
+> promoted — but the card is moved by hand, with the command above.
+
 ## Adding a phase or a family
 
 Both mean editing `scripts/board/config.mjs`:

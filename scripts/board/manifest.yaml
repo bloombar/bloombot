@@ -851,7 +851,7 @@
   section: §5 AI Chatbot
   family: BOT
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: BOT-12
   title: Role fallback matches the configured student role
@@ -864,7 +864,7 @@
   section: §5 AI Chatbot
   family: BOT
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: DATA-6
   title: Migration seed data matches the models
@@ -876,7 +876,7 @@
   section: §7 Persistence & Data Model
   family: DATA
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: DSC-7
   title: Server lookup by numeric id
@@ -892,7 +892,7 @@
   section: §2 Discord Client Library
   family: DSC
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-6
   title: Automated tests and continuous integration
@@ -908,7 +908,7 @@
   section: §10 Operations & Deployment
   family: OPS
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-7
   title: Roster path resolved from the results directory
@@ -920,7 +920,7 @@
   section: §4 Roster Ingestion & Student Channels
   family: ROST
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-8
   title: Welcome message mentions the student
@@ -934,7 +934,7 @@
   section: §4 Roster Ingestion & Student Channels
   family: ROST
   phase: 1
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-7
   title: Continuous deployment
@@ -951,7 +951,24 @@
   section: §10 Operations & Deployment
   family: OPS
   phase: 2
-  status: Backlog
+  status: Done
+  review: false
+- id: BOARD-4
+  title: Card status follows the slice
+  full: "A requirement's card shows where its work actually is: In progress when a
+    slice starts, In review when its pull request opens, and Done when that pull
+    request merges. GitHub's own closing keywords cannot do this here: Closes N
+    fires only for a pull request merged into the repository's default branch,
+    and every branch in the platform build targets the long-lived integration
+    branch instead, so nothing would ever close and every card would sit in
+    Backlog while the work happened. scripts/board/status.mjs is the explicit
+    substitute — it writes the status into manifest.yaml, which is the board's
+    source of truth, and reconciles the board with it. Pull requests still carry
+    Closes N, so the link…"
+  section: §11 Specification & Project Board Tooling
+  family: BOARD
+  phase: 3
+  status: In review
   review: false
 - id: CONV-1
   title: Conversations key on course and person
@@ -1004,7 +1021,7 @@
   section: §12 Platform Architecture
   family: PLAT
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: PLAT-2
   title: Package boundaries
@@ -1019,7 +1036,7 @@
   section: §12 Platform Architecture
   family: PLAT
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: PLAT-3
   title: One gateway connection
@@ -1054,7 +1071,7 @@
   section: §12 Platform Architecture
   family: PLAT
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: PPL-1
   title: People are the platform's end users
@@ -1102,7 +1119,7 @@
   section: §16 Projects
   family: PROJ
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: PROJ-2
   title: Archiving a project
@@ -1112,7 +1129,7 @@
   section: §16 Projects
   family: PROJ
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: PROJ-3
   title: Names must not collide within a server
@@ -1126,7 +1143,7 @@
   section: §16 Projects
   family: PROJ
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: QA-1
   title: Tests fail before they pass
@@ -1189,7 +1206,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: TEN-1
   title: The tenant is an organization
@@ -1200,7 +1217,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: TEN-2
   title: Repository-level scoping
@@ -1212,7 +1229,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: TEN-3
   title: One organization per Discord server
@@ -1223,7 +1240,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 3
-  status: Backlog
+  status: Done
   review: false
 - id: ACT-1
   title: Every operation is an action

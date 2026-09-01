@@ -253,10 +253,33 @@ describe('courses repo', () => {
       enabled: false,
     })
 
-    expect(courses.enableCourse(orgA, created.id, testDb.db)).toBe(1)
+    expect(courses.enableCourse(orgA, created.id, testDb.db)).toEqual({
+      ok: true,
+      changed: true,
+    })
     expect(courses.getCourse(orgA, created.id, testDb.db)).toMatchObject({
       enabled: true,
     })
+  })
+
+  // Cheap-fix 6: a caller that treats "changed" as "this actually happened"
+  // must not be lied to by a repeat call.
+  it('enabling an already-enabled course, or disabling an already-disabled one, is a no-op', () => {
+    testDb = createTestDatabase()
+    const { orgA, projectA } = seedTwoOrganizations(testDb)
+    const created = expectOk(
+      courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+    )
+
+    // Already enabled: enabling again reports `changed: false`, not `true`.
+    expect(courses.enableCourse(orgA, created.id, testDb.db)).toEqual({
+      ok: true,
+      changed: false,
+    })
+
+    courses.disableCourse(orgA, created.id, testDb.db)
+    // Already disabled: disabling again is `0` rows changed, not `1`.
+    expect(courses.disableCourse(orgA, created.id, testDb.db)).toBe(0)
   })
 
   it('lists only the courses in a given project', () => {
@@ -339,7 +362,7 @@ describe('courses repo', () => {
         testDb.db
       )
       expect(updateResult).toBeUndefined()
-      expect(courses.enableCourse(orgB, created.id, testDb.db)).toBe(0)
+      expect(courses.enableCourse(orgB, created.id, testDb.db)).toBeUndefined()
       expect(courses.disableCourse(orgB, created.id, testDb.db)).toBe(0)
 
       const stillOwnedByA = courses.getCourse(orgA, created.id, testDb.db)
@@ -550,6 +573,232 @@ describe('courses repo', () => {
       )
 
       expect(result?.ok).toBe(true)
+    })
+
+    // Must-fix 3: the collision check only applies to a save that would
+    // actually route. A disabled course's names are free for someone else to
+    // take, and taking them must not lock the disabled course out of every
+    // future edit — including one that leaves it disabled.
+    it('a title-only edit of a disabled course is allowed even if its names are now taken elsewhere', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const webDesign = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            enabled: false,
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      // Data Science reuses Web Design's now-free names.
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-wd-fa26',
+            studentsRole: 'students-wd-fa26',
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.updateCourse(
+        orgA,
+        webDesign.id,
+        courseInput(projectA.id, {
+          enabled: false,
+          title: 'Web Design (renamed)',
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(true)
+    })
+
+    // The same escape hatch on create, not just update: creating a disabled
+    // course that reuses names already taken by an enabled course must be
+    // allowed — it introduces no routing collision.
+    it('creating a disabled course that reuses names taken by an enabled course is allowed', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          enabled: false,
+          title: 'Data Science',
+          adminsRole: 'admins-wd-fa26',
+          studentsRole: 'students-wd-fa26',
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
+
+    // Must-fix 5: self-consistency within a single save, not just across two.
+    it('refuses a save whose admin and student role are the same name', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          adminsRole: 'same-role',
+          studentsRole: 'same-role',
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('studentsRole')
+      expect(result.conflict.name).toBe('same-role')
+    })
+
+    it('refuses a save with two categories sharing the same name', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          categories: [
+            { name: 'GLOBAL', channels: [] },
+            { name: 'GLOBAL', channels: [] },
+          ],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'category',
+        name: 'GLOBAL',
+      })
+    })
+
+    it('refuses an update whose admin and student role are the same name', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      const result = courses.updateCourse(
+        orgA,
+        created.id,
+        courseInput(projectA.id, {
+          adminsRole: 'same-role',
+          studentsRole: 'same-role',
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('studentsRole')
+    })
+  })
+
+  // TEN-5: `projectId` must belong to the calling organization — the
+  // foreign key alone only proves it belongs to *some* organization.
+  describe('project ownership (TEN-5)', () => {
+    it("refuses to create a course against another organization's project", () => {
+      testDb = createTestDatabase()
+      const { orgB, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgB,
+        courseInput(projectA.id),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('projectId')
+      expect(result.conflict.name).toBe(projectA.id)
+      // The refusal must not disclose org A's project name to org B.
+      expect(result.conflict.message).not.toContain('Fall 2026')
+    })
+
+    it("refuses to update a course onto another organization's project", () => {
+      testDb = createTestDatabase()
+      const { orgB, projectA, projectB } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(orgB, courseInput(projectB.id), testDb.db)
+      )
+
+      const result = courses.updateCourse(
+        orgB,
+        created.id,
+        courseInput(projectA.id),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('projectId')
+    })
+  })
+
+  // Must-fix 2: re-enabling a course must not produce the state PROJ-3
+  // forbids just because the check only ran at save time.
+  describe('enableCourse re-runs the PROJ-3 check', () => {
+    it('refuses to enable a course whose names were taken by another course while it was disabled', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const webDesign = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      courses.disableCourse(orgA, webDesign.id, testDb.db)
+      // Data Science takes Web Design's freed names while it is disabled.
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-wd-fa26',
+            studentsRole: 'students-wd-fa26',
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.enableCourse(orgA, webDesign.id, testDb.db)
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        conflictingCourseTitle: 'Data Science',
+      })
+      // Refused, so it must still read back disabled.
+      expect(courses.getCourse(orgA, webDesign.id, testDb.db)).toMatchObject({
+        enabled: false,
+      })
     })
   })
 })

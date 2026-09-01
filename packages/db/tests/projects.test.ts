@@ -57,14 +57,14 @@ describe('projects repo', () => {
       testDb.db
     )
 
-    const changed = projects.renameProject(
+    const result = projects.renameProject(
       orgA,
       project.id,
       'Autumn 2026',
       testDb.db
     )
 
-    expect(changed).toBe(1)
+    expect(result).toMatchObject({ ok: true, project: { name: 'Autumn 2026' } })
     expect(projects.getProject(orgA, project.id, testDb.db)).toMatchObject({
       name: 'Autumn 2026',
     })
@@ -106,14 +106,14 @@ describe('projects repo', () => {
         testDb.db
       )
 
-      const changed = projects.renameProject(
+      const result = projects.renameProject(
         orgB,
         project.id,
         'Hijacked',
         testDb.db
       )
 
-      expect(changed).toBe(0)
+      expect(result).toBeUndefined()
       expect(projects.getProject(orgA, project.id, testDb.db)).toMatchObject({
         name: 'Fall 2026',
       })
@@ -189,9 +189,9 @@ describe('projects repo', () => {
       )
       projects.archiveProject(orgA, project.id, testDb.db)
 
-      const changed = projects.unarchiveProject(orgA, project.id, testDb.db)
+      const result = projects.unarchiveProject(orgA, project.id, testDb.db)
 
-      expect(changed).toBe(1)
+      expect(result).toMatchObject({ ok: true })
       expect(
         projects.getProject(orgA, project.id, testDb.db)?.archivedAt
       ).toBeNull()
@@ -221,6 +221,153 @@ describe('projects repo', () => {
       expect(everything.map((p) => p.id).sort()).toEqual(
         [active.id, archived.id].sort()
       )
+    })
+  })
+
+  // Must-fix 4: `renameProject` and `unarchiveProject` refuse rather than
+  // let a raw SqliteError escape `projects_org_name_active_unique`.
+  describe('name collisions (PROJ-2)', () => {
+    it('refuses to rename a project into a name already used by another active project', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      projects.createProject(orgA, { name: 'Fall 2026' }, testDb.db)
+      const other = projects.createProject(
+        orgA,
+        { name: 'Spring 2027' },
+        testDb.db
+      )
+
+      const result = projects.renameProject(
+        orgA,
+        other.id,
+        'Fall 2026',
+        testDb.db
+      )
+
+      expect(result).toMatchObject({
+        ok: false,
+        conflict: { name: 'Fall 2026' },
+      })
+      // Unchanged: still readable under its old name.
+      expect(projects.getProject(orgA, other.id, testDb.db)).toMatchObject({
+        name: 'Spring 2027',
+      })
+    })
+
+    // Archiving frees a name, but only until someone else takes it — then
+    // unarchiving the original must be refused, not throw a raw driver error.
+    it('refuses to unarchive a project whose name was reused by another active project', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const original = projects.createProject(
+        orgA,
+        { name: 'Fall 2026' },
+        testDb.db
+      )
+      projects.archiveProject(orgA, original.id, testDb.db)
+      projects.createProject(orgA, { name: 'Fall 2026' }, testDb.db)
+
+      const result = projects.unarchiveProject(orgA, original.id, testDb.db)
+
+      expect(result).toMatchObject({
+        ok: false,
+        conflict: { name: 'Fall 2026' },
+      })
+      // Unchanged: still archived.
+      expect(
+        projects.getProject(orgA, original.id, testDb.db)?.archivedAt
+      ).not.toBeNull()
+    })
+
+    // The hole one level up from must-fix 2: unarchiving must not silently
+    // put an enabled course back into a PROJ-3 collision.
+    it('refuses to unarchive a project whose enabled course names were taken while it was archived', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const original = projects.createProject(
+        orgA,
+        { name: 'Fall 2026' },
+        testDb.db
+      )
+      const webDesign = courses.createCourse(
+        orgA,
+        {
+          projectId: original.id,
+          title: 'Web Design',
+          filePrefix: 'wd',
+          enabled: true,
+          adminsRole: 'admins-wd-fa26',
+          studentsRole: 'students-wd-fa26',
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        },
+        testDb.db
+      )
+      if (!webDesign.ok) throw new Error('setup failed: unexpected conflict')
+      projects.archiveProject(orgA, original.id, testDb.db)
+
+      // Data Science takes Web Design's freed names while its project is archived.
+      const other = projects.createProject(
+        orgA,
+        { name: 'Spring 2027' },
+        testDb.db
+      )
+      const dataScience = courses.createCourse(
+        orgA,
+        {
+          projectId: other.id,
+          title: 'Data Science',
+          filePrefix: 'ds',
+          enabled: true,
+          adminsRole: 'admins-wd-fa26',
+          studentsRole: 'students-ds-fa26',
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        },
+        testDb.db
+      )
+      if (!dataScience.ok) throw new Error('setup failed: unexpected conflict')
+
+      const result = projects.unarchiveProject(orgA, original.id, testDb.db)
+
+      expect(result).toMatchObject({
+        ok: false,
+        conflict: { conflictingCourseTitle: 'Data Science' },
+      })
+      // Unchanged: still archived.
+      expect(
+        projects.getProject(orgA, original.id, testDb.db)?.archivedAt
+      ).not.toBeNull()
+    })
+
+    it('unarchives a project whose enabled course has no name conflicts', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const original = projects.createProject(
+        orgA,
+        { name: 'Fall 2026' },
+        testDb.db
+      )
+      const webDesign = courses.createCourse(
+        orgA,
+        {
+          projectId: original.id,
+          title: 'Web Design',
+          filePrefix: 'wd',
+          enabled: true,
+          adminsRole: 'admins-wd-fa26',
+          studentsRole: 'students-wd-fa26',
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        },
+        testDb.db
+      )
+      if (!webDesign.ok) throw new Error('setup failed: unexpected conflict')
+      projects.archiveProject(orgA, original.id, testDb.db)
+
+      const result = projects.unarchiveProject(orgA, original.id, testDb.db)
+
+      expect(result).toMatchObject({ ok: true })
+      expect(
+        projects.getProject(orgA, original.id, testDb.db)?.archivedAt
+      ).toBeNull()
     })
   })
 })

@@ -16,9 +16,10 @@ import {
   usage,
   type Database,
 } from '@bloombot/db'
+import { createAdmissionGate, type AdmissionGate } from '@bloombot/jobs'
 
 import { answerQuestion } from '../src/answer.js'
-import { ModelAskError } from '../src/ports.js'
+import { ModelAskError, type ModelClient } from '../src/ports.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
 import { FakeModelClient } from './helpers/fake-model-client.js'
 import { seedCourseAndPerson } from './helpers/seed.js'
@@ -1098,5 +1099,146 @@ describe('answerQuestion (finding 6 of the MDL-1 rework): a conversation id crea
         )?.upstreamThreadId
       ).toBeNull()
     }
+  })
+})
+
+describe('answerQuestion (JOB-4): admission bounds concurrent model calls', () => {
+  it('a request admission never grants costs nothing — no model call, no usage counted, the same "costs nothing" shape declined-over-limit already has', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+    const neverGrants: AdmissionGate = {
+      acquire: async () => ({ granted: false }),
+    }
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger, admission: neverGrants }
+    )
+
+    expect(result).toEqual({ kind: 'declined-busy' })
+    expect(model.calls).toHaveLength(0)
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        personId,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+  })
+
+  // JOB-4's own test: with a bound of one, two concurrent answers serialize
+  // rather than both calling the model. Driven by a model client this test
+  // controls, tracking how many calls are in flight at once.
+  it('with a bound of one, two concurrent answers serialize rather than both calling the model at once', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const logger = createFakeLogger()
+    const admission = createAdmissionGate({ limit: 1, waitMs: 500 })
+
+    let concurrentCalls = 0
+    let maxConcurrentCalls = 0
+    const model: ModelClient = {
+      ask: async () => {
+        concurrentCalls += 1
+        maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls)
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        concurrentCalls -= 1
+        return { text: 'ok', upstreamThreadId: 'thread-1' }
+      },
+    }
+
+    const deps = { db: testDb.db, model, logger, admission }
+    const baseInput = {
+      organizationId,
+      courseId,
+      personId,
+      surface: 'discord' as const,
+      day: '2026-01-01',
+    }
+
+    const [a, b] = await Promise.all([
+      answerQuestion({ ...baseInput, text: 'question a' }, deps),
+      answerQuestion({ ...baseInput, text: 'question b' }, deps),
+    ])
+
+    // Neither call ever saw the other in flight — proof the bound of one
+    // actually serialized them, not merely that both eventually answered.
+    expect(maxConcurrentCalls).toBe(1)
+    expect(a.kind).not.toBe('declined-busy')
+    expect(b.kind).not.toBe('declined-busy')
+  })
+
+  // JOB-4's own test, the other half: a third caller beyond the wait
+  // ceiling is told it could not be served rather than left hanging. A
+  // separate, short-ceilinged gate makes this deterministic and fast: one
+  // caller holds the slot well past the second caller's own wait ceiling.
+  it('a caller beyond the wait ceiling is told it could not be served, and reserves no usage slot', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const logger = createFakeLogger()
+    const admission = createAdmissionGate({ limit: 1, waitMs: 20 })
+
+    const model: ModelClient = {
+      ask: async () => {
+        // Held far longer than the second caller's own 20ms wait ceiling.
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        return { text: 'ok', upstreamThreadId: 'thread-1' }
+      },
+    }
+
+    const deps = { db: testDb.db, model, logger, admission }
+    const baseInput = {
+      organizationId,
+      courseId,
+      personId,
+      surface: 'discord' as const,
+      day: '2026-01-01',
+    }
+
+    const holding = answerQuestion(
+      { ...baseInput, text: 'holds the slot' },
+      deps
+    )
+    // Give the first call a tick to actually acquire the slot before the
+    // second one arrives behind it.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    const declined = await answerQuestion(
+      { ...baseInput, text: 'told, not hanging' },
+      deps
+    )
+
+    expect(declined).toEqual({ kind: 'declined-busy' })
+    // The declined caller reserved nothing (JOB-4 costs nothing, the same
+    // as declined-over-limit) — only the holder's own eventual request (if
+    // any) could have counted against the day's allowance.
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        personId,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBeLessThanOrEqual(1)
+
+    await holding
   })
 })

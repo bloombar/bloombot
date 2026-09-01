@@ -15,6 +15,7 @@
     "@bloombot/core": "*",
     "@bloombot/db": "*",
     "@bloombot/discord": "*",
+    "@bloombot/jobs": "*",
     "@bloombot/logger": "*",
     "@bloombot/openai": "*",
     "discord.js": "^14.27.0"

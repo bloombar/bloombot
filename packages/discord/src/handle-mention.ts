@@ -17,6 +17,7 @@ import {
   type RoutableCourse,
 } from '@bloombot/core'
 import { courses, discordServers, people, type Database } from '@bloombot/db'
+import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import type { InboundMention, ReplyPort } from './dto.js'
@@ -42,6 +43,16 @@ export interface HandleMentionDependencies {
   day: string
   /** The bare name (no `@`) BOT-6 rewrites a mention to. Defaults to `'Bloombot'`; `apps/bot` passes the gateway client's own username instead of hardcoding it here. */
   botDisplayName?: string
+  /**
+   * JOB-4's bound on concurrent model calls, passed straight through to
+   * `answerQuestion`'s own `AnswerDependencies.admission`. Optional, the
+   * same reason it is optional there: `apps/bot`'s own `main()` builds the
+   * real, configured gate once (from `CONFIG.MODEL_ADMISSION_LIMIT`/
+   * `MODEL_ADMISSION_WAIT_MS`) and passes it here; a caller — a test, or a
+   * future surface with no admission story yet — that omits it gets
+   * `answerQuestion`'s own no-bound default.
+   */
+  admission?: AdmissionGate
 }
 
 /**
@@ -65,6 +76,7 @@ export type HandleMentionResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'declined-over-limit' }
+  | { kind: 'declined-busy' }
   | { kind: 'answered'; conversationId: string; messageCount: number }
   | {
       kind: 'answered-last-request'
@@ -80,6 +92,11 @@ export type HandleMentionResult =
 /** BOT-5/SURF-6's refusal text for a request that arrives after the allowance is already spent — `response_bot.py` never sends this at all (BOT-5's own "requests beyond the limit are silently ignored"); SURF-6 requires every outcome reach the student or the log, so this one now reaches the student too. See docs/DECISIONS.md. */
 function overLimitRefusalText(courseTitle: string): string {
   return `You have reached the maximum number of responses for today. See ${courseTitle} admins for help.`
+}
+
+/** Rework finding 1 — JOB-4's own text is "a student who waits is told they are waiting rather than left with silence": a busy, correctly configured course is neither the "answers nothing" nor the "matches no course" case SURF-6 reserves for log-only, so this reaches the student too. */
+function busyRefusalText(): string {
+  return `Bloombot is busy right now. Please try again shortly.`
 }
 
 /** SURF-5 — send `text` through `reply`, split first if it is over Discord's limit, each part awaited in order so the parts cannot arrive out of sequence. Returns how many messages were sent. */
@@ -235,7 +252,12 @@ export async function handleMention(
   // transcript records via `answerQuestion`'s own `text`/`modelText` split.
   const modelText = rewriteMention(input.text, input.botId, botDisplayName)
 
-  const answerDeps: AnswerDependencies = { db, model, logger }
+  const answerDeps: AnswerDependencies = {
+    db,
+    model,
+    logger,
+    ...(deps.admission ? { admission: deps.admission } : {}),
+  }
   const result = await answerQuestion(
     {
       organizationId,
@@ -298,6 +320,21 @@ export async function handleMention(
         'handleMention: dropped, course is not configured to answer'
       )
       return { kind: result.kind }
+    }
+    case 'declined-busy': {
+      // JOB-4/rework finding 1 — no admission slot became free within the
+      // wait ceiling. A busy, correctly configured course is neither of the
+      // two cases SURF-6 reserves for log-only (a course configured to
+      // answer nothing, or a message matching no course), so the student is
+      // told they are waiting rather than left with silence indistinguishable
+      // from the bot being offline — the same "reaches the student" treatment
+      // `declined-over-limit` above already gets.
+      await sendReply(reply, busyRefusalText())
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: declined, no admission slot became free within the wait ceiling'
+      )
+      return { kind: 'declined-busy' }
     }
   }
 }

@@ -6,9 +6,9 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../core" },
-    { "path": "../db" },
-    { "path": "../jobs" },
-    { "path": "../logger" }
+    { "path": "../../packages/config" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/jobs" },
+    { "path": "../../packages/logger" }
   ]
 }

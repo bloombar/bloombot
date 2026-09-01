@@ -572,3 +572,79 @@ export const discordInstallStates = sqliteTable(
     index('discord_install_states_account_id_idx').on(table.accountId),
   ]
 )
+
+// JOB-1..3 — the background queue: anything that cannot finish inside a
+// request (provisioning a server's channels, importing a roster, attaching a
+// knowledge file, duplicating a term) is a row here rather than work held
+// open on an HTTP connection. `organizationId` is carried on every job, the
+// same TEN-1 discipline every other scoped table holds itself to — JOB-1's
+// own text is explicit that a queue must not be a way around it. `kind` and
+// `payload` are deliberately opaque to this table: `kind` selects a handler
+// a caller registered (`packages/jobs`), and `payload` is that handler's own
+// JSON, not a shape this schema tries to model — a handler that reads a
+// foreign id out of its own payload still reaches it only through
+// `repos/**`'s usual organization-scoped functions, so a payload naming
+// another tenant's record is refused the same way any other cross-tenant
+// read or write is (`repos/jobs.ts`'s own module comment has the worked
+// example).
+export const JOB_STATUSES = [
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
+] as const
+export type JobStatus = (typeof JOB_STATUSES)[number]
+
+export const jobs = sqliteTable(
+  'jobs',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    kind: text('kind').notNull(),
+    payload: text('payload').notNull(),
+    status: text('status', { enum: JOB_STATUSES }).notNull(),
+    // How many attempts this job has been claimed for, incremented by
+    // `repos/jobs.ts#claimNextJob` at the moment of claim — attempt 1 is the
+    // first run, not the first retry (JOB-2).
+    attempts: integer('attempts').notNull(),
+    // JOB-2's bound. Set once, from the caller's retry policy, when the job
+    // is enqueued — not read from a platform default here, the same "no
+    // default value is invented" reasoning `courses.maxRequestsPerDay`'s own
+    // comment already applies to a column like this.
+    maxAttempts: integer('max_attempts').notNull(),
+    // When this job next becomes claimable: the enqueue time on a fresh job,
+    // or `now + backoff` after a retryable failure (JOB-2) — always an
+    // explicit value the repo layer sets, never derived from a clock read
+    // inside a query, the same BOT-11 discipline `usage_counters.day`'s own
+    // comment holds itself to.
+    nextAttemptAt: integer('next_attempt_at').notNull(),
+    // JOB-3's lease: who currently holds this job (an opaque worker-instance
+    // id) and until when. Both null when the job is not currently claimed —
+    // pending, succeeded, or failed. A claim whose `claimExpiresAt` has
+    // passed is treated as released, so a worker that dies mid-job does not
+    // strand it (see `repos/jobs.ts#claimNextJob`).
+    claimedBy: text('claimed_by'),
+    claimExpiresAt: integer('claim_expires_at'),
+    // The most recent failure's reason, kept even once a job reaches its
+    // terminal `failed` status — JOB-2's "stays visible with the reason it
+    // stopped, rather than disappearing". Also set (without a status change)
+    // on a retryable failure, so the row shows why the *last* attempt failed
+    // while it waits for the next one.
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    // The shape `claimNextJob`'s own candidate lookup filters and orders
+    // by (`repos/jobs.ts`) — an eligible job is always found by `status`
+    // first, then ordered by `nextAttemptAt`.
+    index('jobs_status_next_attempt_idx').on(table.status, table.nextAttemptAt),
+    index('jobs_organization_id_idx').on(table.organizationId),
+    check(
+      'jobs_status_check',
+      sql`${table.status} in ('pending', 'running', 'succeeded', 'failed')`
+    ),
+  ]
+)

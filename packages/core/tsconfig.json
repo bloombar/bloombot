@@ -5,5 +5,9 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../db" }, { "path": "../logger" }]
+  "references": [
+    { "path": "../db" },
+    { "path": "../jobs" },
+    { "path": "../logger" }
+  ]
 }

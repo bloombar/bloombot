@@ -1,0 +1,19 @@
+{
+  "name": "@bloombot/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The background worker process (JOB-1..5, PLAT-3, PLAT-4): claims, runs and records the outcome of one job at a time through @bloombot/jobs's runNextJob, single-instance like every other process.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@bloombot/config": "*",
+    "@bloombot/db": "*",
+    "@bloombot/jobs": "*",
+    "@bloombot/logger": "*"
+  }
+}

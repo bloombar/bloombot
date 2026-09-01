@@ -49,6 +49,14 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    rows on every `beginDiscordInstall` call, deliberately not scoped to
 //    the one organization that call is for — an abandoned attempt from a
 //    different organization is just as much a dead row worth clearing.
+//  - jobs.ts: JOB-1's queue, the same class one level up again.
+//    `claimNextJob` is a worker claiming *the next* job to run — it has not
+//    resolved an organization yet, the job it happens to claim decides
+//    that, so there is nothing to scope the claim itself by (the same
+//    reasoning `resolveDiscordServerBinding` already gets). `countQueuedJobs`
+//    is `apps/worker`'s own health endpoint's "how deep is the queue"
+//    (JOB-5) — an operational metric about the queue as a whole, the same
+//    class `deleteExpiredInstallStates` already is.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
@@ -57,6 +65,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'consumeInstallState',
     'deleteExpiredInstallStates',
   ],
+  'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
   'memberships.ts': ['listMembershipsForAccount'],
   'sign-in-tokens.ts': [
     'createSignInToken',
@@ -141,7 +150,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twelve repo files this test is written against', () => {
+  it('found the thirteen repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -151,6 +160,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'courses.ts',
         'discord-install-states.ts',
         'discord-servers.ts',
+        'jobs.ts',
         'memberships.ts',
         'organizations.ts',
         'people.ts',

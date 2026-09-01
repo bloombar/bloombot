@@ -338,6 +338,28 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
     expect(reply.sent[0]).toMatch(/reached the maximum number of responses/)
   })
 
+  // Rework finding 1 — a busy course (JOB-4's admission gate never freed a
+  // slot within the wait ceiling) is neither of the two cases SURF-6
+  // reserves for log-only: not a course configured to answer nothing, and
+  // not a message matching no course. The student must be told they are
+  // waiting rather than left with silence indistinguishable from the bot
+  // being offline (JOB-4's own text). Before this fix, `declined-busy`
+  // logged and returned without ever calling `reply`, so `reply.sent` stayed
+  // empty here.
+  it('renders "declined-busy" as a refusal reaching the student, not silence', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db)
+    const neverGrants = { acquire: async () => ({ granted: false as const }) }
+    const { deps, model, reply } = makeDeps(testDb, { admission: neverGrants })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'declined-busy' })
+    expect(model.calls).toHaveLength(0) // never reached the model
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toMatch(/busy/i)
+  })
+
   it('renders "failed-with-apology" when the model call fails', async () => {
     testDb = createTestDatabase()
     const { guildId } = seedBoundServerWithCourse(testDb.db)

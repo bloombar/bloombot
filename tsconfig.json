@@ -14,9 +14,11 @@
     { "path": "./packages/discord" },
     { "path": "./packages/discord-rest" },
     { "path": "./packages/actions" },
+    { "path": "./packages/jobs" },
     { "path": "./apps/bot" },
     { "path": "./apps/api" },
     { "path": "./apps/web" },
+    { "path": "./apps/worker" },
     { "path": "./tsconfig.tests.json" }
   ]
 }

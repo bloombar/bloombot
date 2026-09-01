@@ -25,6 +25,28 @@
  * directly with a `courseId` they resolved themselves, never through
  * routing — so this function guards both cases itself rather than trusting
  * every caller to have checked first.
+ *
+ * JOB-4 — admission bounds how many calls to `model.ask` run at once. It is
+ * acquired *before* `reserveUsageSlot`, not around `model.ask` alone: see
+ * this file's own `answerQuestion` comment for why, and `docs/DECISIONS.md`
+ * for the fuller reasoning. `deps.admission` is optional and, when omitted,
+ * defaults to `NO_ADMISSION_LIMIT` below — a gate that always grants
+ * immediately, applying no bound at all. That default is deliberate, not
+ * merely convenient: `@bloombot/config`'s `MODEL_ADMISSION_LIMIT`/
+ * `MODEL_ADMISSION_WAIT_MS` are what a *real* bound is configured from, but
+ * reading them here — even lazily — would give this file the same
+ * environment-validating side effect `@bloombot/config`'s own `CONFIG`
+ * proxy has (a missing `PUBLIC_APP_URL`, say, throws), which every existing
+ * caller of `answerQuestion` — every test in this package, `@bloombot/discord`'s
+ * own test suite, `@bloombot/openai`'s integration test — would suddenly
+ * have to satisfy just to answer a question with a `FakeModelClient` and no
+ * database concurrency at all. CORE-4's own "dependencies as arguments"
+ * rule exists exactly to prevent that: the real, configured gate is built
+ * once, from `CONFIG`, by whichever process actually runs concurrent
+ * traffic (`apps/bot`'s own `main()`, mirroring how it already builds
+ * `model` from `CONFIG.OPENAI_API_KEY`) and handed down through
+ * `@bloombot/discord`'s own `HandleMentionDependencies.admission` — this
+ * file only has to expose the seam, not decide when it is real.
  */
 
 import {
@@ -35,12 +57,24 @@ import {
   type Database,
 } from '@bloombot/db'
 import type { schema } from '@bloombot/db'
+import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import { ModelAskError, type ModelClient } from './ports.js'
 
 /** BOT-5's platform default, applied here — the layer D-13 named as responsible for it — for a course whose `maxRequestsPerDay` was never configured (`null`). */
 const DEFAULT_MAX_REQUESTS_PER_DAY = 10 // BOT-5
+
+/**
+ * `deps.admission`'s default (this file's own module comment has the full
+ * reasoning): always grants immediately, applying no bound. A single,
+ * shared, stateless instance — `release` is a no-op, so nothing about
+ * sharing it across calls is unsafe the way sharing a real gate's internal
+ * counter across unrelated tests would be.
+ */
+const NO_ADMISSION_LIMIT: AdmissionGate = {
+  acquire: async () => ({ granted: true, release: () => {} }),
+}
 
 /** What one call to `answerQuestion` needs — the organization, course, person, surface and text CORE-1 names. */
 export interface AnswerQuestionInput {
@@ -70,6 +104,8 @@ export interface AnswerDependencies {
   db: Database
   model: ModelClient
   logger: Logger
+  /** JOB-4's bound on concurrent model calls. Defaults to `NO_ADMISSION_LIMIT` (this file's own module comment) when omitted — a test that wants to observe or control admission passes its own instead, and a real process wires its own configured gate through (`apps/bot`'s own `main()`). */
+  admission?: AdmissionGate
 }
 
 /**
@@ -82,6 +118,11 @@ export interface AnswerDependencies {
  *    (CORE-3).
  *  - `declined-over-limit` — past the allowance; no model call was made and
  *    nothing was recorded (CORE-3's "costs nothing").
+ *  - `declined-busy` — JOB-4: no admission slot became free within the wait
+ *    ceiling; no allowance was reserved and nothing was recorded, the same
+ *    "costs nothing" treatment `declined-over-limit` gets, and for the same
+ *    reason — see this file's own `answerQuestion` comment for why
+ *    admission is acquired *before* the allowance is reserved.
  *  - `failed-with-apology` — the model call raised; the reply is a plain
  *    apology pointing at the course's staff (CORE-5). `lastRequestOfDay`
  *    carries the fact this request also reached the allowance (finding 7 of
@@ -100,6 +141,7 @@ export type AnswerResult =
   | { kind: 'answered'; conversationId: string; text: string }
   | { kind: 'answered-last-request'; conversationId: string; text: string }
   | { kind: 'declined-over-limit' }
+  | { kind: 'declined-busy' }
   | {
       kind: 'failed-with-apology'
       conversationId: string
@@ -121,22 +163,45 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
 
 /**
  * Answer one question. In order (CORE-1's brief, as reworked by findings 1,
- * 3 and 8):
+ * 3 and 8, and by JOB-4):
  *
  * 1. Guard the course itself — disabled, or not configured to answer at all
  *    — before anything else runs, matching `response_bot.py`'s own early
  *    return (`response_bot.py:208`).
- * 2. Reserve a slot against the allowance (CORE-3), atomically, before
+ * 2. Wait for an admission slot (JOB-4), before the allowance is touched at
+ *    all. Ordering this ahead of step 3, not around step 5's model call
+ *    alone, is deliberate: the alternative — reserve the allowance first,
+ *    then wait behind admission — lets a request spend a day's slot while
+ *    it is still queued, and a caller that times out waiting (`declined-
+ *    busy`, below) would have paid for an answer it never got. There is no
+ *    `usage.ts` operation that gives an already-reserved slot back, so
+ *    "reserve, then maybe wait" cannot be undone if the wait fails — while
+ *    "wait, then reserve" costs nothing when the wait itself is what fails.
+ *    The cost of that ordering: a queued request holds no allowance and
+ *    counts as nothing yet, so a very busy course could in principle let
+ *    more distinct people queue than its daily limit alone would predict,
+ *    each waiting its turn rather than one holding a reservation while the
+ *    rest are refused outright. JOB-4's own text — "wait for a slot rather
+ *    than failing" — is exactly that trade, made on purpose.
+ * 3. Reserve a slot against the allowance (CORE-3), atomically, before
  *    anything else is read or written, so an over-limit request costs
  *    nothing and two requests racing the model call's own `await` cannot
  *    both be granted (finding 8 — see `packages/db/repos/usage.ts`'s
  *    `reserveUsageSlot`).
- * 3. Record the inbound message (CORE-6) — before the model is asked, so a
+ * 4. Record the inbound message (CORE-6) — before the model is asked, so a
  *    question the model never answers is still on the transcript (CORE-5).
- * 4. Ask the model, through the port (CORE-4).
- * 5. Record the reply (CORE-6), and return a result.
+ * 5. Ask the model, through the port (CORE-4).
+ * 6. Record the reply (CORE-6), and return a result.
  *
- * A failure to record (step 3 or step 5), or to persist the model's own
+ * The admission slot step 2 acquired is released in a single `finally`
+ * covering steps 3 through 6 as one unit, not the instant step 5's call
+ * settles: releasing the moment `model.ask` resolves would mean every early
+ * exit between here and there (an over-limit decline, a conversation that
+ * fails to open) would also have to remember its own release, and "nothing
+ * forgets to release" is worth more than shaving the hold time by the cost
+ * of a few synchronous local database writes.
+ *
+ * A failure to record (step 4 or step 6), or to persist the model's own
  * upstream thread id, is logged and never stops the reply (CORE-6): every
  * write from here on is wrapped so a broken database write degrades to a
  * log line, not a lost answer.
@@ -180,209 +245,233 @@ export async function answerQuestion(
     return { kind: 'not-configured' }
   }
 
-  // BOT-5's default, applied here (D-13 named this the layer responsible for
-  // it): a course that never configured `maxRequestsPerDay` is capped at
-  // `DEFAULT_MAX_REQUESTS_PER_DAY`, not left unlimited.
-  const limit = course.maxRequestsPerDay ?? DEFAULT_MAX_REQUESTS_PER_DAY
-
-  // CORE-3/finding 8 — the allowance check and the count that enforces it
-  // are the same atomic statement, reserved before the model is ever asked:
-  // an over-limit request costs nothing (no conversation, no write, no
-  // model call), and two requests from the same person arriving close
-  // together cannot both be granted by racing the `await` below.
-  const reservation = usage.reserveUsageSlot(
-    organizationId,
-    courseId,
-    personId,
-    day,
-    limit,
-    db
-  )
-  if (!reservation) {
-    throw new Error(
-      `answerQuestion: could not reserve a usage slot for course ${courseId} and person ${personId} in organization ${organizationId}`
-    )
-  }
-  if (!reservation.granted) {
+  // JOB-4 — waits for a slot, up to the configured ceiling, before the
+  // allowance is touched at all (this function's own module comment has
+  // the ordering reasoning). Declining here costs nothing: no reservation,
+  // no conversation, no write, no model call — the same "costs nothing"
+  // shape `declined-over-limit` below already takes.
+  const admission = deps.admission ?? NO_ADMISSION_LIMIT
+  const admitted = await admission.acquire()
+  if (!admitted.granted) {
     logger.info(
-      { organizationId, courseId, personId, day, limit },
-      'answerQuestion: declined, daily allowance already exhausted'
+      { organizationId, courseId, personId },
+      'answerQuestion: declined, no admission slot became free within the wait ceiling'
     )
-    return { kind: 'declined-over-limit' }
-  }
-  // This request reaches (but does not pass) the allowance — known now,
-  // before the model is asked, so it can be carried on whichever result
-  // comes back, including a failed one (finding 7).
-  const isLastRequestOfDay = reservation.count === limit
-
-  const conversation = conversations.getOrCreateConversation(
-    organizationId,
-    { courseId, personId, surface },
-    db
-  )
-  if (!conversation) {
-    throw new Error(
-      `answerQuestion: could not open a conversation for course ${courseId} and person ${personId} in organization ${organizationId}`
-    )
+    return { kind: 'declined-busy' }
   }
 
-  // CORE-1/CORE-6 — recorded before the model is asked, so it is on the
-  // transcript even if the model call below fails (CORE-5). DATA-4's
-  // Discord context travels with it, the same as the reply below (finding
-  // 6) — both directions of one exchange carry the same context.
+  // JOB-4 — everything from here through the end of this function runs
+  // with the admission slot above held; `finally` releases it once this
+  // whole block finishes, success, decline or throw alike (this function's
+  // own module comment says why this is one release rather than one per
+  // early exit).
   try {
-    conversations.appendMessage(
+    // BOT-5's default, applied here (D-13 named this the layer responsible for
+    // it): a course that never configured `maxRequestsPerDay` is capped at
+    // `DEFAULT_MAX_REQUESTS_PER_DAY`, not left unlimited.
+    const limit = course.maxRequestsPerDay ?? DEFAULT_MAX_REQUESTS_PER_DAY
+
+    // CORE-3/finding 8 — the allowance check and the count that enforces it
+    // are the same atomic statement, reserved before the model is ever asked:
+    // an over-limit request costs nothing (no conversation, no write, no
+    // model call), and two requests from the same person arriving close
+    // together cannot both be granted by racing the `await` below.
+    const reservation = usage.reserveUsageSlot(
       organizationId,
-      conversation.id,
-      {
-        direction: 'from_person',
-        content: text,
-        surface,
-        channelRef: input.channelRef ?? null,
-        categoryRef: input.categoryRef ?? null,
-      },
+      courseId,
+      personId,
+      day,
+      limit,
       db
     )
-  } catch (error) {
-    logger.error(
-      { err: error, organizationId, conversationId: conversation.id },
-      'answerQuestion: failed to record the inbound message'
-    )
-  }
-
-  // Finding 1 of the MDL-1 rework (D-16) — resolved once per turn so a new
-  // upstream conversation's opening item can say who is asking and which
-  // course they are in, the same information `response_bot.py` seeds with
-  // (`response_bot.py:262-269`). `getPerson` cannot come back empty here:
-  // PPL-3 already created this person before `personId` ever reached this
-  // function, the same trust CORE-2/PPL-3 hold everywhere else in this
-  // file — a display name simply not merged in yet reads as `null`, which
-  // the port's own contract already treats as "seed without one".
-  const person = people.getPerson(organizationId, personId, db)
-  const identity = people.getPersonIdentity(
-    organizationId,
-    personId,
-    surface,
-    db
-  )
-
-  // CORE-4 — the model is asked through the port, never a vendor SDK.
-  // `modelText` (finding 10), not `text`: a surface may have rewritten the
-  // question before sending it (BOT-6's mention rewriting) without that
-  // rewrite reaching the transcript above.
-  let replyText: string
-  let newUpstreamThreadId: string | null = null
-  let failed = false
-  try {
-    const modelAnswer = await model.ask({
-      promptId: course.promptId,
-      instructions: course.instructions,
-      vectorStoreId: course.vectorStoreId,
-      model: course.model,
-      upstreamThreadId: conversation.upstreamThreadId,
-      question: modelText,
-      displayName: person?.displayName ?? null,
-      courseTitle: course.title,
-      personRef: identity ? `<@${identity.externalId}>` : null,
-    })
-    replyText = isLastRequestOfDay
-      ? withLastRequestNotice(course.title, modelAnswer.text)
-      : modelAnswer.text
-    newUpstreamThreadId = modelAnswer.upstreamThreadId
-  } catch (error) {
-    // CORE-5 — logged with its cause, and the reply degrades to a plain
-    // apology rather than silence or the raw error reaching the person.
-    logger.error(
-      { err: error, organizationId, courseId, personId },
-      'answerQuestion: model call failed'
-    )
-    replyText = apologyText(course.title)
-    failed = true
-    // Finding 6 of the MDL-1 rework — a call that already minted a new
-    // upstream conversation id before failing must not orphan it:
-    // `ModelAskError` (`ports.ts`) carries the id across the throw, and the
-    // write below persists it exactly the way a successful call's own id
-    // is persisted, so the next turn resumes it instead of creating (and
-    // failing to use) yet another one.
-    if (error instanceof ModelAskError) {
-      newUpstreamThreadId = error.upstreamThreadId
+    if (!reservation) {
+      throw new Error(
+        `answerQuestion: could not reserve a usage slot for course ${courseId} and person ${personId} in organization ${organizationId}`
+      )
     }
-  }
+    if (!reservation.granted) {
+      logger.info(
+        { organizationId, courseId, personId, day, limit },
+        'answerQuestion: declined, daily allowance already exhausted'
+      )
+      return { kind: 'declined-over-limit' }
+    }
+    // This request reaches (but does not pass) the allowance — known now,
+    // before the model is asked, so it can be carried on whichever result
+    // comes back, including a failed one (finding 7).
+    const isLastRequestOfDay = reservation.count === limit
 
-  // CONV-1 — "the model's own context can be resumed" (D-13's own text for
-  // why this write exists at all). Finding 4: guarded like the two
-  // `appendMessage` calls around it, so a database write failing here
-  // degrades to a log line rather than losing the answer the model already
-  // produced — the allowance was already reserved above, so nothing here
-  // can cost more than an un-resumable next turn.
-  if (newUpstreamThreadId) {
+    const conversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId, personId, surface },
+      db
+    )
+    if (!conversation) {
+      throw new Error(
+        `answerQuestion: could not open a conversation for course ${courseId} and person ${personId} in organization ${organizationId}`
+      )
+    }
+
+    // CORE-1/CORE-6 — recorded before the model is asked, so it is on the
+    // transcript even if the model call below fails (CORE-5). DATA-4's
+    // Discord context travels with it, the same as the reply below (finding
+    // 6) — both directions of one exchange carry the same context.
     try {
-      conversations.setUpstreamThreadId(
+      conversations.appendMessage(
         organizationId,
         conversation.id,
-        newUpstreamThreadId,
+        {
+          direction: 'from_person',
+          content: text,
+          surface,
+          channelRef: input.channelRef ?? null,
+          categoryRef: input.categoryRef ?? null,
+        },
         db
       )
     } catch (error) {
       logger.error(
         { err: error, organizationId, conversationId: conversation.id },
-        'answerQuestion: failed to record the upstream thread id'
+        'answerQuestion: failed to record the inbound message'
       )
     }
-  }
 
-  // CORE-6 — recorded after the model call regardless of outcome, and a
-  // failure to record here still returns the reply below. DATA-4's Discord
-  // context travels with the reply too (finding 6), not just the question.
-  try {
-    conversations.appendMessage(
+    // Finding 1 of the MDL-1 rework (D-16) — resolved once per turn so a new
+    // upstream conversation's opening item can say who is asking and which
+    // course they are in, the same information `response_bot.py` seeds with
+    // (`response_bot.py:262-269`). `getPerson` cannot come back empty here:
+    // PPL-3 already created this person before `personId` ever reached this
+    // function, the same trust CORE-2/PPL-3 hold everywhere else in this
+    // file — a display name simply not merged in yet reads as `null`, which
+    // the port's own contract already treats as "seed without one".
+    const person = people.getPerson(organizationId, personId, db)
+    const identity = people.getPersonIdentity(
       organizationId,
-      conversation.id,
-      {
-        direction: 'to_person',
-        content: replyText,
-        surface,
-        channelRef: input.channelRef ?? null,
-        categoryRef: input.categoryRef ?? null,
-      },
+      personId,
+      surface,
       db
     )
-  } catch (error) {
-    logger.error(
-      { err: error, organizationId, conversationId: conversation.id },
-      'answerQuestion: failed to record the reply'
-    )
-  }
 
-  if (failed) {
+    // CORE-4 — the model is asked through the port, never a vendor SDK.
+    // `modelText` (finding 10), not `text`: a surface may have rewritten the
+    // question before sending it (BOT-6's mention rewriting) without that
+    // rewrite reaching the transcript above.
+    let replyText: string
+    let newUpstreamThreadId: string | null = null
+    let failed = false
+    try {
+      const modelAnswer = await model.ask({
+        promptId: course.promptId,
+        instructions: course.instructions,
+        vectorStoreId: course.vectorStoreId,
+        model: course.model,
+        upstreamThreadId: conversation.upstreamThreadId,
+        question: modelText,
+        displayName: person?.displayName ?? null,
+        courseTitle: course.title,
+        personRef: identity ? `<@${identity.externalId}>` : null,
+      })
+      replyText = isLastRequestOfDay
+        ? withLastRequestNotice(course.title, modelAnswer.text)
+        : modelAnswer.text
+      newUpstreamThreadId = modelAnswer.upstreamThreadId
+    } catch (error) {
+      // CORE-5 — logged with its cause, and the reply degrades to a plain
+      // apology rather than silence or the raw error reaching the person.
+      logger.error(
+        { err: error, organizationId, courseId, personId },
+        'answerQuestion: model call failed'
+      )
+      replyText = apologyText(course.title)
+      failed = true
+      // Finding 6 of the MDL-1 rework — a call that already minted a new
+      // upstream conversation id before failing must not orphan it:
+      // `ModelAskError` (`ports.ts`) carries the id across the throw, and the
+      // write below persists it exactly the way a successful call's own id
+      // is persisted, so the next turn resumes it instead of creating (and
+      // failing to use) yet another one.
+      if (error instanceof ModelAskError) {
+        newUpstreamThreadId = error.upstreamThreadId
+      }
+    }
+
+    // CONV-1 — "the model's own context can be resumed" (D-13's own text for
+    // why this write exists at all). Finding 4: guarded like the two
+    // `appendMessage` calls around it, so a database write failing here
+    // degrades to a log line rather than losing the answer the model already
+    // produced — the allowance was already reserved above, so nothing here
+    // can cost more than an un-resumable next turn.
+    if (newUpstreamThreadId) {
+      try {
+        conversations.setUpstreamThreadId(
+          organizationId,
+          conversation.id,
+          newUpstreamThreadId,
+          db
+        )
+      } catch (error) {
+        logger.error(
+          { err: error, organizationId, conversationId: conversation.id },
+          'answerQuestion: failed to record the upstream thread id'
+        )
+      }
+    }
+
+    // CORE-6 — recorded after the model call regardless of outcome, and a
+    // failure to record here still returns the reply below. DATA-4's Discord
+    // context travels with the reply too (finding 6), not just the question.
+    try {
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        {
+          direction: 'to_person',
+          content: replyText,
+          surface,
+          channelRef: input.channelRef ?? null,
+          categoryRef: input.categoryRef ?? null,
+        },
+        db
+      )
+    } catch (error) {
+      logger.error(
+        { err: error, organizationId, conversationId: conversation.id },
+        'answerQuestion: failed to record the reply'
+      )
+    }
+
+    if (failed) {
+      return {
+        kind: 'failed-with-apology',
+        conversationId: conversation.id,
+        text: replyText,
+        lastRequestOfDay: isLastRequestOfDay,
+      }
+    }
+
+    // BOT-10 — the one INFO line a surface cannot reproduce on its own: only
+    // this function knows both the count `reserveUsageSlot` just granted and
+    // the limit it was granted against.
+    logger.info(
+      {
+        organizationId,
+        courseId,
+        personId,
+        conversationId: conversation.id,
+        promptId: course.promptId,
+        answer: replyText,
+        count: reservation.count,
+        limit,
+      },
+      'answerQuestion: answered'
+    )
+
     return {
-      kind: 'failed-with-apology',
+      kind: isLastRequestOfDay ? 'answered-last-request' : 'answered',
       conversationId: conversation.id,
       text: replyText,
-      lastRequestOfDay: isLastRequestOfDay,
     }
-  }
-
-  // BOT-10 — the one INFO line a surface cannot reproduce on its own: only
-  // this function knows both the count `reserveUsageSlot` just granted and
-  // the limit it was granted against.
-  logger.info(
-    {
-      organizationId,
-      courseId,
-      personId,
-      conversationId: conversation.id,
-      promptId: course.promptId,
-      answer: replyText,
-      count: reservation.count,
-      limit,
-    },
-    'answerQuestion: answered'
-  )
-
-  return {
-    kind: isLastRequestOfDay ? 'answered-last-request' : 'answered',
-    conversationId: conversation.id,
-    text: replyText,
+  } finally {
+    admitted.release()
   }
 }

@@ -1,0 +1,34 @@
+{
+  "name": "@bloombot/legacy-import",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-shot importer of the legacy bot_config.yml and its SQLite snapshot into the platform schema (MIG-1..4).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "legacy:import": "npm run build && node dist/cli.js"
+  },
+  "dependencies": {
+    "@bloombot/config": "*",
+    "@bloombot/db": "*",
+    "@bloombot/logger": "*",
+    "@bloombot/schemas": "*",
+    "better-sqlite3": "^13.0.3",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}

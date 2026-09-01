@@ -466,3 +466,63 @@ name but `displayName` should not, say) — neither function here expresses that
   unrecorded conversation. Every other tenant-checked function in this package already returns `undefined` for an
   id that does not belong to the calling organization; this brings `hasExhaustedDailyLimit` in line with that
   convention instead of leaving it as the one function that answers a foreign id with "no".
+
+---
+
+## D-14 — `packages/legacy-import`: idempotency keys, the shared path guard, and what "the same snapshot into two organizations" means
+
+**Problem.** MIG-4 requires that re-running the importer against the same snapshot change nothing the second
+time. Most rows have a natural key already in the schema to match on — a course's title within its project, a
+person's Discord snowflake on `person_identities` — but `messages` has none: two distinct legacy rows can carry
+identical content, category, channel and direction, and `packages/db` takes caller-generated ids rather than
+inventing its own.
+
+**Choice — a deterministic message id.** `import-messages.ts` derives each imported message's id from
+`(organizationId, the legacy row's own autoincrement id)`, hashed through `ids.ts#deterministicId` (SHA-256,
+truncated, prefixed for readability). Before appending, it checks the target conversation's own transcript
+(`getTranscript`, read once per conversation and cached for the rest of the run) for that id; if it is already
+there, the row is reported `matched` and nothing is written. `organizationId` is folded into the hash — not just
+the legacy row's id — specifically so two different organizations can each import the same snapshot without their
+message ids colliding on the single, non-tenant-partitioned `messages.id` primary key.
+
+**Why not a content hash instead of the legacy row's id.** A hash of `(category, channel, direction, content)`
+would collide for two genuinely different messages with identical text (a repeated "thanks!"), silently dropping
+the second one on both the first _and_ every later run. The legacy row's own autoincrement id has no such
+collision, and it is already the thing this package uses to order the transcript (`read-legacy.ts#readLegacyMessages`
+reads `order by id asc`), so reusing it for identity as well as ordering is one fact, not two.
+
+**The organization and project id/name choice, made for the same reason.** `import-config.ts` derives the
+organization's id deterministically from `bot_config.yml`'s `server.name` (there is no `organizations.name`
+uniqueness constraint to look up against, so the id itself has to be the stable thing a re-run can find again),
+and looks the project up by name inside that organization rather than needing a second deterministic id. Both
+default to `server.name` — the legacy format has no explicit term field, and the role-name suffixes that hint at
+one (`admins-wd-su26` vs `admins-py-s26` in the same file) are inconsistently abbreviated across courses, which
+is exactly the "looks right, is wrong for a config nobody has tested this against yet" trap D-10 already declined
+for the YAML schema itself. `importConfig` accepts an optional `projectName` override for a caller that wants
+something more specific (an actual term, for a later re-import).
+
+**What "the same snapshot into two different organizations" means, concretely.** Since the organization id is
+derived from `server.name` and not from the snapshot path, running the importer twice with the _same_ snapshot
+file but two _different_ `bot_config.yml`s (different `server.name`) produces two organizations, each fully and
+independently populated — person and course lookups are scoped by `organizationId` (TEN-2), so the second
+organization's import sees none of the first's rows and re-creates its own complete copy, with its own message
+ids (they embed `organizationId`, so nothing collides on the shared `messages` table). Running the importer twice
+with the _same_ YAML — and therefore the same derived organization id — is the ordinary MIG-4 idempotent case
+above, not a second organization.
+
+**The path guard, extracted rather than duplicated.** MIG-1's refusal ("never open the live database") needed
+the same real-path-resolution logic `db:migrate`'s `assertMigratablePath` already had
+(`packages/db/src/run-migrate.ts`) — follow symlinks, tolerate a not-yet-existing target, compare against this
+repository's own `data/` directory. Rather than writing a second, subtly different version of that logic inside
+`packages/legacy-import`, it was pulled out into `packages/db/src/path-guard.ts` and both callers now use it:
+`run-migrate.ts` still layers its own `--i-know` override on top for an operator who genuinely needs to migrate
+the live file, while `packages/legacy-import/src/guard.ts` calls the same `isUnderRepoData` with no override at
+all — there is no legitimate reason for an import to ever touch the live database, so no escape hatch was added
+for it.
+
+**Limits.** The deterministic message id is stable only for as long as the legacy row's own autoincrement id is
+stable, which holds for a read-only snapshot but would not survive, say, re-exporting the legacy database with
+its ids renumbered. The organization-id-from-`server.name` scheme means renaming the Discord server in
+`bot_config.yml` between two runs of the importer against the _same_ underlying course would be read as "a new
+organization," not "the same one, renamed" — acceptable for a one-shot migration tool, but worth knowing if this
+importer is ever pressed into service as a recurring sync rather than a single cutover.

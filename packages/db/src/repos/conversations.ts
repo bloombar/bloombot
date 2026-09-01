@@ -247,6 +247,15 @@ export interface NewMessage {
   surface?: Surface | null
   channelRef?: string | null
   categoryRef?: string | null
+  /**
+   * Defaults to `Date.now()` when omitted — the normal case, a message
+   * being recorded as it happens. `packages/legacy-import` (MIG-3) is the
+   * one caller that supplies this explicitly: a transcript imported from
+   * the legacy database keeps the timestamp the message actually occurred
+   * at, not the moment it was imported, which would make the transcript
+   * useless as the record it exists to be.
+   */
+  createdAt?: number
 }
 
 /**
@@ -286,7 +295,7 @@ export function appendMessage(
   if (!conversation) return undefined
 
   return db.transaction((tx) => {
-    const createdAt = Date.now()
+    const createdAt = input.createdAt ?? Date.now()
     const previous = tx
       .select({ sequence: messages.sequence })
       .from(messages)

@@ -1899,3 +1899,84 @@ process-local, in-memory state: the real ceiling on concurrent model calls *plat
 every process that answers, not `MODEL_ADMISSION_LIMIT` alone. Acceptable for the single-droplet, few-process
 topology this platform runs today (`D-2`'s own "single-host" scope); revisit if answering ever runs from more
 than one process concurrently, or if the ceiling needs to be enforced platform-wide rather than per process.
+
+## D-30 — `packages/discord-rest`/`apps/worker`/`packages/db`/`packages/jobs`: server scaffolding is the queue's first real consumer, "never delete" is structural, and a job's result rides the row
+
+**Problem.** `SRV-6..8` move `hydrate_server.py` behind an action and onto the job queue `D-29` built —
+`apps/worker`'s own registry started this build with no real handler in it, so this is also the first proof
+that a handler can actually be written against `runNextJob`'s contract (the claim, the lease, the handler
+timeout) rather than only against a stand-in in `packages/jobs`'s own tests. Three things needed a choice the
+brief did not settle on its own: how "never delete" is *enforced* rather than merely asked for, what happens
+when a course and a guild disagree about a name, and what a Discord failure partway through a run means given
+the lease and the handler timeout `D-29`'s rework already put in place.
+
+**Choice, on "never delete."** `SRV-8` is enforced structurally, not by convention: `packages/discord-rest`'s
+`DiscordRestClient` (`client.ts`) has no method that edits or deletes a category or channel at all — only
+`listGuildChannels`, `listGuildRoles`, `createGuildCategory` and `createGuildChannel`. There is nothing for
+`apps/worker/src/handlers/discord-scaffold.ts` to call even if it wanted to remove a category the course no
+longer declares; `undeclaredCategories` in its own `ScaffoldReport` names one, but the handler is refused the
+means to act on that name beyond reporting it. This is the same "refuse structurally, not by remembering a
+rule" discipline `TEN-3`'s primary-key binding and `courses.ts`'s partial unique indexes already apply
+elsewhere in this codebase — a reviewer can confirm `SRV-8` by reading one interface's method list rather than
+auditing every call site that touches it. The test suite backs this twice: `DiscordRestClient`'s own missing
+methods (a compile-time fact — nothing in `apps/worker` can even name a delete call) and, at the fake level,
+`FakeDiscordGuildServer` (`apps/worker/tests/helpers/`) and `FakeDiscordServer`
+(`packages/discord-rest/tests/helpers/`) implement no route that would honour one, so a test can assert zero
+`DELETE`/`PATCH` requests reached the fake at all, not merely that the handler's own report looked right.
+
+**Choice, on matching by name.** A course's categories and channels carry no Discord id of their own
+(`schema.ts`'s `course_categories`/`course_channels` — nothing this platform writes back once created), so the
+only way to ask "does this already exist" is by name — case- and whitespace-insensitive, the same
+normalization `discord_manager.py`'s own `get_category_id`/`get_channel_id` already apply, carried over rather
+than redesigned. **What happens when two categories share a name:** nothing distinguishes them to this match,
+so the first one found in the guild's own channel list wins, and every later request for that name — a second
+declared category with the same name, or the placeholder/channel-creation loop re-checking after a create —
+is treated as "already present" against that same row, even where a stricter implementation might insist on a
+one-to-one correspondence. This is a deliberate simplification, not an oversight: an instructor names a
+course's own categories and has every reason not to reuse a name within one course (a duplicate is far more
+likely a copy-paste mistake than an intentional two-category design), and `courses.save`
+(`packages/actions/src/actions/courses.ts`) does not police category-name uniqueness within a course either —
+scaffolding matching that same looseness one level down is consistent, not a new gap. Revisit if a real course
+config is ever found relying on two identically-named categories meaning two different things.
+
+**Choice, on a guild unreachable mid-run.** `createDiscordScaffoldHandler`'s own function does nothing special
+for a Discord failure — a rate limit, a transport error, the guild becoming unreachable partway through a
+run — beyond letting it propagate as a thrown error out of the handler. `JOB-2`'s ordinary retry/backoff (built
+in the previous slice, `D-29`) takes it from there: the attempt fails, and — attempts remaining — is
+rescheduled with backoff. What makes that safe, rather than merely convenient, is the same by-name matching
+above: a retried attempt re-lists the guild's channels and re-resolves roles from scratch, so whatever the
+failed attempt already created (say, three of a course's five declared channels, before the fourth `POST`
+failed) is found "already present" on the retry rather than recreated — `SRV-7`'s idempotence is exactly what
+makes a partial failure resumable without special-casing resumption. The same reasoning covers `D-29`'s own
+open question about `JOB_HANDLER_TIMEOUT_MS` firing on a handler still running underneath it
+(`packages/jobs/src/runner.ts`'s own module comment): a scaffold call that is timed out by `runNextJob` while
+still genuinely in flight against Discord may still create a category or channel *after* the row has already
+been marked failed or rescheduled — the next attempt (a retry, or a second worker reclaiming the row once the
+lease lapses) simply finds it already there and moves on, the general obligation `D-29`'s rework already
+placed on every future handler, now concretely satisfied by this one.
+
+**Choice, on where a handler's report lives.** `SRV-6..8`'s brief asks for "a way to see the outcome," which
+needs the report to outlive the handler call that produced it — `apps/worker`'s own process, and the
+in-memory `ScaffoldReport` it returns, are both gone by the time a caller asks. Rather than a new table, `jobs`
+(`packages/db/src/schema.ts`) gained one nullable column, `result`, the same "opaque JSON, not this table's to
+interpret" treatment `payload` already gets (that column's own comment). `repos/jobs.ts#completeJob` grew an
+optional `result` argument that serializes it in the same write that flips the row to `succeeded` — one
+transaction, not a second write after, so there is no window where a job is `succeeded` with no report yet.
+`packages/jobs`'s `JobHandler` type changed from `Promise<void>` to `Promise<unknown>` to carry this: a
+handler that still returns nothing leaves `result` `null`, exactly as before, so this is additive for every
+existing handler shape, not a breaking one. `@bloombot/actions`' `jobs.get` read action is the far end of that
+pipe — a generic read over any job, not one written specifically for scaffolding, since the same "how do I
+find out what happened" question applies to every future job-backed action (`ROST-*`'s roster import,
+`KNOW-*`'s knowledge-file attachment) exactly the way it applies to this one.
+
+**Limits.** `getActiveDiscordServerBindingForOrganization` (`repos/discord-servers.ts`) resolves a job's
+`courseId`-only payload to a guild by assuming an organization holds exactly one active Discord server
+binding — true of every organization this build creates today, but not a constraint `discord_server_bindings`
+itself enforces (an organization *can* hold more than one active binding; `TEN-3` only says a server belongs to
+at most one organization, not the reverse). Two active bindings resolve to `undefined`, refusing the whole
+scaffold job the same way "no binding at all" does, rather than guessing which guild a course belongs to. If a
+real deployment ever needs one organization teaching across multiple Discord servers, a course will need its
+own explicit server reference — this slice does not add one, since nothing in `SRV-6..8`'s own text calls for
+it and speculative schema is exactly what `CLAUDE.md`'s "do not add abstraction for a future the brief did not
+describe" warns against.
+than one process concurrently, or if the ceiling needs to be enforced platform-wide rather than per process.

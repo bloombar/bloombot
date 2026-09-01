@@ -1,0 +1,154 @@
+/**
+ * Test helper: a loopback stand-in for the four SRV-6 guild-management
+ * endpoints `discord-scaffold.ts`'s handler calls through
+ * `@bloombot/discord-rest` — `GET`/`POST /guilds/{id}/channels` and `GET
+ * /guilds/{id}/roles` — bound to `127.0.0.1:0` so the OS picks a free port
+ * and no test in this app reaches the real network. Duplicated from
+ * `packages/discord-rest/tests/helpers/fake-discord-server.ts` rather than
+ * imported across a package boundary test helpers are not published
+ * through (that file's own module comment states the same convention),
+ * narrowed to only the endpoints this app's own handler actually calls —
+ * no `/token` or `/users/@me/guilds`, since this process never does an
+ * OAuth exchange.
+ *
+ * Stateful, not fixed responses: `POST /guilds/{id}/channels` actually
+ * appends the created category or channel to this fake's own per-guild
+ * store and echoes it back, so a second `GET`/`POST` against the same guild
+ * — including a second full run of the handler, in the same test — sees
+ * exactly what the first call created. That is what lets SRV-7's
+ * idempotence test assert against this fake's own recorded requests (zero
+ * creates on a second run), not only against the handler's own report.
+ * This fake implements no route that edits or deletes a channel or
+ * category — SRV-8's "never delete" has nothing to call even if a test
+ * wanted to prove otherwise by accident.
+ */
+
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http'
+
+export interface RecordedRequest {
+  method: string | undefined
+  path: string
+  headers: IncomingMessage['headers']
+  body: Record<string, unknown> | undefined
+}
+
+export class FakeDiscordGuildServer {
+  readonly requests: RecordedRequest[] = []
+
+  private server: Server
+  private guildChannels = new Map<string, unknown[]>()
+  private guildRoles = new Map<string, unknown[]>()
+  private nextChannelId = 1
+
+  private constructor(server: Server) {
+    this.server = server
+  }
+
+  static start(): Promise<FakeDiscordGuildServer> {
+    return new Promise((resolve) => {
+      const server = createServer()
+      const instance = new FakeDiscordGuildServer(server)
+      server.on('request', (req, res) => {
+        void instance.handle(req, res)
+      })
+      server.listen(0, '127.0.0.1', () => resolve(instance))
+    })
+  }
+
+  get baseUrl(): string {
+    const address = this.server.address()
+    if (!address || typeof address === 'string') {
+      throw new Error(
+        'FakeDiscordGuildServer.baseUrl read before the server was listening'
+      )
+    }
+    return `http://127.0.0.1:${address.port}`
+  }
+
+  stop(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+
+  /** Seed `guildId`'s existing channels/categories (Discord's own raw shape — `parent_id`, not `parentId`). */
+  setGuildChannels(guildId: string, channels: unknown[]): void {
+    this.guildChannels.set(guildId, [...channels])
+  }
+
+  /** Seed `guildId`'s roles (Discord's own raw shape — `{ id, name, ... }`). */
+  setGuildRoles(guildId: string, roles: unknown[]): void {
+    this.guildRoles.set(guildId, roles)
+  }
+
+  /** Every `POST`/`PATCH`/`DELETE` this fake has ever received — a test's own structural proof, alongside `DiscordRestClient`'s own missing methods, that SRV-8 held: no delete call of any kind reached even a fake willing to record one. */
+  writeRequests(): RecordedRequest[] {
+    return this.requests.filter((request) => request.method !== 'GET')
+  }
+
+  private async handle(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
+    const chunks: Buffer[] = []
+    for await (const chunk of req) {
+      chunks.push(chunk as Buffer)
+    }
+    const raw = Buffer.concat(chunks).toString('utf8')
+    const parsedBody = raw
+      ? (JSON.parse(raw) as Record<string, unknown>)
+      : undefined
+
+    const [pathname] = (req.url ?? '').split('?')
+    this.requests.push({
+      method: req.method,
+      path: req.url ?? '',
+      headers: req.headers,
+      body: parsedBody,
+    })
+
+    const channelsMatch = /^\/guilds\/([^/]+)\/channels$/.exec(pathname ?? '')
+    if (channelsMatch) {
+      const guildId = channelsMatch[1] ?? ''
+      if (req.method === 'GET') {
+        this.respondJson(res, 200, this.guildChannels.get(guildId) ?? [])
+        return
+      }
+      if (req.method === 'POST') {
+        const created = {
+          id: String(this.nextChannelId++),
+          parent_id: null,
+          ...parsedBody,
+        }
+        const existing = this.guildChannels.get(guildId) ?? []
+        this.guildChannels.set(guildId, [...existing, created])
+        this.respondJson(res, 200, created)
+        return
+      }
+    }
+
+    const rolesMatch = /^\/guilds\/([^/]+)\/roles$/.exec(pathname ?? '')
+    if (req.method === 'GET' && rolesMatch) {
+      const guildId = rolesMatch[1] ?? ''
+      this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
+      return
+    }
+
+    res.writeHead(404)
+    res.end()
+  }
+
+  private respondJson(
+    res: ServerResponse,
+    status: number,
+    body: unknown
+  ): void {
+    res.writeHead(status, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(body))
+  }
+}

@@ -29,7 +29,9 @@ import {
 import {
   listDiscordServersAction,
   removeDiscordServerAction,
+  scaffoldDiscordServerAction,
 } from './discord-servers.js'
+import { getJobAction } from './jobs.js'
 
 export {
   archiveProjectAction,
@@ -48,7 +50,9 @@ export {
 export {
   listDiscordServersAction,
   removeDiscordServerAction,
+  scaffoldDiscordServerAction,
 } from './discord-servers.js'
+export { getJobAction, type JobStatus } from './jobs.js'
 
 /** Every action this slice ports, registered once. */
 export function createPlatformRegistry(): ActionRegistry {
@@ -65,5 +69,7 @@ export function createPlatformRegistry(): ActionRegistry {
   registry.register(getCourseAction)
   registry.register(removeDiscordServerAction)
   registry.register(listDiscordServersAction)
+  registry.register(scaffoldDiscordServerAction)
+  registry.register(getJobAction)
   return registry
 }

@@ -103,6 +103,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courses.get',
         'discordServers.remove',
         'discordServers.list',
+        'discordServers.scaffold',
+        'jobs.get',
       ].sort()
     )
 

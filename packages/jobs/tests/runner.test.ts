@@ -112,6 +112,43 @@ describe('runNextJob: success', () => {
       claimExpiresAt: null,
     })
   })
+
+  // SRV-6..8: whatever a handler resolves with is its own report — proven
+  // here at the queue level (`packages/db`'s own `jobs.test.ts` proves
+  // `completeJob`'s own `result` argument in isolation), so this is the one
+  // place that proves the whole path — a handler's return value actually
+  // reaches the row `runNextJob` completes — end to end.
+  it("stores a handler's resolved value on the job row as its result", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'reporting', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('reporting', async () => ({
+      created: ['general'],
+      alreadyPresent: ['admins'],
+    }))
+
+    await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(JSON.parse(row?.result ?? 'null')).toEqual({
+      created: ['general'],
+      alreadyPresent: ['admins'],
+    })
+  })
 })
 
 describe('runNextJob: JOB-2 retry with backoff, bounded attempts', () => {

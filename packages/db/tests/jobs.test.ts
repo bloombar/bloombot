@@ -348,6 +348,68 @@ describe('completing and failing a claimed job', () => {
     })
   })
 
+  // SRV-6..8: what a scaffold handler's report round-trips through — opaque
+  // JSON, the same discipline `payload` already holds itself to.
+  it('completeJob stores a handler result as JSON, readable back through getJob', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const completed = jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { created: ['general'], alreadyPresent: [] }
+    )
+
+    expect(completed?.result).toEqual(
+      JSON.stringify({ created: ['general'], alreadyPresent: [] })
+    )
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(JSON.parse(row?.result ?? 'null')).toEqual({
+      created: ['general'],
+      alreadyPresent: [],
+    })
+  })
+
+  // A handler that resolves with nothing (the common case for most jobs)
+  // leaves `result` `null` rather than the literal string `"undefined"`.
+  it('completeJob leaves result null when no result is given', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const completed = jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db
+    )
+
+    expect(completed?.result).toBeNull()
+  })
+
   // The exact hazard `OwnedClaim` exists to close: a claim that has since
   // been superseded (its lease expired and someone else reclaimed the row)
   // must not be able to complete or fail the *new* claim out from under it.

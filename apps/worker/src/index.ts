@@ -11,13 +11,13 @@
  * platform enforces it: a second instance fails to bind this process's own
  * health port.
  *
- * No handler is registered yet (`HandlerRegistry` starts empty): this
- * slice builds the queue, the claim, the retry policy and this process —
- * nothing in it makes any existing operation actually use the queue. With
- * an empty registry, `runNextJob` finds no eligible `kind` to claim on
- * every iteration and this process idles, polling and sleeping, until a
- * later phase (roster import, channel provisioning, knowledge-file
- * attachment, project duplication — phases 9 and 10) registers one.
+ * SRV-6..8 — `discordServers.scaffold` (`handlers/discord-scaffold.ts`) is
+ * this process's first real handler: `HandlerRegistry` no longer starts
+ * empty. It is registered here, not built into `@bloombot/jobs` itself,
+ * the same "handlers are registered by whoever wires a process up, never
+ * by the registry's own package" division `registry.ts`'s own module
+ * comment describes — a later phase's roster import, knowledge-file
+ * attachment or project duplication registers alongside it the same way.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -29,14 +29,33 @@ import {
   runMigrations,
   type Database,
 } from '@bloombot/db'
+import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
 
+import {
+  createDiscordScaffoldHandler,
+  DISCORD_SCAFFOLD_JOB_KIND,
+} from './handlers/discord-scaffold.js'
 import { startHealthServer, workerHealthStatus } from './health.js'
 import { createWorkerLoop, runLoopOrExit } from './loop.js'
 import { createShutdown, InFlightJob } from './shutdown.js'
 
 const PROCESS_NAME = 'worker'
+
+/**
+ * SRV-6 — credentials `@bloombot/config`'s schema does not cover, the same
+ * CFG-5 convention `apps/bot`'s and `apps/api`'s own `requireEnv` already
+ * hold themselves to: read directly here, at startup, rather than widening
+ * the shared schema for this slice.
+ */
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`apps/worker: ${name} must be set (see env.example)`)
+  }
+  return value
+}
 
 async function main(): Promise<void> {
   // JOB-5 — refuses to start on an environment that does not validate,
@@ -57,6 +76,18 @@ async function main(): Promise<void> {
     baseDelayMs: CONFIG.JOB_RETRY_BASE_DELAY_MS,
     backoffFactor: CONFIG.JOB_RETRY_BACKOFF_FACTOR,
   }
+  // SRV-6 — the same three Discord credentials `apps/api`'s own `main()`
+  // reads for its install flow: this process reaches Discord over REST with
+  // the same bot token `apps/bot`'s gateway connection uses (`apps/bot`'s
+  // own module comment), never a gateway connection of its own.
+  // `discordClientId`/`discordClientSecret` are unused by the scaffold
+  // handler's own guild-management calls (bot-token authenticated, not
+  // OAuth) — required here anyway only because
+  // `createDiscordRestClient` takes them, the same construction
+  // `apps/api` already performs.
+  const discordClientId = requireEnv('BOT_APP_ID')
+  const discordBotToken = requireEnv('BOT_TOKEN')
+  const discordClientSecret = requireEnv('DISCORD_CLIENT_SECRET')
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -68,6 +99,16 @@ async function main(): Promise<void> {
   const owner = `${PROCESS_NAME}:${randomUUID()}`
 
   const handlers = new HandlerRegistry()
+  handlers.register(
+    DISCORD_SCAFFOLD_JOB_KIND,
+    createDiscordScaffoldHandler({
+      discordRestClient: createDiscordRestClient({
+        clientId: discordClientId,
+        clientSecret: discordClientSecret,
+      }),
+      botToken: discordBotToken,
+    })
+  )
 
   let shuttingDown = false
   // `workerHealthStatus` (finding 6 of this rework — `health.ts`'s own

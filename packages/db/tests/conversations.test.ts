@@ -451,6 +451,57 @@ describe('conversations repo', () => {
     ])
   })
 
+  // Finding 6 of the MIG-1 rework: a backdated append (`packages/legacy-import`,
+  // MIG-3, is the one caller that supplies `createdAt` explicitly) must not
+  // rewind a conversation's `lastMessageAt` — the later of the existing value
+  // and the new message's `createdAt` wins, not the new message unconditionally.
+  it('does not rewind lastMessageAt when a message is appended with a backdated createdAt', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    const recent = conversations.appendMessage(
+      orgA,
+      conversation.id,
+      { direction: 'from_person', content: 'a live message' },
+      testDb.db
+    )
+    if (!recent) throw new Error('seed message append failed')
+    const afterLiveMessage = conversations.getConversation(
+      orgA,
+      conversation.id,
+      testDb.db
+    )
+    expect(afterLiveMessage?.lastMessageAt).toBe(recent.createdAt)
+
+    // A transcript import two years old lands after the live message above.
+    const twoYearsAgo = recent.createdAt - 1000 * 60 * 60 * 24 * 365 * 2
+    conversations.appendMessage(
+      orgA,
+      conversation.id,
+      {
+        direction: 'from_person',
+        content: 'an imported, backdated message',
+        createdAt: twoYearsAgo,
+      },
+      testDb.db
+    )
+
+    const afterImport = conversations.getConversation(
+      orgA,
+      conversation.id,
+      testDb.db
+    )
+    // Still the live message's timestamp — not rewound to the import.
+    expect(afterImport?.lastMessageAt).toBe(recent.createdAt)
+  })
+
   // --- CONV-1: the upstream model thread id -------------------------------
 
   it('sets a conversation`s upstream thread id', () => {

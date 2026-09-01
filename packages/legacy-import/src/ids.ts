@@ -1,0 +1,31 @@
+/**
+ * Deterministic ids for rows this importer creates that have no natural key
+ * of their own in the platform schema (MIG-4).
+ *
+ * `packages/db`'s repos take caller-generated ids (`docs/DECISIONS.md`
+ * D-11), so a re-runnable importer can derive a stable id instead of asking
+ * `crypto.randomUUID()` for a fresh one on every run. Everywhere else in
+ * this package idempotency is checked by looking a row up through its own
+ * natural key instead (the organization's own deterministic id, a course's
+ * title within its project, a person's Discord snowflake) — see
+ * `import.ts`'s module comment for the full list and why messages are the
+ * one case that needs this.
+ */
+
+import { createHash } from 'node:crypto'
+
+/**
+ * A stable, human-recognisable id for `namespace` and `parts` — the same
+ * inputs always produce the same output, and different inputs practically
+ * never collide (SHA-256). `namespace` is kept as a readable prefix so an id
+ * seen in a database browser still says what created it.
+ */
+export function deterministicId(namespace: string, ...parts: string[]): string {
+  // A NUL byte (a character no legacy field value contains) joins the parts,
+  // so `('a', 'bc')` and `('ab', 'c')` cannot be made to collide the way
+  // joining with an ordinary character could.
+  const hash = createHash('sha256')
+    .update([namespace, ...parts].join('\0'))
+    .digest('hex')
+  return `${namespace}-${hash.slice(0, 32)}`
+}

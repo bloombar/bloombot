@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,6 +10,15 @@ const TMP_ROOT = join(process.cwd(), 'tmp', 'run-migrate-tests')
 afterEach(() => {
   rmSync(TMP_ROOT, { recursive: true, force: true })
 })
+
+// Whether this checkout sits on a case-insensitive filesystem. It decides what
+// the case-variant spelling below *means*: on darwin (development, and the
+// machine this was written on) `DATA/data.db` and `data/data.db` are the same
+// file, so the guard must refuse it; on the case-sensitive Linux runner CI uses
+// they are two different paths, the upper-case one names nothing, and refusing
+// it would be refusing a file that is not the live database. The guard is right
+// either way — the assertion is what has to follow the platform.
+const CASE_INSENSITIVE_FS = existsSync(resolve('DATA'))
 
 describe('assertMigratablePath', () => {
   it('refuses a relative path under data/ without --i-know', () => {
@@ -50,5 +59,21 @@ describe('assertMigratablePath', () => {
 
   it('allows a plain tmp/ path without any flag', () => {
     expect(() => assertMigratablePath('./tmp/test.db', [])).not.toThrow()
+  })
+
+  // finding 2 (of the MIG-1 rework): darwin (this platform, development and
+  // CI) is case-insensitive — `DATA/data.db` and `data/data.db` are the same
+  // file on disk, and a guard built on plain `realpathSync` (which follows
+  // symlinks but does not canonicalize case) let the upper-case spelling
+  // sail past it, so `db:migrate DATA/data.db` wrote to the live file
+  // without tripping the guard. `resolveReal` (`path-guard.ts`) now uses
+  // `realpathSync.native`, which asks the OS for the real on-disk casing.
+  it('refuses a case-variant path that resolves into data/ without --i-know', () => {
+    if (!CASE_INSENSITIVE_FS) {
+      // A case-sensitive filesystem: `DATA/data.db` is simply another path.
+      expect(() => assertMigratablePath('DATA/data.db', [])).not.toThrow()
+      return
+    }
+    expect(() => assertMigratablePath('DATA/data.db', [])).toThrow(/--i-know/)
   })
 })

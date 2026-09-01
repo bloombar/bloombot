@@ -142,6 +142,11 @@ export const FAMILY_LABEL = {
     color: '0075ca',
     description: 'Conversations, transcripts & daily usage counters',
   },
+  MIG: {
+    name: 'area:legacy-import',
+    color: '8250df',
+    description: 'One-shot import of the legacy config and database',
+  },
   SURF: {
     name: 'area:surfaces',
     color: 'd93f0b',

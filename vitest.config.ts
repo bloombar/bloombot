@@ -18,6 +18,7 @@ export default defineConfig({
       '@bloombot/logger': sourceEntry('logger'),
       '@bloombot/schemas': sourceEntry('schemas'),
       '@bloombot/db': sourceEntry('db'),
+      '@bloombot/legacy-import': sourceEntry('legacy-import'),
     },
   },
   test: {
@@ -68,6 +69,15 @@ export default defineConfig({
         test: {
           name: 'db',
           root: './packages/db',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'legacy-import',
+          root: './packages/legacy-import',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

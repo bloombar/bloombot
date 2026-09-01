@@ -4,6 +4,14 @@
  * The record that binds an account to an organization with a role. Every
  * function here is scoped by `organizationId`, its first parameter — there is
  * no exception in this file.
+ *
+ * `grantMembershipRole` (ENRL-5) is additive, not a replacement for
+ * `createMembership`/`updateMembershipRole` above: those two stay exactly
+ * as every existing caller found them (including the founding-owner write
+ * `accounts.ts#createAccount` makes inline, which records no grantor — see
+ * `schema.ts`'s own comment on `grantedByAccountId`), and
+ * `grantMembershipRole` is the one path that stamps who granted a role,
+ * for `@bloombot/actions`' `memberships.grant` action to call.
  */
 
 import { and, eq } from 'drizzle-orm'
@@ -136,4 +144,70 @@ export function deleteMembership(
     )
     .run()
   return result.changes
+}
+
+/** Fields `@bloombot/actions`' `memberships.grant` action supplies. */
+export interface GrantMembershipInput {
+  accountId: string
+  role: MembershipRole
+  /** The owner performing the grant (ENRL-5) — never the account being granted a role; the action's own execute is what refuses a caller granting themselves one. */
+  grantedByAccountId: string
+}
+
+/**
+ * ENRL-5: grant a role, creating the membership if `accountId` holds none in
+ * `organizationId` yet, or changing an existing one's role — either way,
+ * `grantedByAccountId` and `grantedAt` are stamped on the row, so a staff
+ * role is never traceless (see `schema.ts`'s own comment on the two
+ * columns). *Who* may call this — only an existing owner, and never on
+ * themselves — is `@bloombot/actions`' `memberships.grant` action's own
+ * check, not this function's: this file has no notion of a "caller",
+ * only of the organization the write is scoped to, the same division
+ * `courseInstructionRevisions.createRevision` draws from
+ * `courseInstructions.save`'s own `requireAccountId` check.
+ */
+export function grantMembershipRole(
+  organizationId: string,
+  input: GrantMembershipInput,
+  db: Database
+): Membership {
+  const existing = getMembership(organizationId, input.accountId, db)
+  const grantedAt = Date.now()
+
+  if (existing) {
+    const updated = db
+      .update(memberships)
+      .set({
+        role: input.role,
+        grantedByAccountId: input.grantedByAccountId,
+        grantedAt,
+      })
+      .where(
+        and(
+          eq(memberships.organizationId, organizationId),
+          eq(memberships.accountId, input.accountId)
+        )
+      )
+      .returning()
+      .get()
+    // `existing` just proved this row was there; `updated` is only
+    // `undefined` if a concurrent writer removed it in between (D-11's own
+    // "a write whose own WHERE re-checks the condition its read relied on"
+    // reasoning) — falls through to the insert below, treating that race
+    // exactly like "no membership existed yet".
+    if (updated) return updated
+  }
+
+  return db
+    .insert(memberships)
+    .values({
+      organizationId,
+      accountId: input.accountId,
+      role: input.role,
+      grantedByAccountId: input.grantedByAccountId,
+      grantedAt,
+      createdAt: grantedAt,
+    })
+    .returning()
+    .get()
 }

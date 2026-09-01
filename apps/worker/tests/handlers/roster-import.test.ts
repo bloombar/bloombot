@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { jobs, organizations, people } from '@bloombot/db'
+import { enrolments, jobs, organizations, people } from '@bloombot/db'
 import {
   createDiscordRestClient,
   type DiscordRestClient,
@@ -862,5 +862,70 @@ describe('roster.import handler', () => {
     expect(report.channelsCreated).toEqual([
       expect.objectContaining({ channelName: 'ada' }),
     ])
+  })
+
+  // ENRL-3: a roster row is one of the three admission decisions — importing
+  // it enrols the person it resolves to, recording `source: 'roster'`.
+  describe('ENRL-3 — a roster row enrols the person it resolves to', () => {
+    it('enrols a newly-created person, recording source "roster"', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      const personId = report.peopleCreated[0]?.personId
+      expect(personId).toBeDefined()
+      const enrolment = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId as string,
+        testDb.db
+      )
+      expect(enrolment?.source).toBe('roster')
+    })
+
+    it('re-importing the same roster does not duplicate the enrolment', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      const personId = first.peopleCreated[0]?.personId as string
+      const before = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId,
+        testDb.db
+      )
+
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      const after = enrolments.getActiveEnrolment(
+        seeded.organizationId,
+        seeded.courseId,
+        personId,
+        testDb.db
+      )
+      expect(after?.id).toBe(before?.id)
+    })
   })
 })

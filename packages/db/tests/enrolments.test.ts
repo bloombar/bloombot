@@ -1,0 +1,359 @@
+import { randomUUID } from 'node:crypto'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import {
+  conversations,
+  courses,
+  enrolments,
+  organizations,
+  people,
+  projects,
+  type courses as coursesRepo,
+} from '@bloombot/db'
+
+import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
+
+let testDb: TestDatabase
+
+afterEach(() => {
+  testDb.cleanup()
+})
+
+/** Seeds an organization with one enabled course, synthetic data only (QA-3). */
+function seedOrganizationWithCourse(
+  testDatabase: TestDatabase,
+  overrides: Partial<coursesRepo.NewCourse> = {}
+) {
+  const organizationId = randomUUID()
+  organizations.createOrganization(
+    organizationId,
+    { name: 'Org A', isPersonal: false },
+    testDatabase.db
+  )
+  const project = projects.createProject(
+    organizationId,
+    { name: 'Fall 2026' },
+    testDatabase.db
+  )
+  const result = courses.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: 'Web Design',
+      filePrefix: 'wd',
+      enabled: true,
+      adminsRole: 'admins-wd-fa26',
+      studentsRole: 'students-wd-fa26',
+      categories: [],
+      ...overrides,
+    },
+    testDatabase.db
+  )
+  if (!result.ok) throw new Error('setup failed: unexpected conflict')
+  return { organizationId, course: result.course }
+}
+
+describe('enrolments repo (ENRL-1..6)', () => {
+  // --- ENRL-1/ENRL-2: a person's list is exactly their enrolments --------
+
+  it("lists only a person's own enrolled courses", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { course: courseB } = (() => {
+      const project = projects.createProject(
+        organizationId,
+        { name: 'Second course project' },
+        testDb.db
+      )
+      const result = courses.createCourse(
+        organizationId,
+        {
+          projectId: project.id,
+          title: 'Data Structures',
+          filePrefix: 'ds',
+          enabled: true,
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'students-ds-fa26',
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!result.ok) throw new Error('setup failed: unexpected conflict')
+      return { course: result.course }
+    })()
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+
+    const listed = enrolments.listCoursesForPerson(
+      organizationId,
+      person.id,
+      testDb.db
+    )
+
+    expect(listed.map((c) => c.id)).toEqual([courseA.id])
+    expect(listed.map((c) => c.id)).not.toContain(courseB.id)
+  })
+
+  it('has no active enrolment for a course the person was never admitted to', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // --- ENRL-3: each of the three paths creates its own source ------------
+
+  it('enrolViaRoster records source "roster"', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(enrolment.source).toBe('roster')
+  })
+
+  it('enrolViaDiscordRole records source "discord_role" when the person holds the course\'s student role', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const enrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.studentsRole],
+      },
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('discord_role')
+  })
+
+  it("enrolViaDiscordRole refuses a person who does not hold the course's student role", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.enrolViaDiscordRole(
+        organizationId,
+        {
+          courseId: course.id,
+          personId: person.id,
+          roleNames: ['some-other-role'],
+        },
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // Holding the course's own *admins* role must never admit anyone — ENRL-5's
+  // "a Discord role confers none of them" also means the admin role has no
+  // bearing on enrolment eligibility, only the student one does.
+  it("enrolViaDiscordRole does not admit someone holding only the course's admin role", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.enrolViaDiscordRole(
+        organizationId,
+        {
+          courseId: course.id,
+          personId: person.id,
+          roleNames: [course.adminsRole],
+        },
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  it('there is no repo function that enrols with a caller-chosen source', () => {
+    // Structural: `enrolments.ts` exports exactly three admission functions,
+    // each with a fixed source, and no generic `enrol(..., { source })`.
+    expect(Object.keys(enrolments).sort()).toEqual(
+      [
+        'enrolViaDiscordRole',
+        'enrolViaJoinLink',
+        'enrolViaRoster',
+        'endEnrolment',
+        'getActiveEnrolment',
+        'getEnrolment',
+        'listCoursesForPerson',
+        'listPeopleForCourse',
+      ].sort()
+    )
+  })
+
+  it('enrolling the same person in the same course twice through the same path is idempotent, not a duplicate', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    const second = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(second.id).toBe(first.id)
+    expect(
+      enrolments.listPeopleForCourse(organizationId, course.id, testDb.db)
+    ).toHaveLength(1)
+  })
+
+  // --- ENRL-6: ending an enrolment stops asking, deletes nothing ---------
+
+  it("ending an enrolment removes it from the person's active list but leaves the transcript and course messages untouched", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    const conversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: person.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('setup failed: no conversation')
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'from_person', content: 'How do I center a div?' },
+      testDb.db
+    )
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'to_person', content: 'With flexbox.' },
+      testDb.db
+    )
+
+    const transcriptBefore = conversations.getTranscript(
+      organizationId,
+      conversation.id,
+      testDb.db
+    )
+    expect(transcriptBefore).toHaveLength(2)
+
+    const changed = enrolments.endEnrolment(
+      organizationId,
+      enrolment.id,
+      testDb.db
+    )
+    expect(changed).toBe(1)
+
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      enrolments.listCoursesForPerson(organizationId, person.id, testDb.db)
+    ).toHaveLength(0)
+
+    // The enrolment row itself still exists — ended, not deleted.
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({ id: enrolment.id, endedAt: expect.any(Number) })
+
+    const transcriptAfter = conversations.getTranscript(
+      organizationId,
+      conversation.id,
+      testDb.db
+    )
+    expect(transcriptAfter).toHaveLength(2)
+    expect(transcriptAfter).toEqual(transcriptBefore)
+  })
+
+  it('ending an already-ended enrolment is an idempotent no-op', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(
+      enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toBe(1)
+    expect(
+      enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toBe(0)
+  })
+
+  // --- Tenant scoping (TEN-2/TEN-5) ---------------------------------------
+
+  it("does not read another organization's enrolment through the wrong organization", () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb, {
+        adminsRole: 'admins-a',
+        studentsRole: 'students-a',
+      })
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb, {
+      adminsRole: 'admins-b',
+      studentsRole: 'students-b',
+    })
+    const person = people.createPerson(orgA, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(
+      enrolments.getActiveEnrolment(orgB, courseA.id, person.id, testDb.db)
+    ).toBeUndefined()
+    expect(
+      enrolments.getEnrolment(orgB, enrolment.id, testDb.db)
+    ).toBeUndefined()
+    expect(enrolments.endEnrolment(orgB, enrolment.id, testDb.db)).toBe(0)
+    expect(
+      enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
+    ).toBeDefined()
+  })
+})

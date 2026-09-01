@@ -2648,3 +2648,80 @@ Likewise, `listOrganizationTotals` and `checkPlatformHealth` are both plain func
 `TEN-5`'s own access matrix entirely — harmless while nothing calls them, but the surface that eventually wires
 either one (again, `ADMIN-4`'s own phase) must add its own administrator check and its own audit trail rather
 than assuming either already exists, the same way `dispatch.ts` would have given it for free.
+
+---
+
+## D-34 — `packages/db`/`packages/actions`/`apps/worker`: enrolment is a stored relation, where the Discord-role path is evaluated, `active` versus deletion, what archiving does to an enrolment, and what routing should pick up next
+
+**Problem.** ENRL-1..6 needed a `courses`↔`people` relation neither `routing.ts` (which decides a Discord
+message's course per-message, from category or role) nor anything else in the schema recorded. Three separate
+things create it — a redeemed join link, holding a course's Discord student role, an imported roster row — and
+ENRL-5 needed staff roles (`memberships`) to stop being grantable by nothing at all.
+
+**Choice — `enrolments`, and three admission functions, not one with a `source` parameter.**
+`packages/db/src/repos/enrolments.ts` exports `enrolViaJoinLink`, `enrolViaDiscordRole` and `enrolViaRoster`,
+each hard-coding its own `source` literal, funnelling through a module-private `admit`. There is no exported
+function that takes an arbitrary `source` — ENRL-3's "a person never enrols themselves out of nothing" is true
+of what this file lets a caller *express*, not merely a convention documented beside a more general function.
+`active` is not a separate boolean column: it is `endedAt is null`, the same nullable-timestamp shape
+`discordServerBindings.removedAt`/`projects.archivedAt` already use for TEN-6/PROJ-2 — ending an enrolment
+(ENRL-6) never deletes the row, and "ended" carries *when*, which a bare boolean would have thrown away.
+
+**Choice — the Discord-role path is evaluated in `packages/db`, not `packages/core`'s `routing.ts`.**
+`enrolViaDiscordRole(organizationId, { courseId, personId, roleNames }, db)` is a pure string-membership check
+against the course's own `studentsRole` (never `adminsRole` — ENRL-5's "a Discord role confers none of them"
+means even the admin role a person holds has no bearing on enrolment) against role names its caller already
+resolved; it makes no Discord call of its own. It was not added to `routing.ts` for two reasons. First, this
+slice's brief is explicit that Discord's own routing behaviour does not change here — `routeMessage` still
+matches a message to a course by category or role, exactly as before, and nothing calls `enrolViaDiscordRole`
+from the live message path yet. Second, `routing.ts`'s own job is "which course does this message belong to",
+a per-message question; "is this person enrolled" is a per-admission question that only needs to run once,
+not on every message — folding it into `routeMessage` would have made every message re-derive a fact that a
+stored enrolment already answers cheaper than a role-name comparison plus a database round trip repeated per
+message. Keeping the check in the repo layer, next to the write it gates, means the whole discord_role
+admission path (matching and writing) is one function a future caller supplies already-known role names to.
+
+**What the linking slice should change in routing.** Today a Discord message still answers on category-or-role
+match alone (`routing.ts`), which is exactly the gap ENRL-1's own SPEC text names: "on Discord the category
+decides the course... every surface consults the same relation" is not true yet for Discord itself. The
+natural change, left to that slice with the full picture rather than guessed at here: once a message resolves
+to a person and a candidate course (via `routeMessage`, unchanged), call `enrolViaDiscordRole` (or, if the
+person already holds an active enrolment via `getActiveEnrolment`, skip the write) before answering — turning
+"holds the role, so route it" into "holds the role, so admit them once, then route through the stored
+enrolment," which is what makes a role holder's *second* message just as auditable as their first. This slice
+deliberately does not make that change, per its own brief.
+
+**What archiving a project, or disabling a course, does to an enrolment: nothing.** `enrolments` carries no
+trigger, and neither `archiveProject` nor `disableCourse` touches this table — an enrolment an instructor
+recorded outlives a term the same way a conversation or a transcript does (ENRL-6's own reasoning, and TEN-6's
+before it). A disabled or archived course already routes nothing (CORE-2, PROJ-2), so an enrolment against one
+is inert rather than dangerous; re-enabling or unarchiving makes it live again with the enrolment already
+intact, which is the behaviour a returning course should have.
+
+**Choice — a join link's redemption is a plain function, not a dispatched `Action`.** `dispatch.ts`'s own
+`DispatchContext.organizationId` has to be known before a single line of an action runs; a redeemer presents
+only the secret from the link they were given, which is *how* the organization becomes known, not something
+provable in advance. `@bloombot/auth`'s `consumeSignInToken` is the same shape for the same reason (AUTH-1): a
+plain function composed by whichever surface calls it, never a dispatched action. `createCourseJoinLinkAction`
+and `revokeCourseJoinLinkAction` are ordinary dispatched actions — both already know their organization, an
+instructor issuing or revoking a link they administer.
+
+**Choice — ENRL-5's grant is recorded on the row, not a separate audit table.** `memberships` gained two
+nullable columns, `grantedByAccountId`/`grantedAt`, written only by the new `grantMembershipRole` (called by
+`memberships.grant`, the one action in the platform that changes a role). The founding-owner membership
+`accounts.createAccount` writes inline at sign-up records no grantor — there is nobody to have granted it — the
+same "nullable means not applicable, not merely unset" reasoning `courses.promptId`/`maxRequestsPerDay` already
+use. `memberships.grant`'s own `execute` (not its policy, which only sees `organizationId`/`db`, never the
+caller's account id) checks that the caller holds `'owner'` in the organization being acted on and refuses a
+caller granting a role to their own account — "never self-selected" is enforced procedurally here, the same
+place `courseInstructions.save`'s `requireAccountId` already enforces "every revision has a real author",
+because nothing in `packages/actions`' policy shape today can express "and not to themselves" declaratively.
+
+**Limits.** `enrolViaDiscordRole` is unreachable from any live surface in this slice — nothing calls it yet,
+by design (previous paragraph). `grantMembershipRole`'s two new columns record only the *most recent* grant,
+not a full history the way `course_instruction_revisions` keeps one per save — sufficient for ENRL-5's "the
+grant is recorded with who did it," insufficient if a later requirement needs "every role this account has
+ever held and who changed it." `courseJoinLinks`' secret is generated and hashed with a small, deliberately
+duplicated copy of `@bloombot/auth`'s `secrets.ts` (SHA-256 over a CSPRNG, no salt) rather than a new
+cross-package dependency — see `packages/actions/src/actions/course-join-links.ts`'s own module comment for
+why duplication was chosen over depending on `@bloombot/auth` for ten lines.

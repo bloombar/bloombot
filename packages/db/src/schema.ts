@@ -84,6 +84,22 @@ export const memberships = sqliteTable(
       .notNull()
       .references(() => accounts.id),
     role: text('role', { enum: MEMBERSHIP_ROLES }).notNull(),
+    // ENRL-5 — who granted this role, and when. Null for the one membership
+    // nobody grants: the founding owner row `accounts.createAccount` writes
+    // atomically with a brand-new account (TEN-1) — a person cannot grant
+    // themselves the very membership that first gives them anything to act
+    // with, so that row has no grantor and is not created through
+    // `repos/memberships.ts#grantMembershipRole` at all. Every other
+    // membership — a second instructor added later, a role changed later —
+    // goes through `grantMembershipRole`, which always stamps both columns:
+    // "granted only by an existing owner, through an action that is
+    // recorded" (ENRL-5) is this pair of columns, not a separate audit log,
+    // the same "record it on the row itself" shape
+    // `course_instruction_revisions.savedByAccountId` already uses for FILE-4.
+    grantedByAccountId: text('granted_by_account_id').references(
+      () => accounts.id
+    ),
+    grantedAt: integer('granted_at'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -830,3 +846,95 @@ export const costLedgerEntries = sqliteTable(
     ),
   ]
 )
+
+// ENRL-1..3 — which courses a person may ask, a stored relation rather than
+// something inferred per message (ENRL-1). `source` is which of the three
+// admission decisions created the row — ENRL-3's "the platform records
+// which of the three admitted them" — and, structurally, is the only fact
+// `repos/enrolments.ts` lets a caller assert about a new row at all: that
+// file exports no function that takes an arbitrary `source`, only three
+// that each write their own literal (`enrolViaJoinLink`/`enrolViaDiscordRole`/
+// `enrolViaRoster`), so "a person never enrols themselves out of nothing"
+// is a fact about which functions exist, not a convention a caller has to
+// remember.
+export const ENROLMENT_SOURCES = [
+  'join_link',
+  'discord_role',
+  'roster',
+] as const
+export type EnrolmentSource = (typeof ENROLMENT_SOURCES)[number]
+
+// ENRL-6 — ending an enrolment stops the person asking; it deletes neither
+// the row nor anything it touched. `endedAt` is nullable and reversible,
+// the same "let the database refuse it, never delete it" shape
+// `discordServerBindings.removedAt`/`projects.archivedAt` already use for
+// TEN-6/PROJ-2 — "currently active" means `endedAt is null`, read that way
+// everywhere in `repos/enrolments.ts` rather than a separate boolean this
+// column would only ever duplicate.
+export const enrolments = sqliteTable(
+  'enrolments',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    source: text('source', { enum: ENROLMENT_SOURCES }).notNull(),
+    createdAt: integer('created_at').notNull(),
+    endedAt: integer('ended_at'),
+  },
+  (table) => [
+    // At most one *active* enrolment per (organization, course, person) —
+    // enforced structurally, the same partial-unique-index approach
+    // `conversations`' own pair of indexes uses above, rather than trusted
+    // to an application check: redeeming the same join link twice, or
+    // re-importing the same roster row, admits the same person into the
+    // same course at most once at a time. A person may hold more than one
+    // *ended* row for the same course (re-enrolled after leaving), which is
+    // exactly why this index is partial rather than plain.
+    uniqueIndex('enrolments_org_course_person_active_unique')
+      .on(table.organizationId, table.courseId, table.personId)
+      .where(sql`${table.endedAt} is null`),
+    index('enrolments_organization_id_idx').on(table.organizationId),
+    check(
+      'enrolments_source_check',
+      sql`${table.source} in ('join_link', 'discord_role', 'roster')`
+    ),
+  ]
+)
+
+// ENRL-3/ENRL-4 — a course join link: an instructor-issued admission
+// decision a student redeems. `secretHash` only, never the plaintext value —
+// the same "returned once, stored only as a hash" shape `sign_in_tokens`
+// already uses (AUTH-1), for the same reason: a claim link is a bearer
+// secret, and a stolen database row must not be able to replay it.
+// `revokedAt` is nullable and never un-set — ENRL-4's "revoking does not
+// un-enrol anybody" is a fact about `repos/enrolments.ts` (it never reads
+// this table at all), not something this column has to express by itself;
+// this column's own job is only "does this link currently admit anyone
+// new", read as `revokedAt is null and (expiresAt is null or expiresAt >
+// now)` everywhere `repos/course-join-links.ts` checks it.
+export const courseJoinLinks = sqliteTable('course_join_links', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id')
+    .notNull()
+    .references(() => organizations.id),
+  courseId: text('course_id')
+    .notNull()
+    .references(() => courses.id),
+  secretHash: text('secret_hash').notNull().unique(),
+  // Nullable — a link with no expiry is valid until revoked, the same
+  // "nullable means not configured" reading `courses.maxRequestsPerDay`'s
+  // own comment gives a nullable column elsewhere in this schema.
+  expiresAt: integer('expires_at'),
+  revokedAt: integer('revoked_at'),
+  createdByAccountId: text('created_by_account_id')
+    .notNull()
+    .references(() => accounts.id),
+  createdAt: integer('created_at').notNull(),
+})

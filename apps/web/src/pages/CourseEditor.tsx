@@ -63,6 +63,28 @@ function emptyCategory(): EditableCategory {
   return { key: newKey(), name: '', channels: [] }
 }
 
+/**
+ * `form.maxRequestsPerDay` is a raw text input, so it has to be validated
+ * before it can become `SaveCourseInput.maxRequestsPerDay` — `courses.save`
+ * requires it to be either absent (kept), `null` (cleared) or a positive
+ * integer (`packages/actions/src/actions/courses.ts`'s own
+ * `z.number().int().positive()`). Blank means "clear it," anything else has
+ * to parse as that same positive integer or this returns `{ ok: false }` —
+ * never a `NaN`, which `JSON.stringify` would silently turn into `null` and
+ * clear the stored cap without telling anyone (finding 2 of the WEB-7
+ * rework).
+ */
+function parseMaxRequestsPerDay(
+  raw: string
+): { ok: true; value: number | null } | { ok: false } {
+  const trimmed = raw.trim()
+  if (trimmed === '') return { ok: true, value: null }
+  if (!/^\d+$/.test(trimmed)) return { ok: false }
+  const value = Number(trimmed)
+  if (!Number.isSafeInteger(value) || value <= 0) return { ok: false }
+  return { ok: true, value }
+}
+
 /** Blank editable state for a brand-new course — `enabled: false`: a fresh course's category and role names have not been confirmed against this term's Discord server yet, so it starts disabled the same way a duplicated course does (D-23), rather than defaulting to routing immediately. */
 function blankForm() {
   return {
@@ -116,32 +138,86 @@ export function CourseEditor({
 }: CourseEditorProps) {
   const [form, setForm] = useState<FormState>(blankForm())
   const [loading, setLoading] = useState(courseId !== undefined)
+  // Finding 3 (WEB-7 rework): a failed `courses.get` used to clear `loading`
+  // and fall through to the same form a real, empty course renders — fillable
+  // and saveable straight over the top of the course that failed to load
+  // (and `courses.save`'s update path deletes and reinserts, so that save
+  // would have destroyed the stored categories, channels, instructions and
+  // model settings). Kept apart from `error` below, which is the *save*
+  // failure this form already renders inline, over a form that did load —
+  // a load failure instead replaces the form entirely; see the render below.
+  const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [togglingEnabled, setTogglingEnabled] = useState(false)
+  // Finding 4 (WEB-7 rework): the last enabled state `courses.save`,
+  // `courses.enable` or `courses.disable` actually confirmed — separate from
+  // `form.enabled`, the checkbox's own pending edit. Without the split, a
+  // save the API refused (a PROJ-3 collision) left `form.enabled` ticked from
+  // the edit that never took, and the live toggle button read it too — so
+  // the button claimed a never-enabled course was enabled, and clicking it
+  // sent `courses.disable` for a course that had never actually been
+  // enabled. The button below always reads `confirmedEnabled`; only the
+  // checkbox reads `form.enabled`.
+  const [confirmedEnabled, setConfirmedEnabled] = useState(false)
 
   useEffect(() => {
+    // Finding 8 (WEB-7 rework): guards against an out-of-order response —
+    // if `courseId` changes again before this fetch resolves, the response
+    // that lands is stale and must not overwrite what the current props
+    // asked for.
+    let stale = false
     if (courseId === undefined) {
       setForm(blankForm())
+      setLoadError(undefined)
+      setConfirmedEnabled(false)
       setLoading(false)
       return
     }
     setLoading(true)
+    setLoadError(undefined)
     getCourse(organizationId, courseId).then(
       (course) => {
+        if (stale) return
         setForm(formFromCourse(course))
+        setConfirmedEnabled(course.enabled)
         setLoading(false)
       },
       (caught: unknown) => {
+        if (stale) return
         setLoading(false)
-        if (caught instanceof ApiError) setError(caught)
+        if (caught instanceof ApiError) setLoadError(caught)
         else throw caught
       }
     )
+    return () => {
+      stale = true
+    }
   }, [organizationId, courseId])
 
   const handleSave = async () => {
     setError(undefined)
+    const maxRequestsPerDay = parseMaxRequestsPerDay(form.maxRequestsPerDay)
+    if (!maxRequestsPerDay.ok) {
+      // Finding 2 (WEB-7 rework): refuse client-side rather than ever
+      // sending a `NaN` — `JSON.stringify(NaN)` is `null`, which
+      // `courses.save` reads as "clear the stored cap," silently, on a
+      // typo. Rendered through the same `ErrorMessage` a server-side
+      // validation failure uses, so the instructor is told, not obeyed.
+      setError(
+        new ApiError(400, {
+          error: 'action_input_invalid',
+          issues: [
+            {
+              path: ['maxRequestsPerDay'],
+              message:
+                'Enter a whole number greater than zero, or leave it blank to use the platform default.',
+            },
+          ],
+        })
+      )
+      return
+    }
     setSaving(true)
     try {
       const categories: SaveCourseCategoryInput[] = form.categories.map(
@@ -170,14 +246,12 @@ export function CourseEditor({
         model: form.model.trim() === '' ? null : form.model.trim(),
         vectorStoreId:
           form.vectorStoreId.trim() === '' ? null : form.vectorStoreId.trim(),
-        maxRequestsPerDay:
-          form.maxRequestsPerDay.trim() === ''
-            ? null
-            : Number(form.maxRequestsPerDay),
+        maxRequestsPerDay: maxRequestsPerDay.value,
         categories,
       }
       const saved = await saveCourse(organizationId, input)
       setForm(formFromCourse(saved))
+      setConfirmedEnabled(saved.enabled)
       onSaved(saved)
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
@@ -192,11 +266,18 @@ export function CourseEditor({
     setError(undefined)
     setTogglingEnabled(true)
     try {
-      if (form.enabled) {
+      // Reads and sets `confirmedEnabled`, not `form.enabled` — the button
+      // acts on the server-confirmed state, not a pending, unsaved edit to
+      // the checkbox above (finding 4 of the WEB-7 rework). A successful
+      // toggle has no pending edit left to disagree with, so both states
+      // move together here.
+      if (confirmedEnabled) {
         await disableCourse(organizationId, courseId)
+        setConfirmedEnabled(false)
         setForm((current) => ({ ...current, enabled: false }))
       } else {
         await enableCourse(organizationId, courseId)
+        setConfirmedEnabled(true)
         setForm((current) => ({ ...current, enabled: true }))
       }
     } catch (caught) {
@@ -280,6 +361,20 @@ export function CourseEditor({
 
   if (loading) {
     return <p>Loading…</p>
+  }
+
+  if (loadError) {
+    // Finding 3 (WEB-7 rework): a failed `courses.get` renders only this —
+    // never the form, which for an existing `courseId` would otherwise be
+    // an *editable, saveable* blank standing in for a real course.
+    return (
+      <section aria-label="Course" data-testid="course-editor">
+        <button type="button" onClick={onCancel}>
+          ← {project.name}
+        </button>
+        <ErrorMessage error={loadError} />
+      </section>
+    )
   }
 
   return (
@@ -369,7 +464,9 @@ export function CourseEditor({
           onClick={() => void handleToggleEnabled()}
           disabled={togglingEnabled}
         >
-          {form.enabled ? 'Disable' : 'Enable'}
+          {/* Reads `confirmedEnabled`, not `form.enabled` — see this
+              component's own comment on that state (finding 4). */}
+          {confirmedEnabled ? 'Disable' : 'Enable'}
         </button>
       )}
 

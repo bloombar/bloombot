@@ -2,11 +2,18 @@
  * The signed-in shell: which organization the panel is acting in (WEB-3),
  * the Discord install button (WEB-4), and — this slice — the projects and
  * courses screens (WEB-7, WEB-8, WEB-9). The two live behind a tab rather
- * than both rendering at once: `ProjectsPanel` fetches on mount
+ * than both rendering at once — `ProjectsPanel` fetches on mount
  * (`projects.list`), and there is no reason to pay that request, or show
- * that much screen, before an instructor actually wants to manage a
- * project — the install button stays the thing every visitor sees first,
- * unchanged from before this slice.
+ * that much screen, until an instructor actually wants it (`activeTab`'s
+ * own comment below has the accounting of what gating it costs
+ * `tests/shell.test.tsx`).
+ *
+ * The *default* tab is Projects, though: it is what an instructor comes to
+ * this panel for on nearly every visit once a server is installed, and
+ * landing on the install button every reload, one click away from the
+ * thing they actually came for, is worse than the few extra `listProjects`
+ * mocks that default costs the test file (finding 10 of the WEB-7 rework;
+ * `docs/DECISIONS.md` D-25 has the same accounting from the test side).
  */
 
 import { useState } from 'react'
@@ -57,7 +64,11 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [signingOut, setSigningOut] = useState(false)
-  const [activeTab, setActiveTab] = useState<'discord' | 'projects'>('discord')
+  // Defaults to 'projects' — the module comment above has the product
+  // reasoning; `docs/DECISIONS.md` D-25 has the accounting of what that
+  // default costs `tests/shell.test.tsx` (a handful of `listProjects`
+  // mocks, added there rather than left implicit by defaulting elsewhere).
+  const [activeTab, setActiveTab] = useState<'discord' | 'projects'>('projects')
 
   const installedServerId =
     justInstalled?.organizationId === activeOrganizationId &&
@@ -156,7 +167,19 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
             {error && <ErrorMessage error={error} />}
           </>
         ) : (
-          <ProjectsPanel organizationId={activeOrganizationId} />
+          // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a
+          // fresh `ProjectsPanel` — and its own internal `view` state — on
+          // every organization switch. Without it, a project (or course)
+          // selected in the previous organization stayed selected, and
+          // switching organizations re-issued `courses.list`/`courses.get`
+          // for a project id that no longer belongs to the newly active
+          // organization — a cross-tenant lookup TEN-2's own policy
+          // correctly refuses, stranding the instructor on that refusal
+          // with no way to clear it short of reloading the page.
+          <ProjectsPanel
+            key={activeOrganizationId}
+            organizationId={activeOrganizationId}
+          />
         )}
       </main>
     </div>

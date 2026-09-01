@@ -10,41 +10,9 @@
  * is actually dead — not merely that the tab forgot it.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { expect, test } from '@playwright/test'
 
-import { E2E_MAIL_PATH } from './support/env.js'
-
-interface RecordedEmail {
-  to: string
-  subject: string
-  body: string
-}
-
-/** Polls `E2E_MAIL_PATH` (`FileEmailSender`'s own JSONL file) for the sign-in link mailed to `to`, and returns the token off the end of it. */
-async function readSignInToken(to: string): Promise<string> {
-  await expect(async () => {
-    const lines = readFileSync(E2E_MAIL_PATH, 'utf8')
-      .split('\n')
-      .filter((line) => line.length > 0)
-    const mail: RecordedEmail[] = lines.map((line) => JSON.parse(line))
-    expect(mail.some((message) => message.to === to)).toBe(true)
-  }).toPass({ timeout: 10_000 })
-
-  const lines = readFileSync(E2E_MAIL_PATH, 'utf8')
-    .split('\n')
-    .filter((line) => line.length > 0)
-  const mail: RecordedEmail[] = lines.map((line) => JSON.parse(line))
-  const message = mail.find((entry) => entry.to === to)
-  if (!message) throw new Error(`no mail was sent to ${to}`)
-
-  const token = message.body.split('/sign-in/')[1]?.trim()
-  if (!token) {
-    throw new Error(`sign-in link not found in mail body: ${message.body}`)
-  }
-  return token
-}
+import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('sign in by emailed link, land in an organization, sign out, and stay signed out', async ({
   page,
@@ -70,6 +38,10 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   const organizationSwitcher = page.getByTestId('organization-switcher')
   await expect(organizationSwitcher).toBeVisible()
   await expect(organizationSwitcher).toContainText('owner')
+  // The Discord tab is not the default one anymore (finding 10 of the
+  // WEB-7 rework — `pages/Shell.tsx`'s own module comment) — this opens it
+  // explicitly, the way an instructor reaching for the install button would.
+  await page.getByRole('button', { name: 'Discord' }).click()
   await expect(page.getByTestId('install-button')).toBeVisible()
 
   // The URL is replaced, not left on the single-use link — a reload must

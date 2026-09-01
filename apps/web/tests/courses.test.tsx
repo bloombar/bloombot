@@ -111,6 +111,59 @@ describe('Courses (WEB-8)', () => {
     )
   })
 
+  it('a stale, out-of-order response for a superseded project cannot overwrite the current one (finding 8 of the WEB-7 rework)', async () => {
+    let resolveFirst: (value: CourseSummary[]) => void = () => {}
+    let resolveSecond: (value: CourseSummary[]) => void = () => {}
+    listCourses
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve
+          })
+      )
+
+    const { rerender } = render(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+      />
+    )
+    const otherProject: Project = {
+      ...PROJECT,
+      id: 'project-2',
+      name: 'Spring 2027',
+    }
+    rerender(
+      <Courses
+        organizationId="org-1"
+        project={otherProject}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+      />
+    )
+
+    // The *second* request (for the now-current project) resolves first,
+    // and the superseded first request resolves after it — exactly the
+    // out-of-order case `refreshId` exists to guard against.
+    resolveSecond([{ ...COURSE, id: 'course-2', title: 'Spring Course' }])
+    await screen.findByText('Spring Course')
+    resolveFirst([COURSE])
+    // Flush the microtask queue so the stale response's `.then` — the one
+    // that must be ignored — has a chance to run before this asserts.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Spring Course')).toBeInTheDocument()
+    expect(screen.queryByText('Web Design')).not.toBeInTheDocument()
+  })
+
   it('opening "New course" hands undefined up, opening an existing one hands its id up', async () => {
     listCourses.mockResolvedValue([COURSE])
     const onOpenCourse = vi.fn()

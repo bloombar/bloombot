@@ -74,6 +74,8 @@ test('a project and course defined entirely in the panel route and answer a matc
   const categoryName = `Web Design - GLOBAL - ${suffix}`
   const studentsRole = `students-wd-${suffix}`
   const adminsRole = `admins-wd-${suffix}`
+  const courseInstructions =
+    'Answer student questions about the course clearly and concisely.'
 
   // 1. Sign in — the same emailed-link flow `auth-flow.spec.ts` exercises,
   //    which also creates this account's own personal organization (TEN-1).
@@ -103,9 +105,7 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByLabel('Category name').fill(categoryName)
-  await page
-    .getByLabel('Instructions')
-    .fill('Answer student questions about the course clearly and concisely.')
+  await page.getByLabel('Instructions').fill(courseInstructions)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
 
@@ -152,13 +152,20 @@ test('a project and course defined entirely in the panel route and answer a matc
     const logger = createFakeLogger()
     const botId = 'e2e-bot'
 
+    // authorRoleNames is deliberately empty: the requirement under test is
+    // that a message in *this course's own category* is routed to it, and
+    // `handleMention` falls back to role names only when the category
+    // matches no course (`packages/discord/src/dto.ts`'s own comment on
+    // `authorRoleNames`) — leaving the role populated let it carry the whole
+    // route while the category the instructor typed went unchecked (finding
+    // 1 of the WEB-7 rework).
     const mention: InboundMention = {
       guildId,
       channelName: 'announcements',
       categoryName,
       authorId: `e2e-student-${suffix}`,
       authorDisplayName: 'QA Student',
-      authorRoleNames: [studentsRole],
+      authorRoleNames: [],
       text: `<@${botId}> When is the midterm?`,
       botId,
       authorIsBot: false,
@@ -180,6 +187,11 @@ test('a project and course defined entirely in the panel route and answer a matc
       throw new Error(`expected "answered", got "${result.kind}"`)
     }
     expect(model.calls).toHaveLength(1)
+    // The instructions the model was asked with are the ones the instructor
+    // typed into the panel, not merely *some* non-null value — proves the
+    // saved course's own configuration reached `handleMention`, not a
+    // default (finding 1 of the WEB-7 rework).
+    expect(model.calls[0]?.instructions).toBe(courseInstructions)
     expect(reply.sent).toEqual(['The midterm is on the 14th.'])
 
     // Both directions are in the transcript (CONV-2).

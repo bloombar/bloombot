@@ -1,10 +1,11 @@
 /**
  * QA-7's `auth-flow.spec.ts` and QA-8's own spec both need "read the
  * sign-in link the API actually mailed back out of `FileEmailSender`'s own
- * file" — pulled out here so QA-8 does not duplicate it inline. Behaviour
- * unchanged from `auth-flow.spec.ts`'s original inline version: poll
- * `E2E_MAIL_PATH` (`file-email-sender.ts`'s own JSONL file) for the mail
- * sent to `to`, and return the token off the end of its body.
+ * file" — pulled out here so neither duplicates it inline (finding 9 of the
+ * WEB-7 rework fixed `auth-flow.spec.ts`'s own copy, which had drifted back
+ * into a byte-identical inline duplicate rather than importing this).
+ * Polls `E2E_MAIL_PATH` (`file-email-sender.ts`'s own JSONL file) for the
+ * mail sent to `to`, and returns the token off the end of its body.
  */
 
 import { readFileSync } from 'node:fs'
@@ -31,7 +32,14 @@ export async function readSignInToken(to: string): Promise<string> {
     expect(readMail().some((message) => message.to === to)).toBe(true)
   }).toPass({ timeout: 10_000 })
 
-  const message = readMail().find((entry) => entry.to === to)
+  // The *latest* mail to `to`, not the first — `FileEmailSender` appends,
+  // so an address mailed more than once in the same run (a test requesting
+  // a second link, say, after letting the first one go stale) had `.find`
+  // return the earliest, already-redeemed-or-stale token instead of the one
+  // that still works (finding 9 of the WEB-7 rework).
+  const message = readMail()
+    .reverse()
+    .find((entry) => entry.to === to)
   if (!message) throw new Error(`no mail was sent to ${to}`)
 
   const token = message.body.split('/sign-in/')[1]?.trim()

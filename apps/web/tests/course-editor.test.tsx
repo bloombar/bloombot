@@ -139,6 +139,17 @@ describe('CourseEditor (WEB-8)', () => {
     expect(input).toHaveProperty('model', null)
     // Every other unedited nullable field is still sent explicitly too.
     expect(input).toHaveProperty('promptId', 'prompt-1')
+    // `categories` is sent too, and carries the fetched course's own
+    // categories/channels — not dropped, and not an empty replacement
+    // (finding 1 of the WEB-7 rework: a `handleSave` that hard-coded
+    // `categories: []` left this whole suite green while every saved
+    // course's categories vanished).
+    expect(input).toHaveProperty('categories', [
+      {
+        name: 'Web Design - GLOBAL',
+        channels: [{ name: 'announcements', adminsOnly: false }],
+      },
+    ])
   })
 
   it("a save refused for a PROJ-3 collision renders the conflict's own message, naming the other course and project (WEB-9)", async () => {
@@ -170,6 +181,98 @@ describe('CourseEditor (WEB-8)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Category name "GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".'
     )
+  })
+
+  it('a non-numeric "Max requests per day" refuses the save rather than silently clearing the stored cap (finding 2)', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    render(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    // Fat-finger the cap: '5O' (letter O), not '50'.
+    fireEvent.change(screen.getByLabelText('Max requests per day'), {
+      target: { value: '5O' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'maxRequestsPerDay'
+    )
+    // Never reaches the API at all — `Number('5O')` is `NaN`, which
+    // `JSON.stringify` would have turned into `null` and cleared the
+    // stored cap silently had this gone through.
+    expect(saveCourse).not.toHaveBeenCalled()
+  })
+
+  it('a failed load renders only the failure, never an editable blank form over a real course (finding 3)', async () => {
+    getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
+
+    render(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not found, or you do not have access to it.'
+    )
+    // No form at all — nothing fillable or saveable standing in for the
+    // course that failed to load.
+    expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save course' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('a save refused after ticking Enabled leaves the live toggle reading "Enable", not "Disable" (finding 4)', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, enabled: false })
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          message:
+            'Category name "GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+
+    render(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument()
+
+    // Tick the checkbox (a pending edit) and hit a refused save.
+    fireEvent.click(screen.getByLabelText(/^Enabled$/))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await screen.findByRole('alert')
+
+    // The checkbox reflects the pending edit, but the live toggle still
+    // reads the server-confirmed state — never enabled, so still "Enable,"
+    // not "Disable" for a course that was never actually enabled.
+    expect(screen.getByLabelText(/^Enabled$/)).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Disable' })
+    ).not.toBeInTheDocument()
   })
 
   it('enable and disable dispatch the dedicated actions, not a resave', async () => {

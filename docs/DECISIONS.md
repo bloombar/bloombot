@@ -1628,12 +1628,23 @@ project and one of its courses has neither property: it is ordinary in-panel nav
 protect against a back-button press, so a `useState<View>` discriminated union — the same shape `App.tsx`'s
 own `SessionState` already uses one level up — is the whole "path-switch style, no router library" the brief
 asked for, without inventing history entries this navigation has no need of. `pages/Shell.tsx` gates
-`ProjectsPanel` behind its own `activeTab` state (defaulting to the pre-existing Discord tab) for an
-unrelated, narrower reason: `ProjectsPanel` fetches `projects.list` on mount, and every existing `Shell.tsx`
-test (`tests/shell.test.tsx`) mocks `dispatchAction` selectively per test rather than by default — mounting
-`ProjectsPanel` unconditionally would have fired an unmocked `dispatchAction('projects.list', ...)` on every
-one of those tests' first render. Tabbing it off by default means WEB-7..9 add a screen with zero behavioural
-change to a test file this slice's own brief did not name as in scope.
+`ProjectsPanel` behind its own `activeTab` state for an unrelated, narrower reason: `ProjectsPanel` fetches
+`projects.list` (`api/client.ts#listProjects`) on mount, so mounting it unconditionally on every render of
+`Shell.tsx` would fire that request even when an instructor is looking at the Discord tab instead.
+
+**Choice, `activeTab` defaults to `'projects'`, not `'discord'`.** The first version of this gate defaulted to
+Discord — the tab that already existed before this slice — for a reason that had nothing to do with the
+product: every existing `Shell.tsx` test (`tests/shell.test.tsx`) mocked `dispatchAction` selectively per test
+rather than by default, and mounting `ProjectsPanel` unconditionally would have fired an unmocked
+`listProjects` call on every one of those tests' first render. That is a real cost, but it is a test-file cost,
+not a reason for what an instructor sees on every reload — and a reviewer caught it as exactly that (finding 10
+of the WEB-7 rework): the two comments explaining the default disagreed with each other, one giving this
+paragraph's real reason and the other inventing a product one. The product reason instead governs the default
+now: Projects is what an instructor comes to this panel for on nearly every visit once a server is installed,
+so landing them on the install button every reload — one click away from the thing they actually came for — is
+worse than the cost of updating the test file. `tests/shell.test.tsx` now mocks `listProjects`/`listCourses`
+with a `beforeEach` default so every test's now-unconditional `ProjectsPanel` mount has something to resolve,
+and the handful of tests that assert on the Discord tab's own content click it open explicitly first.
 
 **What QA-8's harness proves, and what it stands in for — read `e2e/course-configuration.spec.ts`'s own module
 comment for the full breakdown, summarized here.** Real: the browser driving `pages/Projects.tsx`,

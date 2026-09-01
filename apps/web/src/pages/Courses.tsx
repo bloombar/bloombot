@@ -6,7 +6,7 @@
  * `pages/CourseEditor.tsx` to define a new one or edit an existing one.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { disableCourse, enableCourse, listCourses } from '../api/client.js'
 import { ApiError } from '../api/client.js'
@@ -32,10 +32,23 @@ export function Courses({
     undefined
   )
 
+  // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
+  // below (on mount, and whenever `project.id` changes) and directly after
+  // enabling/disabling a course — two ways for two `listCourses` calls to
+  // be in flight at once, with no guarantee the later request resolves
+  // last. `refreshId` tags each call and only the most recent one is
+  // allowed to update state, so an out-of-order response cannot leave the
+  // list showing a course's stale enabled/disabled state.
+  const refreshId = useRef(0)
   const refresh = useCallback(() => {
+    const id = ++refreshId.current
     listCourses(organizationId, project.id).then(
-      (result) => setCourses(result),
+      (result) => {
+        if (id !== refreshId.current) return
+        setCourses(result)
+      },
       (caught: unknown) => {
+        if (id !== refreshId.current) return
         if (caught instanceof ApiError) setError(caught)
         else throw caught
       }

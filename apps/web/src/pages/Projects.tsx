@@ -12,7 +12,7 @@
  * between "list a project" and "list a project's courses."
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   archiveProject,
@@ -74,10 +74,23 @@ export function Projects({
     undefined
   )
 
+  // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
+  // below (on mount, and whenever `includeArchived` changes) and directly
+  // after every mutation (create/archive/duplicate) — two ways for two
+  // `listProjects` calls to be in flight at once, with no guarantee the
+  // later request resolves last. `refreshId` tags each call and only the
+  // most recent one is allowed to update state, so an out-of-order response
+  // cannot leave the list disagreeing with the "Show archived" checkbox.
+  const refreshId = useRef(0)
   const refresh = useCallback(() => {
+    const id = ++refreshId.current
     listProjects(organizationId, includeArchived).then(
-      (result) => setProjects(result),
+      (result) => {
+        if (id !== refreshId.current) return
+        setProjects(result)
+      },
       (caught: unknown) => {
+        if (id !== refreshId.current) return
         if (caught instanceof ApiError) setError(caught)
         else throw caught
       }
@@ -93,7 +106,11 @@ export function Projects({
     setError(undefined)
     setCreating(true)
     try {
-      await createProject(organizationId, newProjectName)
+      // Trimmed, not the raw input — the Create button is already disabled
+      // on a whitespace-only name (`newProjectName.trim().length === 0`
+      // below), but the *stored* name should not carry leading/trailing
+      // whitespace either (finding 7 of the WEB-7 rework).
+      await createProject(organizationId, newProjectName.trim())
       setNewProjectName('')
       refresh()
     } catch (caught) {
@@ -123,8 +140,12 @@ export function Projects({
   }
 
   const handleDuplicate = async (project: Project) => {
-    const name = duplicateNames[project.id]
-    if (!name) return
+    // `.trim()` — the same whitespace-only guard `handleCreate` and its own
+    // button already apply (finding 7 of the WEB-7 rework): a raw-truthiness
+    // check here accepted a whitespace-only name and created an effectively
+    // unopenable project.
+    const name = (duplicateNames[project.id] ?? '').trim()
+    if (name === '') return
     setError(undefined)
     setDuplicateNotice(undefined)
     setDuplicatingId(project.id)
@@ -213,7 +234,8 @@ export function Projects({
                 type="button"
                 onClick={() => void handleDuplicate(project)}
                 disabled={
-                  duplicatingId === project.id || !duplicateNames[project.id]
+                  duplicatingId === project.id ||
+                  (duplicateNames[project.id] ?? '').trim().length === 0
                 }
               >
                 {duplicatingId === project.id ? 'Duplicating…' : 'Duplicate'}

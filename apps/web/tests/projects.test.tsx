@@ -78,6 +78,46 @@ describe('Projects (WEB-7)', () => {
     )
   })
 
+  it('a stale, out-of-order response cannot leave the list disagreeing with "Show archived" (finding 8 of the WEB-7 rework)', async () => {
+    let resolveInitial: (value: Project[]) => void = () => {}
+    let resolveArchived: (value: Project[]) => void = () => {}
+    listProjects
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitial = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveArchived = resolve
+          })
+      )
+
+    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    fireEvent.click(screen.getByLabelText('Show archived'))
+
+    // The later request (includeArchived: true) resolves first, and the
+    // superseded initial request resolves after it — exactly the
+    // out-of-order case `refreshId` exists to guard against.
+    const archivedProject: Project = {
+      ...PROJECT,
+      id: 'project-2',
+      name: 'Old Term',
+      archivedAt: 1_700_000_000,
+    }
+    resolveArchived([archivedProject])
+    await screen.findByText('Old Term')
+    resolveInitial([PROJECT])
+    // Flush the microtask queue so the stale response's `.then` — the one
+    // that must be ignored — has a chance to run before this asserts.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Old Term')).toBeInTheDocument()
+    expect(screen.queryByText('Fall 2026')).not.toBeInTheDocument()
+  })
+
   it('creates a project and refreshes the list', async () => {
     listProjects.mockResolvedValue([])
     createProject.mockResolvedValue(PROJECT)
@@ -99,7 +139,42 @@ describe('Projects (WEB-7)', () => {
     await waitFor(() => expect(listProjects).toHaveBeenCalledTimes(2))
   })
 
-  it('archives an active project and restores an archived one', async () => {
+  it('trims a name with surrounding whitespace before creating (finding 7 of the WEB-7 rework)', async () => {
+    listProjects.mockResolvedValue([])
+    createProject.mockResolvedValue(PROJECT)
+
+    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    await screen.findByText('No projects yet.')
+
+    fireEvent.change(screen.getByLabelText('New project name'), {
+      target: { value: '  Fall 2026  ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
+
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith('org-1', 'Fall 2026')
+    )
+  })
+
+  it('a whitespace-only duplicate name is rejected the same way Create rejects one (finding 7 of the WEB-7 rework)', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+
+    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    await screen.findByText('Fall 2026')
+
+    fireEvent.change(screen.getByLabelText('Duplicate "Fall 2026" as'), {
+      target: { value: '   ' },
+    })
+
+    // Consistent with Create's own `.trim()` guard, not the raw truthiness
+    // that used to accept this and create an effectively unopenable
+    // project.
+    expect(screen.getByRole('button', { name: 'Duplicate' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
+    expect(duplicateProject).not.toHaveBeenCalled()
+  })
+
+  it('archives an active project', async () => {
     listProjects.mockResolvedValue([PROJECT])
     archiveProject.mockResolvedValue({ archived: true })
 
@@ -111,6 +186,31 @@ describe('Projects (WEB-7)', () => {
     await waitFor(() =>
       expect(archiveProject).toHaveBeenCalledWith('org-1', 'project-1')
     )
+    expect(unarchiveProject).not.toHaveBeenCalled()
+  })
+
+  it('restores an archived project — the branch the previous test never actually clicked (finding 6 of the WEB-7 rework)', async () => {
+    const archivedProject: Project = { ...PROJECT, archivedAt: 1_700_000_000 }
+    listProjects.mockResolvedValue([archivedProject])
+    unarchiveProject.mockResolvedValue({ archived: false })
+
+    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    await screen.findByText('Fall 2026')
+
+    // The archived marker, and the button's label for an archived project —
+    // both distinct from the active-project case above.
+    expect(screen.getByText(/\(archived\)/)).toBeInTheDocument()
+    const restoreButton = screen.getByRole('button', { name: 'Restore' })
+
+    fireEvent.click(restoreButton)
+
+    await waitFor(() =>
+      expect(unarchiveProject).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    // Without this, a `handleArchive` that called `archiveProject` in both
+    // branches would leave this whole suite green while Restore silently
+    // re-archived an already-archived project.
+    expect(archiveProject).not.toHaveBeenCalled()
   })
 
   it('a duplicate reports plainly that every copied course arrived disabled, and why (PROJ-4/D-23)', async () => {

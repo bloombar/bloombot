@@ -1,0 +1,125 @@
+import { randomUUID } from 'node:crypto'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import { closeDatabase, openDatabase, signInTokens } from '@bloombot/db'
+
+import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
+
+let testDb: TestDatabase
+
+afterEach(() => {
+  testDb.cleanup()
+})
+
+describe('sign-in-tokens repo (AUTH-1)', () => {
+  it('creates a token row and stores the hash, not any plaintext', () => {
+    testDb = createTestDatabase()
+
+    const row = signInTokens.createSignInToken(
+      {
+        email: 'Student@Example.edu',
+        tokenHash: 'a-hash-value',
+        expiresAt: Date.now() + 60_000,
+      },
+      testDb.db
+    )
+
+    expect(row).toMatchObject({
+      email: 'student@example.edu',
+      tokenHash: 'a-hash-value',
+      usedAt: null,
+    })
+  })
+
+  it('consumes a token exactly once', () => {
+    testDb = createTestDatabase()
+    signInTokens.createSignInToken(
+      {
+        email: 'a@example.edu',
+        tokenHash: 'hash-1',
+        expiresAt: Date.now() + 60_000,
+      },
+      testDb.db
+    )
+
+    const first = signInTokens.consumeSignInToken(
+      'hash-1',
+      Date.now(),
+      testDb.db
+    )
+    const second = signInTokens.consumeSignInToken(
+      'hash-1',
+      Date.now(),
+      testDb.db
+    )
+
+    expect(first).toMatchObject({ email: 'a@example.edu' })
+    expect(second).toBeUndefined()
+  })
+
+  it('refuses a hash that was never issued', () => {
+    testDb = createTestDatabase()
+    expect(
+      signInTokens.consumeSignInToken('nonexistent', Date.now(), testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('refuses an expired token', () => {
+    testDb = createTestDatabase()
+    const now = Date.now()
+    signInTokens.createSignInToken(
+      { email: 'a@example.edu', tokenHash: 'hash-1', expiresAt: now - 1 },
+      testDb.db
+    )
+
+    expect(
+      signInTokens.consumeSignInToken('hash-1', now, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // TEN-3's re-claim guard proves the same shape with two connections; this
+  // is that proof for the sign-in-token redemption's own single conditional
+  // `UPDATE`.
+  it('two connections redeeming the same hash yield exactly one winner', () => {
+    testDb = createTestDatabase()
+    const now = Date.now()
+    signInTokens.createSignInToken(
+      { email: 'a@example.edu', tokenHash: 'hash-1', expiresAt: now + 60_000 },
+      testDb.db
+    )
+
+    const connectionB = openDatabase(testDb.path)
+    const resultA = signInTokens.consumeSignInToken(
+      'hash-1',
+      Date.now(),
+      testDb.db
+    )
+    const resultB = signInTokens.consumeSignInToken(
+      'hash-1',
+      Date.now(),
+      connectionB
+    )
+    closeDatabase(connectionB)
+
+    const successes = [resultA, resultB].filter((r) => r !== undefined)
+    expect(successes).toHaveLength(1)
+  })
+
+  it('lowercases the email it stores, the same way accounts.ts does', () => {
+    testDb = createTestDatabase()
+    const id = randomUUID()
+
+    const row = signInTokens.createSignInToken(
+      {
+        id,
+        email: 'Mixed.Case@Example.EDU',
+        tokenHash: 'hash-2',
+        expiresAt: Date.now() + 60_000,
+      },
+      testDb.db
+    )
+
+    expect(row.email).toBe('mixed.case@example.edu')
+  })
+})

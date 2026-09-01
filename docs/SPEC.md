@@ -717,8 +717,13 @@ that creates the session, so a link cannot be replayed.
 #### AUTH-2 Google sign-in
 
 Google OAuth 2.0 with PKCE is offered alongside email. A Google identity links to an
-existing account only when the provider asserts the email is verified and it matches;
-otherwise a new account is created. Linking on an unverified email is account takeover.
+existing account only when the provider asserts the email is verified and it matches; when
+it is verified but matches no account, a new one is created. An identity the provider does
+not assert is verified neither links nor creates an account, regardless of whether the
+address matches one — it is refused outright. Linking on an unverified email is account
+takeover, and so is creating an account from one: an attacker who asserts a victim's real,
+unverified address before the victim has ever signed in themselves must not get to hold
+that account first.
 
 #### AUTH-3 Sessions
 

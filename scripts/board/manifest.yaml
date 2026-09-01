@@ -1608,18 +1608,23 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-2
   title: Google sign-in
-  full: Google OAuth 2.0 with PKCE is offered alongside email. A Google identity
+  full: "Google OAuth 2.0 with PKCE is offered alongside email. A Google identity
     links to an existing account only when the provider asserts the email is
-    verified and it matches; otherwise a new account is created. Linking on an
-    unverified email is account takeover.
+    verified and it matches; when it is verified but matches no account, a new
+    one is created. An identity the provider does not assert is verified neither
+    links nor creates an account, regardless of whether the address matches one
+    — it is refused outright. Linking on an unverified email is account
+    takeover, and so is creating an account from one: an attacker who asserts a
+    victim's real, unverified address before the victim has ever signed in
+    themselves must not get to hold that account first."
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-3
   title: Sessions
@@ -1630,7 +1635,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-4
   title: Platform administrators
@@ -1641,7 +1646,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: TEN-4
   title: Installation

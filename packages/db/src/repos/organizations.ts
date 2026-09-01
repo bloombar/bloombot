@@ -10,7 +10,7 @@
 
 import { eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { organizations } from '../schema.js'
 
 export type Organization = typeof organizations.$inferSelect
@@ -29,11 +29,16 @@ export interface NewOrganization {
  * than generated here, the same way every other repo in this package takes
  * its scoping id as an argument instead of inventing one — it keeps id
  * generation in one place (the caller) regardless of which table is involved.
+ *
+ * `db` accepts `Executor`, not just `Database`: `@bloombot/auth`'s
+ * `sign-in.ts` calls this from inside its own transaction, creating a
+ * first-time sign-in's personal organization atomically with its account
+ * and membership (TEN-1).
  */
 export function createOrganization(
   organizationId: string,
   input: NewOrganization,
-  db: Database
+  db: Executor
 ): Organization {
   return db
     .insert(organizations)

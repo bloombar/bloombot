@@ -58,6 +58,12 @@ export const envSchema = z.object({
   DISCORD_OAUTH_BASE: z.url().default('https://discord.com/api/oauth2'),
   OPENAI_BASE_URL: z.url().default('https://api.openai.com/v1'),
   GOOGLE_ISSUER: z.url().default('https://accounts.google.com'),
+
+  // Google OAuth client id (AUTH-2). Checked as the `aud` claim on every ID
+  // token `packages/auth`'s `google.ts` verifies — an unset audience must
+  // never be treated as "accept any audience", so an empty value here makes
+  // the real verifier refuse every token rather than skip the check.
+  GOOGLE_CLIENT_ID: z.string().default(''),
 })
 
 /** The validated environment. */

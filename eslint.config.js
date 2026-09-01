@@ -14,6 +14,11 @@ const BROWSER_FORBIDDEN_PACKAGES = [
   '@bloombot/db',
   '@bloombot/config',
   '@bloombot/logger',
+  // @bloombot/auth depends on @bloombot/db and @bloombot/config (session and
+  // sign-in-token hashes, the admin allowlist), so it carries the same
+  // credential-surface risk transitively — reachable through this one import
+  // rather than the two direct ones the rule already blocks.
+  '@bloombot/auth',
 ]
 
 export default tseslint.config(

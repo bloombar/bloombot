@@ -479,3 +479,60 @@ export const usageCounters = sqliteTable(
     ),
   ]
 )
+
+// AUTH-1 — a single-use, passwordless sign-in link. Keyed on the email
+// address it was requested for, not an account id: the account a link
+// resolves to may not exist yet (AUTH-1's "an account is created and
+// accessed by a link" — a first-time sign-in creates it on redemption, see
+// `@bloombot/auth`'s `sign-in.ts`), so there is nothing to scope this row to
+// until the token is redeemed. Organization-independent for the same reason
+// `accounts` itself is (TEN-1: an account exists before any organization
+// does) — this table sits one step earlier still, before even the account.
+// `tokenHash` only: the plaintext value is generated and returned to the
+// caller exactly once, by `@bloombot/auth`'s `tokens.ts`, and is never
+// written to this table (AUTH-1's "stored as hashes"). `usedAt` is the
+// single-use marker; `repos/sign-in-tokens.ts#consumeSignInToken` sets it
+// with one conditional `UPDATE` rather than a `SELECT` then an `UPDATE`, so
+// two concurrent redemptions of the same token cannot both succeed — the
+// same reasoning `discordServerBindings`' re-claim guard documents for
+// TEN-3.
+export const signInTokens = sqliteTable(
+  'sign_in_tokens',
+  {
+    id: text('id').primaryKey(),
+    email: text('email').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: integer('expires_at').notNull(),
+    usedAt: integer('used_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [index('sign_in_tokens_email_idx').on(table.email)]
+)
+
+// AUTH-3 — an opaque, revocable session. Keyed on the account, not an
+// organization: a session authenticates a person across every organization
+// their account belongs to (which organization is acting is a separate,
+// per-request concern the API layer resolves), the same account-not-org
+// scoping `accounts` itself uses. `tokenHash` only, never the token itself —
+// this is *why* hashes are stored rather than tokens at all: administrative
+// revocation (single session, or every session of an account) only needs to
+// find and mark rows, never to recover a secret a stolen database row could
+// then replay (SPEC.md AUTH-3). `lastSeenAt` is touched on every successful
+// validation; `revokedAt` is nullable and covers both a single-session
+// revoke and a rotate-on-sign-in (the old row is revoked, a new one
+// created) — see `@bloombot/auth`'s `sessions.ts`.
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: integer('created_at').notNull(),
+    lastSeenAt: integer('last_seen_at').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    revokedAt: integer('revoked_at'),
+  },
+  (table) => [index('sessions_account_id_idx').on(table.accountId)]
+)

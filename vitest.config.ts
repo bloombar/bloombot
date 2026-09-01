@@ -18,6 +18,7 @@ export default defineConfig({
       '@bloombot/logger': sourceEntry('logger'),
       '@bloombot/schemas': sourceEntry('schemas'),
       '@bloombot/db': sourceEntry('db'),
+      '@bloombot/auth': sourceEntry('auth'),
       '@bloombot/legacy-import': sourceEntry('legacy-import'),
       '@bloombot/core': sourceEntry('core'),
       '@bloombot/openai': sourceEntry('openai'),
@@ -42,7 +43,10 @@ export default defineConfig({
     // untested part is obvious", not logic this floor exists to hold.
     // `packages/actions` joins it too (ACT-1..6): it is the single write
     // path every surface dispatches through, exactly the kind of
-    // logic-that-matters this floor exists to hold.
+    // logic-that-matters this floor exists to hold. `packages/auth` joins it
+    // too (AUTH-1..4): tokens, sessions and the identity-linking rule are
+    // exactly the security-critical logic this floor exists to hold to a
+    // standard, not the coverage of the platform as a whole.
     coverage: {
       provider: 'v8',
       include: [
@@ -51,6 +55,7 @@ export default defineConfig({
         'packages/openai/src/**/*.ts',
         'packages/discord/src/**/*.ts',
         'packages/actions/src/**/*.ts',
+        'packages/auth/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,
@@ -92,6 +97,15 @@ export default defineConfig({
         test: {
           name: 'db',
           root: './packages/db',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'auth',
+          root: './packages/auth',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

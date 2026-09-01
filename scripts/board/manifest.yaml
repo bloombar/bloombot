@@ -1374,7 +1374,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-2
   title: A stored prompt when the course has one, its own instructions otherwise
@@ -1386,7 +1386,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-3
   title: Answers are grounded in the course's own material
@@ -1397,7 +1397,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-4
   title: Continuity is an upstream conversation the platform remembers
@@ -1410,7 +1410,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-5
   title: Every request is bounded, and a transient failure is retried once
@@ -1423,7 +1423,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-6
   title: Citation markers never reach a student
@@ -1432,7 +1432,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: MDL-7
   title: No test ever calls OpenAI
@@ -1442,7 +1442,7 @@
   section: §21 Model Adapter
   family: MDL
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: ACT-1
   title: Every operation is an action

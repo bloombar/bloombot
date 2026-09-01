@@ -24,7 +24,6 @@ afterEach(() => {
 })
 
 const retryPolicy: RetryPolicy = {
-  maxAttempts: 3,
   baseDelayMs: 1000,
   backoffFactor: 2,
 }
@@ -48,6 +47,7 @@ describe('runNextJob: nothing to do', () => {
       handlers: new HandlerRegistry(),
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
@@ -65,6 +65,7 @@ describe('runNextJob: nothing to do', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
@@ -97,6 +98,7 @@ describe('runNextJob: success', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
@@ -133,6 +135,7 @@ describe('runNextJob: JOB-2 retry with backoff, bounded attempts', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     }
 
@@ -214,6 +217,7 @@ describe('runNextJob: JOB-2 retry with backoff, bounded attempts', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
@@ -252,6 +256,7 @@ describe('runNextJob: a payload that will not parse', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
@@ -285,9 +290,190 @@ describe('runNextJob: JOB-1, organization scoping through the claim', () => {
       handlers,
       owner: 'worker-1',
       leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
       retryPolicy,
     })
 
     expect(seenOrganizationId).toBe(organizationId)
+  })
+})
+
+/**
+ * Simulates the ABA hazard `ownsRunningJob`'s `{owner, claimExpiresAt}` pair
+ * exists to catch: this claim's own lease lapsed mid-run and a second
+ * worker's `claimNextJob` reclaimed the exact same row under a different
+ * owner — reaching past the repo layer on purpose (the same device the
+ * "a payload that will not parse" tests above already use), since driving
+ * this from two real `runNextJob` calls would need a real lease to actually
+ * expire mid-handler.
+ */
+function reclaimUnderAnotherOwner(testDatabase: TestDatabase, jobId: string) {
+  ;(testDatabase.db as any).$client
+    .prepare(
+      'update jobs set claimed_by = ?, claim_expires_at = ? where id = ?'
+    )
+    .run('worker-2', Date.now() + 60_000, jobId)
+}
+
+describe('runNextJob: rework finding 3 — a superseded claim is reported, not silently folded into another outcome', () => {
+  it('reports "superseded" rather than "succeeded" when another worker reclaimed the row before completeJob could write', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('noop', async () => {
+      reclaimUnderAnotherOwner(testDb, enqueued.id)
+    })
+
+    const logger = createFakeLogger()
+    const result = await runNextJob({
+      db: testDb.db,
+      logger,
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    // Before this fix, `completeJob` returning `undefined` fell back to
+    // `?? job` and this reported 'succeeded' — silently, with no log line —
+    // even though nothing was actually written under this claim.
+    expect(result.outcome).toBe('superseded')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'running', claimedBy: 'worker-2' })
+    expect(logger.warnCalls.length).toBeGreaterThan(0)
+  })
+
+  it('reports "superseded" rather than "failed" for a terminal failure whose claim was reclaimed first', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'flaky', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('flaky', async () => {
+      reclaimUnderAnotherOwner(testDb, enqueued.id)
+      throw new Error('boom')
+    })
+
+    const logger = createFakeLogger()
+    const result = await runNextJob({
+      db: testDb.db,
+      logger,
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('superseded')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'running', claimedBy: 'worker-2' })
+    expect(logger.warnCalls.length).toBeGreaterThan(0)
+  })
+
+  it('reports "superseded" rather than "retried" for a retryable failure whose claim was reclaimed first', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'flaky', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('flaky', async () => {
+      reclaimUnderAnotherOwner(testDb, enqueued.id)
+      throw new Error('boom')
+    })
+
+    const logger = createFakeLogger()
+    const result = await runNextJob({
+      db: testDb.db,
+      logger,
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('superseded')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'running', claimedBy: 'worker-2' })
+    expect(logger.warnCalls.length).toBeGreaterThan(0)
+  })
+})
+
+describe('runNextJob: rework finding 7 — a non-Error throw keeps something useful in the row', () => {
+  it('records a JSON-stringified reason rather than "[object Object]" for a thrown plain object', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'flaky', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('flaky', async () => {
+      throw { code: 42 }
+    })
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('failed')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row?.lastError).not.toMatch(/object Object/)
+    expect(row?.lastError).toBe('{"code":42}')
+  })
+})
+
+describe('runNextJob: rework finding 5 — a wedged handler is bounded by a timeout', () => {
+  it('fails the attempt with a clear reason once handlerTimeoutMs elapses, rather than awaiting a handler that never settles', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'wedged', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    // A handler whose own promise never resolves or rejects — the case
+    // finding 5 targets: no timeout, and this call would await it forever.
+    handlers.register('wedged', () => new Promise<void>(() => {}))
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 20,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('failed')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row?.lastError).toMatch(/did not settle within 20ms/)
   })
 })

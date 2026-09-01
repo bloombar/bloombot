@@ -1,19 +1,27 @@
 /**
- * JOB-2's retry policy: exponential backoff from a base delay, bounded by a
- * maximum number of attempts. Kept as pure arithmetic, no database and no
- * clock read inside it — `runner.ts` supplies the attempt number and reads
- * `Date.now()` itself, the same "never read from a clock inside a
- * repo/policy function" discipline `usage.ts`'s own module comment holds
- * itself to, so this is trivially testable without a fake timer.
+ * JOB-2's retry schedule: exponential backoff from a base delay. Kept as
+ * pure arithmetic, no database and no clock read inside it — `runner.ts`
+ * supplies the attempt number and reads `Date.now()` itself, the same
+ * "never read from a clock inside a repo/policy function" discipline
+ * `usage.ts`'s own module comment holds itself to, so this is trivially
+ * testable without a fake timer.
  *
- * See `docs/DECISIONS.md` for why these particular numbers (the schedule
- * and the bound) are configuration rather than constants, and why they are
- * what they are.
+ * The bound on attempts is `job.maxAttempts` on the row itself
+ * (`repos/jobs.ts#NewJob.maxAttempts`, enforced in `runner.ts`), not a field
+ * here — rework finding 4: an earlier `RetryPolicy.maxAttempts` field and a
+ * `JOB_MAX_ATTEMPTS` environment variable existed alongside it but were
+ * never read by anything, so raising the variable changed nothing an
+ * operator could observe. Deleted rather than wired up: nothing in this
+ * slice enqueues a job yet (`apps/worker`'s own module comment — the
+ * registry is empty), so there is no real call site to default from, and
+ * `repos/jobs.ts#NewJob.maxAttempts`'s own comment already settled the
+ * bound as "required, not defaulted" per-enqueue policy.
+ *
+ * See `docs/DECISIONS.md` for why the numbers here are configuration
+ * rather than constants, and why they are what they are.
  */
 
 export interface RetryPolicy {
-  /** JOB-2's bound: a job is retried at most this many times before it stops in a terminal `failed` state. */
-  maxAttempts: number
   /** The delay before the *second* attempt (the first retry) — attempt 1 never waits, since it runs the moment the job is first claimed. */
   baseDelayMs: number
   /** Multiplies the delay on each subsequent attempt. `1` is a fixed delay; anything greater than `1` grows the wait, which is what "backoff" means here. */

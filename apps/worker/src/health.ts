@@ -36,6 +36,25 @@ export function checkWorkerHealth(db: Database): WorkerHealthStatus {
   return { ready: database, database, queueDepth }
 }
 
+/**
+ * What `index.ts`'s own `getStatus` callback reports. Rework finding 6 —
+ * `ready: false` is correct the moment a shutdown begins (no new claim will
+ * be attempted), but the database stays open and reachable right up until
+ * `closeDb()` runs in `shutdown.ts` — hardcoding `database: false` for the
+ * whole drain read to an operator as a database outage rather than an
+ * orderly shutdown. A real round trip (`checkWorkerHealth`) is cheap and
+ * correct at every point: it reports `true` while draining, and only
+ * reports `false` once the connection is actually closed, which by then is
+ * also true.
+ */
+export function workerHealthStatus(
+  db: Database,
+  shuttingDown: boolean
+): WorkerHealthStatus {
+  const status = checkWorkerHealth(db)
+  return shuttingDown ? { ...status, ready: false } : status
+}
+
 export interface HealthServer {
   /** Stops accepting new connections and resolves once the server is fully closed. */
   close: () => Promise<void>

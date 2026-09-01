@@ -4,6 +4,8 @@
  * stand-in for `runNextJob` and no real database, timer or handler.
  */
 
+import type { Logger } from '@bloombot/logger'
+
 import type { InFlightJob } from './shutdown.js'
 
 /** The subset of `@bloombot/jobs`'s `runNextJob` this loop needs — just enough to decide whether to sleep before trying again. */
@@ -50,5 +52,46 @@ export function createWorkerLoop(deps: WorkerLoopDependencies): WorkerLoop {
     stop: () => {
       stopping = true
     },
+  }
+}
+
+/**
+ * Rework finding 2 — runs `loop` until `stop()` is called or `run()`
+ * itself rejects. `index.ts` used to attach a bare `.catch()` to
+ * `loop.run()` that only logged: `main()` then awaited that now-resolved
+ * promise and fell through to the end of its own body, leaving the health
+ * server (and the signal handlers registered after it) keeping the process
+ * alive — a zombie whose PID stays up and whose `checkWorkerHealth` keeps
+ * reporting `ready: true` (the database is still reachable) even though
+ * nothing will ever claim another job again, indistinguishable from a
+ * healthy idle worker to anything only watching the health endpoint. A
+ * transient error thrown out of `runOnce` (a blip inside `claimNextJob`,
+ * say) does exactly this.
+ *
+ * `apps/bot`'s own health design already leans on a crashed process
+ * actually exiting so a process manager's restart policy (pm2 — see
+ * docs/DECISIONS.md's "why not a richer health payload") is what recovers
+ * it, rather than a health check flipping unhealthy and something else
+ * noticing on its own schedule. This follows the same choice: log, then
+ * exit non-zero, so pm2 restarts the process with a fresh claim rather than
+ * leaving a wedged one running indefinitely.
+ */
+export async function runLoopOrExit(
+  loop: Pick<WorkerLoop, 'run'>,
+  deps: {
+    logger: Pick<Logger, 'error'>
+    /** Overridable so a test can observe the call instead of ending the test process. Defaults to `process.exit`. */
+    exit?: (code: number) => void
+  }
+): Promise<void> {
+  const exit = deps.exit ?? process.exit
+  try {
+    await loop.run()
+  } catch (error) {
+    deps.logger.error(
+      { err: error },
+      'apps/worker: the job loop crashed — exiting so a process manager can restart it'
+    )
+    exit(1)
   }
 }

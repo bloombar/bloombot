@@ -11,7 +11,11 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { createWorkerLoop } from '../src/loop.js'
+import {
+  createWorkerLoop,
+  runLoopOrExit,
+  type WorkerLoop,
+} from '../src/loop.js'
 import { InFlightJob } from '../src/shutdown.js'
 
 describe('createWorkerLoop', () => {
@@ -109,5 +113,45 @@ describe('createWorkerLoop', () => {
     // Exactly one claim attempt: the loop slept once, called stop() from
     // inside that sleep, and never looped back for a second claim.
     expect(runOnce).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * Rework finding 2 — `runLoopOrExit` (`loop.ts`'s own comment has the full
+ * reasoning): a `loop.run()` that rejects used to be swallowed by
+ * `index.ts`'s own bare `.catch()`, leaving the process a zombie — still
+ * running, health still reporting ready, but never claiming another job.
+ * `exit` is stubbed here so this test observes the call instead of ending
+ * the test process.
+ */
+describe('runLoopOrExit', () => {
+  it('does nothing beyond awaiting run() when the loop stops normally', async () => {
+    const loop: Pick<WorkerLoop, 'run'> = {
+      run: vi.fn().mockResolvedValue(undefined),
+    }
+    const logger = { error: vi.fn() }
+    const exit = vi.fn()
+
+    await runLoopOrExit(loop, { logger, exit })
+
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(exit).not.toHaveBeenCalled()
+  })
+
+  it('logs and exits non-zero when the loop rejects, rather than leaving the process running with nothing left claiming jobs', async () => {
+    const crash = new Error('claimNextJob: database is locked')
+    const loop: Pick<WorkerLoop, 'run'> = {
+      run: vi.fn().mockRejectedValue(crash),
+    }
+    const logger = { error: vi.fn() }
+    const exit = vi.fn()
+
+    await runLoopOrExit(loop, { logger, exit })
+
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: crash },
+      expect.stringContaining('the job loop crashed')
+    )
+    expect(exit).toHaveBeenCalledWith(1)
   })
 })

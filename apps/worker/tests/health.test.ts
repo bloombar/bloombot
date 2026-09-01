@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   checkWorkerHealth,
   startHealthServer,
+  workerHealthStatus,
   type HealthServer,
 } from '../src/health.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -77,6 +78,36 @@ describe('checkWorkerHealth', () => {
     const status = checkWorkerHealth(testDb.db)
 
     expect(status).toEqual({ ready: false, database: false, queueDepth: 0 })
+  })
+})
+
+describe('workerHealthStatus (rework finding 6)', () => {
+  it('reports the database as reachable while draining, not hardcoded false', () => {
+    testDb = createTestDatabase()
+
+    const status = workerHealthStatus(testDb.db, true)
+
+    // Before this fix, `index.ts` hardcoded `database: false` for the whole
+    // drain — untrue here, since the connection is still open — which read
+    // to an operator as a database outage rather than an orderly shutdown.
+    expect(status).toEqual({ ready: false, database: true, queueDepth: 0 })
+  })
+
+  it('still reports the database unreachable while draining once it is actually closed', () => {
+    testDb = createTestDatabase()
+    closeDatabase(testDb.db)
+
+    const status = workerHealthStatus(testDb.db, true)
+
+    expect(status).toEqual({ ready: false, database: false, queueDepth: 0 })
+  })
+
+  it('matches checkWorkerHealth exactly when not shutting down', () => {
+    testDb = createTestDatabase()
+
+    expect(workerHealthStatus(testDb.db, false)).toEqual(
+      checkWorkerHealth(testDb.db)
+    )
   })
 })
 

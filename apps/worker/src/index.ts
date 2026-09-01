@@ -32,8 +32,8 @@ import {
 import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
 
-import { checkWorkerHealth, startHealthServer } from './health.js'
-import { createWorkerLoop } from './loop.js'
+import { startHealthServer, workerHealthStatus } from './health.js'
+import { createWorkerLoop, runLoopOrExit } from './loop.js'
 import { createShutdown, InFlightJob } from './shutdown.js'
 
 const PROCESS_NAME = 'worker'
@@ -47,8 +47,13 @@ async function main(): Promise<void> {
   const healthPort = CONFIG.WORKER_HEALTH_PORT
   const leaseMs = CONFIG.JOB_CLAIM_LEASE_MS
   const pollIntervalMs = CONFIG.JOB_POLL_INTERVAL_MS
+  const handlerTimeoutMs = CONFIG.JOB_HANDLER_TIMEOUT_MS
+  // Rework finding 4 — the bound on attempts is `job.maxAttempts` on the
+  // row itself (`repos/jobs.ts#NewJob.maxAttempts`, enforced in
+  // `runner.ts`), not part of this policy; see `retry.ts`'s own module
+  // comment for why the earlier `maxAttempts` field here was deleted rather
+  // than wired up.
   const retryPolicy: RetryPolicy = {
-    maxAttempts: CONFIG.JOB_MAX_ATTEMPTS,
     baseDelayMs: CONFIG.JOB_RETRY_BASE_DELAY_MS,
     backoffFactor: CONFIG.JOB_RETRY_BACKOFF_FACTOR,
   }
@@ -65,25 +70,37 @@ async function main(): Promise<void> {
   const handlers = new HandlerRegistry()
 
   let shuttingDown = false
-  const health = await startHealthServer(healthPort, () => {
-    if (shuttingDown) return { ready: false, database: false, queueDepth: 0 }
-    return checkWorkerHealth(db)
-  })
+  // `workerHealthStatus` (finding 6 of this rework — `health.ts`'s own
+  // comment has the full reasoning) reports a real, fresh database round
+  // trip even while draining, only overriding `ready`.
+  const health = await startHealthServer(healthPort, () =>
+    workerHealthStatus(db, shuttingDown)
+  )
 
   const inFlight = new InFlightJob()
   const loop = createWorkerLoop({
     runOnce: () =>
-      runNextJob({ db, logger, handlers, owner, leaseMs, retryPolicy }),
+      runNextJob({
+        db,
+        logger,
+        handlers,
+        owner,
+        leaseMs,
+        handlerTimeoutMs,
+        retryPolicy,
+      }),
     pollIntervalMs,
     inFlight,
   })
 
-  const loopPromise = loop.run().catch((error: unknown) => {
-    logger.error({ err: error }, 'apps/worker: the job loop crashed')
-  })
+  // Finding 2 of this rework — `runLoopOrExit` (`loop.ts`'s own comment has
+  // the full reasoning) exits the process non-zero on a crash rather than
+  // merely logging and returning, so this never becomes a zombie: still
+  // running, health still `ready: true`, but claiming nothing ever again.
+  const loopPromise = runLoopOrExit(loop, { logger })
 
   logger.info(
-    { owner, healthPort, pollIntervalMs, leaseMs },
+    { owner, healthPort, pollIntervalMs, leaseMs, handlerTimeoutMs },
     'apps/worker: started'
   )
 

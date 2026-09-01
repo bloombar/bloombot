@@ -1809,13 +1809,42 @@ enough for the slowest job this slice anticipates, short enough that a crash is 
 class period) rather than a measurement — there is no real job to time yet, since none is wired to the queue
 in this slice. Revisit once phase 9/10 lands real handlers and their actual running time is known.
 
-**Choice, on the backoff.** `JOB_MAX_ATTEMPTS` defaults to 5, `JOB_RETRY_BASE_DELAY_MS` to 1000, and
-`JOB_RETRY_BACKOFF_FACTOR` to 2 — exponential backoff (`packages/jobs/src/retry.ts#backoffDelayMs`) from one
-second, doubling each attempt: 1s, 2s, 4s, 8s before the fifth and final attempt, then terminal. This is the
-ordinary shape for a transient-failure retry (a rate limit, a momentary network blip) without a real workload
-to tune against yet; the four numbers are each their own environment variable rather than folded into one
-"retry policy" constant, so a later phase that finds five attempts too few for, say, a large roster import can
-raise it without touching code.
+**Rework finding 5 — `JOB_HANDLER_TIMEOUT_MS`, and what a fired timeout means for idempotency.** Before this,
+`runner.ts` awaited a handler call unbounded, and `apps/worker` runs one job at a time (`loop.ts`'s own module
+comment) — a handler that never settled would stall every later claim indefinitely, invisibly, since the
+lease alone does not reclaim a job while the very worker that claimed it is the one still "holding" it, wedged
+mid-`await`. `JOB_HANDLER_TIMEOUT_MS` (default 240s, deliberately under `JOB_CLAIM_LEASE_MS`'s own 300s
+default, so the timeout is the thing that actually fires and this worker can move on to its next claim while
+the lease it holds the stuck job under is still comfortably unexpired) bounds that wait
+(`packages/jobs/src/runner.ts#runHandlerWithTimeout`); past it, the attempt fails (or retries) with a clear
+reason rather than hanging. What it does *not* do: stop the handler. JavaScript has no cooperative cancellation
+for a `Promise` already in flight (`apps/worker/src/shutdown.ts`'s own module comment already says this about
+shutdown, for the same underlying reason) — a handler still running underneath a fired timeout keeps running,
+and may still write, call an upstream API, or otherwise act *after* `runNextJob` has already told the row it
+failed or is due for retry. Nothing in this slice's own registry is real yet to make that concrete, but the
+obligation lands on phase 9/10's own handlers: a handler that can be timed out here must tolerate being invoked
+again (by a retry, or by a second worker reclaiming the row once the lease lapses) while its own earlier,
+"timed-out" invocation might still be mid-flight — the same idempotency discipline `JOB-3`'s "a job runs once,
+even with a worker restart in the middle" already asks of every handler, just triggered by a timeout rather
+than a crash.
+
+**Choice, on the backoff.** `JOB_RETRY_BASE_DELAY_MS` defaults to 1000 and `JOB_RETRY_BACKOFF_FACTOR` to 2 —
+exponential backoff (`packages/jobs/src/retry.ts#backoffDelayMs`) from one second, doubling each attempt: 1s,
+2s, 4s, 8s before whichever attempt is a job's last. This is the ordinary shape for a transient-failure retry
+(a rate limit, a momentary network blip) without a real workload to tune against yet; each is its own
+environment variable rather than folded into one "retry policy" constant, so a later phase that finds the
+schedule too aggressive (or too gentle) for, say, a large roster import can raise it without touching code.
+
+**Rework finding 4 — the bound on attempts is `job.maxAttempts`, not a policy field.** The row itself carries
+its own bound (`repos/jobs.ts#NewJob.maxAttempts`, required per-enqueue, checked against `job.attempts` in
+`runner.ts`), not a shared `RetryPolicy` default: `RetryPolicy` originally also carried a `maxAttempts` field,
+alongside its own `JOB_MAX_ATTEMPTS` environment variable defaulting to 5, but `runner.ts` never actually read
+either — the bound it enforced was always `job.maxAttempts` on the row. An operator raising `JOB_MAX_ATTEMPTS`
+to give a large roster import more headroom would have changed nothing, silently. Both were deleted rather
+than wired up as a default: nothing in this slice enqueues a job yet (`apps/worker`'s own module comment — the
+registry is empty), so there was no real call site to default from, and `NewJob.maxAttempts`'s own comment
+had already settled the bound as "required, not defaulted" per-enqueue policy, not something a shared default
+should quietly override.
 
 **Choice, on where admission sits relative to the allowance.** `JOB-4`'s admission gate is acquired in
 `answerQuestion` *before* `usage.reserveUsageSlot`, not around `model.ask` alone. The alternative — reserve the

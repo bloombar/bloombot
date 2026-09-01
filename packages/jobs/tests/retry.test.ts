@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest'
 import { backoffDelayMs, type RetryPolicy } from '../src/retry.js'
 
 const policy: RetryPolicy = {
-  maxAttempts: 5,
   baseDelayMs: 1000,
   backoffFactor: 2,
 }
@@ -27,7 +26,6 @@ describe('backoffDelayMs (JOB-2)', () => {
 
   it('a factor of 1 is a fixed delay, not growing backoff', () => {
     const fixed: RetryPolicy = {
-      maxAttempts: 5,
       baseDelayMs: 500,
       backoffFactor: 1,
     }

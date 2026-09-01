@@ -60,20 +60,38 @@ export const envSchema = z.object({
   // "dependencies as arguments" discipline) — `apps/worker` is the one place
   // that reads them, at startup, the same as every other `CONFIG` value
   // apps/bot and apps/api already read once in their own `main()`.
+  //
+  // No `JOB_MAX_ATTEMPTS` here (rework finding 4) — the bound on attempts
+  // is `job.maxAttempts` on the row itself (`repos/jobs.ts#NewJob`,
+  // required per-enqueue, enforced in `packages/jobs/src/runner.ts`), not a
+  // policy default; an earlier variable of this name existed but was never
+  // read by anything, so raising it changed nothing an operator could
+  // observe.
   JOB_CLAIM_LEASE_MS: z.coerce.number().int().min(1).default(300_000),
-  JOB_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
   JOB_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1_000),
   JOB_RETRY_BACKOFF_FACTOR: z.coerce.number().min(1).default(2),
   // How long apps/worker sleeps between claim attempts once the queue is
   // found empty.
   JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2_000),
+  // Rework finding 5 — bounds how long a single handler call may run before
+  // `runNextJob` gives up on it and fails the attempt, rather than awaiting
+  // it unbounded and stalling every later claim (`apps/worker` runs one job
+  // at a time). Defaults under `JOB_CLAIM_LEASE_MS`'s own default so a
+  // timeout fires — and this worker can move on to its next claim — while
+  // the lease this attempt claimed the job under is still comfortably held;
+  // see docs/DECISIONS.md for the full reasoning and what a handler still
+  // running underneath a fired timeout means for idempotency.
+  JOB_HANDLER_TIMEOUT_MS: z.coerce.number().int().min(1).default(240_000),
 
   // JOB-4: the bound on concurrent model calls, and how long a request
   // waits for a slot before it is told plainly it could not be served —
   // both configuration, not a constant compiled into a client (JOB-4's own
-  // text). Read lazily by `@bloombot/core`'s `answer.ts`, the one place
-  // JOB-4 applies (see docs/DECISIONS.md for the default and the ordering
-  // decision this bound is part of).
+  // text). Read once at startup by whichever process actually answers —
+  // `apps/bot`'s own `main()` today — not by `@bloombot/core`'s `answer.ts`
+  // itself: `packages/core` never reads `CONFIG` at all (see
+  // docs/DECISIONS.md's "why `packages/core` itself never reads `CONFIG`"
+  // for the coupling that first version hit and why this slice moved the
+  // read to the process instead).
   MODEL_ADMISSION_LIMIT: z.coerce.number().int().min(1).default(5),
   MODEL_ADMISSION_WAIT_MS: z.coerce.number().int().min(0).default(15_000),
 

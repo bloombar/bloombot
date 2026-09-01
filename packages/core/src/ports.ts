@@ -66,6 +66,16 @@ export interface ModelAnswer {
   text: string
   /** A new (or changed) upstream thread id, when the adapter's call produced one. `null` when the conversation's existing id is unchanged. */
   upstreamThreadId: string | null
+  /**
+   * The model this call actually ran against — COST-1's "every call
+   * records ... the model", read back here rather than assumed from
+   * `ModelRequest.model`: that field is `null` whenever a course leaves it
+   * unconfigured (D-3), and it is the *adapter*'s business which concrete
+   * model a `null` falls back to (`@bloombot/openai`'s own `DEFAULT_MODEL`,
+   * this file's own module comment on `ModelRequest.model`) — `answer.ts`
+   * must not guess at that fallback itself just to price the call.
+   */
+  model: string
   /** Token counts, when the adapter's provider reports them. `undefined` when it does not — this port does not require every adapter to know. */
   usage?: {
     inputTokens: number

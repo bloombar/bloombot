@@ -57,6 +57,13 @@
       "when": 1788288606039,
       "tag": "0007_marvelous_mandrill",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788292715449,
+      "tag": "0008_colossal_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

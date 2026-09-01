@@ -10,7 +10,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   conversations,
+  costLedger,
   courses,
+  organizations,
   people,
   schema,
   usage,
@@ -219,6 +221,357 @@ describe('answerQuestion (CORE-3): the daily allowance is checked before the mod
     )
     expect(fourth.kind).toBe('answered')
     expect(model.calls).toHaveLength(3)
+  })
+})
+
+describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one ledger row, attributed', () => {
+  it('records the organization, course, person, model and tokens', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient({
+      model: 'gpt-4o',
+      usage: { inputTokens: 100, outputTokens: 50 },
+    })
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(result.kind).toBe('answered')
+
+    // Finding 4 of this rework — this test's own name promises "model and
+    // tokens", which the per-course summary alone cannot prove (it has
+    // neither field). Read the raw row `answerQuestion` actually wrote.
+    const rows = testDb.db.select().from(schema.costLedgerEntries).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.organizationId).toBe(organizationId)
+    expect(rows[0]?.courseId).toBe(courseId)
+    expect(rows[0]?.personId).toBe(personId)
+    expect(rows[0]?.model).toBe('gpt-4o')
+    expect(rows[0]?.inputTokens).toBe(100)
+    expect(rows[0]?.outputTokens).toBe(50)
+
+    const summary = costLedger.getOrganizationUsageSummary(
+      organizationId,
+      testDb.db
+    )
+    expect(summary.courses).toEqual([
+      {
+        courseId,
+        courseTitle: 'Test Course',
+        // Default pricing, unconfigured (`answerQuestion`'s own
+        // `NO_PRICING_CONFIGURED`): 0 micros, but still a real, attributed
+        // row — proven by `callCount` below, not by `costMicros` alone.
+        costMicros: 0,
+        estimatedCostMicros: 0,
+        callCount: 1,
+      },
+    ])
+  })
+
+  it('cannot write a second, unattributed ledger row — the ordinary path always attributes organization, course and person', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    const row = costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId: randomUUID(), // a course that does not exist anywhere
+        personId,
+        model: 'gpt-4o',
+        inputTokens: 1,
+        outputTokens: 1,
+        costMicros: 1,
+        measurement: 'measured',
+      },
+      testDb.db
+    )
+    expect(row).toBeUndefined()
+  })
+})
+
+describe('answerQuestion (COST-6): usage the provider never reported is recorded as an estimate, never a measurement', () => {
+  it('estimates tokens and cost from the request/answer text, flagged estimated, when the model reports no usage — never a flat zero (finding 2 of this rework)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    // `FakeModelClient`'s own default has no `usage` — the same shape
+    // `@bloombot/openai`'s own `extractUsage` returns when the provider
+    // reports none (MDL-5).
+    const model = new FakeModelClient({ model: 'gpt-4o' })
+    const logger = createFakeLogger()
+    const pricing = {
+      rates: {},
+      defaultRate: {
+        inputMicrosPerMillionTokens: 1_000_000,
+        outputMicrosPerMillionTokens: 1_000_000,
+      },
+    }
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger, pricing }
+    )
+
+    const rows = testDb.db.select().from(schema.costLedgerEntries).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.measurement).toBe('estimated')
+    // No usage reported, but the question ('q1') and answer
+    // (`FakeModelClient`'s own default text) are still in hand —
+    // `pricing.ts#computeCost`'s own character-based estimate, not `null`.
+    expect(rows[0]?.inputTokens).toBeGreaterThan(0)
+    expect(rows[0]?.outputTokens).toBeGreaterThan(0)
+    // Priced against that estimate, not the flat `costMicros: 0` this used
+    // to record — a cap that sums this column can actually see it.
+    expect(rows[0]?.costMicros).toBeGreaterThan(0)
+  })
+
+  it('prices an unpriced model against the configured default rate, flagged estimated — not silently zero', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient({
+      model: 'some-unlisted-model',
+      usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    })
+    const logger = createFakeLogger()
+    const pricing = {
+      rates: {
+        'gpt-4o': {
+          inputMicrosPerMillionTokens: 111,
+          outputMicrosPerMillionTokens: 222,
+        },
+      },
+      defaultRate: {
+        inputMicrosPerMillionTokens: 500_000,
+        outputMicrosPerMillionTokens: 500_000,
+      },
+    }
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger, pricing }
+    )
+
+    const rows = testDb.db.select().from(schema.costLedgerEntries).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.measurement).toBe('estimated')
+    // The default rate, applied to real tokens — not zero.
+    expect(rows[0]?.costMicros).toBe(1_000_000) // 500_000 + 500_000
+  })
+})
+
+describe('answerQuestion (COST-3): an organization at its spending cap is refused before any model call', () => {
+  it('refuses with declined-over-cap, calls the model zero times, and charges nothing — under the cap the call proceeds and the ledger grows', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    organizations.setSpendingCap(organizationId, 100, testDb.db)
+    const model = new FakeModelClient({
+      model: 'gpt-4o',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    })
+    const logger = createFakeLogger()
+    const day = '2026-01-01'
+
+    // Under the cap (nothing spent yet): the call proceeds and the ledger
+    // grows by one row.
+    const first = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(first.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+    expect(
+      costLedger.getOrganizationSpentMicros(organizationId, testDb.db)
+    ).toBe(0)
+
+    // Push the organization's own recorded spend to (or past) its cap,
+    // directly — simulating an organization that has already spent enough.
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId,
+        personId,
+        model: 'gpt-4o',
+        inputTokens: 1,
+        outputTokens: 1,
+        costMicros: 100,
+        measurement: 'measured',
+      },
+      testDb.db
+    )
+    expect(costLedger.hasReachedSpendingCap(organizationId, testDb.db)).toBe(
+      true
+    )
+
+    const second = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q2',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    // Over the cap: refused with the outcome that says so, before any model
+    // call — the fake recorded no second call at all.
+    expect(second).toEqual({ kind: 'declined-over-cap' })
+    expect(model.calls).toHaveLength(1)
+    // Nothing charged: the ledger still holds only the two rows already
+    // written above (the answered call, and the one recorded directly) —
+    // the refusal itself added nothing.
+    const summary = costLedger.getOrganizationUsageSummary(
+      organizationId,
+      testDb.db
+    )
+    expect(summary.courses[0]?.callCount).toBe(2)
+  })
+
+  it('a refusal for the cap does not consume the daily allowance, and a refusal for the allowance does not touch the cap', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { maxRequestsPerDay: 1 }
+    )
+    organizations.setSpendingCap(organizationId, 1, testDb.db)
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId,
+        personId,
+        model: 'gpt-4o',
+        inputTokens: 1,
+        outputTokens: 1,
+        costMicros: 1,
+        measurement: 'measured',
+      },
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+    const day = '2026-01-01'
+
+    // Already over the cap: refused before the daily allowance is ever
+    // touched — the day's count stays at zero, not consumed by a refusal
+    // that was never about the daily limit at all.
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q1',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(result).toEqual({ kind: 'declined-over-cap' })
+    expect(model.calls).toHaveLength(0)
+    expect(
+      usage.getUsageCount(organizationId, courseId, personId, day, testDb.db)
+    ).toBe(0)
+
+    // Finding 4 of this rework — the other half of this test's own name: a
+    // refusal for the daily allowance must not touch the cap either. A
+    // fresh organization, well under its own cap, whose daily allowance is
+    // exhausted by the one call above — `declined-over-limit` is returned
+    // before `hasReachedSpendingCap` is even read (this file's own module
+    // comment: the cap check runs *before* the allowance, so a request that
+    // never reaches the allowance check never reaches the cap check either
+    // — and, symmetrically, a decline that never ran a model call writes no
+    // ledger row for the cap to sum).
+    const other = seedCourseAndPerson(testDb.db, { maxRequestsPerDay: 1 })
+    organizations.setSpendingCap(other.organizationId, 1_000_000, testDb.db)
+    const first = await answerQuestion(
+      {
+        organizationId: other.organizationId,
+        courseId: other.courseId,
+        personId: other.personId,
+        surface: 'discord',
+        text: 'q1',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(first.kind).toBe('answered-last-request')
+    const spentAfterFirst = costLedger.getOrganizationSpentMicros(
+      other.organizationId,
+      testDb.db
+    )
+
+    const second = await answerQuestion(
+      {
+        organizationId: other.organizationId,
+        courseId: other.courseId,
+        personId: other.personId,
+        surface: 'discord',
+        text: 'q2',
+        day,
+      },
+      { db: testDb.db, model, logger }
+    )
+    expect(second).toEqual({ kind: 'declined-over-limit' })
+    // The refusal itself charged nothing beyond what the one answered call
+    // above already recorded — untouched by the decline.
+    expect(
+      costLedger.getOrganizationSpentMicros(other.organizationId, testDb.db)
+    ).toBe(spentAfterFirst)
+    expect(
+      costLedger.hasReachedSpendingCap(other.organizationId, testDb.db)
+    ).toBe(false)
   })
 })
 
@@ -1158,7 +1511,7 @@ describe('answerQuestion (JOB-4): admission bounds concurrent model calls', () =
         maxConcurrentCalls = Math.max(maxConcurrentCalls, concurrentCalls)
         await new Promise((resolve) => setTimeout(resolve, 30))
         concurrentCalls -= 1
-        return { text: 'ok', upstreamThreadId: 'thread-1' }
+        return { text: 'ok', upstreamThreadId: 'thread-1', model: 'fake-model' }
       },
     }
 
@@ -1199,7 +1552,7 @@ describe('answerQuestion (JOB-4): admission bounds concurrent model calls', () =
       ask: async () => {
         // Held far longer than the second caller's own 20ms wait ceiling.
         await new Promise((resolve) => setTimeout(resolve, 200))
-        return { text: 'ok', upstreamThreadId: 'thread-1' }
+        return { text: 'ok', upstreamThreadId: 'thread-1', model: 'fake-model' }
       },
     }
 

@@ -31,14 +31,18 @@ import {
   type OmitPartialGroupDMChannel,
 } from 'discord.js'
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, getModelPricingTable } from '@bloombot/config'
 import {
   closeDatabase,
   openDatabase,
   runMigrations,
   type Database,
 } from '@bloombot/db'
-import type { ModelClient } from '@bloombot/core'
+import {
+  createCountingModelClient,
+  type ModelClient,
+  type PricingTable,
+} from '@bloombot/core'
 import { handleMention } from '@bloombot/discord'
 import { createAdmissionGate, type AdmissionGate } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
@@ -77,6 +81,8 @@ interface MessageHandlerDeps {
   logger: Logger
   /** JOB-4's bound on concurrent model calls — built once in `main()`, from `CONFIG`, and shared across every message this process handles. */
   admission: AdmissionGate
+  /** COST-1/COST-6's per-model rates — built once in `main()`, from `CONFIG.MODEL_PRICING_JSON`, and shared across every message this process handles. */
+  pricing: PricingTable
 }
 
 /** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
@@ -100,6 +106,7 @@ async function onMessageCreate(
     day: today(),
     botDisplayName: deps.botDisplayName,
     admission: deps.admission,
+    pricing: deps.pricing,
   })
 
   deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
@@ -123,7 +130,16 @@ async function main(): Promise<void> {
   const db = openDatabase(databasePath)
   runMigrations(db)
 
-  const model = createOpenAiModelClient({ apiKey: openaiApiKey, logger })
+  // COST-5 — wrapped once, here, so every call this process ever makes
+  // (including every retry `@bloombot/openai`'s own adapter takes
+  // internally, which this wrapper cannot see or double-count — it only
+  // observes `ModelClient.ask` itself) is counted; `getModelStats` below
+  // hands the running total to the health endpoint.
+  const { client: countingModel, getStats: getModelStats } =
+    createCountingModelClient(
+      createOpenAiModelClient({ apiKey: openaiApiKey, logger })
+    )
+  const model = countingModel
   // JOB-4 — one gate, shared across every message this process handles;
   // `@bloombot/core`'s own `answerQuestion` applies no bound at all when a
   // caller omits this (its own module comment says why), so building the
@@ -133,6 +149,10 @@ async function main(): Promise<void> {
     limit: admissionLimit,
     waitMs: admissionWaitMs,
   })
+  // COST-1/COST-6 — the real, configured rate table, the same "read CONFIG
+  // once in main(), thread it through" discipline `admission` above already
+  // follows: `@bloombot/core` itself never reads `@bloombot/config` (D-29).
+  const pricing = getModelPricingTable(CONFIG.MODEL_PRICING_JSON)
 
   const client = new Client({
     intents: [
@@ -159,7 +179,11 @@ async function main(): Promise<void> {
   // last changed. Finding 4 — wired to the gateway's full lifecycle
   // (`gateway-health.ts`), not just latched `true` on the first `ClientReady`.
   let gatewayConnected = false
-  const health = await startHealthServer(healthPort, () => gatewayConnected)
+  const health = await startHealthServer(
+    healthPort,
+    () => gatewayConnected,
+    getModelStats
+  )
   wireGatewayHealth(client, (connected) => {
     gatewayConnected = connected
   })
@@ -192,6 +216,7 @@ async function main(): Promise<void> {
           model,
           logger,
           admission,
+          pricing,
         }).catch((error: unknown) => {
           logger.error(
             { err: error },

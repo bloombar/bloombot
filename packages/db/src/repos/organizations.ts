@@ -63,3 +63,24 @@ export function getOrganizationById(
     .where(eq(organizations.id, organizationId))
     .get()
 }
+
+/**
+ * Set (or clear, with `null`) COST-3's spending cap. There is no action
+ * layer wired to this in this slice (the brief for COST-1..6 excludes the
+ * admin console this would eventually be set from) — it exists so a test,
+ * or a future admin action, can configure a cap without reaching for raw
+ * SQL. `undefined` when `organizationId` does not exist, the same
+ * "cannot tell you" refusal every other lookup in this file gives.
+ */
+export function setSpendingCap(
+  organizationId: string,
+  spendingCapMicros: number | null,
+  db: Database
+): Organization | undefined {
+  return db
+    .update(organizations)
+    .set({ spendingCapMicros })
+    .where(eq(organizations.id, organizationId))
+    .returning()
+    .get()
+}

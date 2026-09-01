@@ -173,6 +173,7 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/courseInstructions.save',
         'POST /organizations/:organizationId/actions/courseInstructions.list',
         'POST /organizations/:organizationId/actions/courseInstructions.restore',
+        'POST /organizations/:organizationId/actions/costLedger.organizationUsage',
         'POST /organizations/:organizationId/discord-servers/install/begin',
         'POST /organizations/:organizationId/discord-servers/install/callback',
       ].sort()

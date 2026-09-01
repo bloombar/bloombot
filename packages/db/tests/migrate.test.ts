@@ -62,6 +62,7 @@ describe('runMigrations', () => {
       '__drizzle_migrations',
       'accounts',
       'conversations',
+      'cost_ledger_entries',
       'course_attachments',
       'course_categories',
       'course_channels',
@@ -85,6 +86,7 @@ describe('runMigrations', () => {
       'id',
       'is_personal',
       'name',
+      'spending_cap_micros',
     ])
     expect(schema.accounts).toEqual([
       'created_at',

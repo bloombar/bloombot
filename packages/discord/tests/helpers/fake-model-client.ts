@@ -11,6 +11,10 @@ export interface FakeModelClientOptions {
   /** The text every successful `ask` resolves with, unless overridden per test. */
   answerText?: string
   upstreamThreadId?: string | null
+  /** The model every successful `ask` reports it ran against (COST-1). Defaults to a fixed string. */
+  model?: string
+  /** Token counts every successful `ask` reports (COST-1/COST-6). `undefined` (the default) simulates a provider that reports no usage at all. */
+  usage?: { inputTokens: number; outputTokens: number }
 }
 
 export class FakeModelClient implements ModelClient {
@@ -19,11 +23,15 @@ export class FakeModelClient implements ModelClient {
 
   private answerText: string
   private upstreamThreadId: string | null
+  private model: string
+  private usage: { inputTokens: number; outputTokens: number } | undefined
   private nextError: Error | null = null
 
   constructor(options: FakeModelClientOptions = {}) {
     this.answerText = options.answerText ?? 'a fake answer'
     this.upstreamThreadId = options.upstreamThreadId ?? 'fake-thread-1'
+    this.model = options.model ?? 'fake-model'
+    this.usage = options.usage
   }
 
   /** The *next* call to `ask` rejects with `error` instead of answering — CORE-5's failure path. */
@@ -38,6 +46,17 @@ export class FakeModelClient implements ModelClient {
       this.nextError = null
       throw error
     }
-    return { text: this.answerText, upstreamThreadId: this.upstreamThreadId }
+    return this.usage
+      ? {
+          text: this.answerText,
+          upstreamThreadId: this.upstreamThreadId,
+          model: this.model,
+          usage: this.usage,
+        }
+      : {
+          text: this.answerText,
+          upstreamThreadId: this.upstreamThreadId,
+          model: this.model,
+        }
   }
 }

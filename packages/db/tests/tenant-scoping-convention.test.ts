@@ -57,8 +57,13 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    is `apps/worker`'s own health endpoint's "how deep is the queue"
 //    (JOB-5) — an operational metric about the queue as a whole, the same
 //    class `deleteExpiredInstallStates` already is.
+//  - cost-ledger.ts: `listOrganizationTotals` is COST-4's platform
+//    administrator read — "usage per organization", spanning every
+//    organization by definition, the same class `countQueuedJobs` already
+//    is one level up from every other function in this file.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
+  'cost-ledger.ts': ['listOrganizationTotals'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
   'discord-install-states.ts': [
     'createInstallState',
@@ -150,13 +155,14 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the thirteen repo files this test is written against', () => {
+  it('found the sixteen repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
       [
         'accounts.ts',
         'conversations.ts',
+        'cost-ledger.ts',
         'course-attachments.ts',
         'course-instruction-revisions.ts',
         'courses.ts',

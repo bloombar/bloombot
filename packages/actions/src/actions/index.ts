@@ -45,6 +45,7 @@ import {
 } from './discord-servers.js'
 import { getJobAction } from './jobs.js'
 import { importRosterAction } from './roster.js'
+import { organizationUsageAction } from './cost-ledger.js'
 
 export {
   archiveProjectAction,
@@ -77,6 +78,10 @@ export {
 } from './discord-servers.js'
 export { getJobAction, type JobStatus } from './jobs.js'
 export { importRosterAction } from './roster.js'
+export {
+  organizationUsageAction,
+  type OrganizationUsageReport,
+} from './cost-ledger.js'
 
 /**
  * Every action this slice ports, registered once.
@@ -136,5 +141,6 @@ export function createPlatformRegistry(options?: {
   registry.register(saveCourseInstructionsAction)
   registry.register(listCourseInstructionRevisionsAction)
   registry.register(restoreCourseInstructionRevisionAction)
+  registry.register(organizationUsageAction)
   return registry
 }

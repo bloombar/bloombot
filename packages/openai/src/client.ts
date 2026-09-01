@@ -251,10 +251,13 @@ export function createOpenAiModelClient(
       // `ModelAnswer.usage` (ports.ts) is optional, not
       // optional-or-`undefined` (`exactOptionalPropertyTypes`) — omitted
       // entirely rather than set to `undefined` when the provider reported
-      // no usage.
+      // no usage. `model` (COST-1) is always this call's own resolved
+      // model — `request.model ?? DEFAULT_MODEL`, computed once above —
+      // never `request.model` itself, which is `null` on exactly the calls
+      // this adapter had to fall back for.
       return usage
-        ? { text, upstreamThreadId: newConversationId, usage }
-        : { text, upstreamThreadId: newConversationId }
+        ? { text, upstreamThreadId: newConversationId, model, usage }
+        : { text, upstreamThreadId: newConversationId, model }
     },
   }
 }

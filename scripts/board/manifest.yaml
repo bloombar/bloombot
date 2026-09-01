@@ -2118,7 +2118,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: COST-2
   title: A cost is attributed to whoever caused it
@@ -2129,7 +2129,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: COST-3
   title: An organization has a spending cap, and the cap is enforced before the call
@@ -2140,7 +2140,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: COST-4
   title: Usage is visible to the people it concerns
@@ -2150,7 +2150,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: COST-5
   title: The bot's own health is monitored, not inferred
@@ -2160,7 +2160,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: COST-6
   title: An estimate is never presented as a measurement
@@ -2170,7 +2170,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: In review
+  status: Done
   review: false
 - id: ENRL-1
   title: A person's courses are a record, not a guess

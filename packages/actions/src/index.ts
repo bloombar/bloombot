@@ -23,7 +23,13 @@ export {
   createPlatformRegistry,
   createProjectAction,
   disableCourseAction,
+  duplicateProjectAction,
   enableCourseAction,
+  getCourseAction,
+  listCoursesAction,
+  listDiscordServersAction,
+  listProjectsAction,
+  removeDiscordServerAction,
   saveCourseAction,
   unarchiveProjectAction,
 } from './actions/index.js'

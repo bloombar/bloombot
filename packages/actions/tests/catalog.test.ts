@@ -94,10 +94,15 @@ describe('ACT-6 — machine-readable catalog', () => {
         'projects.create',
         'projects.archive',
         'projects.unarchive',
+        'projects.list',
+        'projects.duplicate',
         'courses.save',
         'courses.enable',
         'courses.disable',
+        'courses.list',
+        'courses.get',
         'discordServers.remove',
+        'discordServers.list',
       ].sort()
     )
 

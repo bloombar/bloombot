@@ -93,7 +93,7 @@ The point at which the product exists: a second tenant creates a project, define
 in it, and the bot answers in their server without anyone editing a file in this
 repository.
 
-**In scope:** PROJ-4
+**In scope:** PROJ-4, PROJ-5, TEN-7, TEN-8
 
 ## Phase 8 — Job runner, throttling & server scaffolding
 

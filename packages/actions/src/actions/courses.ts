@@ -1,8 +1,9 @@
 /**
- * Actions over `packages/db`'s `courses` repo (PROJ-1, PROJ-3), proving the
- * action shape against a real repository — `courses.save` (create or
- * update, through the same collision handling `packages/db` already runs),
- * `courses.enable`, `courses.disable`.
+ * Actions over `packages/db`'s `courses` repo (PROJ-1, PROJ-3, PROJ-5),
+ * proving the action shape against a real repository — `courses.save`
+ * (create or update, through the same collision handling `packages/db`
+ * already runs), `courses.enable`, `courses.disable`, and PROJ-5's own
+ * reads: `courses.list` and `courses.get`.
  */
 
 import { courses, projects, schema, type Database } from '@bloombot/db'
@@ -13,6 +14,38 @@ import type { Action } from '../types.js'
 
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
+
+const listCoursesInputSchema = z.object({
+  projectId: z.string().min(1),
+})
+type ListCoursesInput = z.infer<typeof listCoursesInputSchema>
+
+/**
+ * PROJ-5: list a project's courses. Resolves the project itself, scoped to
+ * the caller's organization (ACT-2) — the same "not an existing record to
+ * write, but still a real tenant-scoped lookup" shape `projects.create`'s
+ * policy uses, one level down. Base rows only (no categories or channels) —
+ * matching `listCourses`'s (`repos/courses.ts`) own split from `getCourse`,
+ * below.
+ */
+export const listCoursesAction: Action<
+  'courses.list',
+  ListCoursesInput,
+  Project,
+  courses.Course[]
+> = {
+  name: 'courses.list',
+  description:
+    "List a project's courses (base rows only — use courses.get for one course's categories and channels).",
+  inputSchema: listCoursesInputSchema,
+  policy: {
+    descriptor: { resource: 'project', access: 'read' },
+    resolve: (input, context) =>
+      projects.getProject(context.organizationId, input.projectId, context.db),
+  },
+  execute: ({ organizationId, entity, db }) =>
+    courses.listCourses(organizationId, db, { projectId: entity.id }),
+}
 
 const channelInputSchema = z.object({
   name: z.string().min(1),
@@ -180,6 +213,28 @@ function resolveOwnCourse(
   context: { organizationId: string; db: Database }
 ): Course | undefined {
   return courses.getCourse(context.organizationId, input.courseId, context.db)
+}
+
+/**
+ * PROJ-5: open one course, with its categories and channels. `resolveOwnCourse`
+ * (above) already returns exactly `getCourse`'s own shape, so this action's
+ * `execute` hands back the entity the policy resolved rather than looking it
+ * up a second time.
+ */
+export const getCourseAction: Action<
+  'courses.get',
+  CourseIdInput,
+  Course,
+  Course
+> = {
+  name: 'courses.get',
+  description: 'Open one course, with its categories and channels.',
+  inputSchema: courseIdInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'read' },
+    resolve: resolveOwnCourse,
+  },
+  execute: ({ entity }) => entity,
 }
 
 export const enableCourseAction: Action<

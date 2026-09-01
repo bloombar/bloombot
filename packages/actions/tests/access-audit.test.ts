@@ -24,6 +24,15 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'projects.create': { resource: 'organization', access: 'write' },
   'projects.archive': { resource: 'project', access: 'write' },
   'projects.unarchive': { resource: 'project', access: 'write' },
+  // PROJ-5: no existing project to resolve on a list either — the same
+  // "organization" resource `projects.create` resolves, read rather than
+  // written.
+  'projects.list': { resource: 'organization', access: 'read' },
+  // PROJ-4: resolves the *source* project being copied; the new project and
+  // its courses are `execute`'s own writes, the same asymmetry `courses.save`
+  // already has between what its policy resolves and what it writes (D-18,
+  // finding 10).
+  'projects.duplicate': { resource: 'project', access: 'write' },
   // Resolves the *project* a course is saved into, whether creating or
   // updating (`actions/courses.ts`'s `CourseSaveEntity`) — an update also
   // resolves the existing course, but the descriptor names the one
@@ -35,11 +44,19 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'courses.save': { resource: 'project', access: 'write' },
   'courses.enable': { resource: 'course', access: 'write' },
   'courses.disable': { resource: 'course', access: 'write' },
+  // PROJ-5: resolves the project a course list is scoped to, read.
+  'courses.list': { resource: 'project', access: 'read' },
+  // PROJ-5: resolves the course itself, read.
+  'courses.get': { resource: 'course', access: 'read' },
   // TEN-6: marks a binding inactive; deletes nothing. Installing is not an
   // action at all (`actions/discord-servers.ts`'s own module comment) — it
   // needs the caller's account id, which nothing in this package's dispatch
   // context carries.
   'discordServers.remove': { resource: 'discordServer', access: 'write' },
+  // TEN-8: no existing binding to resolve against (a caller may hold none at
+  // all) — resolves the organization itself, read, the same shape
+  // `projects.list` uses.
+  'discordServers.list': { resource: 'organization', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

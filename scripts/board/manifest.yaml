@@ -1839,3 +1839,38 @@
   phase: 7
   status: Backlog
   review: false
+- id: PROJ-5
+  title: The panel reads through the same layer it writes through
+  full: Everything the control panel displays about projects and courses is read
+    through the action layer, not through a route that reaches the database on
+    its own. A read is an action with a policy like any other, so a screen
+    cannot show a record the caller would not have been allowed to open, and the
+    audit index covers reading as well as writing.
+  section: §16 Projects
+  family: PROJ
+  phase: 7
+  status: Backlog
+  review: false
+- id: TEN-7
+  title: An organization has a name a person recognizes
+  full: An organization carries a display name, shown wherever a person has to
+    choose which one they are acting in. A personal organization created at
+    sign-up is named after the account that owns it, so the choice is never
+    between two identifiers.
+  section: §15 Tenancy & Server Registration
+  family: TEN
+  phase: 7
+  status: Backlog
+  review: false
+- id: TEN-8
+  title: A server binding is visible to the organization that holds it
+  full: "An organization can list the Discord servers bound to it, so the panel
+    can show what is already installed rather than only what this browser
+    session happened to install. The listing is scoped like every other read: a
+    server bound to another organization is not in it, and its existence is not
+    disclosed."
+  section: §15 Tenancy & Server Registration
+  family: TEN
+  phase: 7
+  status: Backlog
+  review: false

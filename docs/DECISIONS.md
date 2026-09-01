@@ -1427,3 +1427,79 @@ the API's routes ... stop and report").**
    inventing two more specific messages the API gives it no way to tell apart — WEB-5's "the panel adds no
    interpretation the API did not give it" reads as the tie-breaker between the two requirements where they
    pull in different directions.
+
+---
+
+## D-23 — `packages/actions`/`apps/api`: read actions close D-22's first two gaps, a duplicate's courses are copied disabled, and what a removed binding looks like in the listing
+
+**Problem.** PROJ-5 asks that "everything the control panel displays about projects and courses is read
+through the action layer," and TEN-7/TEN-8 ask for an organization's own name and its Discord server bindings
+to be readable at all — three things D-22 already named as gaps `apps/api`'s existing routes left open, closed
+here as read _actions_ rather than the bespoke routes D-22 sketched as "the natural fix." Separately, PROJ-4
+("a project can be copied into a new one, bringing its courses...") runs straight into PROJ-3: a duplicate's
+courses are, by construction, copies — same category names, same admin and student role names as their
+originals — which is exactly the collision PROJ-3 forbids among enabled courses in the same organization.
+Something has to give, and the brief asked that it be a deliberate choice, not an accident discovered by the
+first person who duplicates a project and then tries to enable its courses.
+
+**Choice, five new actions, not five new routes.** `projects.list`, `courses.list`, `courses.get` and
+`discordServers.list` (`packages/actions/src/actions/*.ts`) each declare a policy the same way every write in
+this package already does — `projects.list` and `discordServers.list` resolve the caller's own organization
+(the same "no existing record to resolve, resolve what it protects instead" shape `projects.create`'s policy
+already uses), `courses.list` resolves the project a course list is scoped to, and `courses.get` resolves the
+course itself, reusing `courses.enable`/`courses.disable`'s own `resolveOwnCourse`. `apps/api/src/routes/actions.ts`
+needed no change at all: registering these five in `createPlatformRegistry` is enough for the existing generic
+route, the existing `ACT-5` audit table and the existing `ACT-6` catalog test, and the `TEN-5` matrix
+(`apps/api/tests/tenant-isolation.test.ts`) picks each one up automatically because it is derived from the
+registry — the brief's own point in choosing actions over routes for a read.
+
+**Choice, TEN-7's fix is `/auth/me`, not a new route.** The organization name itself already existed —
+`@bloombot/auth`'s `sign-in.ts` already names a personal organization after the account that owns it
+(`displayNameFromEmail(email)`), on both the email and Google paths, since before this slice. What was
+missing was anywhere to read it back: `/auth/me`'s memberships now carry `organizationName` alongside
+`organizationId`, looked up per membership with `organizations.getOrganizationById` — the one `apps/api`
+change TEN-7 needed, matching the brief's "keep `apps/api` changes to what TEN-7 needs."
+
+**Choice, a duplicate's courses are copied disabled, unconditionally — not refused, and not renamed.** Three
+options were on the table: refuse to duplicate unless the source project is archived (PROJ-3's own other
+escape hatch); auto-rename each copy's categories and roles to something guaranteed unique; or copy every
+course disabled regardless of the source's own `enabled` flag. Refusing unless archived was rejected because
+it makes duplication less useful exactly when it is most wanted — rolling a project forward while the current
+term is still live and still routing. Auto-renaming was rejected because a category name and a role name are
+not just database columns: they are supposed to match real Discord category and role names an instructor will
+go configure to match, and silently generating `"Web Design - GLOBAL (2)"` would hand back a course that looks
+configured but is not, for a distinction only readable in a diff. Copying disabled (`projects.ts#duplicateProjectAction`,
+`enabled: false` unconditionally, whatever the source course's own flag was) makes the PROJ-3 collision this
+slice worried about _unreachable at the point of copying_ — `createCourse`'s own PROJ-3 check only runs when
+`input.enabled && projectResult.project.archivedAt === null` (`repos/courses.ts`), so a disabled copy runs no
+collision check at all, succeeds unconditionally, and leaves the exact same names sitting there, inert, until
+an instructor edits them (or the source project is archived) and enables the copy through `courses.enable`,
+which re-runs PROJ-3 the same way it always does. The organization is never, at any point, in a state PROJ-3
+would have refused — `tests/project-duplicate.test.ts`'s "copies every course disabled, even one that was
+enabled in the source project" asserts exactly the case that would have collided, disabled instead. A side
+effect worth naming: because the copy step never runs PROJ-3's own check, `duplicateProjectAction`'s loop over
+`courses.createCourse` has no real failure mode left except a database error, so it is not wrapped in its own
+outer transaction the way a fully atomic copy might otherwise want — a partial copy is not currently reachable
+in practice, and adding transactional composition to `createProject`/`createCourse` (both take a top-level
+`Database`, not the `Executor`/`TransactingExecutor` shapes `accounts.ts#createAccount` already composes with)
+was judged more machinery than this slice's own scope asked for.
+
+**Choice, `discordServers.list` shows a removed binding as removed, not omitted.** `listDiscordServerBindingsForOrganization`
+(`repos/discord-servers.ts`) already returns every binding an organization has ever held, active or removed —
+nothing in this slice needed to change that function, only give an action a way to call it. The action passes
+that shape straight through rather than filtering to `removedAt IS NULL`, for the reason D-22's own gap 2
+named: the panel's "what is already installed" screen needs to tell "never installed" apart from "installed,
+then removed," and only the unfiltered listing carries that distinction — filtering it out here would throw
+away information the repo function already computed for no reason beyond a narrower reading of "list the
+bindings."
+
+**What "knowledge-file attachments" will mean, for whichever slice adds them.** PROJ-4's own SPEC text says a
+duplicate brings "instructions and knowledge-file attachments" — nothing in `packages/db`'s schema has a table
+for either a knowledge file or an attachment yet (Phase 10, "Knowledge files & instructions," is still empty in
+`docs/ROADMAP.md`), so this slice's `duplicateProjectAction` copies every column `courses` actually has today
+(`instructions`, `promptId`, `model`, `vectorStoreId`, `maxRequestsPerDay`, `conversationScope`) and copies
+nothing for knowledge files because there is nothing to copy. The natural shape, whenever that table exists, is
+the same one this slice already uses for categories and channels: read the source course's attachment rows,
+insert new rows pointing at the same underlying file (or a copy of it, if a file's own lifecycle turns out to
+be tied to one course) under the new course's id — the same "bring the settings, not the roster" pattern PROJ-4
+already describes, extended to a table this slice never touched.

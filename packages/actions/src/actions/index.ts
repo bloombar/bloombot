@@ -15,26 +15,40 @@ import { ActionRegistry } from '../registry.js'
 import {
   archiveProjectAction,
   createProjectAction,
+  duplicateProjectAction,
+  listProjectsAction,
   unarchiveProjectAction,
 } from './projects.js'
 import {
   disableCourseAction,
   enableCourseAction,
+  getCourseAction,
+  listCoursesAction,
   saveCourseAction,
 } from './courses.js'
-import { removeDiscordServerAction } from './discord-servers.js'
+import {
+  listDiscordServersAction,
+  removeDiscordServerAction,
+} from './discord-servers.js'
 
 export {
   archiveProjectAction,
   createProjectAction,
+  duplicateProjectAction,
+  listProjectsAction,
   unarchiveProjectAction,
 } from './projects.js'
 export {
   disableCourseAction,
   enableCourseAction,
+  getCourseAction,
+  listCoursesAction,
   saveCourseAction,
 } from './courses.js'
-export { removeDiscordServerAction } from './discord-servers.js'
+export {
+  listDiscordServersAction,
+  removeDiscordServerAction,
+} from './discord-servers.js'
 
 /** Every action this slice ports, registered once. */
 export function createPlatformRegistry(): ActionRegistry {
@@ -42,9 +56,14 @@ export function createPlatformRegistry(): ActionRegistry {
   registry.register(createProjectAction)
   registry.register(archiveProjectAction)
   registry.register(unarchiveProjectAction)
+  registry.register(listProjectsAction)
+  registry.register(duplicateProjectAction)
   registry.register(saveCourseAction)
   registry.register(enableCourseAction)
   registry.register(disableCourseAction)
+  registry.register(listCoursesAction)
+  registry.register(getCourseAction)
   registry.register(removeDiscordServerAction)
+  registry.register(listDiscordServersAction)
   return registry
 }

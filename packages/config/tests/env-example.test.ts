@@ -68,4 +68,27 @@ describe('env.example (QA-6)', () => {
     // contain TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL.
     expect(contents).not.toMatch(/\b(sk-[A-Za-z0-9]{16,}|xox[baprs]-)/)
   })
+
+  // The gap this closes, found by somebody following docs/RUNNING_LOCALLY.md:
+  // `MAIL_FILE` was documented in the guide and missing from the template, so
+  // `cp env.example .env` produced a checkout where requesting a sign-in link
+  // succeeded and the link went nowhere. The schema check above cannot see it —
+  // it is read straight from `process.env` by the process that needs it, the
+  // same as the credentials, and deliberately not part of `envSchema`. So the
+  // variables an app reads outside the schema are pinned here by name: adding
+  // one to a `process.env[...]` read without adding it to the template is a red
+  // build rather than an afternoon of confusion.
+  it('documents the variables the apps read outside the schema', () => {
+    const documented = documentedKeys(contents)
+    const readDirectly = [
+      'BOT_APP_ID',
+      'BOT_PERMISSIONS',
+      'BOT_TOKEN',
+      'DISCORD_CLIENT_SECRET',
+      'MAIL_FILE',
+      'OPENAI_API_KEY',
+    ]
+    const missing = readDirectly.filter((key) => !documented.has(key))
+    expect(missing).toEqual([])
+  })
 })

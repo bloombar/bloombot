@@ -88,8 +88,8 @@ file.
 **Check it worked:**
 
 ```bash
-curl -s localhost:3000/health     # {"status":"ready",...}
-curl -s localhost:3001/           # the bot's gateway health, once the bot is running
+curl -s http://127.0.0.1:3000/health   # {"ready":true,"database":true}
+curl -s http://127.0.0.1:3001/         # the bot's gateway health, once the bot is running
 ```
 
 The bot's endpoint distinguishes *running* from *connected* — a process that is up with a dead gateway is
@@ -166,9 +166,11 @@ side — an import that can only ever run against a snapshot can be rehearsed as
 
 | symptom | cause |
 | --- | --- |
-| every save fails with 403 | `PUBLIC_APP_URL` does not match the address in your browser's bar |
+| `Cannot GET /` on port 3000 | correct — the API has no root route. The UI is the web dev server, on <http://localhost:5173> |
+| a 404 page from a port you expected to be ours | something else is listening. Our processes bind `127.0.0.1` only, so an unrelated server on `*:PORT` wins `localhost` on macOS, which resolves `::1` first — `curl http://127.0.0.1:PORT` to be sure, and `lsof -nP -iTCP:PORT -sTCP:LISTEN` to see both |
+| every save fails with 403 | `PUBLIC_APP_URL` does not match the address in your browser's bar — including `localhost` versus `127.0.0.1`, which are different origins |
 | API exits at startup naming a variable | that variable is missing from `.env`; the process refuses to start on an environment it cannot validate rather than failing later |
-| sign-in email "sent" but no link anywhere | `MAIL_FILE` is not set — the fallback logs only the recipient and subject |
+| sign-in email "sent" (a `204`) but no link anywhere | `MAIL_FILE` is not set, or was added after the process started — it is read at startup. The fallback logs only the recipient and subject, never the link |
 | bot connects but never answers | the **Message Content Intent** is off in the developer portal; Discord then withholds message text entirely |
 | the bot answers nothing in a category you configured | the course is disabled, its project is archived, or the category name does not match exactly |
 | `npm ci` fails on a lockfile mismatch | run `npm install` and commit the lockfile — a new workspace package was added without it |

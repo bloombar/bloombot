@@ -2256,3 +2256,213 @@ same gap this entry's own "what this does not do" section already accepted for t
 not a new one this rework introduces. `handle-mention.test.ts`'s own `D-31 rework` describe block proves both
 the reconciliation and its own boundary: a `handle:` identity that does not match the author's own display
 name still creates a new person, rather than this fallback ever guessing.
+
+---
+
+## D-32 — `packages/db`/`packages/openai`/`apps/worker`/`packages/actions`: where a course attachment's bytes live, how a vector store gets created, and what a failure costs
+
+`FILE-1..5` — an instructor attaches a course's notes, syllabus and schedule in the panel, and those files
+ground that course's answers, replacing a vector store id typed in from a vendor dashboard. This entry
+records four judgment calls the brief left open: where the bytes actually live and what protects them, how a
+course's vector store is created and what happens to a hand-typed id, what a failed attachment costs, and
+whether restoring an instruction revision is a new revision or a pointer move.
+
+**Where the bytes live, and what protects them (FILE-5).** `packages/db`'s new `attachment-storage.ts`
+exports `createFilesystemAttachmentStorage`, a small filesystem-backed store rooted at
+`CONFIG.ATTACHMENT_STORAGE_DIR` (default `./data/attachments`, gitignored the same way `data/*.db` already
+is). The layout is `<root>/<organizationId>/<attachmentId>/content` — both path segments are
+application-generated UUIDs (`crypto.randomUUID()`, the same convention every other id in this platform
+already follows), and the on-disk filename is always the literal `content`, never the instructor's own
+filename (kept only as a display column, `course_attachments.filename`). This is what makes a filename like
+`../../etc/passwd` inert by construction: nothing about what a browser upload calls a file ever reaches a
+path. `safeSegment` is a charset check, not a UUID check — it refuses any segment holding `/`, `\`, `.` or
+anything else outside `[A-Za-z0-9_-]`, which is enough to reject a path-shaped id, but it does not require the
+segment to actually look like a UUID (a rework finding: this entry, and `attachment-storage.ts`'s own module
+comment, used to claim `safeSegment` "refuses a non-UUID-shaped segment" — it does not, and this slice's own
+worker tests pass non-UUID ids like `att-1` and `placeholder` through it deliberately). Every resolved path is
+also re-checked to fall inside the storage root before use — belt and braces against a future caller that
+reaches this module with something other than a value it generated itself. That second check is, honestly,
+unreachable in ordinary operation rather than proven by any test: `safeSegment`'s own charset admits no `.`,
+`/` or `\` at all, so `join(rootDir, segment, segment)` can never actually produce a path outside `rootDir`
+once both segments have already passed `safeSegment` — an earlier version of this entry claimed a test proved
+the containment check alone stops an escape "by neutering the primary guard"; no such test exists, `safeSegment`
+is not exported for a test to bypass without reaching into the module's own internals, and writing one was not
+worth the reach for a defense this implementation does not expect to trip. Reachability
+is TEN-2's own answer, not a new mechanism: an attachment's bytes are found only by an id read off a
+`course_attachments` row, and that row is only ever reached through the organization-scoped repo functions
+(`repos/course-attachments.ts`) every other record already goes through.
+
+**Why bytes are written by the action, not carried in the job payload.** `roster.import` (`D-31`) carries a
+roster's raw CSV text directly in its job's own `payload` — a deliberate choice, reasoned out in that
+requirement's own module comment, because a roster is small text and nothing about it needs a blob-storage
+table. A course attachment is the opposite case: unbounded binary content, and `jobs.payload`/`jobs.result`
+are never deleted (`JOB-2`'s "stays visible... rather than disappearing" is permanent, not just until the row
+succeeds) — leaving raw file bytes sitting base64-encoded in that table forever is exactly what `FILE-5`
+exists to prevent. `courseAttachments.attach`'s own action therefore decodes the uploaded bytes and writes
+them to `AttachmentStorage` itself, before it ever enqueues anything; the job it enqueues carries only the
+attachment's own id. Writing to the local filesystem is not the network call `JOB-1` exists to defer, so doing
+it inline in the action costs nothing `JOB-1`'s own reasoning protects.
+
+**How a course's vector store is created, and what happens to a hand-typed id.** `courses.vectorStoreId`
+(`D-3`'s own escape hatch) is the single field `packages/openai`'s `client.ts` already reads to decide whether
+a request is grounded (`MDL-3`) — this slice changes nothing about that read path. What changes is how the
+column gets filled in: `apps/worker`'s `courseAttachments.attach` handler reuses the course's own
+`vectorStoreId` when it already has one — hand-typed from a vendor dashboard, or set by an earlier attachment,
+indistinguishable to this handler and treated identically — and only calls `createVectorStore` when the
+column is still null. Crucially, the freshly created id is **not** written to `courses.vectorStoreId` until
+the file that justified creating it has actually attached successfully (`repos/courses.ts#setCourseVectorStoreIdIfUnset`,
+called only after `attachFileToVectorStore` reports `completed`) — this is what keeps `FILE-2`'s promise: a
+course must never look configured while its answers are ungrounded. A course whose first-ever attachment
+fails is left with `vectorStoreId` still `null`, exactly as if no attachment had ever been tried, even though a
+vector store may already exist, empty, on the provider's side. An existing course with a hand-typed id keeps
+working unchanged in every respect: the column is read the same way it always was, and `setCourseVectorStoreIdIfUnset`'s
+own `WHERE vector_store_id IS NULL` clause means a hand-typed value is never overwritten by anything this
+slice adds.
+
+**What a failed attachment costs.** A `client_error` from the provider (a malformed request, an unsupported
+file the provider actively refuses, or a hand-typed `vectorStoreId` that no longer resolves) is caught and
+recorded on the row — `markAttachmentFailed`, carrying the provider's own message — and the job itself
+*succeeds* with a report saying so, rather than being retried: retrying a call the provider has already
+refused for a permanent reason spends nothing but time and confuses `FILE-2`'s own "visible lifecycle" with an
+internal retry loop nobody asked to see. A rework finding widened this from "only the upload is guarded" to
+all three provider calls the handler makes (upload, create-vector-store, attach-to-vector-store) — the original
+guarded only the first, so a non-retryable rejection from either of the other two propagated uncaught and left
+the row `pending` with no reason, exactly the state `FILE-2` exists to prevent.
+
+A *transient* failure (a timeout, a rate limit, a 5xx) still propagates on every attempt but the last, for
+`JOB-2`'s ordinary retry/backoff, the same division every other handler in this app holds itself to — but a
+second rework finding closes the gap that division used to leave open: on this job's own *last* attempt
+(`JobContext.maxAttempts`, widened onto `@bloombot/jobs`' own context for exactly this), the handler also calls
+`markAttachmentFailed` before re-throwing, so the row reaches the same terminal `failed` state the job row
+itself is about to reach, rather than staying `pending` forever once `JOB-2` gives up with no way to tell
+"still working" from "dead." `courseAttachments.list` needs no separate job id for a caller to notice this —
+the reason lands directly on the row the panel already reads.
+
+**The bytes themselves are kept on disk either way** — a `failed` attachment's own `AttachmentStorage` entry is
+never cleaned up automatically. This slice adds no `courseAttachments.retry` action (not named in its own
+brief), so today the only way to clear a failed attachment's bytes is `courseAttachments.detach`, which
+removes both the row and the bytes together; a future retry action could reuse the bytes already on disk
+without asking the browser to upload them again. A third rework finding closed a real leak in that same
+detach path: `providerFileId` used to stay `null` on a `failed` attachment whenever the rejection came from
+creating or attaching to the vector store (steps 3-4) rather than the upload itself (step 2) — `detach`'s own
+`if (attachment.providerFileId)` guard then had nothing to reach, and the successfully uploaded file stayed on
+the provider permanently. `repos/course-attachments.ts#recordProviderFileId` now writes the id the instant the
+upload succeeds, before either later call runs, so `detach` can always reach a file the upload actually
+produced regardless of what happened afterward. Detaching a `failed` (or an abandoned, see below) attachment
+also needed `deleteVectorStoreFile`/`deleteFile` to tolerate a `404` as "already gone" rather than an uncaught
+`client_error` (a fourth rework finding, load-bearing for ordinary retried detaches too — the first delete of a
+retried detach can succeed while the second times out, and the retry then 404s on the one that already landed)
+— without it, a detach on a file whose vector-store attach never actually completed could throw on the first
+delete and never reach the second, or the local removal.
+
+The cost of a retryable failure that keeps failing transiently is less contained on one remaining axis, an
+accepted limitation this rework pass did not close: each full handler retry re-uploads the bytes and, if the
+course still has no `vectorStoreId`, creates another empty vector store on the provider — nothing local tracks
+or cleans up an earlier attempt's now-orphaned *vector store* (as opposed to the uploaded *file*, which the
+third rework finding above now always leaves reachable). Closing it needs the handler to persist an
+in-progress `vectorStoreId` somewhere between attempts (on the attachment row itself, most likely) so a retry
+can resume rather than restart a fresh vector store each time, which is a larger change than this brief asked
+for. Revisit if a flaky provider connection makes orphaned vector stores material.
+
+**A concurrent detach racing an in-flight attach (a rework finding).** `markAttachmentReady` returns
+`undefined`, not a row, when the attachment id it was given no longer resolves in this organization (TEN-5's
+usual contract) — the original attach handler dropped that return value entirely, so a `courseAttachments.detach`
+that completed while this handler's own provider calls were still in flight was silently overwritten: the
+handler would still call `setCourseVectorStoreIdIfUnset`, and its own report would still claim `status: 'ready'`
+for a file nothing local records any more. The handler now checks the return, skips
+`setCourseVectorStoreIdIfUnset` entirely when it is `undefined`, and reports a third status, `'abandoned'`,
+naming what happened rather than a false `'ready'`. This is a narrow, honestly-reported race, not a guarantee
+that no attach and detach can ever interleave: the uploaded file itself is left on the provider in this case
+(the same accepted cost D-32's own "what a failed attachment costs" section above already describes for a
+retryable failure's orphaned vector store), since nothing local records an attachment id to reach it through
+any more.
+
+**After detaching a course's last attachment, `courses.vectorStoreId` stays set.** `courseAttachments.detach`
+removes the attachment row and its bytes, and reaches the provider to remove the file from the vector store and
+delete the file object itself — but it never touches `courses.vectorStoreId`, even when that was the course's
+only attachment. The column keeps pointing at a vector store that is now empty on the provider's side, so the
+course still reads as "configured" even though nothing currently grounds it. Clearing the column automatically
+would be wrong for a hand-typed id (`D-3`'s escape hatch): an instructor who typed in a `vectorStoreId` from a
+vendor dashboard and later detached every file this platform itself uploaded should not have that hand-typed
+value silently erased out from under them — this handler has no way to tell "the id I created" from "the id an
+instructor typed in" once it is sitting in `courses.vectorStoreId`, the same indistinguishability `courses.ts`'s
+own module comment already accepts for the read path (`MDL-3`). Leaving it set is therefore the defensible
+choice, not an oversight, but it was previously undocumented; recorded here so a future reader does not mistake
+an empty-but-still-set vector store for a bug.
+
+**Whether restoring a revision is a new revision or a pointer move.** A new revision, always — `FILE-4`'s own
+text ("what the assistant was told last week and restore it") and `course_instruction_revisions`'s own module
+comment in `schema.ts` are both explicit that a revision is never updated or deleted. `courseInstructions.restore`
+copies the chosen revision's text into `courses.instructions` (`setCourseInstructions`) and inserts a *new*
+row recording the restore, authored by whoever performed it — not by the original author, an honest record of
+who actually chose to bring the text back, and never merely a `currentRevisionId` pointer moved backward. The
+practical consequence, proven in `packages/actions/tests/course-instructions.test.ts`: restoring the first of
+three saved revisions produces a fourth, and the second and third are still there, unrewritten — an instructor
+can restore an even older revision afterward without anything about the intervening history having been lost.
+A real tiebreaker was needed for "newest first": `createdAt` is millisecond precision and two saves can land in
+the same tick, so `course_instruction_revisions` gained its own `sequence` column, computed the same
+read-max-then-insert-in-one-transaction way `messages.sequence` already is (`repos/conversations.ts#appendMessage`'s
+own comment) — the bug this closes was caught by `packages/db/tests/course-instruction-revisions.test.ts` itself
+failing, non-deterministically by insertion order, before `sequence` existed.
+
+**Who authored a save or a restore (FILE-4), and the one shared-plumbing change this needed.** Neither action
+had anywhere to get an author from: `packages/actions`' `DispatchContext`/`ExecuteContext` carried an
+organization id and never an account id (`discordServers.ts`'s own module comment states this as a deliberate
+prior limit — installing a server needed the caller's own account for a different reason and was routed around
+`packages/actions` entirely rather than widen this shape). `FILE-4`'s own "an author and a time" cannot be
+satisfied by asking the caller's own input to name one — that is a self-reported, forgeable audit trail, the
+same reasoning `apps/api`'s `routes/actions.ts` already gives for never trusting a caller-supplied
+`organizationId` out of a request body. `DispatchContext` and `ExecuteContext` therefore both gained one new,
+optional field, `accountId`, and `apps/api`'s own action route threads `req.session.accountId` through it —
+the account `sessionMiddleware` already proved, never read from the body. Optional, not required: every other
+action in this package has no reason to know who is calling (`organizationId` alone already decides what it
+may reach), and making this mandatory would have forced every existing test and caller to supply a value it
+never uses. `courseInstructions.save`/`.restore` are the only two actions that read it today, and both refuse
+outright (`ActionRefusedError`) when `dispatch` was not given one — reachable only by calling `dispatch`
+directly with no `accountId`, since `routes/actions.ts` always supplies the authenticated caller's own.
+
+**Why `createPlatformRegistry` gained an options argument, and why its default does not read `CONFIG`.**
+`courseAttachments.attach` is the first action in this package whose `execute` needs something beyond
+`organizationId`/`db` — the same `AttachmentStorage` this entry's own first section describes — so it is built
+by a factory (`createAttachCourseAttachmentAction(attachmentStorage)`) rather than exported as a plain object
+the way every other action in this package is. `createPlatformRegistry` gained one new, optional parameter,
+`attachmentStorageDir`, to construct that storage and pass it in. The obvious default — fall through to
+`AttachmentStorage`'s own `CONFIG.ATTACHMENT_STORAGE_DIR` default — was tried first and rejected: it broke
+`packages/actions`' own tests (`catalog.test.ts`, `access-audit.test.ts`), which run in an environment that does
+not set every variable `@bloombot/config`'s schema requires (`PUBLIC_APP_URL`, notably) — this package has
+never depended on `@bloombot/config` at all, the same "dependencies as arguments, only the process reads
+`CONFIG`" discipline `D-15` already holds `packages/core` to, and a zero-arg call reaching `CONFIG` at all
+would fail those tests for a reason with nothing to do with what they test. `createPlatformRegistry`'s own
+default is a literal string instead — never touching `CONFIG`. A real deployment is unaffected:
+`apps/api/src/index.ts` reads `CONFIG.ATTACHMENT_STORAGE_DIR` once, at startup, the same as every other
+`CONFIG` value it reads there, and threads it explicitly through `buildApp`/`server.ts` to
+`createPlatformRegistry`.
+
+That literal used to be `'./data/attachments'`, matching `ATTACHMENT_STORAGE_DIR`'s own schema default — a
+rework finding changed it to `'./tmp/attachments'` instead. A real deployment never reaches this fallback at
+all (the paragraph above), so which literal it is only matters to a caller that supplied nothing, and that was
+never meant to be more than a test: `apps/api`'s own test helper (`build-test-app.ts`) and the e2e harness's
+`start-api.ts` both used to omit `attachmentStorageDir` entirely, which silently wrote real course material
+into `data/`, the same directory `data/*.db` is protected on this repository for holding real students' names,
+emails and conversations. Both now thread their own `tmp/`-rooted path explicitly, the same "lives under
+`tmp/`, never `data/`" discipline QA-2/QA-3 already hold every other test database to — but the fallback itself
+was fixed too, not only its two known callers, since a silent default that happens to land in a protected
+directory is a hazard for the next caller that forgets, not only the two this rework pass found.
+
+**FILE-1's own request-size ceiling, and why it lives on one route, not globally.** `courseAttachments.attach`'s
+payload carries a file's bytes as base64 in this entry's own JSON body (the section above on why bytes, not a
+reference) — but `apps/api` never gave that route its own body-size limit, so it inherited `express.json()`'s
+ordinary 100 kB default from `server.ts`'s global middleware. Base64 encoding inflates a file's raw size by
+4/3, so 100 kB of JSON body is roughly a 74 kB *raw file* ceiling — well under a real syllabus, notes file or
+schedule (`FILE-1`'s own text names all three), so an ordinary multi-page PDF was rejected `413` before this
+action ever ran, a rework finding. `routes/actions.ts` now exports two constants recording the chosen bound
+explicitly: `MAX_COURSE_ATTACHMENT_BYTES` (20 MiB) is the ceiling on a raw file's own size — generous for a
+course's own notes, syllabus and schedule, including a scanned PDF, without inviting an instructor to treat
+this as general file storage; `ACTION_JSON_BODY_LIMIT_BYTES` (28 MiB) is the JSON body limit that ceiling
+actually requires once base64's 4/3 inflation and the payload's other fields (`courseId`, `filename`,
+`contentType`) are accounted for. The raised limit is scoped to the `/organizations/:organizationId/actions`
+path prefix alone — `server.ts` mounts a second `express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })` ahead
+of its own general-purpose one, and body-parser's own "already parsed" guard makes the second a no-op for that
+one prefix — rather than raising the global default, since every other action's own input is small and a
+100 kB-scale body is still the right ceiling for all of them; only this one route carries binary content at
+all.

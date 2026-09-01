@@ -157,6 +157,8 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
       [
         'accounts.ts',
         'conversations.ts',
+        'course-attachments.ts',
+        'course-instruction-revisions.ts',
         'courses.ts',
         'discord-install-states.ts',
         'discord-servers.ts',

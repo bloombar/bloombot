@@ -1,15 +1,24 @@
 /**
- * Test helper: an in-process fake of the OpenAI Conversations/Responses
- * APIs (MDL-7) — bound to `127.0.0.1:0` so the OS picks a free port, never
- * reaching a real network. Every test in this package points its adapter's
- * `baseUrl` at `server.baseUrl` instead of `CONFIG.OPENAI_BASE_URL`'s real
- * default, and asserts on `server.requests` — the actual bodies the
- * adapter sent — rather than trusting the adapter's own account of itself.
+ * Test helper: an in-process fake of the OpenAI Conversations/Responses/
+ * Files/Vector Stores APIs (MDL-7, FILE-1..3) — bound to `127.0.0.1:0` so
+ * the OS picks a free port, never reaching a real network. Every test in
+ * this package points its adapter's `baseUrl` at `server.baseUrl` instead
+ * of `CONFIG.OPENAI_BASE_URL`'s real default, and asserts on
+ * `server.requests` — the actual bodies the adapter sent — rather than
+ * trusting the adapter's own account of itself.
  *
  * Each endpoint's response is programmable per test via `respondToConversations`/
- * `respondToResponses` — a queue of one-shot responders, falling back to a
+ * `respondToResponses`/`respondToFiles`/`respondToVectorStoreCreate`/
+ * `respondToVectorStoreFileAttach`/`respondToVectorStoreFileDelete`/
+ * `respondToFileDelete` — a queue of one-shot responders, falling back to a
  * fixed default once the queue is empty, so a test can script "500 then
  * 200" (MDL-5) without the fake growing test-specific branches of its own.
+ *
+ * `POST /files` is the one endpoint whose request body is not JSON — the
+ * real API takes `multipart/form-data`, so this fake parses it with the
+ * runtime's own `Request#formData()` rather than hand-rolling a multipart
+ * reader, and records the parsed `filename`/`contentType`/`content` on
+ * `RecordedRequest.file` for a test to assert against.
  */
 
 import {
@@ -26,12 +35,21 @@ export interface FakeResponse {
   delayMs?: number
 }
 
+/** What the fake recorded about a `POST /files` upload's own multipart body — `undefined` for every other endpoint. */
+export interface RecordedFile {
+  filename: string
+  contentType: string
+  content: Buffer
+  purpose: string | undefined
+}
+
 /** What the fake recorded about one request, for a test to assert against. */
 export interface RecordedRequest {
   method: string | undefined
   path: string
   headers: IncomingMessage['headers']
   body: unknown
+  file?: RecordedFile
 }
 
 type Responder = (body: unknown, request: RecordedRequest) => FakeResponse
@@ -44,6 +62,26 @@ const DEFAULT_CONVERSATION_RESPONSE: FakeResponse = {
 const DEFAULT_RESPONSES_RESPONSE: FakeResponse = {
   status: 200,
   body: fakeResponsesPayload('a fake answer'),
+}
+
+const DEFAULT_FILES_RESPONSE: FakeResponse = {
+  status: 200,
+  body: { id: 'file_default' },
+}
+
+const DEFAULT_VECTOR_STORE_CREATE_RESPONSE: FakeResponse = {
+  status: 200,
+  body: { id: 'vs_default' },
+}
+
+const DEFAULT_VECTOR_STORE_FILE_ATTACH_RESPONSE: FakeResponse = {
+  status: 200,
+  body: { status: 'completed' },
+}
+
+const DEFAULT_DELETE_RESPONSE: FakeResponse = {
+  status: 200,
+  body: { deleted: true },
 }
 
 /** Build a Responses API success payload with the real API's `output`/`usage` shape (`responses.ts`'s `extractOutputText` walks exactly this). */
@@ -71,12 +109,25 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/** One matchable route this fake answers — a fixed `method`/`path` pair (`/conversations`, `/files`, ...) or a `pathPattern` for a path carrying a provider-assigned id (`/vector_stores/:id/files`). */
+interface Route {
+  method: string
+  test: (method: string | undefined, path: string) => boolean
+  queue: Responder[]
+  default: FakeResponse
+}
+
 export class FakeOpenAiServer {
   readonly requests: RecordedRequest[] = []
 
   private server: Server
   private conversationQueue: Responder[] = []
   private responsesQueue: Responder[] = []
+  private filesQueue: Responder[] = []
+  private vectorStoreCreateQueue: Responder[] = []
+  private vectorStoreFileAttachQueue: Responder[] = []
+  private vectorStoreFileDeleteQueue: Responder[] = []
+  private fileDeleteQueue: Responder[] = []
 
   private constructor(server: Server) {
     this.server = server
@@ -124,6 +175,81 @@ export class FakeOpenAiServer {
     this.responsesQueue.push(toResponder(response))
   }
 
+  /** Queue one response for the next `POST /files` upload (FILE-1). */
+  respondToFiles(response: FakeResponse | Responder): void {
+    this.filesQueue.push(toResponder(response))
+  }
+
+  /** Queue one response for the next `POST /vector_stores` (FILE-1). */
+  respondToVectorStoreCreate(response: FakeResponse | Responder): void {
+    this.vectorStoreCreateQueue.push(toResponder(response))
+  }
+
+  /** Queue one response for the next `POST /vector_stores/:id/files` (FILE-1, FILE-2). */
+  respondToVectorStoreFileAttach(response: FakeResponse | Responder): void {
+    this.vectorStoreFileAttachQueue.push(toResponder(response))
+  }
+
+  /** Queue one response for the next `DELETE /vector_stores/:id/files/:fileId` (FILE-3). */
+  respondToVectorStoreFileDelete(response: FakeResponse | Responder): void {
+    this.vectorStoreFileDeleteQueue.push(toResponder(response))
+  }
+
+  /** Queue one response for the next `DELETE /files/:fileId` (FILE-3). */
+  respondToFileDelete(response: FakeResponse | Responder): void {
+    this.fileDeleteQueue.push(toResponder(response))
+  }
+
+  /** Every route this fake answers, most-specific first — `/vector_stores/:id/files` must be checked before the bare `/vector_stores` path would otherwise wrongly claim it. */
+  private routes(): Route[] {
+    return [
+      {
+        method: 'POST',
+        test: (m, p) => m === 'POST' && p === '/conversations',
+        queue: this.conversationQueue,
+        default: DEFAULT_CONVERSATION_RESPONSE,
+      },
+      {
+        method: 'POST',
+        test: (m, p) => m === 'POST' && p === '/responses',
+        queue: this.responsesQueue,
+        default: DEFAULT_RESPONSES_RESPONSE,
+      },
+      {
+        method: 'POST',
+        test: (m, p) => m === 'POST' && p === '/files',
+        queue: this.filesQueue,
+        default: DEFAULT_FILES_RESPONSE,
+      },
+      {
+        method: 'POST',
+        test: (m, p) => m === 'POST' && p === '/vector_stores',
+        queue: this.vectorStoreCreateQueue,
+        default: DEFAULT_VECTOR_STORE_CREATE_RESPONSE,
+      },
+      {
+        method: 'DELETE',
+        test: (m, p) =>
+          m === 'DELETE' && /^\/vector_stores\/[^/]+\/files\/[^/]+$/.test(p),
+        queue: this.vectorStoreFileDeleteQueue,
+        default: DEFAULT_DELETE_RESPONSE,
+      },
+      {
+        method: 'POST',
+        test: (m, p) =>
+          m === 'POST' && /^\/vector_stores\/[^/]+\/files$/.test(p),
+        queue: this.vectorStoreFileAttachQueue,
+        default: DEFAULT_VECTOR_STORE_FILE_ATTACH_RESPONSE,
+      },
+      {
+        method: 'DELETE',
+        test: (m, p) => m === 'DELETE' && /^\/files\/[^/]+$/.test(p),
+        queue: this.fileDeleteQueue,
+        default: DEFAULT_DELETE_RESPONSE,
+      },
+    ]
+  }
+
   private async handle(
     req: IncomingMessage,
     res: ServerResponse
@@ -132,37 +258,59 @@ export class FakeOpenAiServer {
     for await (const chunk of req) {
       chunks.push(chunk as Buffer)
     }
-    const raw = Buffer.concat(chunks).toString('utf8')
-    const body = raw ? (JSON.parse(raw) as unknown) : undefined
+    const raw = Buffer.concat(chunks)
+    const path = req.url ?? ''
+    const contentType = req.headers['content-type'] ?? ''
+
+    let body: unknown
+    let file: RecordedFile | undefined
+    if (contentType.startsWith('multipart/form-data')) {
+      // `POST /files` — parsed through the runtime's own `Request`, rather
+      // than a hand-rolled multipart reader (this file's own module
+      // comment).
+      const form = await new Request('http://fake-openai.invalid/files', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: raw,
+        // Node's `Request` requires this for a body on a same-origin-less
+        // fake request; it changes nothing about what is actually read.
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' }).formData()
+      const purpose = form.get('purpose')
+      const uploaded = form.get('file')
+      if (uploaded instanceof File) {
+        file = {
+          filename: uploaded.name,
+          contentType: uploaded.type,
+          content: Buffer.from(await uploaded.arrayBuffer()),
+          purpose: typeof purpose === 'string' ? purpose : undefined,
+        }
+      }
+    } else if (raw.length > 0) {
+      body = JSON.parse(raw.toString('utf8')) as unknown
+    }
 
     const recorded: RecordedRequest = {
       method: req.method,
-      path: req.url ?? '',
+      path,
       headers: req.headers,
       body,
+      ...(file ? { file } : {}),
     }
     this.requests.push(recorded)
 
-    const queue =
-      req.url === '/conversations'
-        ? this.conversationQueue
-        : req.url === '/responses'
-          ? this.responsesQueue
-          : undefined
-    if (!queue) {
+    const route = this.routes().find((candidate) =>
+      candidate.test(req.method, path)
+    )
+    if (!route) {
       res.writeHead(404)
       res.end()
       return
     }
 
-    const responder =
-      queue.shift() ??
-      toResponder(
-        req.url === '/conversations'
-          ? DEFAULT_CONVERSATION_RESPONSE
-          : DEFAULT_RESPONSES_RESPONSE
-      )
-    const result = responder(body, recorded)
+    const result =
+      route.queue.shift()?.(body, recorded) ??
+      toResponder(route.default)(body, recorded)
 
     if (result.delayMs) {
       await sleep(result.delayMs)

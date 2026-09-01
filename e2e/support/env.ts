@@ -23,3 +23,10 @@ const TMP_ROOT = join(import.meta.dirname, '..', 'tmp')
 export const E2E_DATABASE_PATH = join(TMP_ROOT, 'e2e.db')
 export const E2E_LOGS_DIR = join(TMP_ROOT, 'logs')
 export const E2E_MAIL_PATH = join(TMP_ROOT, 'mail.jsonl')
+// FILE-1..5 — a course attachment's bytes, same `tmp/` reasoning as every
+// other path above: `createPlatformRegistry`'s own fallback
+// (`packages/actions/src/actions/index.ts`) is a literal `./data/attachments`
+// — the repository's own protected directory — so this harness must thread
+// its own path explicitly rather than let `start-api.ts`'s `buildApp` call
+// fall through to it.
+export const E2E_ATTACHMENT_STORAGE_DIR = join(TMP_ROOT, 'attachments')

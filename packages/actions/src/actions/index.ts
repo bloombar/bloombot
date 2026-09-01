@@ -11,6 +11,8 @@
  * it either way.
  */
 
+import { createFilesystemAttachmentStorage } from '@bloombot/db'
+
 import { ActionRegistry } from '../registry.js'
 import {
   archiveProjectAction,
@@ -26,6 +28,16 @@ import {
   listCoursesAction,
   saveCourseAction,
 } from './courses.js'
+import {
+  createAttachCourseAttachmentAction,
+  detachCourseAttachmentAction,
+  listCourseAttachmentsAction,
+} from './course-attachments.js'
+import {
+  listCourseInstructionRevisionsAction,
+  restoreCourseInstructionRevisionAction,
+  saveCourseInstructionsAction,
+} from './course-instructions.js'
 import {
   listDiscordServersAction,
   removeDiscordServerAction,
@@ -49,6 +61,16 @@ export {
   saveCourseAction,
 } from './courses.js'
 export {
+  createAttachCourseAttachmentAction,
+  detachCourseAttachmentAction,
+  listCourseAttachmentsAction,
+} from './course-attachments.js'
+export {
+  listCourseInstructionRevisionsAction,
+  restoreCourseInstructionRevisionAction,
+  saveCourseInstructionsAction,
+} from './course-instructions.js'
+export {
   listDiscordServersAction,
   removeDiscordServerAction,
   scaffoldDiscordServerAction,
@@ -56,8 +78,42 @@ export {
 export { getJobAction, type JobStatus } from './jobs.js'
 export { importRosterAction } from './roster.js'
 
-/** Every action this slice ports, registered once. */
-export function createPlatformRegistry(): ActionRegistry {
+/**
+ * Every action this slice ports, registered once.
+ *
+ * `attachmentStorageDir` (FILE-1..5) is the one dependency any action here
+ * needs beyond `organizationId`/`db` — `createAttachCourseAttachmentAction`'s
+ * own module comment has why. Deliberately *not* left to `AttachmentStorage`'s
+ * own `CONFIG.ATTACHMENT_STORAGE_DIR` default when omitted here: this
+ * package holds no dependency on `@bloombot/config` at all (the same
+ * "dependencies as arguments, only the process reads `CONFIG`" discipline
+ * `docs/DECISIONS.md` already holds `packages/core` to), and this
+ * package's own tests run in an environment that does not set every
+ * variable `@bloombot/config`'s schema requires — reaching `CONFIG` at all
+ * from a zero-arg call would fail those tests for a reason that has
+ * nothing to do with what they are testing.
+ *
+ * The literal fallback below is `'./tmp/attachments'`, **not**
+ * `ATTACHMENT_STORAGE_DIR`'s own schema default (`'./data/attachments'`,
+ * `packages/config/src/env.ts`) — a rework finding: a caller that forgets
+ * to thread `attachmentStorageDir` (an earlier revision of `apps/api`'s own
+ * test helper and the e2e harness both did) used to fall through to that
+ * literal and write real course material into `data/`, the same directory
+ * `data/*.db` is protected for holding real students' names, emails and
+ * conversations. A real deployment never reaches this fallback at all:
+ * `apps/api/src/index.ts` always threads `CONFIG.ATTACHMENT_STORAGE_DIR`
+ * through explicitly, the same way it already threads every other `CONFIG`
+ * value it reads once, at startup — so this default only ever runs for a
+ * caller that supplied nothing, which today means only a test, and a test
+ * belongs under `tmp/`, never `data/` (see `docs/DECISIONS.md` D-32).
+ */
+export function createPlatformRegistry(options?: {
+  attachmentStorageDir?: string
+}): ActionRegistry {
+  const attachmentStorage = createFilesystemAttachmentStorage(
+    options?.attachmentStorageDir ?? './tmp/attachments'
+  )
+
   const registry = new ActionRegistry()
   registry.register(createProjectAction)
   registry.register(archiveProjectAction)
@@ -74,5 +130,11 @@ export function createPlatformRegistry(): ActionRegistry {
   registry.register(scaffoldDiscordServerAction)
   registry.register(getJobAction)
   registry.register(importRosterAction)
+  registry.register(createAttachCourseAttachmentAction(attachmentStorage))
+  registry.register(listCourseAttachmentsAction)
+  registry.register(detachCourseAttachmentAction)
+  registry.register(saveCourseInstructionsAction)
+  registry.register(listCourseInstructionRevisionsAction)
+  registry.register(restoreCourseInstructionRevisionAction)
   return registry
 }

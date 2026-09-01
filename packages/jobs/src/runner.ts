@@ -211,6 +211,11 @@ export async function runNextJob(
         organizationId: job.organizationId,
         jobId: job.id,
         attempts: job.attempts,
+        // `JobContext.maxAttempts`'s own doc comment — the same bound this
+        // function's own `job.attempts >= job.maxAttempts` check (below)
+        // reads, handed to the handler too so it can recognise its own last
+        // attempt before this function does.
+        maxAttempts: job.maxAttempts,
         db: deps.db,
         logger: deps.logger,
       },

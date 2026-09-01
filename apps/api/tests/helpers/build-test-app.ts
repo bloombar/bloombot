@@ -11,6 +11,7 @@
  */
 
 import { createServer, type Server } from 'node:http'
+import { join } from 'node:path'
 
 import type {
   GoogleIdTokenVerificationResult,
@@ -27,6 +28,20 @@ import { createFakeLogger } from './fake-logger.js'
 
 /** The origin every origin-check test treats as "this site" — never a real host, since nothing here reaches the network. */
 export const TEST_PUBLIC_APP_URL = 'https://app.bloombot.test'
+
+// FILE-1..5 — a rework finding: this helper used to omit `attachmentStorageDir`
+// entirely, which let `buildApp`'s own `createPlatformRegistry` call fall
+// through to its default (`packages/actions/src/actions/index.ts`) — a
+// literal that used to be `./data/attachments`, the repository's own
+// protected directory. Threaded explicitly here instead, under `tmp/`, the
+// same "lives under `tmp/`, never `data/`" discipline `test-db.ts`'s own
+// module comment already holds `TestDatabase` to.
+export const TEST_ATTACHMENT_STORAGE_DIR = join(
+  process.cwd(),
+  'tmp',
+  'api-tests',
+  'attachments'
+)
 
 /** A `GoogleIdTokenVerifier` that never reaches a network — always refuses, unless a test replaces `verifyIdToken` with its own. */
 export function createFakeGoogleVerifier(
@@ -121,6 +136,7 @@ export function buildTestApp(
     // test suite never sets `process.env`'s Discord/`PUBLIC_APP_URL`
     // variables, by design (`routes/discord-servers.ts`'s own doc comment).
     discordOauthBase: 'https://discord.test/oauth2',
+    attachmentStorageDir: TEST_ATTACHMENT_STORAGE_DIR,
     ...overrides,
   })
   return startTestServer(app)

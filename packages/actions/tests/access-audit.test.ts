@@ -76,6 +76,32 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // names is what a write grant against `'course'` already protects
   // everywhere else in this table.
   'roster.import': { resource: 'course', access: 'write' },
+  // FILE-1: resolves the course a file is attached to, write — `execute`
+  // writes the bytes to disk and enqueues the provider upload; it never
+  // reaches Discord or a person, the same "the course it names is what a
+  // write grant already protects" shape `roster.import`/
+  // `discordServers.scaffold` both use above.
+  'courseAttachments.attach': { resource: 'course', access: 'write' },
+  // FILE-2: resolves the course a file list is scoped to, read — the same
+  // shape `courses.list`/`discordServers.list` use above.
+  'courseAttachments.list': { resource: 'course', access: 'read' },
+  // FILE-3/FILE-5: resolves the attachment itself, write — an attachment
+  // belonging to another organization resolves to nothing (TEN-5), the
+  // same as every other scoped read or write in this table. `execute` only
+  // enqueues the provider removal; it never reaches the provider itself.
+  'courseAttachments.detach': { resource: 'courseAttachment', access: 'write' },
+  // FILE-4: resolves the course whose instructions are being saved, write —
+  // `execute` also creates a new `course_instruction_revisions` row, but
+  // the course it names is the resource a write grant against `'course'`
+  // already protects everywhere else in this table.
+  'courseInstructions.save': { resource: 'course', access: 'write' },
+  // FILE-4: resolves the course a revision list is scoped to, read.
+  'courseInstructions.list': { resource: 'course', access: 'read' },
+  // FILE-4: resolves the revision being restored (and the course it
+  // belongs to) — write, the same shape `courseInstructions.save` uses:
+  // restoring is itself a write to `courses.instructions`, gated the same
+  // way an ordinary save already is.
+  'courseInstructions.restore': { resource: 'course', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

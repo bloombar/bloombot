@@ -17,9 +17,9 @@
  * the same "handlers are registered by whoever wires a process up, never
  * by the registry's own package" division `registry.ts`'s own module
  * comment describes — ROST-9..12's `roster.import`
- * (`handlers/roster-import.ts`) registers alongside it the same way, this
- * slice; a later phase's knowledge-file attachment or project duplication
- * does too, in theirs.
+ * (`handlers/roster-import.ts`) registers alongside it the same way, and
+ * FILE-1..3's `courseAttachments.attach`/`.detach`
+ * (`handlers/course-attachments.ts`) do too, this slice.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto'
 import { CONFIG } from '@bloombot/config'
 import {
   closeDatabase,
+  createFilesystemAttachmentStorage,
   openDatabase,
   runMigrations,
   type Database,
@@ -34,7 +35,14 @@ import {
 import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
+import type { FilesHttpOptions } from '@bloombot/openai'
 
+import {
+  createAttachCourseAttachmentHandler,
+  createDetachCourseAttachmentHandler,
+  ATTACH_COURSE_ATTACHMENT_JOB_KIND,
+  DETACH_COURSE_ATTACHMENT_JOB_KIND,
+} from './handlers/course-attachments.js'
 import {
   createDiscordScaffoldHandler,
   DISCORD_SCAFFOLD_JOB_KIND,
@@ -99,6 +107,36 @@ async function main(): Promise<void> {
   const discordClientId = process.env['BOT_APP_ID'] ?? ''
   const discordBotToken = requireEnv('BOT_TOKEN')
   const discordClientSecret = process.env['DISCORD_CLIENT_SECRET'] ?? ''
+  // FILE-1..3 — this process's own OpenAI credential, the same one
+  // `apps/bot`'s own `createOpenAiModelClient` reads (CFG-5: a credential
+  // `@bloombot/config`'s schema does not cover, checked explicitly here).
+  const openaiApiKey = requireEnv('OPENAI_API_KEY')
+  const openaiHttpOptions: FilesHttpOptions = {
+    fetchFn: fetch,
+    baseUrl: CONFIG.OPENAI_BASE_URL,
+    apiKey: openaiApiKey,
+    // Rework finding 10 — this used to equal `handlerTimeoutMs` itself, the
+    // whole handler's own budget, not just one request's. `createAttachCourseAttachmentHandler`
+    // makes up to three sequential provider calls (upload, create-vector-store,
+    // attach) — with no smaller bound, one slow call could consume the
+    // entire handler budget, leaving `runHandlerWithTimeout` (`@bloombot/jobs`'s
+    // own `runner.ts`) no slack to abandon a genuinely wedged handler before
+    // a fresh retry's own re-upload starts, while the abandoned attempt's
+    // own request might still be writing to a socket underneath it (that
+    // file's own doc comment: "JavaScript has no way to cancel a Promise
+    // already in flight"). One third of the handler's own budget per
+    // request, the same "the request gets a smaller bound than the handler
+    // that contains it" discipline `packages/discord-rest`'s own
+    // `DEFAULT_TIMEOUT_MS` already holds itself to, decoupled from the
+    // handler budget entirely.
+    timeoutMs: Math.floor(handlerTimeoutMs / 3),
+  }
+  // FILE-5 — the same directory `@bloombot/actions`' `courseAttachments.attach`
+  // action already wrote an attachment's bytes under (both processes share
+  // one filesystem, D-2); no argument here means both read
+  // `CONFIG.ATTACHMENT_STORAGE_DIR`, the same default `createFilesystemAttachmentStorage`'s
+  // own doc comment describes.
+  const attachmentStorage = createFilesystemAttachmentStorage()
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -131,6 +169,24 @@ async function main(): Promise<void> {
         clientSecret: discordClientSecret,
       }),
       botToken: discordBotToken,
+    })
+  )
+  // FILE-1..3 — this process's third and fourth handlers, sharing one
+  // `openaiHttpOptions`/`attachmentStorage` pair rather than each building
+  // its own (this file's own module comment on why deps are read once, in
+  // `main()`).
+  handlers.register(
+    ATTACH_COURSE_ATTACHMENT_JOB_KIND,
+    createAttachCourseAttachmentHandler({
+      openaiHttpOptions,
+      attachmentStorage,
+    })
+  )
+  handlers.register(
+    DETACH_COURSE_ATTACHMENT_JOB_KIND,
+    createDetachCourseAttachmentHandler({
+      openaiHttpOptions,
+      attachmentStorage,
     })
   )
 

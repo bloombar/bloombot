@@ -840,6 +840,81 @@ export function disableCourse(
 }
 
 /**
+ * FILE-4 — write a course's *current* instructions, and only that column:
+ * unlike `updateCourse`, this never touches categories, channels or any
+ * other field, so `@bloombot/actions`' `courseInstructions.save` action can
+ * call it without first reading (and re-supplying) the rest of the course.
+ * `course_instruction_revisions` is the caller's own concern
+ * (`repos/course-instruction-revisions.ts`) — this file only ever knows
+ * about `courses.instructions` itself, the same division
+ * `course-attachments.ts`'s own module comment draws between a row's
+ * lifecycle and the bytes or provider state a different file owns.
+ *
+ * `db` accepts `Executor`, not just `Database`: `courseInstructions.save`/
+ * `.restore` (`@bloombot/actions`) call this from inside their own
+ * `db.transaction(...)`, alongside `course-instruction-revisions.ts#createRevision`
+ * — the same "one transaction, or the comment claiming atomicity is a lie"
+ * fix that entry's own module comment now spells out.
+ *
+ * Returns the updated course, or `undefined` when `courseId` does not exist
+ * or does not belong to `organizationId` (TEN-2/TEN-5).
+ */
+export function setCourseInstructions(
+  organizationId: string,
+  courseId: string,
+  instructions: string,
+  db: Executor
+): Course | undefined {
+  return db
+    .update(courses)
+    .set({ instructions })
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .returning()
+    .get()
+}
+
+/**
+ * FILE-1 — the course a `courseAttachments.attach`/`.detach` job's own
+ * `vectorStoreId` writes into. Set once, the first time a course's files are
+ * attached this way (`apps/worker`'s own handler) — an instructor's
+ * hand-typed `vectorStoreId` (D-3's escape hatch, still settable through
+ * `courses.save`) is left untouched if the course already has one: this
+ * never overwrites a value already there, only fills a `null`. Returns the
+ * updated course, or `undefined` for the usual TEN-2/TEN-5 reasons.
+ */
+export function setCourseVectorStoreIdIfUnset(
+  organizationId: string,
+  courseId: string,
+  vectorStoreId: string,
+  db: Database
+): Course | undefined {
+  db.update(courses)
+    .set({ vectorStoreId })
+    .where(
+      and(
+        eq(courses.id, courseId),
+        eq(courses.organizationId, organizationId),
+        isNull(courses.vectorStoreId)
+      )
+    )
+    .run()
+  // Read back regardless of whether the `UPDATE` above actually matched a
+  // row (TEN-2's usual "the caller already knows why" contract) — a course
+  // that already had a `vectorStoreId` (hand-typed or set by an earlier
+  // attachment) is returned unchanged, not as `undefined`, since the id this
+  // caller wanted is already the one in place.
+  return db
+    .select()
+    .from(courses)
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .get()
+}
+
+/**
  * The conflict unarchiving `projectId` would produce, if any: a course in an
  * archived project is excluded from the PROJ-3 candidate set
  * (`findCourseNameConflict`), so a name freed by archiving and reused by

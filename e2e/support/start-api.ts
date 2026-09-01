@@ -25,6 +25,7 @@ import { buildApp } from '../../apps/api/src/server.js'
 import { FileEmailSender } from './file-email-sender.js'
 import {
   E2E_API_PORT,
+  E2E_ATTACHMENT_STORAGE_DIR,
   E2E_DATABASE_PATH,
   E2E_LOGS_DIR,
   E2E_MAIL_PATH,
@@ -37,6 +38,7 @@ for (const suffix of ['', '-wal', '-shm']) {
   rmSync(`${E2E_DATABASE_PATH}${suffix}`, { force: true })
 }
 mkdirSync(E2E_LOGS_DIR, { recursive: true })
+mkdirSync(E2E_ATTACHMENT_STORAGE_DIR, { recursive: true })
 writeFileSync(E2E_MAIL_PATH, '')
 
 const db = openDatabase(E2E_DATABASE_PATH)
@@ -71,6 +73,10 @@ const app = buildApp({
   discordBotToken: 'e2e-unused-bot-token',
   discordRedirectUri: `${E2E_PUBLIC_APP_URL}/discord/callback`,
   discordOauthBase: 'http://127.0.0.1:1/discord-oauth-unused',
+  // FILE-1..5 — without this, `buildApp`'s own `createPlatformRegistry` call
+  // falls through to `./data/attachments`, the repository's own protected
+  // directory (`env.js`'s own comment on `E2E_ATTACHMENT_STORAGE_DIR`).
+  attachmentStorageDir: E2E_ATTACHMENT_STORAGE_DIR,
 })
 
 const server = createServer(app)

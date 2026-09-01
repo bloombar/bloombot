@@ -56,6 +56,11 @@ async function main(): Promise<void> {
   const port = CONFIG.API_PORT
   const publicAppUrl = CONFIG.PUBLIC_APP_URL
   const nodeEnv = CONFIG.NODE_ENV
+  // FILE-1..5 — read once here, alongside every other `CONFIG` value this
+  // process reads at startup, and threaded to `buildApp` rather than left
+  // for `createPlatformRegistry`'s own default to read `CONFIG` a second
+  // time.
+  const attachmentStorageDir = CONFIG.ATTACHMENT_STORAGE_DIR
 
   // TEN-4 — the same fail-loudly-at-startup discipline `apps/bot`'s own
   // `BOT_TOKEN`/`OPENAI_API_KEY` checks hold themselves to, applied to the
@@ -82,6 +87,7 @@ async function main(): Promise<void> {
     db,
     logger,
     publicAppUrl,
+    attachmentStorageDir,
     // Must-fix 1 of the API-1..6 rework: refuses outright rather than
     // silently logging sign-in links in production — see
     // `logging-email-sender.ts`.

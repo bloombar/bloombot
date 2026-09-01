@@ -15,6 +15,7 @@
     "@bloombot/db": "*",
     "@bloombot/discord-rest": "*",
     "@bloombot/jobs": "*",
-    "@bloombot/logger": "*"
+    "@bloombot/logger": "*",
+    "@bloombot/openai": "*"
   }
 }

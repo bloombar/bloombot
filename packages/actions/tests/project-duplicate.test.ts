@@ -7,7 +7,7 @@
  */
 
 import { conversations, courses, people, projects } from '@bloombot/db'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { duplicateProjectAction } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
@@ -57,20 +57,25 @@ describe('projects.duplicate', () => {
     )
     if (!source.ok) throw new Error('setup failed: unexpected conflict')
 
-    const newProject = await dispatch(
+    const result = await dispatch(
       duplicateProjectAction,
       { projectId, name: 'Spring 2027' },
       { organizationId, db: testDb.db }
     )
 
-    expect(newProject).toMatchObject({
+    expect(result.project).toMatchObject({
       organizationId,
       name: 'Spring 2027',
       archivedAt: null,
     })
+    // Finding 7 (rework pass): the result names how many courses were
+    // copied and that they are all disabled, rather than leaving the caller
+    // to issue a second `courses.list` to find out.
+    expect(result.coursesCopied).toBe(1)
+    expect(result.coursesDisabled).toBe(true)
 
     const copiedCourses = courses.listCourses(organizationId, testDb.db, {
-      projectId: newProject.id,
+      projectId: result.project.id,
     })
     expect(copiedCourses).toHaveLength(1)
     const copied = courses.getCourse(
@@ -126,14 +131,14 @@ describe('projects.duplicate', () => {
     )
     if (!source.ok) throw new Error('setup failed: unexpected conflict')
 
-    const newProject = await dispatch(
+    const result = await dispatch(
       duplicateProjectAction,
       { projectId, name: 'Copy of Fall 2026' },
       { organizationId, db: testDb.db }
     )
 
     const copiedCourses = courses.listCourses(organizationId, testDb.db, {
-      projectId: newProject.id,
+      projectId: result.project.id,
     })
     expect(copiedCourses).toHaveLength(1)
     expect(copiedCourses[0]?.enabled).toBe(false)
@@ -252,5 +257,133 @@ describe('projects.duplicate', () => {
     await expect(attempt).rejects.toThrow(ActionConflictError)
     // No orphaned courses were created under a project that was refused.
     expect(courses.listCourses(organizationId, testDb.db, {}).length).toBe(0)
+  })
+
+  // Finding 1 (rework pass): a failure partway through used to leave a new
+  // project committed with only some of its courses copied — indistinguishable
+  // from a complete duplicate — while consuming the chosen name, so a retry
+  // under the same name was refused as a collision with the stub the failed
+  // attempt left behind. Wrapping the whole duplicate in one transaction
+  // (`actions/projects.ts`) rolls all of it back, name included, on any
+  // failure — proven here with a real, unrecoverable failure on the *second*
+  // course's own write, standing in for the database fault or process crash
+  // this fix actually targets.
+  it('rolls back the whole duplicate — new project included — when a course partway through fails to copy, freeing the name for a retry', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    for (const suffix of ['A', 'B']) {
+      const created = courses.createCourse(
+        organizationId,
+        {
+          projectId,
+          title: `Course ${suffix}`,
+          filePrefix: suffix.toLowerCase(),
+          enabled: false,
+          adminsRole: `admins-${suffix.toLowerCase()}`,
+          studentsRole: `students-${suffix.toLowerCase()}`,
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!created.ok) throw new Error('setup failed: unexpected conflict')
+    }
+
+    // The first course copies normally; the second fails the way a database
+    // fault or a process crash mid-loop would — a real thrown error, not a
+    // refusal `duplicateProjectAction` itself produces.
+    const realCreateCourse = courses.createCourse
+    let calls = 0
+    const spy = vi
+      .spyOn(courses, 'createCourse')
+      .mockImplementation((...args) => {
+        calls += 1
+        if (calls === 2) throw new Error('simulated database fault')
+        return realCreateCourse(...args)
+      })
+
+    try {
+      await expect(
+        dispatch(
+          duplicateProjectAction,
+          { projectId, name: 'Spring 2027' },
+          { organizationId, db: testDb.db }
+        )
+      ).rejects.toThrow('simulated database fault')
+    } finally {
+      spy.mockRestore()
+    }
+
+    // Not a half-copy sitting under a project that looks complete: the new
+    // project itself was rolled back too, so only the original ("Fall 2026")
+    // remains.
+    expect(
+      projects
+        .listProjects(organizationId, testDb.db, { includeArchived: true })
+        .map((project) => project.name)
+    ).toEqual(['Fall 2026'])
+
+    // The name is free again — the obvious recovery (retry under the same
+    // name) succeeds instead of being refused as a collision with a stub.
+    const retried = await dispatch(
+      duplicateProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+    expect(retried.project.name).toBe('Spring 2027')
+    expect(retried.coursesCopied).toBe(2)
+  })
+
+  // Finding 2 (rework pass): a source course that could not be re-read used
+  // to be silently skipped (`if (!source) continue`) — the duplicate still
+  // reported success, indistinguishable from a complete copy. Every other
+  // guard in this file throws; this one now does too.
+  it('throws, rather than silently continuing, when a listed source course cannot be re-read', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    const created = courses.createCourse(
+      organizationId,
+      {
+        projectId,
+        title: 'Web Design',
+        filePrefix: 'wd',
+        enabled: false,
+        adminsRole: 'admins-wd',
+        studentsRole: 'students-wd',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    // Stands in for the race the file's own comment already names as
+    // "unreachable in practice" — `getCourse` returning `undefined` for a
+    // course `listCourses` just listed a moment earlier.
+    const spy = vi.spyOn(courses, 'getCourse').mockReturnValue(undefined)
+
+    try {
+      await expect(
+        dispatch(
+          duplicateProjectAction,
+          { projectId, name: 'Spring 2027' },
+          { organizationId, db: testDb.db }
+        )
+      ).rejects.toThrow(ActionRefusedError)
+    } finally {
+      spy.mockRestore()
+    }
+
+    // No half-duplicate was left behind either — the same transaction
+    // (finding 1) rolls this back too.
+    expect(
+      projects
+        .listProjects(organizationId, testDb.db, { includeArchived: true })
+        .map((project) => project.name)
+    ).toEqual(['Fall 2026'])
   })
 })

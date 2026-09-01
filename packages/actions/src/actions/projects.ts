@@ -87,11 +87,24 @@ export const createProjectAction: Action<
   },
 }
 
-const listInputSchema = z.object({
-  // PROJ-5: "archived included on request" — defaults to excluding them,
-  // matching `listProjects`'s own default (`repos/projects.ts`).
-  includeArchived: z.boolean().optional(),
-})
+const listInputSchema = z
+  .object({
+    // Finding 8 (rework pass): PROJ-5 itself says nothing about archived
+    // projects — this defaults to excluding them because `listProjects`
+    // (`repos/projects.ts`) already does, and PROJ-2's own reasoning for
+    // that default ("what is currently in use" is the common case) applies
+    // here unchanged; `includeArchived: true` opts into seeing everything,
+    // e.g. for an admin view that lists past terms too.
+    includeArchived: z.boolean().optional(),
+  })
+  // Finding 5 (rework pass): every field here is optional, so `{}` already
+  // validates — but a body-less `POST` (`routes/actions.ts`) hands
+  // `dispatch` `undefined`, not `{}`, and a bare `z.object` refuses
+  // `undefined` at the top level regardless of what is optional inside it.
+  // `.default({})` makes "no input at all" and "`{}`" the same call, the way
+  // this action's own browser client and every direct-`dispatch` test
+  // already treat them.
+  .default({})
 type ListInput = z.infer<typeof listInputSchema>
 
 /**
@@ -211,6 +224,22 @@ const duplicateInputSchema = z.object({
 type DuplicateInput = z.infer<typeof duplicateInputSchema>
 
 /**
+ * What `projects.duplicate` reports: the new project itself, how many
+ * courses were copied into it, and that every one of them was created
+ * disabled (finding 7 of the PROJ-4/5/TEN-7/8 rework) — a caller who
+ * duplicates a term and finds nothing routing should not have to issue a
+ * second `courses.list` just to learn why; the answer is right here.
+ */
+export interface DuplicateProjectOutput {
+  project: Project
+  coursesCopied: number
+  /** Always `true` — see the PROJ-3 decision below — named rather than
+   *  typed as `boolean` so a caller reading this shape cannot mistake it
+   *  for a flag that could ever come back `false`. */
+  coursesDisabled: true
+}
+
+/**
  * PROJ-4: copy a project into a new one, bringing its courses with their
  * categories, channels, instructions and settings — rosters and transcripts
  * are per-course/per-person tables `courses.createCourse` never touches, so
@@ -226,91 +255,110 @@ type DuplicateInput = z.infer<typeof duplicateInputSchema>
  * collision would be; copying disabled instead means the duplicate can
  * never itself put the organization in a state PROJ-3 would have refused,
  * whether or not the source project is archived.
+ *
+ * The whole copy — the new project and every course copied into it — runs
+ * inside one transaction (finding 1 of the PROJ-4/5/TEN-7/8 rework): a
+ * database fault or a process crash partway through used to leave a new
+ * project committed with only some of its courses, indistinguishable from a
+ * complete duplicate, while also consuming the chosen name — a retry under
+ * the same name was refused as a collision with the very stub the failure
+ * left behind. `projects.createProject` and `courses.createCourse` both
+ * accept `Executor`/`TransactingExecutor` now (`repos/projects.ts`,
+ * `repos/courses.ts`), not just a top-level `Database`, so this can open one
+ * `db.transaction(...)` and pass its `tx` through every write below; a
+ * failure anywhere in the loop rolls the whole thing back, including the
+ * project insert, so the name is free again for a retry.
  */
 export const duplicateProjectAction: Action<
   'projects.duplicate',
   DuplicateInput,
   Project,
-  Project
+  DuplicateProjectOutput
 > = {
   name: 'projects.duplicate',
   description:
     'Copy a project (PROJ-4) into a new one, bringing its courses, categories, channels, instructions and settings — disabled — and leaving rosters and transcripts untouched.',
   inputSchema: duplicateInputSchema,
   policy: {
-    descriptor: { resource: 'project', access: 'write' },
+    descriptor: { resource: 'organization', access: 'write' },
     resolve: resolveOwnProject,
   },
-  execute: ({ organizationId, entity, input, db }) => {
-    let newProject: Project
-    try {
-      newProject = projects.createProject(
-        organizationId,
-        { name: input.name },
-        db
-      )
-    } catch (error) {
-      // The same D-12 collision `projects.create` converts, above — a
-      // duplicate's own chosen name can collide with an existing project
-      // exactly the way a fresh one can.
-      if (!isUniqueNameConstraintError(error)) throw error
-      const conflictingProject = projects
-        .listProjects(organizationId, db)
-        .find((project) => project.name === input.name)
-      const conflict: projects.ProjectNameConflict = {
-        message: `Project name "${input.name}" is already used by another active project in this organization.`,
-        name: input.name,
-        conflictingProjectId: conflictingProject?.id ?? '',
+  execute: ({ organizationId, entity, input, db }) =>
+    db.transaction((tx): DuplicateProjectOutput => {
+      let newProject: Project
+      try {
+        newProject = projects.createProject(
+          organizationId,
+          { name: input.name },
+          tx
+        )
+      } catch (error) {
+        // The same D-12 collision `projects.create` converts, above — a
+        // duplicate's own chosen name can collide with an existing project
+        // exactly the way a fresh one can.
+        if (!isUniqueNameConstraintError(error)) throw error
+        const conflictingProject = projects
+          .listProjects(organizationId, tx)
+          .find((project) => project.name === input.name)
+        const conflict: projects.ProjectNameConflict = {
+          message: `Project name "${input.name}" is already used by another active project in this organization.`,
+          name: input.name,
+          conflictingProjectId: conflictingProject?.id ?? '',
+        }
+        throw new ActionConflictError(conflict)
       }
-      throw new ActionConflictError(conflict)
-    }
 
-    for (const courseRow of courses.listCourses(organizationId, db, {
-      projectId: entity.id,
-    })) {
-      // `listCourses` returns base rows only — categories and channels come
-      // from `getCourse`, the same split `repos/courses.ts`'s own comment
-      // documents.
-      const source = courses.getCourse(organizationId, courseRow.id, db)
-      // Unreachable in practice — `courseRow` was just read from this same
-      // organization moments earlier — guarded rather than assumed, the
-      // same discipline every other action in this file holds itself to.
-      if (!source) continue
+      let coursesCopied = 0
+      for (const courseRow of courses.listCourses(organizationId, tx, {
+        projectId: entity.id,
+      })) {
+        // `listCourses` returns base rows only — categories and channels come
+        // from `getCourse`, the same split `repos/courses.ts`'s own comment
+        // documents.
+        const source = courses.getCourse(organizationId, courseRow.id, tx)
+        // Finding 2 of the PROJ-4/5/TEN-7/8 rework: `source` missing here
+        // means a course this same transaction just listed could not be
+        // re-read a moment later — every other guard in this file throws
+        // rather than silently accepts a partial result, and skipping this
+        // course used to return success with an incomplete duplicate
+        // nothing told the caller about.
+        if (!source) throw new ActionRefusedError()
 
-      const result = courses.createCourse(
-        organizationId,
-        {
-          projectId: newProject.id,
-          title: source.title,
-          filePrefix: source.filePrefix,
-          enabled: false, // PROJ-3 decision, above.
-          adminsRole: source.adminsRole,
-          studentsRole: source.studentsRole,
-          promptId: source.promptId,
-          instructions: source.instructions,
-          model: source.model,
-          vectorStoreId: source.vectorStoreId,
-          maxRequestsPerDay: source.maxRequestsPerDay,
-          conversationScope: source.conversationScope,
-          categories: source.categories.map((category) => ({
-            name: category.name,
-            channels: category.channels.map((channel) => ({
-              name: channel.name,
-              adminsOnly: channel.adminsOnly,
+        const result = courses.createCourse(
+          organizationId,
+          {
+            projectId: newProject.id,
+            title: source.title,
+            filePrefix: source.filePrefix,
+            enabled: false, // PROJ-3 decision, above.
+            adminsRole: source.adminsRole,
+            studentsRole: source.studentsRole,
+            promptId: source.promptId,
+            instructions: source.instructions,
+            model: source.model,
+            vectorStoreId: source.vectorStoreId,
+            maxRequestsPerDay: source.maxRequestsPerDay,
+            conversationScope: source.conversationScope,
+            categories: source.categories.map((category) => ({
+              name: category.name,
+              channels: category.channels.map((channel) => ({
+                name: channel.name,
+                adminsOnly: channel.adminsOnly,
+              })),
             })),
-          })),
-        },
-        db
-      )
-      // Unreachable in practice: `enabled: false` means `createCourse` never
-      // runs PROJ-3's cross-course check at all (its own guard, `input.enabled
-      // && projectResult.project.archivedAt === null`), and `newProject.id`
-      // was created in this organization moments earlier. Guarded rather
-      // than asserted, the same discipline every other action in this file
-      // holds itself to for a race nothing here causes on purpose.
-      if (!result.ok) throw new ActionConflictError(result.conflict)
-    }
+          },
+          tx
+        )
+        // Unreachable in practice: `enabled: false` means `createCourse` never
+        // runs PROJ-3's cross-course check at all (its own guard, `input.enabled
+        // && projectResult.project.archivedAt === null`), and `newProject.id`
+        // was created in this organization moments earlier. Guarded rather
+        // than asserted, the same discipline every other action in this file
+        // holds itself to for a race nothing here causes on purpose.
+        if (!result.ok) throw new ActionConflictError(result.conflict)
+        coursesCopied += 1
+      }
 
-    return newProject
-  },
+      return { project: newProject, coursesCopied, coursesDisabled: true }
+    }),
 }

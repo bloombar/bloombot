@@ -28,11 +28,15 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // "organization" resource `projects.create` resolves, read rather than
   // written.
   'projects.list': { resource: 'organization', access: 'read' },
-  // PROJ-4: resolves the *source* project being copied; the new project and
-  // its courses are `execute`'s own writes, the same asymmetry `courses.save`
-  // already has between what its policy resolves and what it writes (D-18,
-  // finding 10).
-  'projects.duplicate': { resource: 'project', access: 'write' },
+  // Finding 3 (rework pass): `resolve` resolves the *source* project being
+  // copied, but `execute` performs `createProject` — the same write
+  // `projects.create` gates behind organization-scoped write, above, not a
+  // write into the resolved project. That is not `courses.save`'s asymmetry
+  // (D-18, finding 10): `courses.save` writes into the project it resolved;
+  // this creates an unrelated new one, so a project-scoped write grant would
+  // let its holder create arbitrary new projects once descriptors are
+  // enforced. The descriptor names the resource the write actually reaches.
+  'projects.duplicate': { resource: 'organization', access: 'write' },
   // Resolves the *project* a course is saved into, whether creating or
   // updating (`actions/courses.ts`'s `CourseSaveEntity`) — an update also
   // resolves the existing course, but the descriptor names the one

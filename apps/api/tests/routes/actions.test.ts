@@ -102,4 +102,28 @@ describe('API-1 — routes carry, they do not decide', () => {
       projects.getProject(otherOrganizationId, createdId, testDb.db)
     ).toBeUndefined()
   })
+
+  // Finding 5 (rework pass): a zero-input read action (every field optional
+  // or none at all — `projects.list`, `discordServers.list`) has to work on
+  // a body-less `POST` too, not only when a caller sends `{}` explicitly.
+  // Express 5 leaves `req.body` `undefined` when no request body carries a
+  // matching `Content-Type` — `dispatch`'s own tests never exercise this,
+  // since they call `dispatch` directly with `{}`, and the browser client
+  // always sends a JSON body — so only a real HTTP request with no body at
+  // all reproduces it.
+  it('a zero-input read action succeeds on a body-less POST, not just an explicit {}', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post(`/organizations/${caller.organizationId}/actions/projects.list`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    // No `.send(...)` at all — no `Content-Type` header, so `req.body` is
+    // `undefined`, not `{}`.
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ result: [] })
+  })
 })

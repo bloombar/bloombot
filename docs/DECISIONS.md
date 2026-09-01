@@ -1476,22 +1476,53 @@ collision check at all, succeeds unconditionally, and leaves the exact same name
 an instructor edits them (or the source project is archived) and enables the copy through `courses.enable`,
 which re-runs PROJ-3 the same way it always does. The organization is never, at any point, in a state PROJ-3
 would have refused — `tests/project-duplicate.test.ts`'s "copies every course disabled, even one that was
-enabled in the source project" asserts exactly the case that would have collided, disabled instead. A side
-effect worth naming: because the copy step never runs PROJ-3's own check, `duplicateProjectAction`'s loop over
-`courses.createCourse` has no real failure mode left except a database error, so it is not wrapped in its own
-outer transaction the way a fully atomic copy might otherwise want — a partial copy is not currently reachable
-in practice, and adding transactional composition to `createProject`/`createCourse` (both take a top-level
-`Database`, not the `Executor`/`TransactingExecutor` shapes `accounts.ts#createAccount` already composes with)
-was judged more machinery than this slice's own scope asked for.
+enabled in the source project" asserts exactly the case that would have collided, disabled instead.
 
-**Choice, `discordServers.list` shows a removed binding as removed, not omitted.** `listDiscordServerBindingsForOrganization`
-(`repos/discord-servers.ts`) already returns every binding an organization has ever held, active or removed —
-nothing in this slice needed to change that function, only give an action a way to call it. The action passes
-that shape straight through rather than filtering to `removedAt IS NULL`, for the reason D-22's own gap 2
-named: the panel's "what is already installed" screen needs to tell "never installed" apart from "installed,
-then removed," and only the unfiltered listing carries that distinction — filtering it out here would throw
-away information the repo function already computed for no reason beyond a narrower reading of "list the
-bindings."
+**Correction, finding 1 of the PROJ-4/5/TEN-7/8 rework: the missing transaction was not, in fact, fine.** A
+side effect this paragraph originally named, and then drew the wrong conclusion from: because the copy step
+never runs PROJ-3's own check, `duplicateProjectAction`'s loop over `courses.createCourse` has no real failure
+mode left *from PROJ-3* except a database error — true — and the original text treated that as license to skip
+an outer transaction, reasoning that "a partial copy is not currently reachable in practice." That is exactly
+backwards: a database error is precisely the case a transaction exists to cover, not a reason to omit one. A
+fault on, say, the second course's own insert used to leave the new project committed with only some of its
+courses — indistinguishable from a complete duplicate to anything that did not count — while also consuming
+the chosen name, so the obvious recovery (retry the duplicate under the same name) was refused as a collision
+with the very stub the failed attempt left behind, until the caller found and archived it. `createProject` and
+`createCourse` now accept `Executor`/`TransactingExecutor` (`repos/projects.ts`, `repos/courses.ts`) the same
+way `accounts.ts#createAccount` already did, so `duplicateProjectAction` opens one `db.transaction(...)` and
+runs the whole copy — the new project and every course — inside it: a failure anywhere rolls all of it back,
+including the project insert, so the name is free again for a retry. The "more machinery than this slice's own
+scope asked for" judgment was the actual mistake here, not the transaction itself.
+
+**Choice, `discordServers.list` shows a removed binding as removed, not omitted — corrected (finding 6 of the
+PROJ-4/5/TEN-7/8 rework).** `listDiscordServerBindingsForOrganization` (`repos/discord-servers.ts`) already
+returns every binding an organization has ever held, active or removed — nothing in this slice needed to
+change that function, only give an action a way to call it. The action passes that shape straight through
+rather than filtering to `removedAt IS NULL`, for the reason D-22's own gap 2 named: the panel's "what is
+already installed" screen needs to tell "never installed" apart from "installed, then removed."
+
+That distinction is **not stable**, and this paragraph originally overstated it. `discord_server_bindings` is
+keyed on the Discord server's own snowflake alone (`claimDiscordServerBinding`'s own module comment,
+`repos/discord-servers.ts`), and re-claiming a released binding *updates that same row* to the new
+organization rather than inserting a second one (the same function, the `removed_at IS NULL` branch). So a
+server organization A installed and later released shows in A's own `discordServers.list` as "installed, then
+removed" — right up until organization B claims it, at which point the row's `organizationId` becomes B's and
+the binding vanishes from A's listing entirely, reverting to indistinguishable from "never installed." Two
+consequences follow, neither of which the original text named: first, "installed, then removed" is not a
+durable fact about a binding A can rely on — it silently degrades back to "never installed" for exactly the
+servers most likely to have moved. Second, an organization that polls this action can *detect* a re-claim: a
+binding that used to appear removed and now does not appear at all means some other organization claimed that
+server in between — a cross-tenant signal TEN-8's own text rules out ("a server bound to another organization
+is not in it, and its existence is not disclosed"). The signal is weak (a disappearance, not a name or an id),
+but it is real, and it is a direct consequence of one row standing in for a server's whole history.
+
+Closing this properly needs a binding *history* table — one row per claim/release rather than one row per
+server, `discordServerBindings` kept as "current state" and a new `discord_server_binding_events` (or similar)
+recording every claim and release with its own organization id — so a released binding stays visibly removed
+for the organization that released it regardless of what happens to the server afterward, and no listing ever
+has to reuse a row across two different organizations' histories. That is real schema and migration work, well
+past what this slice's own read-surface scope asked for; it is left for whichever slice next touches
+`discord_server_bindings`.
 
 **What "knowledge-file attachments" will mean, for whichever slice adds them.** PROJ-4's own SPEC text says a
 duplicate brings "instructions and knowledge-file attachments" — nothing in `packages/db`'s schema has a table

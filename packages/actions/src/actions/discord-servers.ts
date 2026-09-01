@@ -28,7 +28,14 @@ const removeInputSchema = z.object({
 })
 type RemoveInput = z.infer<typeof removeInputSchema>
 
-const listInputSchema = z.object({})
+// Finding 5 (rework pass): `.default({})`, not a bare `z.object({})` — this
+// action takes no input at all, so a browser client always sends `{}`, but a
+// body-less `POST` (no matching `Content-Type` header, so express 5 leaves
+// `req.body` `undefined` — `routes/actions.ts`) fails `safeParse(undefined)`
+// against a plain `z.object({})` before it ever reaches this action's
+// policy. Only `dispatch`'s own tests and this package's own tests ever
+// called this with `{}` explicitly, which is why nothing caught it.
+const listInputSchema = z.object({}).default({})
 type ListInput = z.infer<typeof listInputSchema>
 
 /**

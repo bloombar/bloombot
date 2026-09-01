@@ -12,9 +12,21 @@
  * any HTTP client carries against a server it does not share types with.
  */
 
-/** One organization a signed-in account belongs to, and the account's role in it — `GET /auth/me`. */
+/**
+ * One organization a signed-in account belongs to, and the account's role in
+ * it — `GET /auth/me`.
+ *
+ * `organizationName` (TEN-7, finding 4 of the rework pass): `apps/api`'s own
+ * `/auth/me` (`routes/auth.ts`) has carried this alongside `organizationId`
+ * since the slice that added this read surface — nothing here read it back,
+ * so `OrganizationSwitcher.tsx` could only ever show a raw id. Required, not
+ * optional: the route always sends it (falling back to the id itself only
+ * for the account/organization race its own comment documents), so there is
+ * no real case this app needs to render around a missing name.
+ */
 export interface MembershipSummary {
   organizationId: string
+  organizationName: string
   role: string
 }
 

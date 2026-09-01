@@ -1,7 +1,8 @@
 /**
  * Test helper: a loopback stand-in for Discord's `/oauth2/token`,
- * `/users/@me/guilds`, `/guilds/{id}/channels` and `/guilds/{id}/roles`
- * endpoints — bound to `127.0.0.1:0` so the OS picks a free port and no test
+ * `/users/@me/guilds`, `/guilds/{id}/channels`, `/guilds/{id}/roles` and
+ * `/guilds/{id}/members` (ROST-10/ROST-11) endpoints — bound to
+ * `127.0.0.1:0` so the OS picks a free port and no test
  * in this package reaches the real network, the same shape
  * `packages/openai/tests/helpers/fake-openai-server.ts` and
  * `packages/auth/tests/helpers/fake-google-server.ts` already use for their
@@ -76,6 +77,9 @@ export class FakeDiscordServer {
   // `GET`/`POST` against the same guild, not merely a fixed canned response.
   private guildChannels = new Map<string, unknown[]>()
   private guildRoles = new Map<string, unknown[]>()
+  // ROST-10/ROST-11 — one member list per guild id, paginated the same way
+  // `userGuilds`/`botGuilds` above already are for `/users/@me/guilds`.
+  private guildMembers = new Map<string, unknown[]>()
   private guildChannelsQueue: (FakeResponse | undefined)[] = []
   private nextChannelId = 1
 
@@ -143,6 +147,11 @@ export class FakeDiscordServer {
   /** Seed `guildId`'s roles (Discord's own raw shape — `{ id, name, ... }`). */
   setGuildRoles(guildId: string, roles: unknown[]): void {
     this.guildRoles.set(guildId, roles)
+  }
+
+  /** Seed `guildId`'s members (Discord's own raw shape — `{ user: { id, username, global_name }, nick }`). */
+  setGuildMembers(guildId: string, members: unknown[]): void {
+    this.guildMembers.set(guildId, members)
   }
 
   /** `guildId`'s channels/categories as they stand right now — including anything a create call has appended since `setGuildChannels` — for a test that wants to assert on guild state directly rather than only on `requests`. */
@@ -257,6 +266,27 @@ export class FakeDiscordServer {
     if (req.method === 'GET' && rolesMatch) {
       const guildId = rolesMatch[1] ?? ''
       this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
+      return
+    }
+
+    // ROST-10/ROST-11 — paginated the same way `/users/@me/guilds` is
+    // above, so a test can prove `client.ts#listGuildMembers` actually
+    // walks every page.
+    const membersMatch = /^\/guilds\/([^/]+)\/members$/.exec(pathname ?? '')
+    if (req.method === 'GET' && membersMatch) {
+      const guildId = membersMatch[1] ?? ''
+      const full = this.guildMembers.get(guildId) ?? []
+      const params = new URLSearchParams(query)
+      const limit = Number(params.get('limit') ?? '1000')
+      const after = params.get('after')
+      let startIndex = 0
+      if (after) {
+        const index = full.findIndex(
+          (member) => (member as { user?: { id?: string } }).user?.id === after
+        )
+        startIndex = index === -1 ? full.length : index + 1
+      }
+      this.respondJson(res, 200, full.slice(startIndex, startIndex + limit))
       return
     }
 

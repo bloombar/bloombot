@@ -10,6 +10,7 @@
 
 import type {
   DiscordChannel,
+  DiscordGuildMember,
   DiscordGuildSummary,
   DiscordOAuthToken,
   DiscordRestClient,
@@ -75,14 +76,19 @@ export function createFakeDiscordRestClient(
       return Promise.resolve(options.botGuilds ?? [])
     },
 
-    // SRV-6's four guild-write calls — `apps/api` never scaffolds a server
-    // itself (that is `apps/worker`'s own handler, over the queue), so
-    // nothing in this app's routes calls these; they exist only so this
-    // fake keeps satisfying `DiscordRestClient` as that port grows.
+    // SRV-6's guild-management calls, and ROST-10/ROST-11's
+    // `listGuildMembers` alongside them — `apps/api` never scaffolds a
+    // server or imports a roster itself (both are `apps/worker`'s own
+    // handlers, over the queue), so nothing in this app's routes calls
+    // these; they exist only so this fake keeps satisfying
+    // `DiscordRestClient` as that port grows.
     listGuildChannels(): Promise<DiscordChannel[]> {
       return Promise.resolve([])
     },
     listGuildRoles(): Promise<DiscordRole[]> {
+      return Promise.resolve([])
+    },
+    listGuildMembers(): Promise<DiscordGuildMember[]> {
       return Promise.resolve([])
     },
     createGuildCategory(_botToken, _guildId, input): Promise<DiscordChannel> {

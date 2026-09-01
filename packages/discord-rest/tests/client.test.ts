@@ -394,3 +394,64 @@ describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuild
     )
   })
 })
+
+describe('listGuildMembers (ROST-10/ROST-11)', () => {
+  it("resolves a member's id, username and display-name fallback chain (nick, then global_name, then username)", async () => {
+    server.setGuildMembers('guild-1', [
+      {
+        user: { id: '1', username: 'adalovelace', global_name: 'Ada L.' },
+        nick: 'Ada',
+      },
+      {
+        user: { id: '2', username: 'alanturing', global_name: 'Alan T.' },
+        // No nickname set — falls back to global_name.
+      },
+      {
+        user: { id: '3', username: 'gracehopper' },
+        // Neither nickname nor global_name — falls back to username.
+      },
+    ])
+
+    const members = await client.listGuildMembers('bot-token', 'guild-1')
+
+    expect(members).toEqual([
+      { id: '1', username: 'adalovelace', displayName: 'Ada' },
+      { id: '2', username: 'alanturing', displayName: 'Alan T.' },
+      { id: '3', username: 'gracehopper', displayName: 'gracehopper' },
+    ])
+    expect(server.requests[0]?.headers.authorization).toBe('Bot bot-token')
+  })
+
+  // The same page-walking discipline `getUserGuilds`/`getBotGuilds` already
+  // prove above (finding 3 of the TEN-4..6 rework) — a guild with more
+  // members than one page must not be silently truncated to the first.
+  it('walks every page when the member list is larger than one page', async () => {
+    const fullList = Array.from({ length: 1200 }, (_, i) => ({
+      user: { id: String(i + 1).padStart(4, '0'), username: `member-${i + 1}` },
+    }))
+    server.setGuildMembers('guild-1', fullList)
+
+    const members = await client.listGuildMembers('bot-token', 'guild-1')
+
+    expect(members).toHaveLength(1200)
+    const memberRequests = server.requests.filter((r) =>
+      r.path.startsWith('/guilds/guild-1/members')
+    )
+    expect(memberRequests).toHaveLength(2)
+    expect(memberRequests[0]?.path).not.toContain('after=')
+    expect(memberRequests[1]?.path).toContain(`after=${fullList[999]?.user.id}`)
+  })
+
+  it('drops a malformed entry rather than throwing', async () => {
+    server.setGuildMembers('guild-1', [
+      { user: { id: '1', username: 'adalovelace' } },
+      { nick: 'no user object at all' },
+    ])
+
+    const members = await client.listGuildMembers('bot-token', 'guild-1')
+
+    expect(members).toEqual([
+      { id: '1', username: 'adalovelace', displayName: 'adalovelace' },
+    ])
+  })
+})

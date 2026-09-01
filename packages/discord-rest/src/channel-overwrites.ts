@@ -14,12 +14,18 @@
  * operate on, even though these two low bits alone never would; consistency
  * with the rest of this package matters more than the few bytes saved by a
  * plain number here.
+ *
+ * `allowMemberOverwrite` (ROST-11) is this file's one addition since
+ * SRV-2/SRV-3, both of which are role-scoped — a course's per-student
+ * private channel needs to grant exactly one student, by their own member
+ * id, never a role every student shares (ROST-5: "grants the individual
+ * student read_messages and send_messages").
  */
 
 const VIEW_CHANNEL_BIT = 0x400n
 const SEND_MESSAGES_BIT = 0x800n
 
-/** Discord's own overwrite-target kind: `0` for a role, `1` for a guild member. Every overwrite this package builds is role-scoped — SRV-2/SRV-3 grant access by course role, never by naming an individual member. */
+/** Discord's own overwrite-target kind: `0` for a role, `1` for a guild member. */
 export type DiscordOverwriteType = 0 | 1
 
 export interface DiscordPermissionOverwrite {
@@ -53,6 +59,18 @@ export function allowRoleOverwrite(roleId: string): DiscordPermissionOverwrite {
   return {
     id: roleId,
     type: 0,
+    allow: (VIEW_CHANNEL_BIT | SEND_MESSAGES_BIT).toString(),
+    deny: '0',
+  }
+}
+
+/** Grant one guild member read and send access — ROST-11's per-student channel, the one place this package overwrites by member id rather than by role. Same bits as `allowRoleOverwrite`, `type: 1` (member) rather than `0` (role). */
+export function allowMemberOverwrite(
+  memberId: string
+): DiscordPermissionOverwrite {
+  return {
+    id: memberId,
+    type: 1,
     allow: (VIEW_CHANNEL_BIT | SEND_MESSAGES_BIT).toString(),
     deny: '0',
   }

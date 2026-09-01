@@ -1,9 +1,11 @@
 /**
- * Test helper: a loopback stand-in for the four SRV-6 guild-management
- * endpoints `discord-scaffold.ts`'s handler calls through
- * `@bloombot/discord-rest` — `GET`/`POST /guilds/{id}/channels` and `GET
- * /guilds/{id}/roles` — bound to `127.0.0.1:0` so the OS picks a free port
- * and no test in this app reaches the real network. Duplicated from
+ * Test helper: a loopback stand-in for the SRV-6 guild-management endpoints
+ * `discord-scaffold.ts`'s handler calls through `@bloombot/discord-rest` —
+ * `GET`/`POST /guilds/{id}/channels` and `GET /guilds/{id}/roles` — plus,
+ * since this slice, `GET /guilds/{id}/members` (ROST-10/ROST-11), which
+ * `roster-import.ts`'s handler calls to resolve a roster row's Discord
+ * handle. Bound to `127.0.0.1:0` so the OS picks a free port and no test in
+ * this app reaches the real network. Duplicated from
  * `packages/discord-rest/tests/helpers/fake-discord-server.ts` rather than
  * imported across a package boundary test helpers are not published
  * through (that file's own module comment states the same convention),
@@ -61,6 +63,7 @@ export class FakeDiscordGuildServer {
   private server: Server
   private guildChannels = new Map<string, unknown[]>()
   private guildRoles = new Map<string, unknown[]>()
+  private guildMembers = new Map<string, unknown[]>()
   private nextChannelId = 1
 
   private constructor(server: Server) {
@@ -104,6 +107,11 @@ export class FakeDiscordGuildServer {
     this.guildRoles.set(guildId, roles)
   }
 
+  /** Seed `guildId`'s members (Discord's own raw shape — `{ user: { id, username, global_name }, nick }`) — what `roster-import.ts`'s handler resolves a roster row's `Discord` handle against. */
+  setGuildMembers(guildId: string, members: unknown[]): void {
+    this.guildMembers.set(guildId, members)
+  }
+
   /** `guildId`'s channels/categories as they stand right now — including anything a create call has appended since `setGuildChannels`, and with a `GUILD_TEXT` channel's name already slugged — the same escape hatch `packages/discord-rest`'s own `FakeDiscordServer#guildChannelsFor` provides, for a test that wants to assert on the guild's actual state rather than only on `requests`/`writeRequests()`. */
   guildChannelsFor(guildId: string): unknown[] {
     return this.guildChannels.get(guildId) ?? []
@@ -127,7 +135,7 @@ export class FakeDiscordGuildServer {
       ? (JSON.parse(raw) as Record<string, unknown>)
       : undefined
 
-    const [pathname] = (req.url ?? '').split('?')
+    const [pathname, query] = (req.url ?? '').split('?')
     this.requests.push({
       method: req.method,
       path: req.url ?? '',
@@ -168,6 +176,29 @@ export class FakeDiscordGuildServer {
     if (req.method === 'GET' && rolesMatch) {
       const guildId = rolesMatch[1] ?? ''
       this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
+      return
+    }
+
+    // ROST-10/ROST-11 — paginated the same way
+    // `packages/discord-rest/tests/helpers/fake-discord-server.ts`'s own
+    // `/guilds/{id}/members` route is, so a test can prove
+    // `listGuildMembers` walks every page rather than reading only the
+    // first.
+    const membersMatch = /^\/guilds\/([^/]+)\/members$/.exec(pathname ?? '')
+    if (req.method === 'GET' && membersMatch) {
+      const guildId = membersMatch[1] ?? ''
+      const full = this.guildMembers.get(guildId) ?? []
+      const params = new URLSearchParams(query)
+      const limit = Number(params.get('limit') ?? '1000')
+      const after = params.get('after')
+      let startIndex = 0
+      if (after) {
+        const index = full.findIndex(
+          (member) => (member as { user?: { id?: string } }).user?.id === after
+        )
+        startIndex = index === -1 ? full.length : index + 1
+      }
+      this.respondJson(res, 200, full.slice(startIndex, startIndex + limit))
       return
     }
 

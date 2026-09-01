@@ -12,6 +12,17 @@
  * literal in this file, the same `packages/openai`'s own `client.ts` holds
  * itself to (QA-2), proven here by `tests/no-vendor-hostname.test.ts`.
  *
+ * `listGuildMembers` (ROST-10/ROST-11) is this file's one addition since
+ * SRV-6..8: it reads a guild's member list, so a roster-import job
+ * (`apps/worker/src/handlers/roster-import.ts`) can resolve a roster row's
+ * self-reported Discord handle to the real member — and, when it resolves,
+ * the real snowflake — the same lookup `discord_manager.py`'s own
+ * `get_user_id` performs today (matching a member's username or display
+ * name, case-insensitively). It is read-only, the same shape
+ * `listGuildChannels`/`listGuildRoles` already are, and does not weaken
+ * SRV-8's structural "never delete or edit": nothing about a member's own
+ * roles or nickname is written by this call or any caller of it.
+ *
  * SRV-8's "never delete" is made structural here, not merely by convention:
  * this interface has no method that edits or removes a category or channel
  * at all — a category or channel this client creates cannot later be
@@ -101,6 +112,23 @@ export interface DiscordRole {
   name: string
 }
 
+/**
+ * A guild member, as `listGuildMembers` returns it (ROST-10/ROST-11) —
+ * `id` is the member's real snowflake (Discord's `user.id`), `username` is
+ * their account name (`user.username`), and `displayName` is the name a
+ * roster's `Discord` column is most likely to actually contain: a guild
+ * nickname (`nick`) when the member has set one, falling back to their
+ * global display name (`user.global_name`), and finally their username —
+ * the same fallback chain discord.py's own `Member.display_name` property
+ * uses, which is why `discord_manager.py`'s `get_user_id` matches against
+ * it (`match_display_names=True`) as well as the bare username.
+ */
+export interface DiscordGuildMember {
+  id: string
+  username: string
+  displayName: string
+}
+
 export interface DiscordRestClient {
   /**
    * Exchange an authorization code for a user access token (RFC 6749 §4.1.3,
@@ -129,6 +157,12 @@ export interface DiscordRestClient {
 
   /** Every role in a guild (SRV-2) — resolves a course's `adminsRole`/`studentsRole` names to ids. A name that resolves to nothing is the caller's to report (SRV-2's "skipped rather than treated as fatal"), not this method's — it simply omits what it does not find, the same as the real endpoint. */
   listGuildRoles(botToken: string, guildId: string): Promise<DiscordRole[]>
+
+  /** Every member of a guild (ROST-10/ROST-11) — `apps/worker`'s roster-import handler matches a roster row's self-reported `Discord` handle against this list (username or display name, case-insensitively), the same lookup `discord_manager.py`'s own `get_user_id` performs. A handle matching nobody here is the caller's to report (ROST-12), not this method's. */
+  listGuildMembers(
+    botToken: string,
+    guildId: string
+  ): Promise<DiscordGuildMember[]>
 
   /**
    * Create a category (SRV-1, SRV-2) with `permissionOverwrites` applied at
@@ -197,6 +231,16 @@ const GUILD_LIST_PAGE_LIMIT = 200
 // that, say, never stops returning full pages — from turning a single call
 // into an unbounded loop.
 const GUILD_LIST_MAX_PAGES = 50
+
+// `GET /guilds/{id}/members` (ROST-10/ROST-11) is paged the same way
+// `/users/@me/guilds` is — ascending by id, `after=<last id seen>` — but
+// Discord's own limit and maximum for this endpoint is `1000`, not `200`.
+// The same reasoning as `GUILD_LIST_PAGE_LIMIT`/`GUILD_LIST_MAX_PAGES`
+// above applies to the two constants below: a page bound generous enough
+// that no real course's guild approaches it (100 pages * 1000 = 100,000
+// members), not a per-course member-count bound.
+const GUILD_MEMBER_PAGE_LIMIT = 1000
+const GUILD_MEMBER_MAX_PAGES = 100
 
 // Discord's own channel-type enum (API v10) — the two values SRV-6 ever
 // creates. `createGuildCategory`/`createGuildChannel` send exactly one of
@@ -327,6 +371,38 @@ function parseRoleList(body: unknown): DiscordRole[] {
   return body as DiscordRole[]
 }
 
+/** Parse one guild-member entry (`GET /guilds/{id}/members`) — Discord nests the account itself under `user`, and a member's own nickname (`nick`) and the account's `global_name` are both optional, so `displayName`'s own fallback chain (this file's own `DiscordGuildMember` doc comment) is resolved here, once, rather than by every caller. Tolerant of a malformed entry (dropped, not thrown on) — the same "best-effort data for a report" treatment `parsePermissionOverwrite` gives a channel's own overwrites. */
+function parseGuildMember(entry: unknown): DiscordGuildMember | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const payload = entry as { user?: unknown; nick?: unknown }
+  if (typeof payload.user !== 'object' || payload.user === null)
+    return undefined
+  const user = payload.user as {
+    id?: unknown
+    username?: unknown
+    global_name?: unknown
+  }
+  if (typeof user.id !== 'string' || typeof user.username !== 'string') {
+    return undefined
+  }
+  const nick = typeof payload.nick === 'string' ? payload.nick : undefined
+  const globalName =
+    typeof user.global_name === 'string' ? user.global_name : undefined
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: nick ?? globalName ?? user.username,
+  }
+}
+
+/** Parse a guild-member-list success body — `[]` for anything not shaped as Discord's own array of member objects, and drops (never throws on) any individual entry `parseGuildMember` cannot make sense of. */
+function parseGuildMemberList(body: unknown): DiscordGuildMember[] {
+  if (!Array.isArray(body)) return []
+  return body
+    .map(parseGuildMember)
+    .filter((member): member is DiscordGuildMember => member !== undefined)
+}
+
 /** Build a `DiscordRestClient` backed by the real Discord API (or a loopback fake standing in for it, via `apiBase`/`oauthBase`/`fetchFn`). */
 export function createDiscordRestClient(
   options: CreateDiscordRestClientOptions
@@ -421,6 +497,33 @@ export function createDiscordRestClient(
         throw new DiscordRequestError(response.status, response.body)
       }
       return parseRoleList(response.body)
+    },
+
+    async listGuildMembers(botToken, guildId): Promise<DiscordGuildMember[]> {
+      const members: DiscordGuildMember[] = []
+      let after: string | undefined
+      for (let page = 0; page < GUILD_MEMBER_MAX_PAGES; page++) {
+        const query = new URLSearchParams({
+          limit: String(GUILD_MEMBER_PAGE_LIMIT),
+        })
+        if (after) query.set('after', after)
+        const response = await getJson(
+          `${apiBase}/guilds/${guildId}/members?${query.toString()}`,
+          `Bot ${botToken}`,
+          requestOptions
+        )
+        if (!response.ok) {
+          throw new DiscordRequestError(response.status, response.body)
+        }
+        const pageMembers = parseGuildMemberList(response.body)
+        members.push(...pageMembers)
+        if (pageMembers.length < GUILD_MEMBER_PAGE_LIMIT) break
+        after = pageMembers[pageMembers.length - 1]?.id
+        // No `id` to page from — nothing left to ask for, however this page
+        // came to be exactly `GUILD_MEMBER_PAGE_LIMIT` long.
+        if (!after) break
+      }
+      return members
     },
 
     async createGuildCategory(

@@ -1587,3 +1587,85 @@ roughly 1 in 10).
 by grep, along with every other `.listen(0)` call site in the repo; none found). If a future package adds
 HTTP tests over supertest, it needs the same `startTestServer`-style helper, not a bare `request(app)` — the
 squatter-collision test above is the regression to copy alongside it.
+
+---
+
+## D-25 — `apps/web`: how `pages/CourseEditor.tsx` maps onto `courses.save`'s partial-update rule, and what QA-8's harness does and does not prove
+
+**Problem.** `courses.save`'s own input (`packages/actions/src/actions/courses.ts`) treats an *omitted*
+optional field (`promptId`, `instructions`, `model`, `vectorStoreId`, `maxRequestsPerDay`) as "keep whatever
+is stored" and an *explicit* `null` as "clear it" — the distinction `keepOrClear` exists for. That rule is
+right for a partial API caller that only wants to touch one field, but it is exactly the rule a defect in an
+earlier slice already got wrong once (finding 2 of the PROJ-5/TEN-7/8 rework, `docs/DECISIONS.md` D-23's own
+neighbour), so WEB-8's brief asked this slice to get it right deliberately rather than by accident a second
+time. Separately, QA-8 asks for "one test [that] drives a browser to create a project and define a course in
+it, and then a message ... is answered using that course's own configuration" — a claim that spans a real
+browser, a real API, and `@bloombot/discord`'s own Discord-shaped pipeline, none of which this repository's
+Playwright harness had previously driven together.
+
+**Choice, `pages/CourseEditor.tsx` never omits a key at all — it always sends every field it manages,
+translating an empty input into an explicit `null`.** The omitted/explicit-null distinction exists for a
+caller that only has *some* of a course's fields in hand and wants to leave the rest alone; this form is the
+opposite case — by the time a save fires, it has just fetched (`courses.get`, on edit) or default-initialized
+(on create) the whole record, so it always knows the full set of values it intends the saved row to hold. Its
+`handleSave` builds `SaveCourseInput` by mapping each optional field through one `trim() === '' ? null :
+value` — `null` when the instructor cleared the field, the trimmed value otherwise — and never spreads in a
+conditional key the way `courses.save`'s own `execute` does for `conversationScope`. The one field this form
+does *not* manage is `conversationScope` itself: CFG-2..4 do not mention it (D-4's own later addition), so
+`SaveCourseInput` (`api/client.ts`) has no field for it at all, and the key is genuinely omitted from every
+request this form sends — the one deliberate, documented use of "omitted" in this whole component, relied on
+to preserve an update's existing value and let a create fall back to `courses.save`'s own default. The
+regression this guards: `apps/web/tests/course-editor.test.tsx`'s "a save clears an optional field to an
+explicit null, not an omitted key" asserts the request body literally contains `model: null` (not merely a
+missing key) after clearing a field that had a value, and that an untouched nullable field the source course
+already had (`promptId`) is still sent explicitly rather than silently dropped.
+
+**Choice, the panel's project/course navigation is a plain `view` union in `pages/ProjectsPanel.tsx`, not a
+second `window.location.pathname` switch alongside `App.tsx`'s own.** `App.tsx`'s own pathname-based routing
+exists for two one-time entry points a browser can land on directly and must never revisit by pressing "back"
+into (a redeemed sign-in link, a completed Discord OAuth callback — D-22's own choice). Moving between a
+project and one of its courses has neither property: it is ordinary in-panel navigation with nothing to
+protect against a back-button press, so a `useState<View>` discriminated union — the same shape `App.tsx`'s
+own `SessionState` already uses one level up — is the whole "path-switch style, no router library" the brief
+asked for, without inventing history entries this navigation has no need of. `pages/Shell.tsx` gates
+`ProjectsPanel` behind its own `activeTab` state for an unrelated, narrower reason: `ProjectsPanel` fetches
+`projects.list` (`api/client.ts#listProjects`) on mount, so mounting it unconditionally on every render of
+`Shell.tsx` would fire that request even when an instructor is looking at the Discord tab instead.
+
+**Choice, `activeTab` defaults to `'projects'`, not `'discord'`.** The first version of this gate defaulted to
+Discord — the tab that already existed before this slice — for a reason that had nothing to do with the
+product: every existing `Shell.tsx` test (`tests/shell.test.tsx`) mocked `dispatchAction` selectively per test
+rather than by default, and mounting `ProjectsPanel` unconditionally would have fired an unmocked
+`listProjects` call on every one of those tests' first render. That is a real cost, but it is a test-file cost,
+not a reason for what an instructor sees on every reload — and a reviewer caught it as exactly that (finding 10
+of the WEB-7 rework): the two comments explaining the default disagreed with each other, one giving this
+paragraph's real reason and the other inventing a product one. The product reason instead governs the default
+now: Projects is what an instructor comes to this panel for on nearly every visit once a server is installed,
+so landing them on the install button every reload — one click away from the thing they actually came for — is
+worse than the cost of updating the test file. `tests/shell.test.tsx` now mocks `listProjects`/`listCourses`
+with a `beforeEach` default so every test's now-unconditional `ProjectsPanel` mount has something to resolve,
+and the handful of tests that assert on the Discord tab's own content click it open explicitly first.
+
+**What QA-8's harness proves, and what it stands in for — read `e2e/course-configuration.spec.ts`'s own module
+comment for the full breakdown, summarized here.** Real: the browser driving `pages/Projects.tsx`,
+`pages/Courses.tsx` and `pages/CourseEditor.tsx`; a real `apps/api`; a real throwaway SQLite database; every
+action the panel calls, reached exactly the way any other caller reaches them; and `@bloombot/discord`'s own
+`handleMention` plus `@bloombot/core`'s `answerQuestion`/`routeMessage` underneath it, unmodified, run
+directly against that same database from the Playwright test process itself (not a second server) once the
+browser's own part of the scenario ends. Not real, and each is a documented stand-in rather than an
+oversight: there is no discord.js client and no gateway connection anywhere in this harness (`apps/bot` is out
+of this slice's scope) — the Discord server binding this test needs is inserted directly with
+`discordServers.claimDiscordServerBinding`, the same repository function TEN-4's real OAuth install flow
+calls, invoked here instead of walked through Discord's own consent screen, which nothing in this harness can
+automate; the "message arriving in Discord" is a plain `InboundMention` object this spec constructs by hand,
+not something posted to a real channel; the model is `e2e/support/fake-model-client.ts`, a fixed string with
+no OpenAI call anywhere in the run; and the logger passed to `handleMention` is
+`e2e/support/fake-logger.ts` rather than `@bloombot/logger`'s real `createLogger`, because that reads
+`@bloombot/config`'s `CONFIG` (`NODE_ENV`, `PUBLIC_APP_URL`), which is only ever set as an environment variable
+for the *spawned* `apps/api` process (`playwright.config.ts`'s own `webServer.env`), not for the Playwright
+test runner process this spec's own post-browser code actually executes in. So this test proves the database
+round trip the whole migration exists to make true — a course defined entirely through the panel's own
+screens is exactly the configuration `handleMention` routes and answers a matching message with, with no file
+in this repository edited and no process restarted between the two — and it does not prove discord.js itself
+wires correctly to `handleMention` or that a real OpenAI call succeeds, both of which are untouched by this
+slice.

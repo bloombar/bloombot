@@ -877,6 +877,14 @@ database: sign in, land in an organization, and see what a signed-in instructor 
 tests on either side of a contract can both pass while the contract itself is broken, and
 this is the test that would notice.
 
+#### QA-8 The product's central claim is tested end to end
+
+One test drives a browser to create a project and define a course in it, and then a message
+arriving in that course's Discord category is answered using that course's own
+configuration — with no file edited and no process restarted between the two. This is the
+sentence the whole migration exists to make true, and it is worth a test that would notice
+if it stopped being true.
+
 ### 18. People, Conversations & Transcripts
 
 #### PPL-1 People are the platform's end users
@@ -1185,3 +1193,24 @@ for. The panel adds no interpretation the API did not give it.
 The browser bundle imports only the shared schema package from the workspace. The data,
 configuration, Discord and model packages are unreachable from it by lint rule, because
 bundling any of them would ship credentials to every visitor.
+
+#### WEB-7 Projects are managed in the panel
+
+An instructor lists their projects, creates one, archives and restores one, and duplicates
+one into the next term — each through the same action the API exposes to anything else. A
+duplicated project's courses arrive disabled, and the panel says so rather than leaving the
+instructor to discover it when nothing routes.
+
+#### WEB-8 A course is defined in the panel, not in a file
+
+A course's title, its Discord role names, its categories and channels, its instructions and
+its model settings are all editable in the panel, and saving writes them through the
+platform's own action. Nothing about a course requires editing a file in this repository or
+restarting a process, which is the whole point of the migration.
+
+#### WEB-9 The panel shows what will route, and why a save was refused
+
+A course screen shows the category and role names that decide which questions reach it, so
+an instructor can see what a save will claim before making it. A save refused because those
+names collide with another course names that course and its project, because that refusal is
+about a record in the instructor's own organization and is theirs to resolve.

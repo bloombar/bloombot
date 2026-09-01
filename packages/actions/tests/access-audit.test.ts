@@ -70,6 +70,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // organization resolves to nothing (TEN-5), the same as every other
   // scoped read in this table.
   'jobs.get': { resource: 'job', access: 'read' },
+  // ROST-9: resolves the course a roster is imported into, write — the
+  // same shape `discordServers.scaffold` uses above: `execute` reaches no
+  // person or Discord state at all (it only enqueues), but the course it
+  // names is what a write grant against `'course'` already protects
+  // everywhere else in this table.
+  'roster.import': { resource: 'course', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

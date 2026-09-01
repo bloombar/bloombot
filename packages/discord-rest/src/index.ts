@@ -5,6 +5,7 @@ export {
   DiscordRequestError,
   type CreateDiscordRestClientOptions,
   type DiscordChannel,
+  type DiscordGuildMember,
   type DiscordOAuthToken,
   type DiscordRestClient,
   type DiscordRole,
@@ -16,6 +17,7 @@ export type { BuildDiscordAuthorizationUrlInput } from './authorize-url.js'
 export { administersGuild, type DiscordGuildSummary } from './permissions.js'
 
 export {
+  allowMemberOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
   overwriteAllowsView,

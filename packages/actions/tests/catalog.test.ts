@@ -105,6 +105,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'discordServers.list',
         'discordServers.scaffold',
         'jobs.get',
+        'roster.import',
       ].sort()
     )
 

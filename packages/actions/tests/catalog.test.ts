@@ -106,6 +106,12 @@ describe('ACT-6 — machine-readable catalog', () => {
         'discordServers.scaffold',
         'jobs.get',
         'roster.import',
+        'courseAttachments.attach',
+        'courseAttachments.list',
+        'courseAttachments.detach',
+        'courseInstructions.save',
+        'courseInstructions.list',
+        'courseInstructions.restore',
       ].sort()
     )
 

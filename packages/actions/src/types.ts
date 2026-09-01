@@ -58,6 +58,8 @@ export interface ExecuteContext<Input, Entity> {
   input: Input
   entity: Entity
   db: Database
+  /** The authenticated caller's own account, when `dispatch` was given one (`dispatch.ts`'s own `DispatchContext.accountId` doc comment). Optional for the same reason it is there — most actions have no reason to read it. */
+  accountId?: string
 }
 
 /**

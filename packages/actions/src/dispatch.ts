@@ -21,6 +21,25 @@ export interface DispatchContext {
   /** The organization the caller is acting within — established by whatever authenticated the caller (not built in this slice), never read out of the action's own input. */
   organizationId: string
   db: Database
+  /**
+   * FILE-4 — the account that authenticated the call, when the caller has
+   * one (`apps/api`'s own `routes/actions.ts` passes `req.session.accountId`
+   * through; a caller with no session cannot reach `dispatch` at all —
+   * that router's own module comment). Optional here rather than required
+   * on every `DispatchContext`: most actions today have no reason to know
+   * who is calling — `organizationId` alone already decides what they may
+   * reach — and adding a mandatory field to this interface would force
+   * every existing test and caller to supply one it never uses.
+   * `courseInstructions.save`/`.restore` (`actions/course-instructions.ts`)
+   * are the first actions that actually read this, to record a revision's
+   * own author; a caller of either through `dispatch` with no `accountId`
+   * is refused (`ActionRefusedError`) — never recorded as authored by
+   * nobody, and never accepted from the action's own input (the same
+   * "never read out of the action's own input" discipline `organizationId`
+   * above already holds itself to — a self-reported author would be a
+   * forgeable audit trail).
+   */
+  accountId?: string
 }
 
 /**
@@ -71,5 +90,8 @@ export async function dispatch<Name extends string, Input, Entity, Output>(
     input,
     entity,
     db: context.db,
+    ...(context.accountId !== undefined
+      ? { accountId: context.accountId }
+      : {}),
   })
 }

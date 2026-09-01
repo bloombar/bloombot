@@ -42,6 +42,8 @@ export interface ServerDependencies {
   googleVerifier: GoogleIdTokenVerifier
   /** Defaults to `createPlatformRegistry()` — every action this slice ports. Overridable so a test can dispatch against a registry of its own, e.g. a recording action, without registering it alongside the platform's real ones. */
   registry?: ActionRegistry
+  /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. Defaults to `AttachmentStorage`'s own default (`CONFIG.ATTACHMENT_STORAGE_DIR`) when omitted, the same as every other `CONFIG` value this file's own caller (`src/index.ts`) reads once and passes down. */
+  attachmentStorageDir?: string
   /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
   discordRestClient: DiscordRestClient
   /** Discord's "client id"/"application id" — `BOT_APP_ID` in env.example. */
@@ -57,7 +59,13 @@ export interface ServerDependencies {
 }
 
 export function buildApp(deps: ServerDependencies): Express {
-  const registry = deps.registry ?? createPlatformRegistry()
+  const registry =
+    deps.registry ??
+    createPlatformRegistry({
+      ...(deps.attachmentStorageDir !== undefined
+        ? { attachmentStorageDir: deps.attachmentStorageDir }
+        : {}),
+    })
 
   const app = express()
   // Not itself a SPEC requirement, but the header discloses this is an

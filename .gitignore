@@ -7,6 +7,11 @@ rosters/*.csv
 data/*.db
 logs/*.log
 
+# FILE-1..5 — course attachments' own bytes (notes, syllabi, schedules an
+# instructor uploads). Real course material, keyed by an unguessable id —
+# never committed, the same reasoning as data/*.db above.
+data/attachments/
+
 # ignore any cloned repos (anchored to the repo root — packages/db/src/repos/
 # is source code, not a clone, and an unanchored pattern here would silently
 # gitignore it)

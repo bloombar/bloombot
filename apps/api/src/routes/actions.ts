@@ -80,7 +80,16 @@ export function buildActionsRouter(
         return
       }
 
-      dispatch(action, req.body, { organizationId, db })
+      // FILE-4 — the caller's own account, threaded through so an action
+      // that records an author (`courseInstructions.save`/`.restore`) has
+      // one; `req.session` is already proven non-null above (the same
+      // "no session, no dispatch" guard this router's own module comment
+      // describes).
+      dispatch(action, req.body, {
+        organizationId,
+        db,
+        accountId: req.session.accountId,
+      })
         .then((result) => res.status(200).json({ result }))
         .catch(next)
     }

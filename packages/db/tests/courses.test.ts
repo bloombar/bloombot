@@ -949,4 +949,78 @@ describe('courses repo', () => {
       })
     })
   })
+
+  // FILE-4: `setCourseInstructions` writes only the one column.
+  describe('setCourseInstructions', () => {
+    it("updates a course's instructions and nothing else", () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const course = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      const updated = courses.setCourseInstructions(
+        orgA,
+        course.id,
+        'Be concise and cite the syllabus.',
+        testDb.db
+      )
+
+      expect(updated?.instructions).toBe('Be concise and cite the syllabus.')
+      expect(updated?.title).toBe(course.title)
+    })
+
+    it("does not reach another organization's course (TEN-5)", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, projectA } = seedTwoOrganizations(testDb)
+      const course = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      expect(
+        courses.setCourseInstructions(orgB, course.id, 'nope', testDb.db)
+      ).toBeUndefined()
+    })
+  })
+
+  // FILE-1/D-3: a course's vector store id is filled in once, and a
+  // hand-typed one is never overwritten.
+  describe('setCourseVectorStoreIdIfUnset', () => {
+    it('fills in a vector store id when the course has none', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const course = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+      expect(course.vectorStoreId).toBeNull()
+
+      const updated = courses.setCourseVectorStoreIdIfUnset(
+        orgA,
+        course.id,
+        'vs_generated',
+        testDb.db
+      )
+      expect(updated?.vectorStoreId).toBe('vs_generated')
+    })
+
+    it("never overwrites a hand-typed vector store id (D-3's escape hatch)", () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const course = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, { vectorStoreId: 'vs_hand_typed' }),
+          testDb.db
+        )
+      )
+
+      const updated = courses.setCourseVectorStoreIdIfUnset(
+        orgA,
+        course.id,
+        'vs_generated',
+        testDb.db
+      )
+      expect(updated?.vectorStoreId).toBe('vs_hand_typed')
+    })
+  })
 })

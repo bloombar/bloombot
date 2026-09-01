@@ -1535,7 +1535,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: ACT-2
   title: Declared authorization
@@ -1551,7 +1551,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: ACT-3
   title: Refusals reveal nothing
@@ -1561,7 +1561,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: ACT-4
   title: Dispatch pipeline
@@ -1573,7 +1573,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: ACT-5
   title: Access audit index
@@ -1585,7 +1585,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: ACT-6
   title: Machine-readable catalog
@@ -1597,7 +1597,7 @@
   section: §13 Action & Authorization Layer
   family: ACT
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: AUTH-1
   title: Passwordless email sign-in

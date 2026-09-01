@@ -21,6 +21,8 @@
 import type { Logger } from '@bloombot/logger'
 import type { EmailSender } from '@bloombot/auth'
 
+import { FileEmailSender } from './file-email-sender.js'
+
 export class LoggingEmailSender implements EmailSender {
   constructor(private readonly logger: Logger) {}
 
@@ -65,4 +67,39 @@ export function buildLoggingEmailSender(
     )
   }
   return new LoggingEmailSender(logger)
+}
+
+/**
+ * This process's `EmailSender`, chosen from the environment (OPS-14).
+ *
+ * `MAIL_FILE` outside production writes each message to that file so a
+ * developer can complete a local sign-in — the link is a credential and
+ * cannot be recovered any other way, since tokens are stored hashed and the
+ * logging stand-in never writes a link. In production the same variable is
+ * refused outright rather than honoured: writing sign-in links to a file on
+ * the box serving real students is the failure this whole stand-in exists to
+ * avoid, and a variable set by accident must not be the thing that causes it.
+ *
+ * @throws {Error} in production, whether or not `MAIL_FILE` is set — there is
+ *   still no real transport for it to defer to.
+ */
+export function buildEmailSender(
+  nodeEnv: string,
+  mailFile: string | undefined,
+  logger: Logger
+): EmailSender {
+  if (nodeEnv === 'production') {
+    // Deliberately checked before `mailFile`: a stray MAIL_FILE in a
+    // production environment must fail loudly, not quietly start writing
+    // credentials to disk.
+    return buildLoggingEmailSender(nodeEnv, logger)
+  }
+  if (mailFile) {
+    logger.info(
+      { mailFile },
+      'apps/api: writing sign-in emails to a file (development only) — it holds live sign-in links'
+    )
+    return new FileEmailSender(mailFile)
+  }
+  return buildLoggingEmailSender(nodeEnv, logger)
 }

@@ -1229,6 +1229,15 @@ Every credential the Python system used is rotated when the platform takes over,
 credential that has been in two systems' environments is a credential with two chances of having
 leaked.
 
+#### OPS-14 The whole stack runs locally from documentation alone
+
+A developer can bring up the API, the panel and the bot on their own machine and reach the product in a
+browser, following one document: what to install, which configuration values carry over from the system
+being replaced and which are new, how to sign in when no mail transport exists, and what each way of
+failing to start looks like. Signing in locally needs a development-only mail file, because a sign-in link
+is a bearer credential that is never logged and never recoverable from a database that stores it hashed —
+that file is refused outright in production.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

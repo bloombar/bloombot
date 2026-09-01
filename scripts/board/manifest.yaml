@@ -1599,6 +1599,73 @@
   phase: 5
   status: Done
   review: false
+- id: API-1
+  title: Routes carry, they do not decide
+  full: "A route validates nothing, authorizes nothing and writes nothing itself:
+    it turns a request into an action dispatch and the result into a response.
+    Every rule about who may do what therefore lives in one place, and a second
+    surface — the MCP server, a future mobile client — reaches the same rules
+    without a route to copy."
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
+- id: API-2
+  title: The session is a cookie the browser cannot read
+  full: A session token travels in an HttpOnly, Secure, SameSite cookie, scoped to
+    the site, and is rotated when a sign-in succeeds. Nothing hands the token to
+    JavaScript, so a cross-site script cannot read it, and signing out revokes
+    the session rather than only clearing the cookie.
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
+- id: API-3
+  title: A state-changing request must come from the site
+  full: Every non-GET request is checked against its origin before it reaches an
+    action, and one that does not match is refused without being dispatched.
+    Cookies are sent by the browser whatever page asked for the request, so the
+    origin check is what stands between a student's authenticated session and a
+    form on somebody else's site.
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
+- id: API-4
+  title: One place turns a failure into a status
+  full: Typed errors from the action layer are mapped to HTTP statuses by a single
+    middleware, and no route maps its own. A refusal is the same status and the
+    same body whether the record is missing or belongs to another organization,
+    so the API discloses no more than the action layer does.
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
+- id: API-5
+  title: The API reaches Discord over REST, never the gateway
+  full: "The API process opens no gateway connection: that is the bot's alone.
+    Anything the API needs from Discord it does over REST with the same token,
+    so there is no second connection to coordinate and no session to lose."
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
+- id: API-6
+  title: The process reports readiness honestly
+  full: The API answers a health check with whether it can actually serve — that
+    its configuration validated and its database is reachable — rather than
+    merely that the process is running, and it shuts down by closing the server
+    and the database rather than exiting under load.
+  section: §23 HTTP API
+  family: API
+  phase: 5
+  status: In review
+  review: false
 - id: AUTH-1
   title: Passwordless email sign-in
   full: An account is created and accessed by a link sent to an email address.

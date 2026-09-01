@@ -67,6 +67,30 @@ export function listMembershipsForOrganization(
 }
 
 /**
+ * Every membership `accountId` holds, across every organization it belongs
+ * to.
+ *
+ * TEN-2 exception, the same class as `accounts.ts#getAccountByEmail`: an
+ * account is not scoped to one organization — it can hold a membership in
+ * several — so this is organization-independent by design, keyed on
+ * `accountId` rather than `organizationId`, and allowlisted in
+ * `tests/tenant-scoping-convention.test.ts` accordingly. `apps/api`'s
+ * `GET /auth/me` is the first caller: every action URL is
+ * `POST /organizations/:organizationId/actions/:name`, so a signed-in
+ * caller needs a way to discover which organization ids it may use there.
+ */
+export function listMembershipsForAccount(
+  accountId: string,
+  db: Database
+): Membership[] {
+  return db
+    .select()
+    .from(memberships)
+    .where(eq(memberships.accountId, accountId))
+    .all()
+}
+
+/**
  * Change an existing membership's role.
  *
  * Returns the number of rows changed — `0` rather than a different

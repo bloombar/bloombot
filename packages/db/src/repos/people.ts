@@ -116,6 +116,16 @@ export function listPeople(organizationId: string, db: Database): Person[] {
  * Resolve an identity to the person it belongs to, or `undefined` if nobody
  * holds it in this organization yet. Read-only — see
  * `resolvePersonByIdentity` for "create on demand" (PPL-3).
+ *
+ * `people.organizationId` is constrained explicitly in `where`, not just
+ * `personIdentities.organizationId` in the join — not reachable through this
+ * package's own API today, because `resolvePersonByIdentity` always writes a
+ * person and its identity with the same `organizationId`, so the two can
+ * never disagree yet. Left unconstrained, the query would still be correct
+ * for every row this package writes, but it is one join condition away from
+ * returning another organization's person and roster fields the moment
+ * anything writes the two tables out of step (finding 7 of the CONV-1
+ * rework).
  */
 export function resolveIdentity(
   organizationId: string,
@@ -143,6 +153,7 @@ export function resolveIdentity(
     )
     .where(
       and(
+        eq(people.organizationId, organizationId),
         eq(personIdentities.surface, identity.surface),
         eq(personIdentities.externalId, identity.externalId)
       )
@@ -253,6 +264,59 @@ export function mergeRosterFields(
     const incoming = fields[key]
     if (existing[key] === null && incoming != null) {
       patch[key] = incoming
+    }
+  }
+  if (Object.keys(patch).length === 0) return existing
+
+  return db
+    .update(people)
+    .set(patch)
+    .where(
+      and(eq(people.id, personId), eq(people.organizationId, organizationId))
+    )
+    .returning()
+    .get()
+}
+
+/**
+ * Overwrite roster fields on an existing person — the escape hatch
+ * `mergeRosterFields` deliberately does not provide (finding 9 / D-13 of the
+ * CONV-1 rework). `mergeRosterFields` only ever fills a field that is
+ * currently `null`, so a field merged in wrong once (a bad roster row's
+ * email, say) is permanently wrong: a corrected re-import through
+ * `mergeRosterFields` alone is a no-op, because the field is no longer
+ * `null`. This function is the other half — every field named in `fields`
+ * is written exactly as given, including `null` (which clears it),
+ * regardless of what the person's row currently holds; a field left
+ * `undefined` in `fields` is left untouched, the same "absent means
+ * unchanged" reading `updateCourse`'s optional fields use. `undefined` when
+ * `personId` does not exist or does not belong to `organizationId` (TEN-2),
+ * matching `mergeRosterFields`'s refusal shape.
+ */
+export function overwriteRosterFields(
+  organizationId: string,
+  personId: string,
+  fields: RosterFields,
+  db: Database
+): Person | undefined {
+  const existing = getPerson(organizationId, personId, db)
+  if (!existing) return undefined
+
+  const patch: Partial<
+    Pick<
+      Person,
+      'displayName' | 'email' | 'firstName' | 'lastName' | 'githubHandle'
+    >
+  > = {}
+  for (const key of [
+    'displayName',
+    'email',
+    'firstName',
+    'lastName',
+    'githubHandle',
+  ] as const) {
+    if (fields[key] !== undefined) {
+      patch[key] = fields[key]
     }
   }
   if (Object.keys(patch).length === 0) return existing

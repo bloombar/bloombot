@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync, readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { eq } from 'drizzle-orm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   conversations,
@@ -95,7 +97,14 @@ function seedTwoOrganizations(testDatabase: TestDatabase) {
   }
 }
 
-/** Sets a course's `conversationScope` directly — no repo function exposes this write (out of this slice's scope). */
+/**
+ * Sets a course's `conversationScope` directly, bypassing `updateCourse`
+ * (which, since finding 6 of the CONV-1 rework, is a real write path for
+ * this column — see the `conversationScope (CONV-1)` tests below for that).
+ * Kept here for the "scope changes after a conversation already exists"
+ * test below, which only needs the column flipped in place, not a full
+ * `NewCourse` payload re-saved through it.
+ */
 function setConversationScope(
   courseId: string,
   scope: schema.ConversationScope,
@@ -240,6 +249,57 @@ describe('conversations repo', () => {
     ).toHaveLength(2)
   })
 
+  // Finding 6 of the CONV-1 rework: `conversationScope` set at course
+  // creation, through `createCourse`'s own `conversationScope` field — not
+  // through the raw `setConversationScope` test helper — is what
+  // `getOrCreateConversation` honours. Proves the write path finding 6
+  // added is actually the thing this behaviour depends on, not just that
+  // the column has the right value in the database.
+  it('honours the `conversationScope` a course was created with', () => {
+    testDb = createTestDatabase()
+    const { orgA, personA } = seedTwoOrganizations(testDb)
+    const project = projects.createProject(
+      orgA,
+      { name: 'Spring 2027' },
+      testDb.db
+    )
+    const created = courses.createCourse(
+      orgA,
+      {
+        projectId: project.id,
+        title: 'Data Structures',
+        filePrefix: 'ds',
+        enabled: true,
+        adminsRole: 'admins-ds',
+        studentsRole: 'students-ds',
+        conversationScope: 'course_surface',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!created.ok) throw new Error('seed course creation failed')
+
+    const fromDiscord = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: created.course.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    const fromWeb = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: created.course.id, personId: personA.id, surface: 'web' },
+      testDb.db
+    )
+
+    expect(fromWeb?.id).not.toBe(fromDiscord?.id)
+    expect(
+      conversations.listConversationsForCourse(
+        orgA,
+        created.course.id,
+        testDb.db
+      )
+    ).toHaveLength(2)
+  })
+
   // Changing a course's scope after conversations already exist does not
   // merge or split them — this package has no such migration path.
   // Documented in `docs/DECISIONS.md`: the effect actually observed is that
@@ -331,8 +391,145 @@ describe('conversations repo', () => {
     ])
   })
 
-  it('has no delete path for a message anywhere in this repo (TEN-6)', () => {
-    const exportedNames = Object.keys(conversations)
-    expect(exportedNames.some((name) => /delete/i.test(name))).toBe(false)
+  // Finding 3 of the CONV-1 rework: `createdAt` alone is not a determined
+  // order — two messages appended within the same millisecond tie on it,
+  // and SQL does not define an order among tied rows. Freezing the clock so
+  // every append below genuinely shares one millisecond is what makes this
+  // test fail without `messages.sequence`: before that column existed,
+  // `getTranscript` ordered by `createdAt` alone, and with the clock frozen
+  // every row in this test ties on it.
+  it('orders a transcript by append order even when every message shares the same millisecond', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'first' },
+        testDb.db
+      )
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'to_person', content: 'second' },
+        testDb.db
+      )
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'third' },
+        testDb.db
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const transcript = conversations.getTranscript(
+      orgA,
+      conversation.id,
+      testDb.db
+    )
+
+    // Every row ties on `createdAt` (the clock was frozen); only `sequence`
+    // can be producing this order.
+    expect(new Set(transcript.map((m) => m.createdAt)).size).toBe(1)
+    expect(transcript.map((m) => m.content)).toEqual([
+      'first',
+      'second',
+      'third',
+    ])
+  })
+
+  // --- CONV-1: the upstream model thread id -------------------------------
+
+  it('sets a conversation`s upstream thread id', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+    expect(conversation.upstreamThreadId).toBeNull()
+
+    const updated = conversations.setUpstreamThreadId(
+      orgA,
+      conversation.id,
+      'thread_abc123',
+      testDb.db
+    )
+
+    expect(updated?.upstreamThreadId).toBe('thread_abc123')
+    expect(
+      conversations.getConversation(orgA, conversation.id, testDb.db)
+        ?.upstreamThreadId
+    ).toBe('thread_abc123')
+  })
+
+  it('refuses to set an upstream thread id for a conversation belonging to another organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB, courseB, personB } = seedTwoOrganizations(testDb)
+
+    const conversationB = conversations.getOrCreateConversation(
+      orgB,
+      { courseId: courseB.id, personId: personB.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversationB) throw new Error('seed conversation creation failed')
+
+    const result = conversations.setUpstreamThreadId(
+      orgA, // wrong organization
+      conversationB.id,
+      'thread_should_not_apply',
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    expect(
+      conversations.getConversation(orgB, conversationB.id, testDb.db)
+        ?.upstreamThreadId
+    ).toBeNull()
+  })
+
+  // Finding 8 of the CONV-1 rework: the original version of this test
+  // grepped `Object.keys(conversations)` for a function *name* matching
+  // `/delete/i` — so a delete issued from inside a function not named
+  // "delete" (a `purgeTranscript`, a `removeMessages`, or a plain
+  // `db.delete(messages)` folded into some other function), or from another
+  // module entirely, would pass it without ever being seen. This reads the
+  // actual source of every repo file instead, and looks for the thing TEN-6
+  // actually forbids: a `.delete(...)` call or a raw `DELETE FROM` against
+  // `messages` or `conversations`, wherever it might appear.
+  it('no repo source deletes a message or a conversation, anywhere in this package (TEN-6)', () => {
+    const reposDir = fileURLToPath(new URL('../src/repos', import.meta.url))
+    const files = readdirSync(reposDir).filter((name) => name.endsWith('.ts'))
+    expect(files.length).toBeGreaterThan(0)
+
+    const deletePatterns = [
+      /\.delete\(\s*messages\b/,
+      /\.delete\(\s*conversations\b/,
+      /delete\s+from\s+`?messages`?/i,
+      /delete\s+from\s+`?conversations`?/i,
+    ]
+
+    for (const file of files) {
+      const source = readFileSync(`${reposDir}/${file}`, 'utf8')
+      for (const pattern of deletePatterns) {
+        expect(source, `${file} matched ${pattern}`).not.toMatch(pattern)
+      }
+    }
   })
 })

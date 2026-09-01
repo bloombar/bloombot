@@ -428,11 +428,41 @@ column nobody flips yet. `tests/conversations.test.ts` asserts the behaviour abo
 that adds a real merge path will see this test start failing rather than silently no longer describing the
 system.
 
-**`resolvePersonByIdentity`'s "merge" fills gaps, it does not overwrite.** PPL-3 says roster fields are "merged
-onto the person" without specifying a direction; `mergeRosterFields` (`repos/people.ts`) only ever fills a field
-that is currently `null` on the person, never replaces one already set. The alternative — a roster import always
-wins — was not chosen because a person's `displayName` may already have been set from something a surface
-supplied (a Discord display name) before any roster exists for them, and there is no reason to treat a later
-roster import as more authoritative for that field than the identity the student is actually using. Revisit if
-a future import needs the opposite (a roster's `firstName`/`lastName` should always overwrite whatever was there,
-say) — `mergeRosterFields`'s all-or-nothing "only if null" rule would need a per-field policy at that point.
+**`resolvePersonByIdentity`'s "merge" fills gaps, it does not overwrite — and `overwriteRosterFields` is the
+escape hatch that only-fills rule needs.** PPL-3 says roster fields are "merged onto the person" without
+specifying a direction; `mergeRosterFields` (`repos/people.ts`) only ever fills a field that is currently `null`
+on the person, never replaces one already set. The alternative — a roster import always wins — was not chosen
+because a person's `displayName` may already have been set from something a surface supplied (a Discord display
+name) before any roster exists for them, and there is no reason to treat a later roster import as more
+authoritative for that field than the identity the student is actually using. But "only fills a gap" has a sharp
+edge: once a field is merged in wrong — a bad roster row's mistyped email, say — `mergeRosterFields` alone can
+never fix it, because the field is no longer `null`; a corrected re-import through it is silently a no-op. Before
+this rework the package had no other write to `people` at all, so a wrong email had no path to correction short of
+editing the database directly — not something an instructor can be told to do. `overwriteRosterFields`
+(`repos/people.ts`) is the deliberately-named other half: it replaces every field named in its input exactly as
+given, `null` included (which clears a field), regardless of what the person's row currently holds, and leaves a
+field the caller omits untouched. Revisit if a future import needs a per-field policy finer than "merge fills
+gaps, overwrite replaces everything named" (a roster's `firstName`/`lastName` should always win over a Discord
+name but `displayName` should not, say) — neither function here expresses that distinction on its own.
+
+**Two seams left for a later slice, made explicit here rather than left as a comment nobody re-reads.**
+
+- **A course created without `max_requests_per_day` has no cap at all, today.** BOT-5 says the platform default
+  is 10 requests/day; this slice deliberately does not invent that default — `hasExhaustedDailyLimit`
+  (`repos/usage.ts`) returns `false` ("not exhausted") for a course whose `maxRequestsPerDay` is `null`, the same
+  "no default value is invented" reasoning D-10 already applies to the column itself. That means: as of this
+  slice, a course saved with no `maxRequestsPerDay` is _unlimited_ in practice, not defaulted to 10, until
+  whichever later layer reads the platform default (`OPENAI_DEFAULT_MAX_REQUEST_PER_DAY`'s successor, presumably)
+  is wired in front of this repo and applies it before calling `hasExhaustedDailyLimit` — or writes it onto the
+  course at creation time instead. Until that lands, nothing in this package enforces BOT-5's "10" for a course
+  that never set the column, and nothing here will start silently enforcing it later either: the seam is that
+  later layer's responsibility to close, not a database default this table should grow on its own.
+- **`hasExhaustedDailyLimit` is tri-state (`boolean | undefined`), not a plain `boolean`.** `undefined` means "this
+  `courseId` does not belong to `organizationId`" (TEN-2) — deliberately not collapsed into `false`, because
+  `false` already means something else here ("no limit configured"), and a caller cannot tell those two apart
+  from a bare `boolean`. Collapsing them let a cross-tenant or unknown `courseId` fail _open_: an action layer
+  calling `hasExhaustedDailyLimit(orgA, courseFromOrgB, …)` would see `false` and let the request proceed, while
+  the paired `incrementUsage` already returns `undefined` for the same input and counts nothing — an uncapped,
+  unrecorded conversation. Every other tenant-checked function in this package already returns `undefined` for an
+  id that does not belong to the calling organization; this brings `hasExhaustedDailyLimit` in line with that
+  convention instead of leaving it as the one function that answers a foreign id with "no".

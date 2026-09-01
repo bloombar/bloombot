@@ -396,6 +396,15 @@ export const messages = sqliteTable(
     surface: text('surface', { enum: SURFACES }),
     channelRef: text('channel_ref'),
     categoryRef: text('category_ref'),
+    // CONV-2 — `createdAt` alone does not order a transcript: it is
+    // millisecond precision, `appendMessage` can be called for several
+    // messages within the same millisecond, and SQL does not define an
+    // order among rows tied on the `ORDER BY` column. `sequence` is a
+    // monotonic counter assigned per conversation inside `appendMessage`'s
+    // own transaction (`repos/conversations.ts`), so it is what
+    // `getTranscript` actually orders by — `createdAt` stays for display and
+    // for the DATA-4 analytics index below, not for ordering.
+    sequence: integer('sequence').notNull(),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -446,5 +455,27 @@ export const usageCounters = sqliteTable(
         table.day,
       ],
     }),
+    // BOT-11's class of defect, closed a second way: `repos/usage.ts`
+    // already refuses a `day` that is not `YYYY-MM-DD` before it ever
+    // reaches SQL, but a `CHECK` is what stops a future direct writer that
+    // skips the repo layer from creating a counter row under a malformed
+    // day string — which `incrementUsage`'s `ON CONFLICT` target would then
+    // never match again, silently bypassing `max_requests_per_day`. Written
+    // with `length`/`substr`/`BETWEEN` rather than a SQLite-only `GLOB` or a
+    // Postgres-only `~`, so it stays inside D-2's portable subset.
+    check(
+      'usage_counters_day_check',
+      sql`length(${table.day}) = 10
+        and substr(${table.day}, 1, 1) between '0' and '9'
+        and substr(${table.day}, 2, 1) between '0' and '9'
+        and substr(${table.day}, 3, 1) between '0' and '9'
+        and substr(${table.day}, 4, 1) between '0' and '9'
+        and substr(${table.day}, 5, 1) = '-'
+        and substr(${table.day}, 6, 1) between '0' and '9'
+        and substr(${table.day}, 7, 1) between '0' and '9'
+        and substr(${table.day}, 8, 1) = '-'
+        and substr(${table.day}, 9, 1) between '0' and '9'
+        and substr(${table.day}, 10, 1) between '0' and '9'`
+    ),
   ]
 )

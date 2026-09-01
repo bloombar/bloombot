@@ -26,6 +26,7 @@ CREATE TABLE `messages` (
 	`surface` text,
 	`channel_ref` text,
 	`category_ref` text,
+	`sequence` integer NOT NULL,
 	`created_at` integer NOT NULL,
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,
 	FOREIGN KEY (`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE no action ON DELETE no action,
@@ -71,32 +72,31 @@ CREATE TABLE `usage_counters` (
 	PRIMARY KEY(`organization_id`, `course_id`, `person_id`, `day`),
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,
 	FOREIGN KEY (`course_id`) REFERENCES `courses`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`person_id`) REFERENCES `people`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`person_id`) REFERENCES `people`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT "usage_counters_day_check" CHECK(length("usage_counters"."day") = 10
+        and substr("usage_counters"."day", 1, 1) between '0' and '9'
+        and substr("usage_counters"."day", 2, 1) between '0' and '9'
+        and substr("usage_counters"."day", 3, 1) between '0' and '9'
+        and substr("usage_counters"."day", 4, 1) between '0' and '9'
+        and substr("usage_counters"."day", 5, 1) = '-'
+        and substr("usage_counters"."day", 6, 1) between '0' and '9'
+        and substr("usage_counters"."day", 7, 1) between '0' and '9'
+        and substr("usage_counters"."day", 8, 1) = '-'
+        and substr("usage_counters"."day", 9, 1) between '0' and '9'
+        and substr("usage_counters"."day", 10, 1) between '0' and '9')
 );
 --> statement-breakpoint
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
-CREATE TABLE `__new_courses` (
-	`id` text PRIMARY KEY NOT NULL,
-	`organization_id` text NOT NULL,
-	`project_id` text NOT NULL,
-	`title` text NOT NULL,
-	`file_prefix` text NOT NULL,
-	`enabled` integer NOT NULL,
-	`admins_role` text NOT NULL,
-	`students_role` text NOT NULL,
-	`prompt_id` text,
-	`instructions` text,
-	`model` text,
-	`vector_store_id` text,
-	`max_requests_per_day` integer,
-	`conversation_scope` text DEFAULT 'course' NOT NULL,
-	`created_at` integer NOT NULL,
-	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT "courses_conversation_scope_check" CHECK("__new_courses"."conversation_scope" in ('course', 'course_surface'))
-);
---> statement-breakpoint
-INSERT INTO `__new_courses`("id", "organization_id", "project_id", "title", "file_prefix", "enabled", "admins_role", "students_role", "prompt_id", "instructions", "model", "vector_store_id", "max_requests_per_day", "created_at") SELECT "id", "organization_id", "project_id", "title", "file_prefix", "enabled", "admins_role", "students_role", "prompt_id", "instructions", "model", "vector_store_id", "max_requests_per_day", "created_at" FROM `courses`;--> statement-breakpoint
-DROP TABLE `courses`;--> statement-breakpoint
-ALTER TABLE `__new_courses` RENAME TO `courses`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;
+-- CONV-1 / finding 1 of the CONV-1 rework: `drizzle-kit generate` proposes a
+-- full table rebuild here (`DROP TABLE courses` behind a `PRAGMA
+-- foreign_keys=OFF`), because SQLite ties a table-level CHECK constraint to
+-- the whole `CREATE TABLE` statement. That rebuild fails on any database
+-- that already has a course: drizzle's SQLite migrator wraps every
+-- migration in `BEGIN`, `openDatabase` (`src/client.ts`) turns
+-- `foreign_keys` back `ON` for the connection regardless, and `PRAGMA
+-- foreign_keys=OFF` is a documented no-op once a transaction is open — so
+-- `DROP TABLE courses` is enforced against `course_categories.course_id`
+-- and the migration rolls back. A plain `ALTER TABLE ... ADD COLUMN` cannot
+-- orphan anything: SQLite accepts a column-level `CHECK` on it directly
+-- (verified against the running `better-sqlite3` version this package
+-- pins), so the enum constraint stays enforced without a rebuild.
+ALTER TABLE `courses` ADD COLUMN `conversation_scope` text DEFAULT 'course' NOT NULL CHECK("conversation_scope" in ('course', 'course_surface'));

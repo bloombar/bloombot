@@ -8,7 +8,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -191,6 +191,35 @@ export function getConversation(
     .get()
 }
 
+/**
+ * Set a conversation's upstream model thread id (CONV-1: "a conversation
+ * records the upstream model thread it corresponds to, so the model's own
+ * context can be resumed") — organization-scoped like everything else in
+ * this file. `undefined` when `conversationId` does not exist or does not
+ * belong to `organizationId` (TEN-2). Before this function existed,
+ * `upstreamThreadId` was always written `null` by `getOrCreateConversation`
+ * and never updated by anything, so CONV-1's own text was unreachable
+ * through this package's API — see `docs/DECISIONS.md` D-13.
+ */
+export function setUpstreamThreadId(
+  organizationId: string,
+  conversationId: string,
+  upstreamThreadId: string,
+  db: Database
+): Conversation | undefined {
+  return db
+    .update(conversations)
+    .set({ upstreamThreadId })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.organizationId, organizationId)
+      )
+    )
+    .returning()
+    .get()
+}
+
 /** List every conversation a course has (base rows only — use `getTranscript` for messages). */
 export function listConversationsForCourse(
   organizationId: string,
@@ -236,6 +265,16 @@ export interface NewMessage {
  *
  * There is no delete path for a message anywhere in this file (TEN-6): a
  * transcript is a record an instructor may be required to retain.
+ *
+ * `messages.sequence` (finding 3 of the CONV-1 rework) is assigned here,
+ * inside this function's own transaction, as one more than the highest
+ * `sequence` already recorded for this conversation — a real tiebreaker for
+ * `getTranscript`'s order, unlike `createdAt` alone: `createdAt` is
+ * millisecond precision, several messages can be appended within the same
+ * millisecond, and SQL does not define an order among rows tied on the
+ * `ORDER BY` column. Reading the previous max and writing the next value in
+ * the same transaction is what keeps two concurrent appends to the same
+ * conversation from computing the same `sequence`.
  */
 export function appendMessage(
   organizationId: string,
@@ -248,6 +287,15 @@ export function appendMessage(
 
   return db.transaction((tx) => {
     const createdAt = Date.now()
+    const previous = tx
+      .select({ sequence: messages.sequence })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.sequence))
+      .limit(1)
+      .get()
+    const sequence = (previous?.sequence ?? -1) + 1
+
     const message = tx
       .insert(messages)
       .values({
@@ -261,6 +309,7 @@ export function appendMessage(
         surface: input.surface ?? null,
         channelRef: input.channelRef ?? null,
         categoryRef: input.categoryRef ?? null,
+        sequence,
         createdAt,
       })
       .returning()
@@ -280,7 +329,12 @@ export function appendMessage(
   })
 }
 
-/** A conversation's transcript, in order (CONV-2) — both directions, oldest first. */
+/**
+ * A conversation's transcript, in order (CONV-2) — both directions, oldest
+ * first. Ordered by `sequence`, not `createdAt`: `createdAt` alone is not a
+ * determined order (see `appendMessage`'s comment on why), and `sequence` is
+ * the column that actually is.
+ */
 export function getTranscript(
   organizationId: string,
   conversationId: string,
@@ -295,6 +349,6 @@ export function getTranscript(
         eq(messages.organizationId, organizationId)
       )
     )
-    .orderBy(messages.createdAt)
+    .orderBy(messages.sequence)
     .all()
 }

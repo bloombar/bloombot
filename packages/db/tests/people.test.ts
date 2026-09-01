@@ -240,4 +240,126 @@ describe('people repo', () => {
 
     expect(merged?.displayName).toBe('adalovelace#0001')
   })
+
+  // --- Finding 9 / D-13: the overwrite escape hatch -----------------------
+
+  // `mergeRosterFields` only ever fills a gap, so a field set once from a
+  // bad roster row (a mistyped email, say) is permanently wrong through
+  // that function alone — a corrected re-import via `mergeRosterFields` is
+  // a no-op, since the field is no longer `null`. `overwriteRosterFields`
+  // is the other half: it replaces a field regardless of what is already
+  // there.
+  it('overwriteRosterFields replaces a field the person already has', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizations(testDb)
+
+    const person = people.createPerson(
+      orgA,
+      { email: 'typo@example.edu' },
+      testDb.db
+    )
+    // A re-import through `mergeRosterFields` alone would be a no-op here.
+    const unchanged = people.mergeRosterFields(
+      orgA,
+      person.id,
+      { email: 'corrected@example.edu' },
+      testDb.db
+    )
+    expect(unchanged?.email).toBe('typo@example.edu')
+
+    const overwritten = people.overwriteRosterFields(
+      orgA,
+      person.id,
+      { email: 'corrected@example.edu' },
+      testDb.db
+    )
+
+    expect(overwritten?.email).toBe('corrected@example.edu')
+    expect(people.getPerson(orgA, person.id, testDb.db)?.email).toBe(
+      'corrected@example.edu'
+    )
+  })
+
+  it('overwriteRosterFields leaves a field untouched when omitted', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizations(testDb)
+
+    const person = people.createPerson(
+      orgA,
+      { email: 'student@example.edu', firstName: 'Ada' },
+      testDb.db
+    )
+
+    const overwritten = people.overwriteRosterFields(
+      orgA,
+      person.id,
+      { firstName: 'Augusta' }, // `email` not named — left as-is
+      testDb.db
+    )
+
+    expect(overwritten).toMatchObject({
+      email: 'student@example.edu',
+      firstName: 'Augusta',
+    })
+  })
+
+  it('overwriteRosterFields refuses a person id belonging to another organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizations(testDb)
+
+    const personA = people.createPerson(
+      orgA,
+      { email: 'student@example.edu' },
+      testDb.db
+    )
+
+    const result = people.overwriteRosterFields(
+      orgB, // wrong organization
+      personA.id,
+      { email: 'someone-elses@example.edu' },
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    // Untouched.
+    expect(people.getPerson(orgA, personA.id, testDb.db)?.email).toBe(
+      'student@example.edu'
+    )
+  })
+
+  // --- Finding 7: resolveIdentity constrains people.organizationId too ---
+
+  // Not reachable through this package's own API today — `resolvePersonByIdentity`
+  // always writes a person and its identity with the same `organizationId`,
+  // so the two can never disagree yet. This constructs the disagreement
+  // directly, with raw inserts, to prove `resolveIdentity` would refuse it
+  // rather than leak another organization's person and roster fields.
+  it('resolveIdentity refuses a person/identity pair whose organizations disagree', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizations(testDb)
+
+    // A person that belongs to orgB...
+    const personB = people.createPerson(orgB, {}, testDb.db)
+    // ...reached through an identity that, if this ever happened, claims to
+    // belong to orgA instead.
+    testDb.db
+      .insert(schema.personIdentities)
+      .values({
+        id: randomUUID(),
+        organizationId: orgA,
+        personId: personB.id,
+        surface: 'discord',
+        externalId: 'mismatched-snowflake',
+        createdAt: Date.now(),
+      })
+      .run()
+
+    expect(
+      people.resolveIdentity(
+        orgA,
+        { surface: 'discord', externalId: 'mismatched-snowflake' },
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
 })

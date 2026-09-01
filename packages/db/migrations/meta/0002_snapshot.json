@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ee84b908-d567-45c5-b018-3028f8302c0c",
+  "id": "d73c3656-3888-465f-97c2-f5d524697fb2",
   "prevId": "96424a24-2e12-4d2c-8099-c91ccae63b1c",
   "tables": {
     "accounts": {
@@ -726,6 +726,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -1191,7 +1198,12 @@
         }
       },
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "usage_counters_day_check": {
+          "name": "usage_counters_day_check",
+          "value": "length(\"usage_counters\".\"day\") = 10\n        and substr(\"usage_counters\".\"day\", 1, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 2, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 3, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 4, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 5, 1) = '-'\n        and substr(\"usage_counters\".\"day\", 6, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 7, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 8, 1) = '-'\n        and substr(\"usage_counters\".\"day\", 9, 1) between '0' and '9'\n        and substr(\"usage_counters\".\"day\", 10, 1) between '0' and '9'"
+        }
+      }
     }
   },
   "views": {},

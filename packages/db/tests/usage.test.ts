@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { courses, organizations, people, projects, usage } from '@bloombot/db'
+import {
+  courses,
+  organizations,
+  people,
+  projects,
+  schema,
+  usage,
+} from '@bloombot/db'
 import type { courses as coursesRepo } from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -238,5 +245,87 @@ describe('usage repo', () => {
         testDb.db
       )
     ).toBe(false)
+  })
+
+  // Finding 4 of the CONV-1 rework: `hasExhaustedDailyLimit` used to return
+  // `false` — "not exhausted" — for a course that does not belong to
+  // `organizationId` at all, indistinguishable from "no limit configured".
+  // An action layer calling this with a course from another organization
+  // would see "not exhausted" and let the request proceed, while the paired
+  // `incrementUsage` already refuses the same input with `undefined` and
+  // counts nothing — an uncapped, unrecorded conversation. Tri-state closes
+  // that: `undefined` here, distinct from both `false` (no limit
+  // configured, covered above) and a real `true`/`false` exhaustion result
+  // (covered by the midnight-boundary test above).
+  it('reports `undefined`, not `false`, for a course belonging to another organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseB, personA } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.hasExhaustedDailyLimit(
+        orgA,
+        courseB.id, // belongs to orgB
+        personA.id,
+        '2026-08-31',
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  it('reports `undefined` for a course id that does not exist at all', () => {
+    testDb = createTestDatabase()
+    const { orgA, personA } = seedTwoOrganizations(testDb)
+
+    expect(
+      usage.hasExhaustedDailyLimit(
+        orgA,
+        randomUUID(),
+        personA.id,
+        '2026-08-31',
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // --- Finding 5: `day` must be `YYYY-MM-DD`, both in the repo and in SQL -
+
+  it('refuses a malformed `day` before it ever reaches SQL', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    for (const badDay of [
+      '2026-8-31',
+      '8/31/2026',
+      '2026-08-31T00:00:00',
+      '',
+    ]) {
+      expect(() =>
+        usage.incrementUsage(orgA, courseA.id, personA.id, badDay, testDb.db)
+      ).toThrow(/Invalid day/)
+      expect(() =>
+        usage.getUsageCount(orgA, courseA.id, personA.id, badDay, testDb.db)
+      ).toThrow(/Invalid day/)
+    }
+  })
+
+  // Belt-and-suspenders on top of the repo's own regex: a writer that
+  // reaches `usage_counters` directly (skipping `repos/usage.ts` entirely)
+  // is stopped by `usage_counters_day_check` (`schema.ts`) instead.
+  it('refuses a malformed `day` written directly, by CHECK constraint', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+
+    expect(() =>
+      testDb.db
+        .insert(schema.usageCounters)
+        .values({
+          organizationId: orgA,
+          courseId: courseA.id,
+          personId: personA.id,
+          day: '2026-8-31',
+          count: 1,
+        })
+        .run()
+    ).toThrow(/CHECK constraint failed/)
   })
 })

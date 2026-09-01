@@ -29,6 +29,7 @@ import {
   courseChannels,
   courses,
   projects,
+  type ConversationScope,
 } from '../schema.js'
 
 export type Course = typeof courses.$inferSelect
@@ -82,6 +83,13 @@ export interface NewCourse {
   model?: string | null
   vectorStoreId?: string | null
   maxRequestsPerDay?: number | null
+  // CONV-1 — defaults to `'course'` when omitted, matching
+  // `courses.conversationScope`'s own database default (`schema.ts`). Read
+  // by `repos/conversations.ts#getOrCreateConversation` on every call, not
+  // cached anywhere, so a later `updateCourse` changing this takes effect
+  // immediately (see `docs/DECISIONS.md` D-13 for what that does — and does
+  // not — do to a conversation already on disk).
+  conversationScope?: ConversationScope
   categories: NewCourseCategory[]
 }
 
@@ -454,6 +462,7 @@ export function createCourse(
         model: input.model ?? null,
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
+        conversationScope: input.conversationScope ?? 'course',
         createdAt: Date.now(),
       })
       .returning()
@@ -588,6 +597,7 @@ export function updateCourse(
         model: input.model ?? null,
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
+        conversationScope: input.conversationScope ?? 'course',
       })
       .where(
         and(

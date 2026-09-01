@@ -74,13 +74,29 @@ http://localhost:5173/discord/callback
 
 ## 3. Start it
 
-Three terminals, or one with `&`:
+One command starts everything:
 
 ```bash
-npm run api:dev     # http://localhost:3000
+npm run dev
+```
+
+That runs the API, the panel, the background worker and the Discord bot together, with each process's
+output prefixed by its name, and Ctrl-C stops all of them. **The bot and the worker are skipped when
+`BOT_TOKEN` is not set** — it says which, and the API and the panel still come up, so a checkout with no
+Discord credentials is still usable for sign-in and the control panel.
+
+Or run them separately, in their own terminals, when you want one process's output on its own:
+
+```bash
+npm run api:dev     # http://127.0.0.1:3000
 npm run web:dev     # http://localhost:5173
+npm run worker:dev  # background jobs — scaffolding a server, importing a roster
 npm run bot:dev     # only when you want Discord answered
 ```
+
+The **worker** is the one that is easy to forget: actions that enqueue a job — scaffolding a course's
+channels, importing a roster, attaching a knowledge file — return a job id immediately and do nothing
+visible until the worker runs them.
 
 The migration runs automatically at API start, so there is no separate database step for a fresh `tmp/`
 file.

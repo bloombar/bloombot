@@ -982,7 +982,7 @@
   section: §18 People, Conversations & Transcripts
   family: CONV
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: CONV-2
   title: The transcript records both directions
@@ -994,7 +994,7 @@
   section: §18 People, Conversations & Transcripts
   family: CONV
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: CONV-3
   title: Daily usage counters key on course, person and day
@@ -1005,7 +1005,7 @@
   section: §18 People, Conversations & Transcripts
   family: CONV
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: PLAT-1
   title: Monorepo layout
@@ -1084,7 +1084,7 @@
   section: §18 People, Conversations & Transcripts
   family: PPL
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: PPL-2
   title: Identities link a person to a surface
@@ -1097,7 +1097,7 @@
   section: §18 People, Conversations & Transcripts
   family: PPL
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: PPL-3
   title: People are created on demand
@@ -1108,7 +1108,7 @@
   section: §18 People, Conversations & Transcripts
   family: PPL
   phase: 3
-  status: In review
+  status: Done
   review: false
 - id: PROJ-1
   title: Courses are grouped into projects

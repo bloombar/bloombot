@@ -1851,6 +1851,19 @@
   phase: 7
   status: Done
   review: false
+- id: QA-8
+  title: The product's central claim is tested end to end
+  full: One test drives a browser to create a project and define a course in it,
+    and then a message arriving in that course's Discord category is answered
+    using that course's own configuration — with no file edited and no process
+    restarted between the two. This is the sentence the whole migration exists
+    to make true, and it is worth a test that would notice if it stopped being
+    true.
+  section: §17 Quality, Types & Tooling
+  family: QA
+  phase: 7
+  status: In review
+  review: false
 - id: TEN-7
   title: An organization has a name a person recognizes
   full: An organization carries a display name, shown wherever a person has to
@@ -1873,4 +1886,40 @@
   family: TEN
   phase: 7
   status: Done
+  review: false
+- id: WEB-7
+  title: Projects are managed in the panel
+  full: An instructor lists their projects, creates one, archives and restores
+    one, and duplicates one into the next term — each through the same action
+    the API exposes to anything else. A duplicated project's courses arrive
+    disabled, and the panel says so rather than leaving the instructor to
+    discover it when nothing routes.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 7
+  status: In review
+  review: false
+- id: WEB-8
+  title: A course is defined in the panel, not in a file
+  full: A course's title, its Discord role names, its categories and channels, its
+    instructions and its model settings are all editable in the panel, and
+    saving writes them through the platform's own action. Nothing about a course
+    requires editing a file in this repository or restarting a process, which is
+    the whole point of the migration.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 7
+  status: In review
+  review: false
+- id: WEB-9
+  title: The panel shows what will route, and why a save was refused
+  full: A course screen shows the category and role names that decide which
+    questions reach it, so an instructor can see what a save will claim before
+    making it. A save refused because those names collide with another course
+    names that course and its project, because that refusal is about a record in
+    the instructor's own organization and is theirs to resolve.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 7
+  status: In review
   review: false

@@ -92,3 +92,68 @@ export interface ApiErrorBody {
   issues?: ApiIssue[]
   conflict?: unknown
 }
+
+/**
+ * PROJ-1/PROJ-2 (WEB-7): one project (a term or cohort), the shape
+ * `projects.list`/`projects.create`/`projects.unarchive` all return —
+ * mirrors `packages/db`'s `projects` row by hand, the same "not imported
+ * from the workspace" discipline this whole file's module comment already
+ * explains.
+ */
+export interface Project {
+  id: string
+  organizationId: string
+  name: string
+  archivedAt: number | null
+  createdAt: number
+}
+
+/** `projects.duplicate`'s own result — PROJ-4/D-23: every copied course arrives disabled, unconditionally, so the panel can say so without a second read. */
+export interface DuplicateProjectResult {
+  project: Project
+  coursesCopied: number
+  coursesDisabled: true
+}
+
+/** CFG-4: a channel inside one of a course's categories. */
+export interface CourseChannel {
+  id: string
+  name: string
+  adminsOnly: boolean
+}
+
+/** CFG-4: a Discord category belonging to a course, with its channels in declared order. */
+export interface CourseCategory {
+  id: string
+  name: string
+  channels: CourseChannel[]
+}
+
+/**
+ * PROJ-1/CFG-2/CFG-3 (WEB-8): one course's base fields — what `courses.list`
+ * returns, before its categories and channels (`courses.get` adds those,
+ * see `Course` below) — matching `courses.list`'s own "base rows only" split
+ * (`packages/actions/src/actions/courses.ts`).
+ */
+export interface CourseSummary {
+  id: string
+  organizationId: string
+  projectId: string
+  title: string
+  filePrefix: string
+  enabled: boolean
+  adminsRole: string
+  studentsRole: string
+  promptId: string | null
+  instructions: string | null
+  model: string | null
+  vectorStoreId: string | null
+  maxRequestsPerDay: number | null
+  conversationScope: 'course' | 'course_surface'
+  createdAt: number
+}
+
+/** `courses.get`'s own shape: a course with its categories and channels attached (CFG-4). */
+export interface Course extends CourseSummary {
+  categories: CourseCategory[]
+}

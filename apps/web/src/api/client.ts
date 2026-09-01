@@ -24,9 +24,13 @@
 
 import type {
   ApiErrorBody,
+  Course,
+  CourseSummary,
+  DuplicateProjectResult,
   InstallBeginResponse,
   InstallCallbackResponse,
   MeResponse,
+  Project,
   SignedInResponse,
 } from './types.js'
 
@@ -174,4 +178,139 @@ export function dispatchAction<TResult = unknown>(
     `/organizations/${organizationId}/actions/${actionName}`,
     { method: 'POST', body: input }
   ).then((response) => response.result)
+}
+
+/**
+ * WEB-7: the project actions — `projects.list/create/archive/unarchive/duplicate`
+ * (PROJ-1, PROJ-2, PROJ-4, PROJ-5) — each a thin, typed wrapper over
+ * `dispatchAction`, the same route every other action goes through. No new
+ * route and no new action: these exist only so a caller in `pages/` writes
+ * `listProjects(organizationId)` rather than repeating the action's name and
+ * input shape at every call site.
+ */
+export function listProjects(
+  organizationId: string,
+  includeArchived?: boolean
+): Promise<Project[]> {
+  return dispatchAction<Project[]>(
+    organizationId,
+    'projects.list',
+    // `exactOptionalPropertyTypes` — only pass `includeArchived` through
+    // when the caller actually supplied it, the same discipline
+    // `listProjectsAction`'s own execute (`packages/actions`) is written
+    // against on the other side of this same call.
+    includeArchived !== undefined ? { includeArchived } : {}
+  )
+}
+
+export function createProject(
+  organizationId: string,
+  name: string
+): Promise<Project> {
+  return dispatchAction<Project>(organizationId, 'projects.create', { name })
+}
+
+export function archiveProject(
+  organizationId: string,
+  projectId: string
+): Promise<{ archived: boolean }> {
+  return dispatchAction(organizationId, 'projects.archive', { projectId })
+}
+
+export function unarchiveProject(
+  organizationId: string,
+  projectId: string
+): Promise<Project> {
+  return dispatchAction<Project>(organizationId, 'projects.unarchive', {
+    projectId,
+  })
+}
+
+/** PROJ-4/D-23: every course the duplicate copies arrives disabled — `DuplicateProjectResult.coursesDisabled` is always `true`, which is what `pages/Projects.tsx` reads to say so. */
+export function duplicateProject(
+  organizationId: string,
+  projectId: string,
+  name: string
+): Promise<DuplicateProjectResult> {
+  return dispatchAction<DuplicateProjectResult>(
+    organizationId,
+    'projects.duplicate',
+    { projectId, name }
+  )
+}
+
+/** WEB-8: a course's categories and channels as `courses.save` takes them — no `id`, since a save always replaces a course's whole category/channel list rather than diffing it (`repos/courses.ts`'s own comment on `updateCourse`). */
+export interface SaveCourseCategoryInput {
+  name: string
+  channels: { name: string; adminsOnly: boolean }[]
+}
+
+/**
+ * `courses.save`'s own input (`packages/actions/src/actions/courses.ts`).
+ * `id` present means update; absent means create. Every nullable field
+ * (`promptId`, `instructions`, `model`, `vectorStoreId`,
+ * `maxRequestsPerDay`) follows the same omitted-preserves/explicit-null-
+ * clears rule the action itself documents — see `docs/DECISIONS.md` for how
+ * `pages/CourseEditor.tsx` maps its form onto this.
+ */
+export interface SaveCourseInput {
+  id?: string
+  projectId: string
+  title: string
+  filePrefix: string
+  enabled: boolean
+  adminsRole: string
+  studentsRole: string
+  promptId?: string | null
+  instructions?: string | null
+  model?: string | null
+  vectorStoreId?: string | null
+  maxRequestsPerDay?: number | null
+  categories: SaveCourseCategoryInput[]
+}
+
+export function saveCourse(
+  organizationId: string,
+  input: SaveCourseInput
+): Promise<Course> {
+  return dispatchAction<Course>(
+    organizationId,
+    'courses.save',
+    // `SaveCourseInput` is already exactly the JSON body `courses.save`
+    // expects (its own zod schema accepts nothing else) — this cast is only
+    // to satisfy `dispatchAction`'s generic `Record<string, unknown>`
+    // parameter, which no interface literal narrower than that structurally
+    // satisfies without one.
+    input as unknown as Record<string, unknown>
+  )
+}
+
+export function listCourses(
+  organizationId: string,
+  projectId: string
+): Promise<CourseSummary[]> {
+  return dispatchAction<CourseSummary[]>(organizationId, 'courses.list', {
+    projectId,
+  })
+}
+
+export function getCourse(
+  organizationId: string,
+  courseId: string
+): Promise<Course> {
+  return dispatchAction<Course>(organizationId, 'courses.get', { courseId })
+}
+
+export function enableCourse(
+  organizationId: string,
+  courseId: string
+): Promise<{ enabled: boolean }> {
+  return dispatchAction(organizationId, 'courses.enable', { courseId })
+}
+
+export function disableCourse(
+  organizationId: string,
+  courseId: string
+): Promise<{ disabled: boolean }> {
+  return dispatchAction(organizationId, 'courses.disable', { courseId })
 }

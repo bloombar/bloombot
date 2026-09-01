@@ -16,16 +16,22 @@ import { App } from '../src/App.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 
-const { fetchMe, completeDiscordInstall } = vi.hoisted(() => ({
+// `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
+// — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
+// 'projects' (`docs/DECISIONS.md` D-25), so the shell this file renders now
+// mounts `ProjectsPanel` on first render, not only when a test opts into the
+// Projects tab.
+const { fetchMe, completeDiscordInstall, listProjects } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
+  listProjects: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, fetchMe, completeDiscordInstall }
+  return { ...actual, fetchMe, completeDiscordInstall, listProjects }
 })
 
 afterEach(() => {
@@ -44,6 +50,7 @@ describe('App (WEB-1..4)', () => {
     // screen: a fresh page load).
     sessionStorage.setItem(PENDING_INSTALL_ORG_KEY, 'org-2')
     completeDiscordInstall.mockResolvedValue({ serverId: 'guild-99' })
+    listProjects.mockResolvedValue([])
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -70,12 +77,16 @@ describe('App (WEB-1..4)', () => {
     render(<App />)
 
     // The panel returns to the shell, acting in org-2 — the organization the
-    // install actually bound the server to — with the install already
-    // showing, not a fresh "Install to Discord" button.
+    // install actually bound the server to — before checking the install
+    // banner itself: the Discord tab is not the default one (finding 10),
+    // so this opens it explicitly the way an instructor would.
+    expect(
+      await screen.findByRole('combobox', { name: 'Organization' })
+    ).toHaveValue('org-2')
+    fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+    // The install is already showing, not a fresh "Install to Discord"
+    // button.
     await screen.findByText(/guild-99/)
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'org-2'
-    )
     expect(window.location.pathname).toBe('/')
   })
 

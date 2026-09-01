@@ -1186,3 +1186,80 @@ must be run from `packages/db`. And: `validateSession` writes on every request, 
 with the API and the bot sharing one SQLite file (D-2), every authenticated request takes a write lock — fine
 at this scale with WAL and the five-second busy timeout already set in `client.ts`, but worth the API slice
 knowing before it is the thing explaining an unexpected `SQLITE_BUSY` under load.
+
+---
+
+## D-20 — `apps/api`: the origin check's missing-header default, `SameSite=Lax`, one route for every action, and how a caller's organization is resolved
+
+**Problem.** API-3 says a non-GET request "is checked against its origin," but says nothing about a request
+carrying neither `Origin` nor `Referer` at all — the brief for this slice calls that out explicitly as the
+usual way such a check ends up decorative. API-2 names `SameSite` without naming which value. ACT-6's catalog
+indexes every action by one dotted name; nothing in ACT-1..6 says whether the HTTP surface should mirror that
+with one route or one per action. And every action's policy resolves against `context.organizationId`
+(`packages/actions`'s own `DispatchContext`), but nothing before this slice decided how that value reaches
+`dispatch` from an HTTP request in the first place.
+
+**Choice, a non-GET request with neither `Origin` nor `Referer` is refused, not allowed through.**
+`middleware/origin.ts`'s own module comment makes the reasoning explicit: this API expects to serve a same-site
+front end, and a same-site `fetch` or form submission always carries `Origin` — there is no legitimate request
+shape this API needs to support that arrives with both headers stripped. Treating "absent" as "allowed" would
+not exempt some real, awkward client; it would just be the gap an attacker's request finds, since a page that
+wants to hide where a request came from can suppress both headers far more easily than it can forge a matching
+one. `tests/middleware/origin.test.ts` asserts this directly, with a recording action so the refusal is proven
+by "never dispatched," not merely by a status code.
+
+**Choice, `SameSite=Lax` rather than `Strict`.** AUTH-1's sign-in flow depends on a link delivered by email —
+an external origin by construction. Clicking that link is a cross-site, top-level `GET` navigation into this
+platform's own front end; a `Strict` cookie would not be sent on that very navigation (were a session already
+live in the same browser), which is a real, live flow this platform needs to keep working, not a hypothetical
+one. `Lax` still withholds the cookie from a cross-site non-GET request — precisely the CSRF property AUTH-3
+cares about — so nothing is given up on the axis the origin check (API-3) already covers explicitly; `Strict`
+would only cost the email-link flow for no additional protection against the attack API-3 and `SameSite` both
+exist to stop. `middleware/session.ts#setSessionCookie` sets it on every session cookie this API issues.
+
+**Choice, one route dispatches any action by name, not a route per action.** `packages/actions`' own
+`ActionRegistry` already indexes every action by its dotted name (ACT-1, ACT-6's catalog); a route per action
+would be a second list of the same names to keep in sync with it by hand, the exact "rewriting every route
+twice" the roadmap's own phase-5 note warns retrofitting authorization onto existing routes would cause, one
+level down. `routes/actions.ts#buildActionsRouter` is `POST /organizations/:organizationId/actions/:actionName`
+— a new action registered in `packages/actions` reaches this API with no change here at all, and API-1's own
+"a route validates nothing, authorizes nothing" is easier to keep true for one small route than to re-verify
+for every route a hand-written list would eventually accumulate.
+
+**Choice, the caller's organization comes from their own membership, resolved via the `:organizationId` route
+parameter, never from the request body.** An account is not organization-scoped (TEN-1/TEN-2: the same account
+can hold a membership in more than one organization), so nothing about a signed-in session alone names "the"
+organization a request acts within — unlike `accountId`, there is no single value `sessionMiddleware` can
+attach. `routes/actions.ts` takes the organization id from the URL and checks it against
+`memberships.getMembership(organizationId, accountId, db)` (an existing, already-scoped `packages/db` function
+— nothing was added to that package for this slice) before ever calling `dispatch`; a caller with no membership
+there is refused the same way ACT-3 refuses any other absence (TEN-5: indistinguishable from "does not exist").
+Nothing in the request body is ever read for this — most of the six actions' own input schemas have no
+`organizationId` field for a body to name in the first place, and `dispatch`'s zod validation strips an
+unrecognized one from those that could be confused for it either way; `tests/routes/actions.test.ts` proves the
+stronger property directly, with a body that names a second, real organization, checking the *record* dispatch
+actually created rather than trusting that the field was merely absent.
+
+**Choice, no real mail transport exists yet, so `src/index.ts` logs the email it would have sent.**
+`@bloombot/auth`'s own D-19 says its `EmailSender` port's real implementation "is a later slice's adapter
+package" — none exists. Rather than invent a credential this slice was told not to, or silently drop every
+sign-in link in production, `src/logging-email-sender.ts#LoggingEmailSender` implements the same port and logs
+each send at `info` level, visible to whoever operates the process. This is a deliberate, temporary stand-in:
+replacing it with a real transport later needs no change anywhere else, since every caller of `EmailSender`
+already depends on the interface, not this implementation.
+
+**Choice, "who am I" reports only what the session cookie itself already proved.** `GET /auth/me` returns
+`{ account: { id } }` (or `{ account: null }`) — `req.session.accountId`, nothing looked up beyond it. Reaching
+further (an email, a display name) would need an unscoped account-by-id lookup `packages/db`'s `accounts.ts`
+does not currently expose — its own two documented TEN-2 exceptions are keyed on email or are the account-wide
+`disableAccount`, neither of which fits "look this account up by the id a session already named." Adding one
+was judged out of this slice's own file list (`apps/api` only) for a field nothing in this slice's own tests or
+brief actually needs; a richer profile read is better scoped to whichever future slice gives it a real
+consumer (an account-settings page, say) than added speculatively here.
+
+**Limits.** The origin check compares scheme+host+port only (`URL#origin`), not the full URL — the standard
+shape this kind of check takes, and matches how a browser itself scopes `SameSite`. `checkHealth` (API-6) proves
+the database is reachable with a cheap `select 1` against the live connection; it does not (and given D-19's own
+note about `validateSession` already taking a write lock on every authenticated request, deliberately does not)
+attempt a write of its own on every health check. `apps/api` is not part of the coverage floor `vitest.config.ts`
+enforces, the same call already made for `apps/bot` and for the same reason — see that file's own comment.

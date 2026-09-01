@@ -1,0 +1,26 @@
+{
+  "name": "@bloombot/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Express control-plane API (API-1..6): the second apps/ process, carrying sessions, authenticating a caller and dispatching actions — no business logic of its own.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@bloombot/actions": "*",
+    "@bloombot/auth": "*",
+    "@bloombot/config": "*",
+    "@bloombot/db": "*",
+    "@bloombot/logger": "*",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.1.4"
+  }
+}

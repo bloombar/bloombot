@@ -46,7 +46,14 @@ export default defineConfig({
     // logic-that-matters this floor exists to hold. `packages/auth` joins it
     // too (AUTH-1..4): tokens, sessions and the identity-linking rule are
     // exactly the security-critical logic this floor exists to hold to a
-    // standard, not the coverage of the platform as a whole.
+    // standard, not the coverage of the platform as a whole. `apps/api`
+    // (API-1..6) stays outside the floor, the same call already made for
+    // `apps/bot` above and for the same reason: every rule it enforces —
+    // authorization, tenant scoping, error mapping — is `packages/actions`'
+    // or `packages/auth`'s own, already held to this floor there; what
+    // lives in `apps/api` itself is wiring an Express app around those two
+    // packages, tested thoroughly in `apps/api/tests` but not gated by a
+    // percentage a thin translation layer would only game.
     coverage: {
       provider: 'v8',
       include: [
@@ -160,6 +167,15 @@ export default defineConfig({
         test: {
           name: 'bot',
           root: './apps/bot',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'api',
+          root: './apps/api',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

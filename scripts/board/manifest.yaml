@@ -1725,7 +1725,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: TEN-4
   title: Installation
@@ -1770,7 +1770,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: WEB-2
   title: Signing in happens in the browser, and the session never does
@@ -1781,7 +1781,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: WEB-3
   title: The panel always knows which organization it is acting in
@@ -1792,7 +1792,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: WEB-4
   title: Installing the bot is one button, and its outcomes are honest
@@ -1804,7 +1804,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: WEB-5
   title: A failure reads the way the API reported it
@@ -1815,7 +1815,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: WEB-6
   title: The bundle contains no server code and no secret
@@ -1826,7 +1826,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 6
-  status: In review
+  status: Done
   review: false
 - id: PROJ-4
   title: Duplicating a project

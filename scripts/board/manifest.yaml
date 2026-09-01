@@ -2021,7 +2021,7 @@
   section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
-  status: In review
+  status: Done
   review: false
 - id: ROST-10
   title: A roster row becomes a person, and matching is by handle
@@ -2033,7 +2033,7 @@
   section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
-  status: In review
+  status: Done
   review: false
 - id: ROST-11
   title: Per-student channels are created without exceeding Discord's limits
@@ -2044,7 +2044,7 @@
   section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
-  status: In review
+  status: Done
   review: false
 - id: ROST-12
   title: An import says what it could not do
@@ -2055,7 +2055,7 @@
   section: §22 Roster Import on the Platform
   family: ROST
   phase: 9
-  status: In review
+  status: Done
   review: false
 - id: FILE-1
   title: A course's knowledge is files an instructor uploads

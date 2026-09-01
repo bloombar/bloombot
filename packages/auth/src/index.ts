@@ -4,6 +4,7 @@ export {
   issueSignInToken,
   consumeSignInToken,
   DEFAULT_TOKEN_TTL_MS,
+  MAX_TOKEN_TTL_MS,
   type IssuedSignInToken,
   type ConsumedSignInToken,
 } from './tokens.js'
@@ -15,6 +16,7 @@ export {
   revokeSession,
   revokeAllSessions,
   DEFAULT_SESSION_TTL_MS,
+  MAX_SESSION_AGE_MS,
   type CreatedSession,
   type ValidSession,
 } from './sessions.js'
@@ -33,8 +35,10 @@ export {
 } from './link.js'
 
 export {
+  requestSignInLink,
   redeemSignInLink,
   signInWithGoogle,
+  type RequestSignInLinkDeps,
   type SignInResult,
 } from './sign-in.js'
 

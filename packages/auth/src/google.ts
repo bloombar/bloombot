@@ -18,10 +18,13 @@
  */
 
 import {
-  createLocalJWKSet,
+  createRemoteJWKSet,
+  customFetch,
   errors as joseErrors,
   jwtVerify,
-  type JSONWebKeySet,
+  type FetchImplementation,
+  type RemoteJWKSet,
+  type RemoteJWKSetOptions,
 } from 'jose'
 
 import { CONFIG } from '@bloombot/config'
@@ -43,6 +46,14 @@ export interface CreateGoogleIdTokenVerifierOptions {
   audience?: string
   /** Injectable so tests point discovery and key fetches at a loopback fake instead of the network. Defaults to the global `fetch`. */
   fetchFn?: typeof fetch
+  /**
+   * Passed straight through to `jose`'s `createRemoteJWKSet` — the only
+   * caller that needs this is `google.test.ts`, to shrink `cooldownDuration`
+   * so a test can prove a rotated key is picked up without a real 30-second
+   * wait (finding 6 of the AUTH-1..4 rework). Production takes `jose`'s own
+   * defaults.
+   */
+  jwksOptions?: RemoteJWKSetOptions
 }
 
 function stripTrailingSlash(url: string): string {
@@ -54,19 +65,21 @@ interface OidcDiscoveryDocument {
 }
 
 /**
- * Resolve the issuer's current JWKS via OIDC discovery
+ * Resolve the issuer's current JWKS *location* via OIDC discovery
  * (`${issuer}/.well-known/openid-configuration`, then whatever `jwks_uri` it
  * names) rather than a hardcoded path — the real Google issuer
  * (`https://accounts.google.com`) does not itself serve keys; discovery is
  * what points at the host that does
  * (`https://www.googleapis.com/oauth2/v3/certs` today), and it is what lets
  * a test's loopback fake serve both documents from one server without this
- * file knowing the real shape of Google's own hosting.
+ * file knowing the real shape of Google's own hosting. Only the *location*
+ * — fetching and caching the keys themselves is `createRemoteJWKSet`'s job
+ * (below), not this function's.
  */
-async function discoverJwks(
+async function discoverJwksUri(
   issuer: string,
   fetchFn: typeof fetch
-): Promise<JSONWebKeySet> {
+): Promise<string> {
   const discoveryResponse = await fetchFn(
     `${stripTrailingSlash(issuer)}/.well-known/openid-configuration`
   )
@@ -79,25 +92,25 @@ async function discoverJwks(
   if (!discovery.jwks_uri) {
     throw new Error('Google discovery document is missing jwks_uri')
   }
-
-  const jwksResponse = await fetchFn(discovery.jwks_uri)
-  if (!jwksResponse.ok) {
-    throw new Error(
-      `Google JWKS request failed with status ${jwksResponse.status}`
-    )
-  }
-  return (await jwksResponse.json()) as JSONWebKeySet
+  return discovery.jwks_uri
 }
 
 /**
  * Build a verifier against the real Google issuer (or a fake standing in
  * for it in a test — `options.issuer`/`options.fetchFn`).
  *
- * The key set is fetched once, on the first `verifyIdToken` call, and
- * reused for the lifetime of the returned verifier — a fresh verifier (a
- * fresh key-fetch) per process is expected; nothing here refreshes keys on
- * a timer, since a compromised key's real remedy is Google rotating it, at
- * which point the *next* process restart picks up the new set.
+ * The JWKS *location* is resolved once, on the first `verifyIdToken` call,
+ * and reused for the lifetime of the returned verifier — Google's own
+ * `jwks_uri` is stable in practice. The keys served from that location are
+ * a different story (finding 6 of the AUTH-1..4 rework): Google rotates its
+ * signing keys, and a verifier that fetched them once and cached them
+ * forever would start refusing *every* Google sign-in after a rotation,
+ * until the process restarted. `jose`'s `createRemoteJWKSet` is used
+ * instead of a one-shot fetch precisely because it already does the right
+ * thing here — it caches the key set, refetches it when a token's `kid`
+ * is not among the cached keys (bounded by its own cooldown, so a flood of
+ * tokens with a bogus `kid` cannot turn into a flood of requests to
+ * Google), and refetches on a `cacheMaxAge` timer regardless.
  */
 export function createGoogleIdTokenVerifier(
   options: CreateGoogleIdTokenVerifierOptions = {}
@@ -106,10 +119,19 @@ export function createGoogleIdTokenVerifier(
   const audience = options.audience ?? CONFIG.GOOGLE_CLIENT_ID
   const fetchFn = options.fetchFn ?? fetch
 
-  let jwks: ReturnType<typeof createLocalJWKSet> | undefined
+  let jwks: RemoteJWKSet | undefined
 
-  async function getJwks(): Promise<ReturnType<typeof createLocalJWKSet>> {
-    jwks ??= createLocalJWKSet(await discoverJwks(issuer, fetchFn))
+  async function getJwks(): Promise<RemoteJWKSet> {
+    if (!jwks) {
+      const jwksUri = await discoverJwksUri(issuer, fetchFn)
+      jwks = createRemoteJWKSet(new URL(jwksUri), {
+        ...options.jwksOptions,
+        // `fetchFn` (default: the global `fetch`) is the same injection
+        // point discovery uses, so a test pointed at the loopback fake
+        // reaches it for key fetches too, not just the discovery document.
+        [customFetch]: fetchFn as unknown as FetchImplementation,
+      })
+    }
     return jwks
   }
 

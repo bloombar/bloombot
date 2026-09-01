@@ -13,6 +13,7 @@ import { and, eq } from 'drizzle-orm'
 
 import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { accounts, memberships, type MembershipRole } from '../schema.js'
+import { revokeAllSessionsForAccount } from './sessions.js'
 
 export type Account = typeof accounts.$inferSelect
 
@@ -126,4 +127,38 @@ export function getAccountInOrganization(
     )
     .where(eq(accounts.id, accountId))
     .get()
+}
+
+/**
+ * Disable an account and revoke every session it holds, atomically (finding
+ * 3 of the AUTH-1..4 rework: `disabled_at` is the platform's
+ * suspend-without-deleting control, and it must not be possible to set it
+ * without also ending whatever sessions are already live — an operator
+ * disabling a compromised account cannot be left to remember a second call).
+ *
+ * TEN-2 exception, the same class as `getAccountByEmail`: `disabled_at`
+ * lives on `accounts`, not `memberships`, so this is not scoped to one
+ * organization — it is an account-wide suspension, not a per-tenant one.
+ * (Do not add an `organizationId` parameter here that is only used for a
+ * membership pre-check ahead of an unscoped `UPDATE`;
+ * `tests/tenant-scoping-convention.test.ts` documents exactly that shape as
+ * the mistake to avoid.)
+ *
+ * Returns the disabled account, or `undefined` if no account has this id.
+ */
+export function disableAccount(
+  accountId: string,
+  db: TransactingExecutor
+): Account | undefined {
+  return db.transaction((tx) => {
+    const account = tx
+      .update(accounts)
+      .set({ disabledAt: Date.now() })
+      .where(eq(accounts.id, accountId))
+      .returning()
+      .get()
+    if (!account) return undefined
+    revokeAllSessionsForAccount(accountId, tx)
+    return account
+  })
 }

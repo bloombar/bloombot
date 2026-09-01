@@ -45,6 +45,48 @@ describe('createGoogleIdTokenVerifier', () => {
     })
   })
 
+  // Finding 6 of the AUTH-1..4 rework: Google rotates its signing keys, so
+  // a verifier that fetched the JWKS once and cached it for the life of the
+  // process would start refusing every Google sign-in the moment the key it
+  // cached stops being served — until the process happened to restart.
+  // `cooldownDuration: 0` is the only reason this does not need a real
+  // 30-second wait: `jose`'s `createRemoteJWKSet` normally refuses to
+  // refetch again within its cooldown window even for an unrecognised
+  // `kid`, to stop a flood of bad tokens turning into a flood of requests
+  // to Google — a real deployment keeps that default; this test shrinks it
+  // to prove the refetch itself happens, not to time it.
+  it('picks up a rotated signing key without a process restart', async () => {
+    const verifier = createGoogleIdTokenVerifier({
+      issuer: server.baseUrl,
+      audience: 'test-client-id',
+      jwksOptions: { cooldownDuration: 0 },
+    })
+    const tokenBeforeRotation = await server.signIdToken({
+      sub: 'google-subject-1',
+      email: 'student@example.edu',
+      email_verified: true,
+    })
+    expect((await verifier.verifyIdToken(tokenBeforeRotation)).ok).toBe(true)
+
+    await server.rotateKey()
+    const tokenAfterRotation = await server.signIdToken({
+      sub: 'google-subject-1',
+      email: 'student@example.edu',
+      email_verified: true,
+    })
+
+    const result = await verifier.verifyIdToken(tokenAfterRotation)
+
+    expect(result).toEqual({
+      ok: true,
+      identity: {
+        subject: 'google-subject-1',
+        email: 'student@example.edu',
+        emailVerified: true,
+      },
+    })
+  })
+
   it('surfaces an unverified email as emailVerified: false, never defaulting to true', async () => {
     const verifier = createGoogleIdTokenVerifier({
       issuer: server.baseUrl,

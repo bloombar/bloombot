@@ -23,6 +23,15 @@ const emailSchema = z.email()
 // well within the same sitting.
 export const DEFAULT_TOKEN_TTL_MS = 15 * 60 * 1000
 
+// Finding 5 of the AUTH-1..4 rework: `issueSignInToken`'s `ttlMs` parameter
+// had no upper bound, so a caller could issue a link that stayed valid for
+// months — AUTH-1's "expire within minutes" would then be a convention a
+// caller could simply not follow, rather than something this module
+// actually enforces. Equal to `DEFAULT_TOKEN_TTL_MS`: nothing about a
+// sign-in link needs to live longer than the deliberately-chosen default,
+// so there is no legitimate reason for a caller to ask for more.
+export const MAX_TOKEN_TTL_MS = DEFAULT_TOKEN_TTL_MS
+
 /** What a caller gets back from issuing a token — the plaintext value, exactly once. */
 export interface IssuedSignInToken {
   /** The value to put in the emailed link. Never recoverable from the database afterward. */
@@ -38,7 +47,10 @@ export interface IssuedSignInToken {
  * decides at redemption time whether to create an account. Does reject a
  * malformed address up front (`zod`'s own `email()` check) — refusing here
  * is cheap and immediate, versus discovering the same problem only once
- * something tries, and fails, to send mail to it.
+ * something tries, and fails, to send mail to it. `ttlMs` is clamped to
+ * `MAX_TOKEN_TTL_MS` (finding 5 of the AUTH-1..4 rework) — a caller asking
+ * for less than the default still gets exactly what it asked for; only a
+ * request for *more* than the ceiling is capped.
  *
  * @throws {z.ZodError} if `email` is not a syntactically valid address.
  */
@@ -49,7 +61,7 @@ export function issueSignInToken(
 ): IssuedSignInToken {
   emailSchema.parse(email)
   const token = generateSecret()
-  const expiresAt = Date.now() + ttlMs
+  const expiresAt = Date.now() + Math.min(ttlMs, MAX_TOKEN_TTL_MS)
   signInTokens.createSignInToken(
     { email, tokenHash: hashSecret(token), expiresAt },
     db

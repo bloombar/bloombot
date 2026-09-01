@@ -17,6 +17,9 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 // TEN-2's two documented exceptions, and why each is safe:
 //  - accounts.ts#getAccountByEmail: an account exists before any organization
 //    does, so sign-in has to find it by email alone.
+//  - accounts.ts#disableAccount: `disabled_at` lives on `accounts`, not
+//    `memberships` — disabling is account-wide, not scoped to one
+//    organization (AUTH-1..4 rework, finding 3).
 //  - discord-servers.ts#resolveDiscordServerBinding: this *is* the lookup
 //    that establishes which organization an incoming Discord message
 //    belongs to, so it cannot itself take an organization id as input.
@@ -27,7 +30,7 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    exported function in these two files is keyed on an email or an
 //    account id rather than an `organizationId`.
 const ALLOWLIST: Record<string, string[]> = {
-  'accounts.ts': ['getAccountByEmail'],
+  'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
   'sign-in-tokens.ts': ['createSignInToken', 'consumeSignInToken'],
   'sessions.ts': [

@@ -22,7 +22,6 @@
   "dependencies": {
     "@bloombot/config": "*",
     "@bloombot/db": "*",
-    "@bloombot/logger": "*",
     "better-sqlite3": "^13.0.3",
     "jose": "^6.2.10",
     "zod": "^4.5.4"

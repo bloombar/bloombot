@@ -13,10 +13,10 @@
  * and mark rows, never to recover a secret a stolen row could then replay.
  */
 
-import { and, eq, gt, isNull } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull } from 'drizzle-orm'
 
 import type { Executor } from '../client.js'
-import { sessions } from '../schema.js'
+import { accounts, sessions } from '../schema.js'
 
 export type Session = typeof sessions.$inferSelect
 
@@ -28,6 +28,14 @@ export interface NewSession {
   /** SHA-256 hash of the session token; see `@bloombot/auth`'s `sessions.ts`. */
   tokenHash: string
   expiresAt: number
+  /**
+   * Defaults to `Date.now()` when omitted. `@bloombot/auth`'s `rotateSession`
+   * passes the session being replaced's own `createdAt` through here rather
+   * than letting it default — carrying the *original* creation time forward
+   * across a chain of rotations is what lets that function cap how old a
+   * chain is allowed to get, rather than each rotation resetting the clock.
+   */
+  createdAt?: number
 }
 
 /** Create a new session row. */
@@ -39,7 +47,7 @@ export function createSession(input: NewSession, db: Executor): Session {
       id: input.id ?? crypto.randomUUID(),
       accountId: input.accountId,
       tokenHash: input.tokenHash,
-      createdAt: now,
+      createdAt: input.createdAt ?? now,
       lastSeenAt: now,
       expiresAt: input.expiresAt,
     })
@@ -55,7 +63,13 @@ export function createSession(input: NewSession, db: Executor): Session {
  * statement that records the visit, so a session revoked or expired a
  * moment ago cannot be "seen" one more time by a request already in flight.
  * Returns `undefined` for a hash that does not exist, one that is revoked,
- * and one that has expired.
+ * one that has expired, and one whose *account* is disabled (finding 3 of
+ * the AUTH-1..4 rework: `accounts.disabled_at` is the platform's
+ * suspend-without-deleting control, and a live session must stop validating
+ * the moment the account is disabled, not merely at the session's own TTL).
+ * The disabled check is a subquery, not a join, so this stays one
+ * `UPDATE ... WHERE` statement rather than needing SQLite's
+ * `UPDATE ... FROM` (D-2: plain, portable SQL).
  */
 export function validateSession(
   tokenHash: string,
@@ -69,7 +83,14 @@ export function validateSession(
       and(
         eq(sessions.tokenHash, tokenHash),
         isNull(sessions.revokedAt),
-        gt(sessions.expiresAt, now)
+        gt(sessions.expiresAt, now),
+        inArray(
+          sessions.accountId,
+          db
+            .select({ id: accounts.id })
+            .from(accounts)
+            .where(isNull(accounts.disabledAt))
+        )
       )
     )
     .returning()
@@ -79,19 +100,31 @@ export function validateSession(
 /**
  * Revoke a single session by its token hash.
  *
- * Returns the revoked row, or `undefined` if the hash does not exist or was
- * already revoked — `@bloombot/auth`'s `rotateSession` reads `accountId` off
- * this return value to create the replacement session in the same
- * transaction.
+ * Returns the revoked row, or `undefined` if the hash does not exist, was
+ * already revoked, or has already expired — `now` is checked the same way
+ * `validateSession` checks it (finding 1 of the AUTH-1..4 rework: revoking
+ * an already-dead session must not report "an active session just ended",
+ * and `@bloombot/auth`'s `rotateSession` must not be able to turn an
+ * expired token into a live one by reading a defined return value here as
+ * proof the session it names was still alive). `@bloombot/auth`'s
+ * `rotateSession` reads `accountId` and `createdAt` off this return value to
+ * create the replacement session in the same transaction.
  */
 export function revokeSessionByHash(
   tokenHash: string,
+  now: number,
   db: Executor
 ): Session | undefined {
   return db
     .update(sessions)
     .set({ revokedAt: Date.now() })
-    .where(and(eq(sessions.tokenHash, tokenHash), isNull(sessions.revokedAt)))
+    .where(
+      and(
+        eq(sessions.tokenHash, tokenHash),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, now)
+      )
+    )
     .returning()
     .get()
 }

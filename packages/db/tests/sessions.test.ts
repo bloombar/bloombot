@@ -75,7 +75,24 @@ describe('sessions repo (AUTH-3)', () => {
       { accountId, tokenHash: 'hash-1', expiresAt: Date.now() + 60_000 },
       testDb.db
     )
-    sessions.revokeSessionByHash('hash-1', testDb.db)
+    sessions.revokeSessionByHash('hash-1', Date.now(), testDb.db)
+
+    expect(
+      sessions.validateSession('hash-1', Date.now(), testDb.db)
+    ).toBeUndefined()
+  })
+
+  // Finding 3 of the AUTH-1..4 rework: a session must stop validating the
+  // instant its account is disabled, not merely at the session's own TTL.
+  it('does not validate a session whose account is disabled', () => {
+    testDb = createTestDatabase()
+    const accountId = seedAccount(testDb)
+    sessions.createSession(
+      { accountId, tokenHash: 'hash-1', expiresAt: Date.now() + 60_000 },
+      testDb.db
+    )
+
+    accounts.disableAccount(accountId, testDb.db)
 
     expect(
       sessions.validateSession('hash-1', Date.now(), testDb.db)
@@ -90,11 +107,31 @@ describe('sessions repo (AUTH-3)', () => {
       testDb.db
     )
 
-    const first = sessions.revokeSessionByHash('hash-1', testDb.db)
-    const second = sessions.revokeSessionByHash('hash-1', testDb.db)
+    const first = sessions.revokeSessionByHash('hash-1', Date.now(), testDb.db)
+    const second = sessions.revokeSessionByHash('hash-1', Date.now(), testDb.db)
 
     expect(first).toMatchObject({ accountId })
     expect(second).toBeUndefined()
+  })
+
+  // Finding 1 of the AUTH-1..4 rework: revoking an already-expired session
+  // must report "nothing to do", the same as revoking one that never
+  // existed — not "an active session just ended". This is also what stops
+  // `@bloombot/auth`'s `rotateSession` from reviving a long-dead token: it
+  // reads a defined return here as proof the session it is replacing was
+  // still alive.
+  it('does not revoke — and reports no-op for — an already-expired session', () => {
+    testDb = createTestDatabase()
+    const accountId = seedAccount(testDb)
+    const now = Date.now()
+    sessions.createSession(
+      { accountId, tokenHash: 'hash-1', expiresAt: now - 1 },
+      testDb.db
+    )
+
+    expect(
+      sessions.revokeSessionByHash('hash-1', now, testDb.db)
+    ).toBeUndefined()
   })
 
   it('revokeAllSessionsForAccount revokes every active session and none of another account', () => {

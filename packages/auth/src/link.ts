@@ -18,26 +18,32 @@ export interface GoogleIdentity {
   emailVerified: boolean
 }
 
-export type LinkDecision = { action: 'link' } | { action: 'create' }
+export type LinkDecision =
+  { action: 'link' } | { action: 'create' } | { action: 'reject' }
 
 /**
- * Decide whether a Google identity should link to an existing account or
- * create a new one.
+ * Decide whether a Google identity should link to an existing account,
+ * create a new one, or be refused outright.
  *
  * Links only when both hold: the provider asserts `emailVerified`, and the
  * asserted email matches an existing account's email exactly
  * (case-insensitively — `accounts.ts` itself stores and compares email the
- * same way). Every other case creates a new account instead of linking:
+ * same way). Every other case either creates a new account or rejects the
+ * sign-in:
  *
- *  - No account exists for this email yet — the ordinary first-time case,
- *    verified or not, and creating an account for an *unverified* email a
- *    nobody-else-holds is fine; the risk this rule guards against is
- *    reaching an *existing* account, not making a new one.
- *  - An account exists for this email, but the provider does not assert it
- *    is verified — the attack AUTH-2 names. An attacker able to make an
- *    OAuth app assert an arbitrary, unverified email address must not be
- *    able to walk into a stranger's existing account by typing that
- *    stranger's address; refusing to link here is what closes that.
+ *  - `emailVerified` is false — rejected, whether or not the address
+ *    matches an existing account (finding 2 of the AUTH-1..4 rework). An
+ *    unverified assertion proves nothing about who controls the address, so
+ *    it must not be able to *reach* an account either way: matching an
+ *    existing one is the takeover AUTH-2's own sentence names directly, and
+ *    matching nobody yet is the same attack one step earlier — an attacker
+ *    who asserts a victim's real address before the victim has ever signed
+ *    in themselves would otherwise get to pre-create and hold that victim's
+ *    account. See docs/DECISIONS.md (D-19).
+ *  - `emailVerified` is true but no existing account matches — the
+ *    ordinary first-time case: nothing here has been proven false, and
+ *    creating an account for an address nobody else holds is exactly
+ *    AUTH-2's "otherwise a new account is created."
  *
  * This function only decides; it never queries a database and never creates
  * anything. `existingAccountEmail` is `undefined` when the caller found no
@@ -47,12 +53,13 @@ export function decideLinkOutcome(
   identity: GoogleIdentity,
   existingAccountEmail: string | undefined
 ): LinkDecision {
+  if (!identity.emailVerified) {
+    return { action: 'reject' }
+  }
+
   const matches =
     existingAccountEmail !== undefined &&
     identity.email.toLowerCase() === existingAccountEmail.toLowerCase()
 
-  if (identity.emailVerified && matches) {
-    return { action: 'link' }
-  }
-  return { action: 'create' }
+  return matches ? { action: 'link' } : { action: 'create' }
 }

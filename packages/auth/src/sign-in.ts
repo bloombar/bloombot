@@ -20,9 +20,14 @@ import {
   type TransactingExecutor,
 } from '@bloombot/db'
 
+import type { EmailSender } from './email.js'
 import { decideLinkOutcome, type GoogleIdentity } from './link.js'
-import { consumeSignInToken } from './tokens.js'
-import { createSession, type CreatedSession } from './sessions.js'
+import { issueSignInToken, consumeSignInToken } from './tokens.js'
+import {
+  createSession,
+  revokeAllSessions,
+  type CreatedSession,
+} from './sessions.js'
 
 type Account = accountsRepo.Account
 
@@ -86,6 +91,37 @@ function findOrCreateAccountForEmail(
   return { account, createdAccount: true }
 }
 
+/** Deps `requestSignInLink` needs beyond the email address itself. */
+export interface RequestSignInLinkDeps {
+  db: Database
+  /** The mail port (`email.ts`) this is sent through — a real transport in production, `RecordingEmailSender` in a test. */
+  emailSender: EmailSender
+  /** Turns an issued token into the actual URL the emailed link points at — this package has no notion of the web app's own base URL or route. */
+  buildLink: (token: string) => string
+}
+
+/**
+ * Request a sign-in link (AUTH-1, finding 4 of the AUTH-1..4 rework): issues
+ * a token and emails it through `deps.emailSender` — the thing `email.ts`'s
+ * own module comment already described this file as doing, before anything
+ * here actually called it.
+ *
+ * Returns nothing: the plaintext token's only destination is the outgoing
+ * email, never a value this function hands back to its own caller to log,
+ * cache, or otherwise let escape the mail port.
+ */
+export async function requestSignInLink(
+  email: string,
+  deps: RequestSignInLinkDeps
+): Promise<void> {
+  const { token } = issueSignInToken(email, deps.db)
+  await deps.emailSender.send(
+    email,
+    'Sign in to Bloombot',
+    `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
+  )
+}
+
 /**
  * Redeem a sign-in link (AUTH-1).
  *
@@ -94,10 +130,23 @@ function findOrCreateAccountForEmail(
  * same transaction that creates the session" AUTH-1 requires, and TEN-1's
  * "a failure part-way leaves none of the three" for a first-time sign-in.
  *
- * Returns `undefined` for a token that was invalid, already redeemed, or
- * expired — `tokens.ts#consumeSignInToken`'s "no oracle" guarantee holds
- * here too, since this is the only thing this function does differently for
- * those three cases.
+ * Returns `undefined` for a token that was invalid, already redeemed,
+ * expired, or that resolves to a disabled account (finding 3 of the
+ * AUTH-1..4 rework — the token itself is still consumed either way: it was
+ * legitimately issued and legitimately redeemed, so letting it be replayed
+ * later, once the account might be re-enabled, would reopen exactly the
+ * single-use property AUTH-1 requires) — `tokens.ts#consumeSignInToken`'s
+ * "no oracle" guarantee holds for the first three cases, since this is the
+ * only thing this function does differently for them.
+ *
+ * For a *returning* account (`createdAccount: false`), every other session
+ * that account currently holds is revoked before the new one is created
+ * (finding 2 of the AUTH-1..4 rework, belt-and-braces half): redeeming an
+ * emailed link is proof of control of the address, and proving that is
+ * exactly the moment to invalidate anything issued before the proof — an
+ * attacker who reached this account first (an unverified Google identity
+ * that used to create rather than reject, say) does not get to keep a
+ * session alive once the real owner shows up.
  */
 export function redeemSignInLink(
   token: string,
@@ -111,6 +160,10 @@ export function redeemSignInLink(
       consumed.email,
       tx
     )
+    if (account.disabledAt !== null) return undefined
+
+    if (!createdAccount) revokeAllSessions(account.id, tx)
+
     const session = createSession(account.id, tx)
     return { account, session, createdAccount }
   })
@@ -120,19 +173,18 @@ export function redeemSignInLink(
  * Sign in with a Google identity already verified by `google.ts` (AUTH-2).
  *
  * Looks up whatever account exists for the asserted email, asks
- * `link.ts#decideLinkOutcome` whether to link to it or create a new one, and
- * acts on the answer inside one transaction, same as `redeemSignInLink`.
+ * `link.ts#decideLinkOutcome` whether to link to it, create a new one, or
+ * reject the attempt outright, and acts on the answer inside one
+ * transaction, same as `redeemSignInLink`.
  *
- * A verified, matching email links to the existing account. Everything else
- * — no existing account, a verified email that does not match one, or an
- * *unverified* email that happens to match one (the takeover AUTH-2 names)
- * — creates a new account rather than reaching the existing one. Because
- * `accounts.email` is unique, a new account cannot literally reuse an email
- * string an existing row already holds; when that collision happens for the
- * unverified-match case, account creation itself fails and this function
- * refuses the sign-in (returns `undefined`) rather than linking — refusing
- * is still "not the existing account", which is the property AUTH-2
- * requires. See docs/DECISIONS.md.
+ * A verified, matching email links to the existing account (refused,
+ * without creating a session, if that account is disabled — finding 3 of
+ * the AUTH-1..4 rework). A verified email matching nobody yet creates a new
+ * account. An *unverified* email is rejected outright — whether or not it
+ * matches an existing account (finding 2 of the AUTH-1..4 rework: an
+ * unverified assertion proves nothing about who controls the address, so it
+ * must not be able to reach an account *or* pre-create one). See
+ * docs/DECISIONS.md (D-19).
  */
 export function signInWithGoogle(
   identity: GoogleIdentity,
@@ -142,9 +194,12 @@ export function signInWithGoogle(
     const existing = accountsRepo.getAccountByEmail(identity.email, tx)
     const decision = decideLinkOutcome(identity, existing?.email)
 
+    if (decision.action === 'reject') return undefined
+
     let account: Account
     let createdAccount = false
     if (decision.action === 'link' && existing) {
+      if (existing.disabledAt !== null) return undefined
       account = existing
     } else {
       const created = tryCreateAccountForEmail(identity.email, tx)
@@ -160,13 +215,15 @@ export function signInWithGoogle(
 
 /**
  * `findOrCreateAccountForEmail`'s "create" half, on its own: used only by
- * `signInWithGoogle`'s "otherwise a new account is created" branch, where —
- * unlike `redeemSignInLink` — the email may already belong to a *different*
- * account (the unverified-match case above), so the insert itself may fail.
- * `undefined` on that failure rather than letting the driver's raw
- * constraint error escape, the same "report a routine refusal, not a thrown
- * error" shape `discord-servers.ts#claimDiscordServerBinding` uses for
- * TEN-3.
+ * `signInWithGoogle`'s `create` branch, reached only for a *verified* email
+ * that `existing` (read moments earlier, outside this transaction's own
+ * writes) found no account for. That read-then-write gap is exactly what
+ * can make the insert itself fail — a second concurrent sign-in (this one,
+ * or a `redeemSignInLink` racing it) creating the same account first — so
+ * `undefined` is returned on that failure rather than letting the driver's
+ * raw constraint error escape, the same "report a routine refusal, not a
+ * thrown error" shape `discord-servers.ts#claimDiscordServerBinding` uses
+ * for TEN-3.
  */
 function tryCreateAccountForEmail(
   email: string,

@@ -1064,7 +1064,125 @@ harder to add later — `validateSession` takes a bare token string and knows no
 throwaway SQLite database, not against Postgres — `TransactingExecutor`'s nested-transaction (savepoint)
 behaviour is drizzle-orm's better-sqlite3 driver's own implementation, and D-2's portable-SQL discipline
 covers the *schema* this slice adds, not a proof that savepoint semantics carry over unchanged to whichever
-Postgres driver a later migration adopts. `google.ts`'s discovery step is not cached across processes or
-refreshed on a timer — a verifier fetches once per process lifetime; a real key rotation is picked up on the
-next deploy or restart, not live, which is an acceptable trade for a platform this size but is worth knowing
-before treating Google's own emergency key rotation as something this code reacts to immediately.
+Postgres driver a later migration adopts. `google.ts`'s discovery step (which host serves the JWKS) is still
+resolved once per process and not rediscovered — Google's own `jwks_uri` is stable in practice, and rediscovery
+on every token would be a discovery-endpoint request per sign-in for no benefit; the *keys themselves* are a
+different matter and are covered by the rework below (finding 6), since Google does rotate those on a schedule
+this package cannot predict.
+
+---
+
+## Rework pass — three reviewers, including a security review (findings 1–9)
+
+**Finding 1 — an expired session could be rotated back into a live one, and repeated rotation had no ceiling.**
+`packages/db/src/repos/sessions.ts#revokeSessionByHash` checked `token_hash` and `revoked_at` but not
+`expires_at`, so it reported an already-expired session as successfully revoked — indistinguishable, to its
+caller, from revoking one that was still alive. `packages/auth/src/sessions.ts#rotateSession` read that
+`Session` object back as proof the token it named was live and minted a fresh thirty-day session from it; the
+practical effect was that any session token that had expired months ago — recovered from an old browser
+profile, a filesystem backup, a stale device — could be presented to the sign-in path and walk away with a
+brand-new, fully authenticated thirty-day session, no link and no Google token required. Two reviewers
+reproduced it independently. `revokeSessionByHash` now takes `now` and checks `gt(expires_at, now)` the same
+way `validateSession` already did, and `revokeSession` (the public single-session revoke) inherits the fix for
+free — an already-dead session now reports "nothing to do," not "an active session just ended." The second half
+of the same finding — repeated rotation extending a session forever, since each rotation resets the clock — is
+closed by carrying the *original* session's `created_at` forward through every rotation in a chain
+(`NewSession.createdAt`, threaded through by a new internal `createSessionRow` rather than exposed on the
+public `createSession`, which has no legitimate reason to accept a caller-supplied creation time) and refusing
+to rotate once that chain is older than `MAX_SESSION_AGE_MS` — six times `DEFAULT_SESSION_TTL_MS`. The old
+token is revoked either way in that case, ending the chain rather than reviving it. `tests/sessions.test.ts`
+(both packages) covers all three: rotating an expired session, revoking an expired session, and a chain past
+the age cap.
+
+**Finding 2 — an unverified Google identity could pre-register an account before its real owner ever signed
+in, and a proven return did not revoke what came before it.** `link.ts#decideLinkOutcome` returned `create` for
+an unverified email matching nobody — read in isolation this looked like the ordinary first-time case
+`link.ts`'s own comment described it as, but AUTH-2's own attack sentence is about who gets to *hold* an
+account, not only about who gets to *reach* an existing one. An attacker asserting `victim@school.edu` with
+`emailVerified: false` got a real, thirty-day session on a freshly created account for that address; the actual
+victim, redeeming a legitimate sign-in link for the same address moments or months later, was handed the
+*same* account (`getAccountByEmail` found it) with `createdAccount: false` — and the attacker's session kept
+validating throughout, on the victim's own account. The fix tightens `decideLinkOutcome` to a third outcome,
+`reject`, returned whenever `emailVerified` is false — matching an existing account or not — so an unverified
+assertion cannot link *or* create; SPEC.md's AUTH-2 body was updated to say this plainly (the id is unchanged;
+only the requirement's prose changed, per `docs/CONTRIBUTING.md`'s "never change an existing id" rule — the
+manifest was regenerated with `npm run board:derive` to match). Belt and braces, in the same fix:
+`redeemSignInLink` now revokes a returning account's other sessions the moment it proves control of the
+address — proving an address is the moment to invalidate anything issued before the proof, closing the window
+even for whatever pre-registration route reaches an account next. `packages/auth/tests/link.test.ts` and
+`tests/sign-in.test.ts` both cover the reproduction directly: a `signInWithGoogle` call with an unverified,
+non-matching identity, asserted first, followed by the legitimate owner's own first sign-in, which must create
+a *fresh* account rather than inherit the attacker's.
+
+Not settled here, and worth a future slice's attention: this fix makes an unverified Google identity unable to
+reach *any* account through `signInWithGoogle`, which also means there is currently no way to add a Google
+identity to an account that signed up by email only, short of Google itself asserting that account's email
+verified. That is almost certainly the common case (Google verifies its own users' emails before it will assert
+`email_verified: true`), so it is not expected to be a practical gap — but a Google `sub`-to-account binding
+table, letting an already-authenticated session explicitly link a Google identity regardless of the email
+match, is a design question a reviewer raised and this rework pass deliberately left unsettled, rather than
+building a binding mechanism the brief did not ask for.
+
+**Finding 3 — `accounts.disabled_at` was enforced nowhere.** The column's own comment ("set to disable sign-in
+without deleting the account or anything it owns") described a control nothing read in a conditional — a grep
+found it only in the column definition and one `select` projection. An operator disabling a compromised
+account changed nothing observable: existing sessions kept validating for their full remaining TTL, and the
+account could request a fresh sign-in link and use it immediately. Closed in three places, atomically where it
+matters: `packages/db/src/repos/accounts.ts#disableAccount` sets `disabled_at` and revokes every session the
+account holds in one transaction, so disabling is one operation, not two a caller could forget the second half
+of; `packages/db/src/repos/sessions.ts#validateSession` now excludes a session whose account is disabled via a
+subquery in the same `UPDATE ... WHERE` (not a join, so it stays one statement — D-2's portable-SQL discipline),
+so an in-flight session stops the moment the account is disabled rather than at its own TTL; and both
+`redeemSignInLink` and `signInWithGoogle` refuse to sign in a disabled account. `redeemSignInLink` still
+consumes the token on that refusal — it was legitimately issued and legitimately redeemed, and leaving it
+usable against a possible future re-enable would reopen AUTH-1's single-use property. `disableAccount` is
+account-wide by design, the same TEN-2 exception class as `getAccountByEmail` (`disabled_at` lives on
+`accounts`, not `memberships`) — `tests/tenant-scoping-convention.test.ts` already carried a comment describing
+exactly the wrong shape to avoid (`organizationId` used only for a membership pre-check ahead of an unscoped
+`UPDATE`) from when this table was first added; `disableAccount` does not repeat it, and is allowlisted
+alongside `getAccountByEmail` rather than taking an `organizationId` it would not use to scope its own write.
+
+**Finding 4 — the mail port was never used.** `email.ts`'s own module comment said `sign-in.ts` sends a
+sign-in link through it; nothing did. `sign-in.ts#requestSignInLink` now composes `issueSignInToken` and
+`EmailSender#send`, taking the sender and a `buildLink` callback as explicit deps (this package has no notion
+of the web app's own base URL or route, so that stays the caller's to supply) and returning nothing — the
+plaintext token's only destination is the outgoing email. Tested with `RecordingEmailSender`.
+
+**Finding 5 — `issueSignInToken`'s `ttlMs` had no upper bound.** A caller could ask for, and a reviewer
+confirmed redeemed, a year-long sign-in link — AUTH-1's "expire within minutes" held only because every caller
+today happens to ask for the default, not because anything enforced it. `issueSignInToken` now clamps `ttlMs`
+to a new `MAX_TOKEN_TTL_MS`, set equal to `DEFAULT_TOKEN_TTL_MS`: nothing about a sign-in link needs to live
+longer than the fifteen minutes already chosen for it.
+
+**Finding 6 — Google's key set was fetched once per process and never refreshed.** `google.ts` used
+`createLocalJWKSet` over a JWKS fetched once, on the first `verifyIdToken` call, and cached for the process's
+whole lifetime — accurate to what the file's own comment said, and wrong: Google rotates its signing keys on
+its own schedule, and a long-running API process would start refusing *every* Google sign-in the moment its
+cached key stopped being served, recovering only on the next restart. Switched to `jose`'s `createRemoteJWKSet`,
+which does the caching, cooldown and on-unknown-`kid` refetch properly, keeping only the JWKS *location*
+(resolved via the same OIDC discovery as before) cached across calls rather than the keys themselves. The
+loopback fake (`tests/helpers/fake-google-server.ts`) gained a `rotateKey()` that swaps in a new key under a
+new `kid`, and `google.test.ts` proves a token signed after rotation still verifies — with `cooldownDuration: 0`
+passed through the new `jwksOptions` escape hatch, since `jose`'s real default (thirty seconds) exists
+specifically to stop a flood of bad tokens turning into a flood of requests to Google, and a test should not
+need to out-wait a protection a production deployment keeps.
+
+**Finding 7 — `packages/auth` depended on `@bloombot/logger` and imported it nowhere.** Dropped from
+`package.json`; `packages/auth` logs nothing, which is deliberate (the security review noted it as something
+that held, not something to add) and this dependency did not reflect that.
+
+**Finding 8 — a test that could not fail.** `tests/tokens.test.ts`'s replay test asserted
+`expect(neverExisted).toBe(replayed)`, comparing two `undefined`s — trivially true regardless of what either
+call actually did, and no stronger than the `toBeUndefined()` assertions already sitting above it. Replaced
+with an assertion the no-oracle property actually needs: that the replay attempt leaves no further trace on the
+row's own `used_at` — the one place a "was this already spent" fact lives — so a caller cannot use a side
+effect of the *replay itself* to tell "never existed" apart from "already used."
+
+**Finding 9 — two things for whoever runs the tooling next.** `drizzle-kit check`, run from the repository
+root, is *vacuous*: `packages/db/drizzle.config.ts`'s `out: './migrations'` resolves against the current
+working directory, not the config file's own location, so running it from the root silently creates an empty
+`./migrations/meta` there and reports "Everything's fine" without having examined a single real migration —
+must be run from `packages/db`. And: `validateSession` writes on every request, to touch `last_seen_at`, so
+with the API and the bot sharing one SQLite file (D-2), every authenticated request takes a write lock — fine
+at this scale with WAL and the five-second busy timeout already set in `client.ts`, but worth the API slice
+knowing before it is the thing explaining an unexpected `SQLITE_BUSY` under load.

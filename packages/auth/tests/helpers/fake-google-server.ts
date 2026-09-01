@@ -11,6 +11,7 @@
  * without ever leaving the process.
  */
 
+import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 
 import {
@@ -31,7 +32,7 @@ export class FakeGoogleServer {
   private server: Server
   private publicJwk: JWK
   private privateKey: CryptoKey
-  private readonly kid = 'fake-key-1'
+  private kid = 'fake-key-1'
 
   private constructor(server: Server, publicJwk: JWK, privateKey: CryptoKey) {
     this.server = server
@@ -72,6 +73,25 @@ export class FakeGoogleServer {
     return new Promise((resolve, reject) => {
       this.server.close((error) => (error ? reject(error) : resolve()))
     })
+  }
+
+  /**
+   * Replace this fake's signing key with a brand-new one, under a new
+   * `kid` — the way Google's own key rotation looks from the outside: the
+   * old `kid` disappears from `/certs` entirely, and every token signed
+   * from here on carries a `kid` no cached key set has seen before. Used
+   * by `google.test.ts` to prove `google.ts#createGoogleIdTokenVerifier`
+   * (finding 6 of the AUTH-1..4 rework) refetches rather than refusing
+   * every token once the process's cached key set is stale.
+   */
+  async rotateKey(): Promise<void> {
+    const { publicKey, privateKey } = await generateKeyPair('RS256', {
+      extractable: true,
+    })
+    const publicJwk = await exportJWK(publicKey)
+    this.kid = `fake-key-${randomUUID()}`
+    this.publicJwk = { ...publicJwk, kid: this.kid, alg: 'RS256', use: 'sig' }
+    this.privateKey = privateKey
   }
 
   /**

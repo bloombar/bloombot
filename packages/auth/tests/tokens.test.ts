@@ -17,6 +17,7 @@ import {
   consumeSignInToken,
   issueSignInToken,
   DEFAULT_TOKEN_TTL_MS,
+  MAX_TOKEN_TTL_MS,
 } from '../src/tokens.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -53,6 +54,26 @@ describe('issueSignInToken', () => {
     testDb = createTestDatabase()
     expect(DEFAULT_TOKEN_TTL_MS).toBe(15 * 60 * 1000)
   })
+
+  // Finding 5 of the AUTH-1..4 rework: `ttlMs` had no upper bound, so a
+  // caller could issue a link good for a year — and a reviewer confirmed
+  // one actually redeemed. AUTH-1's "expire within minutes" must be
+  // structural, not merely what every caller today happens to ask for.
+  it('clamps a ttlMs far beyond the maximum down to MAX_TOKEN_TTL_MS', () => {
+    testDb = createTestDatabase()
+    const oneYearMs = 365 * 24 * 60 * 60 * 1000
+
+    const issued = issueSignInToken('student@example.edu', testDb.db, oneYearMs)
+
+    expect(issued.expiresAt).toBeLessThanOrEqual(Date.now() + MAX_TOKEN_TTL_MS)
+
+    // Not merely "the returned value looks capped" — the token issued this
+    // way must actually stop redeeming once the (real) ceiling has passed,
+    // not the requested year-long one.
+    const justPastTheCap = Date.now() + MAX_TOKEN_TTL_MS + 1000
+    const row = testDb.db.select().from(schema.signInTokens).get()
+    expect(row?.expiresAt).toBeLessThanOrEqual(justPastTheCap)
+  })
 })
 
 describe('consumeSignInToken (AUTH-1 replay)', () => {
@@ -86,21 +107,38 @@ describe('consumeSignInToken (AUTH-1 replay)', () => {
 
   // AUTH-1: "a token that never existed is refused identically to a wrong
   // one" — no oracle. Both a token nobody ever issued and a token that was
-  // already spent must be indistinguishable `undefined`.
-  it('refuses a token that never existed the same way it refuses a replayed one', () => {
+  // already spent must be indistinguishable `undefined` (finding 8 of the
+  // AUTH-1..4 rework: `expect(neverExisted).toBe(replayed)` on its own only
+  // ever compares two `undefined`s, which is trivially true regardless of
+  // what either call actually did — it cannot fail, so it was not testing
+  // anything `toBeUndefined()` above it did not already cover). What the
+  // no-oracle property actually needs is that the *replay attempt* leaves
+  // no observable trace of its own: the row's `used_at` — the only place a
+  // "was this already spent" fact is recorded — must be exactly what the
+  // first, legitimate consumption set it to, not bumped again by the
+  // replay, which would otherwise be a timing/state side-channel telling
+  // the two cases apart.
+  it('refuses a token that never existed the same way it refuses a replayed one, without a further side effect from the replay', () => {
     testDb = createTestDatabase()
     const { token: issuedToken } = issueSignInToken(
       'student@example.edu',
       testDb.db
     )
-    consumeSignInToken(issuedToken, testDb.db) // spend it
+    const firstConsumption = consumeSignInToken(issuedToken, testDb.db) // spend it
+    const usedAtAfterFirstConsumption = testDb.db
+      .select()
+      .from(schema.signInTokens)
+      .get()?.usedAt
 
     const neverExisted = consumeSignInToken('made-up-token-value', testDb.db)
     const replayed = consumeSignInToken(issuedToken, testDb.db)
 
+    expect(firstConsumption).toEqual({ email: 'student@example.edu' })
     expect(neverExisted).toBeUndefined()
     expect(replayed).toBeUndefined()
-    expect(neverExisted).toBe(replayed)
+    expect(testDb.db.select().from(schema.signInTokens).get()?.usedAt).toBe(
+      usedAtAfterFirstConsumption
+    )
   })
 
   // AUTH-1: "consumed in the same transaction that creates the session ...

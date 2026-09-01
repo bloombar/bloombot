@@ -9,9 +9,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { accounts, organizations, schema } from '@bloombot/db'
 
+import { RecordingEmailSender } from '../src/email.js'
 import type { GoogleIdentity } from '../src/link.js'
-import { redeemSignInLink, signInWithGoogle } from '../src/sign-in.js'
-import { issueSignInToken } from '../src/tokens.js'
+import {
+  redeemSignInLink,
+  requestSignInLink,
+  signInWithGoogle,
+} from '../src/sign-in.js'
+import { validateSession } from '../src/sessions.js'
+import { consumeSignInToken, issueSignInToken } from '../src/tokens.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -59,6 +65,53 @@ describe('redeemSignInLink (AUTH-1, TEN-1)', () => {
     expect(secondResult?.createdAccount).toBe(false)
     expect(secondResult?.account.id).toBe(firstResult?.account.id)
     expect(testDb.db.select().from(schema.accounts).all()).toHaveLength(1)
+  })
+
+  // Finding 2 of the AUTH-1..4 rework, belt-and-braces half: redeeming a
+  // link is proof of control of the address, so a returning sign-in must
+  // revoke whatever sessions the account already held — including one an
+  // attacker may hold on an account they reached before the real owner
+  // ever signed in (an unverified Google identity that used to be able to
+  // `create` an account for an address it did not control).
+  it('revokes the account other sessions when a returning sign-in redeems a link', () => {
+    testDb = createTestDatabase()
+    const first = issueSignInToken('returning@example.edu', testDb.db)
+    const firstResult = redeemSignInLink(first.token, testDb.db)
+    const oldToken = firstResult!.session.token
+
+    const second = issueSignInToken('returning@example.edu', testDb.db)
+    const secondResult = redeemSignInLink(second.token, testDb.db)
+
+    expect(secondResult?.createdAccount).toBe(false)
+    // The session from the earlier redemption no longer validates …
+    expect(validateSession(oldToken, testDb.db)).toBeUndefined()
+    // … but the new one from this redemption does.
+    expect(
+      validateSession(secondResult!.session.token, testDb.db)
+    ).toMatchObject({ accountId: secondResult?.account.id })
+  })
+
+  // Finding 3 of the AUTH-1..4 rework: a disabled account must refuse
+  // sign-in, not merely have its existing sessions stop working.
+  it('refuses to sign in a disabled account, but still consumes the token', () => {
+    testDb = createTestDatabase()
+    const { token: firstToken } = issueSignInToken(
+      'suspended@example.edu',
+      testDb.db
+    )
+    const firstResult = redeemSignInLink(firstToken, testDb.db)
+    accounts.disableAccount(firstResult!.account.id, testDb.db)
+
+    const { token: secondToken } = issueSignInToken(
+      'suspended@example.edu',
+      testDb.db
+    )
+    const result = redeemSignInLink(secondToken, testDb.db)
+
+    expect(result).toBeUndefined()
+    // The token was legitimately issued and redeemed — burned either way,
+    // not left replayable once the account might be re-enabled.
+    expect(consumeSignInToken(secondToken, testDb.db)).toBeUndefined()
   })
 
   it('returns undefined for an invalid token without creating anything', () => {
@@ -177,10 +230,10 @@ describe('signInWithGoogle (AUTH-2)', () => {
 
   // AUTH-2's own attack sentence, exercised end to end: an unverified email
   // that matches an existing account must never sign the caller into that
-  // account. Because `accounts.email` is unique, the "create a new account"
-  // side of the rule cannot literally reuse that email string — the
-  // documented, deliberate outcome here is a clean refusal, not a linked
-  // session and not a crash. See docs/DECISIONS.md.
+  // account. Refusing outright (finding 2 of the AUTH-1..4 rework) rather
+  // than falling back to creating a second account — the documented,
+  // deliberate outcome here is a clean refusal, not a linked session, not a
+  // second account, and not a crash. See docs/DECISIONS.md.
   it('refuses to sign in — and never links — when the email matches an existing account but is not verified', () => {
     testDb = createTestDatabase()
     const { token } = issueSignInToken('victim@example.edu', testDb.db)
@@ -202,5 +255,81 @@ describe('signInWithGoogle (AUTH-2)', () => {
     const sessionRows = testDb.db.select().from(schema.sessions).all()
     expect(sessionRows).toHaveLength(1)
     expect(sessionRows[0]?.accountId).toBe(victim?.account.id)
+  })
+
+  // Finding 2's own core case, the one no existing test covered: an
+  // unverified email matching *nobody yet* must not create an account
+  // either. Before the fix, this is the pre-registration takeover — an
+  // attacker asserting a victim's real address, before the victim has ever
+  // signed in themselves, walks away holding that account.
+  it('refuses to sign in — and never creates an account — for an unverified email that matches nobody yet', () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'not-yet-registered@example.edu',
+        emailVerified: false,
+      }),
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    expect(testDb.db.select().from(schema.accounts).all()).toHaveLength(0)
+    expect(testDb.db.select().from(schema.sessions).all()).toHaveLength(0)
+
+    // The real owner, signing in for the first time immediately afterward,
+    // must get a brand-new account — not one an attacker already holds.
+    const { token } = issueSignInToken(
+      'not-yet-registered@example.edu',
+      testDb.db
+    )
+    const legitimate = redeemSignInLink(token, testDb.db)
+    expect(legitimate?.createdAccount).toBe(true)
+  })
+
+  // Finding 3 of the AUTH-1..4 rework: a disabled account must refuse to
+  // link, even to a verified, matching Google identity.
+  it('refuses to sign in a disabled account, even with a verified matching identity', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('suspended@example.edu', testDb.db)
+    const victim = redeemSignInLink(token, testDb.db)
+    accounts.disableAccount(victim!.account.id, testDb.db)
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'suspended@example.edu' }),
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+  })
+})
+
+describe('requestSignInLink (AUTH-1)', () => {
+  // Finding 4 of the AUTH-1..4 rework: `email.ts`'s own comment says this
+  // package sends a sign-in link through the mail port — this is the
+  // function that actually does it.
+  it('issues a token and sends it through the mail port, never returning the plaintext itself', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+
+    const result = await requestSignInLink('student@example.edu', {
+      db: testDb.db,
+      emailSender,
+      buildLink: (token) => `https://app.bloombot.example/sign-in/${token}`,
+    })
+
+    expect(result).toBeUndefined()
+    expect(emailSender.sent).toHaveLength(1)
+    expect(emailSender.sent[0]?.to).toBe('student@example.edu')
+    expect(emailSender.sent[0]?.body).toContain(
+      'https://app.bloombot.example/sign-in/'
+    )
+
+    // The token in the email actually redeems — this is not a fabricated
+    // link, it is the one `issueSignInToken` wrote a hash of.
+    const sentLink = emailSender.sent[0]?.body ?? ''
+    const token = sentLink.split('/sign-in/')[1]?.trim()
+    expect(token).toBeDefined()
+    expect(redeemSignInLink(token!, testDb.db)).toBeDefined()
   })
 })

@@ -2519,7 +2519,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-14
   title: The whole stack runs locally from documentation alone
@@ -2534,5 +2534,5 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false

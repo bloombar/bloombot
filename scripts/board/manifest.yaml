@@ -1923,6 +1923,255 @@
   phase: 7
   status: Done
   review: false
+- id: JOB-1
+  title: Work that outlives a request runs as a job
+  full: Anything that cannot finish inside a request — provisioning a server's
+    channels, importing a roster, attaching a knowledge file, duplicating a term
+    — is queued as a job rather than held open on an HTTP connection. A job
+    carries the organization it belongs to, so a queue is never a way around the
+    scoping every other read and write obeys.
+  section: §26 Background Jobs & Admission
+  family: JOB
+  phase: 8
+  status: Backlog
+  review: false
+- id: JOB-2
+  title: A job that fails is retried, and a job that keeps failing is visible
+  full: A failure is retried with a backoff and a bounded number of attempts; a
+    job that exhausts them stops and stays visible with the reason it stopped,
+    rather than disappearing. Silent disappearance is what makes a queue
+    impossible to operate.
+  section: §26 Background Jobs & Admission
+  family: JOB
+  phase: 8
+  status: Backlog
+  review: false
+- id: JOB-3
+  title: A job runs once, even with a worker restart in the middle
+  full: Claiming a job is atomic, so two workers cannot run one twice, and a
+    worker that dies mid-job releases its claim rather than stranding it. Where
+    the work itself cannot be made idempotent, the job records enough to resume
+    rather than repeat.
+  section: §26 Background Jobs & Admission
+  family: JOB
+  phase: 8
+  status: Backlog
+  review: false
+- id: JOB-4
+  title: Admission bounds concurrent model calls
+  full: Thirty students asking at the start of a lecture must not become thirty
+    concurrent model calls. Requests wait for a slot rather than failing, up to
+    a bound, and a student who waits is told they are waiting rather than left
+    with silence. The bound is configuration, not a constant compiled into a
+    client.
+  section: §26 Background Jobs & Admission
+  family: JOB
+  phase: 8
+  status: Backlog
+  review: false
+- id: JOB-5
+  title: The worker is one process, and its health says whether it is working
+  full: The background worker is single-instance like every other process, reports
+    whether it can reach the database and the queue, and shuts down by finishing
+    or releasing what it holds rather than abandoning it.
+  section: §26 Background Jobs & Admission
+  family: JOB
+  phase: 8
+  status: Backlog
+  review: false
+- id: SRV-6
+  title: A course's Discord structure is created from its configuration
+  full: The categories and channels a course declares are created in its bound
+    server on request, with the permissions its roles imply. This is the
+    operation the Python hydrate_server script performs today, moved behind an
+    action so an instructor can run it from the panel rather than a terminal.
+  section: §27 Server Scaffolding on the Platform
+  family: SRV
+  phase: 8
+  status: Backlog
+  review: false
+- id: SRV-7
+  title: Scaffolding is idempotent and reports what it did
+  full: "Running it twice creates nothing twice: what exists is left alone, what
+    is missing is created, and the result names what changed. An instructor who
+    is unsure whether it ran can run it again safely, which is the only way a
+    provisioning tool is usable."
+  section: §27 Server Scaffolding on the Platform
+  family: SRV
+  phase: 8
+  status: Backlog
+  review: false
+- id: SRV-8
+  title: Scaffolding never deletes
+  full: Creating structure is not the same operation as removing it. A category or
+    channel the configuration no longer mentions is reported, never deleted — a
+    student's messages live in those channels, and DATA-4's transcript is not a
+    substitute for them.
+  section: §27 Server Scaffolding on the Platform
+  family: SRV
+  phase: 8
+  status: Backlog
+  review: false
+- id: ROST-9
+  title: A roster is imported as a file, into a job
+  full: An instructor uploads the roster the registrar gave them and the import
+    runs as a job (JOB-1), because a large roster outlives a request. The file
+    is parsed against a schema, and a row that does not parse is reported with
+    its line rather than skipped in silence.
+  section: §28 Roster Import on the Platform
+  family: ROST
+  phase: 9
+  status: Backlog
+  review: false
+- id: ROST-10
+  title: A roster row becomes a person, and matching is by handle
+  full: A row's Discord handle identifies the person it describes; the roster's
+    name and email are merged onto that person without overwriting anything a
+    surface already proved (PPL-4's rule, and the reason a roster is
+    corroboration rather than authority). A row whose handle matches nobody yet
+    is kept, so the person is recognized when they first appear.
+  section: §28 Roster Import on the Platform
+  family: ROST
+  phase: 9
+  status: Backlog
+  review: false
+- id: ROST-11
+  title: Per-student channels are created without exceeding Discord's limits
+  full: Private per-student channels are created in batches that respect Discord's
+    cap on channels per category, spilling into the next numbered category as
+    the current one fills — the behavior ROST-4 describes for the Python tool,
+    on the platform's own job runner.
+  section: §28 Roster Import on the Platform
+  family: ROST
+  phase: 9
+  status: Backlog
+  review: false
+- id: ROST-12
+  title: An import says what it could not do
+  full: "Handles that do not resolve, students already present, channels that
+    could not be created: each is reported at the end of the run, with enough
+    detail for an instructor to fix the roster and run it again. An import that
+    silently half-worked is worse than one that refused."
+  section: §28 Roster Import on the Platform
+  family: ROST
+  phase: 9
+  status: Backlog
+  review: false
+- id: FILE-1
+  title: A course's knowledge is files an instructor uploads
+  full: An instructor attaches the course's notes, syllabus and schedule to the
+    course in the panel. The platform stores the file, tracks which course it
+    belongs to, and makes it available to that course's answering — replacing a
+    vector store id typed in from a vendor dashboard.
+  section: §29 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
+- id: FILE-2
+  title: An attachment's lifecycle is visible
+  full: An attachment is pending, ready, or failed, and the panel says which.
+    Uploading a file that the provider then rejects must not leave a course
+    looking configured while its answers are ungrounded.
+  section: §29 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
+- id: FILE-3
+  title: Removing a file removes it from answering
+  full: Detaching a file stops it grounding answers, and the removal reaches the
+    provider rather than only the platform's own record. A course's material is
+    what the instructor last said it was.
+  section: §29 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
+- id: FILE-4
+  title: Instructions are versioned
+  full: A course's instructions are edited in the panel and each save is a
+    revision with an author and a time, so an instructor can see what the
+    assistant was told last week and restore it. This is D-3's
+    course_instruction_revisions, and it is what makes instructions safe to edit
+    on a live course.
+  section: §29 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
+- id: FILE-5
+  title: A file is scoped like every other record
+  full: An attachment belongs to an organization and is reachable only through it,
+    and the stored bytes are not addressable by anybody who guesses an id.
+    Course material is not public.
+  section: §29 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
+- id: COST-1
+  title: Every model call is recorded with what it cost
+  full: A call records the course, the person, the model, the token counts the
+    provider reported and the cost in integer micros. Money as a floating-point
+    number is how a ledger stops adding up.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
+- id: COST-2
+  title: A cost is attributed to whoever caused it
+  full: Every recorded call names the organization, the course and the person it
+    was made for, so an instructor sees what their course spent and an
+    administrator sees what a tenant spent. A call that cannot be attributed is
+    a defect, not a row with a null.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
+- id: COST-3
+  title: An organization has a spending cap, and the cap is enforced before the call
+  full: A cap is checked in the same place the daily allowance is (ACT-4's
+    metering step), before the model is asked, so exceeding it costs nothing. A
+    tenant at their cap is refused with a message that says so, not a generic
+    failure.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
+- id: COST-4
+  title: Usage is visible to the people it concerns
+  full: An instructor sees their courses' usage and the students approaching their
+    limits; a platform administrator sees usage per organization. Neither has to
+    read a log file or run a query to find out what is being spent.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
+- id: COST-5
+  title: The bot's own health is monitored, not inferred
+  full: Whether each process is running, connected and answering is observable —
+    the gateway connection, the queue depth, the model provider's error rate —
+    so a failure is noticed before a student reports it.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
+- id: COST-6
+  title: An estimate is never presented as a measurement
+  full: Where a provider does not report usage, the ledger records that the number
+    is an estimate rather than quietly storing a guess in the same column as a
+    fact.
+  section: §30 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 11
+  status: Backlog
+  review: false
 - id: LINK-1
   title: An unrecognized person is invited to connect, not answered
   full: The first message from an identity the platform cannot attribute to a
@@ -2027,5 +2276,160 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 12
+  status: Backlog
+  review: false
+- id: MCP-1
+  title: An assistant reaches the platform through the action layer
+  full: The MCP server exposes actions as tools and dispatches them through the
+    same pipeline the API uses. An assistant's call is an ordinary call by the
+    account that authorized it — same policies, same refusals, same audit — not
+    a parallel implementation.
+  section: §31 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
+- id: MCP-2
+  title: The tool surface is chosen, not derived
+  full: What an assistant may reach is an explicit list, not everything in the
+    catalog. A new action does not silently become an agent-callable tool;
+    adding one to the surface is a deliberate edit that a reviewer sees.
+  section: §31 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
+- id: MCP-3
+  title: An agent acts as an account, with that account's authority
+  full: A connection authenticates as an account and carries that account's
+    memberships and nothing more. There is no service identity that transcends
+    tenancy, because an assistant with more authority than the person who ran it
+    is a privilege escalation with a friendly interface.
+  section: §31 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
+- id: MCP-4
+  title: A destructive tool asks first
+  full: A tool that deletes, exports, or spends money is marked as such and
+    requires an explicit confirmation the assistant cannot supply on the
+    person's behalf.
+  section: §31 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
+- id: MCP-5
+  title: Agent usage is metered and attributed like any other
+  full: Calls made through MCP draw on the same allowances and the same cost
+    ledger, attributed to the account that authorized the connection. An
+    assistant is not a way around a cap.
+  section: §31 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
+- id: ADMIN-1
+  title: An instructor can read their course's transcripts
+  full: The conversations a course has had are readable in the panel, filtered by
+    student and by date, so an instructor can see what was asked and what was
+    answered. This is the record CONV-2 exists to keep, made usable.
+  section: §32 Admin Console, Transcripts & Export
+  family: ADMIN
+  phase: 14
+  status: Backlog
+  review: false
+- id: ADMIN-2
+  title: Reading a transcript is itself recorded
+  full: Who read whose conversation, and when, is written to an audit trail.
+    Transcripts are student speech, and access to them is the kind of thing an
+    institution has to be able to account for.
+  section: §32 Admin Console, Transcripts & Export
+  family: ADMIN
+  phase: 14
+  status: Backlog
+  review: false
+- id: ADMIN-3
+  title: Export produces a file, as a job
+  full: An instructor exports a course's transcripts and usage as a job (JOB-1),
+    and collects the file when it is ready. The export carries only that
+    organization's data, and the same audit entry as a read.
+  section: §32 Admin Console, Transcripts & Export
+  family: ADMIN
+  phase: 14
+  status: Backlog
+  review: false
+- id: ADMIN-4
+  title: A platform administrator sees tenants, not conversations
+  full: "The platform-administrator console shows organizations, their usage and
+    their health. It does not grant a route into a tenant's transcripts:
+    administering the platform is not the same as reading a student's questions,
+    and AUTH-4's allowlist is not a master key."
+  section: §32 Admin Console, Transcripts & Export
+  family: ADMIN
+  phase: 14
+  status: Backlog
+  review: false
+- id: ADMIN-5
+  title: Deleting a tenant's data is explicit, confirmed and audited
+  full: TEN-6 keeps data when a bot is removed; this is the separate, deliberate
+    operation that removes it. It names exactly what will be deleted, requires
+    confirmation, and is recorded.
+  section: §32 Admin Console, Transcripts & Export
+  family: ADMIN
+  phase: 14
+  status: Backlog
+  review: false
+- id: OPS-8
+  title: The platform deploys as the processes it actually is
+  full: The deployment runs the API, the bot, the worker and the static panel as
+    supervised processes, each restarted independently, with the migration
+    applied once before they start rather than by whichever process wins the
+    race.
+  section: §33 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
+- id: OPS-9
+  title: Cutover is rehearsed against a copy before it is real
+  full: "The legacy import runs against a copy of the production database, and the
+    platform answers alongside the Python bot in a test server, before anything
+    is switched. MIG-1's rule holds: the rehearsal never touches the live file."
+  section: §33 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
+- id: OPS-10
+  title: The old system is retired deliberately, and can be returned to
+  full: Cutover stops the Python bot and starts the platform's, in that order,
+    with a documented way back that does not depend on anything the cutover
+    deleted. The two systems share a database file during the migration (D-9),
+    which is what makes returning possible.
+  section: §33 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
+- id: OPS-11
+  title: Secrets are rotated at cutover
+  full: Every credential the Python system used is rotated when the platform takes
+    over, because a credential that has been in two systems' environments is a
+    credential with two chances of having leaked.
+  section: §33 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
+- id: OPS-12
+  title: A student-facing failure pages somebody
+  full: When the bot stops answering — gateway lost, provider failing, database
+    unreachable — an operator is notified rather than finding out from an
+    instructor. COST-5 makes it observable; this makes it noticed.
+  section: §33 Production Hardening & Cutover
+  family: OPS
+  phase: 15
   status: Backlog
   review: false

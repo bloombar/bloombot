@@ -100,19 +100,19 @@ repository.
 Background jobs, and the foreground admission layer that stops thirty students at the
 start of a lecture becoming thirty concurrent model calls.
 
-**In scope:**
+**In scope:** JOB-1..5, SRV-6..8
 
 ## Phase 9 — Roster import & student channels
 
-**In scope:**
+**In scope:** ROST-9..12
 
 ## Phase 10 — Knowledge files & instructions
 
-**In scope:**
+**In scope:** FILE-1..5
 
 ## Phase 11 — Cost ledger, usage caps & monitoring
 
-**In scope:**
+**In scope:** COST-1..6
 
 ## Phase 12 — Web student chat surface
 
@@ -124,12 +124,12 @@ Discord. That is why the identity rules land here rather than being invented per
 
 ## Phase 13 — MCP server & agent access
 
-**In scope:**
+**In scope:** MCP-1..5
 
 ## Phase 14 — Admin console, transcripts, audit & export
 
-**In scope:**
+**In scope:** ADMIN-1..5
 
 ## Phase 15 — Production hardening
 
-**In scope:**
+**In scope:** OPS-8..12

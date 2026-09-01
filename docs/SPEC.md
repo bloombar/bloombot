@@ -949,6 +949,246 @@ course and never resettable by switching surface. The day the counter belongs to
 on the row rather than derived when it is read, which is the defect BOT-11 fixed in the
 Python bot.
 
+### 26. Background Jobs & Admission
+
+#### JOB-1 Work that outlives a request runs as a job
+
+Anything that cannot finish inside a request — provisioning a server's channels, importing a
+roster, attaching a knowledge file, duplicating a term — is queued as a job rather than held
+open on an HTTP connection. A job carries the organization it belongs to, so a queue is never
+a way around the scoping every other read and write obeys.
+
+#### JOB-2 A job that fails is retried, and a job that keeps failing is visible
+
+A failure is retried with a backoff and a bounded number of attempts; a job that exhausts them
+stops and stays visible with the reason it stopped, rather than disappearing. Silent
+disappearance is what makes a queue impossible to operate.
+
+#### JOB-3 A job runs once, even with a worker restart in the middle
+
+Claiming a job is atomic, so two workers cannot run one twice, and a worker that dies mid-job
+releases its claim rather than stranding it. Where the work itself cannot be made idempotent,
+the job records enough to resume rather than repeat.
+
+#### JOB-4 Admission bounds concurrent model calls
+
+Thirty students asking at the start of a lecture must not become thirty concurrent model calls.
+Requests wait for a slot rather than failing, up to a bound, and a student who waits is told
+they are waiting rather than left with silence. The bound is configuration, not a constant
+compiled into a client.
+
+#### JOB-5 The worker is one process, and its health says whether it is working
+
+The background worker is single-instance like every other process, reports whether it can reach
+the database and the queue, and shuts down by finishing or releasing what it holds rather than
+abandoning it.
+
+### 27. Server Scaffolding on the Platform
+
+#### SRV-6 A course's Discord structure is created from its configuration
+
+The categories and channels a course declares are created in its bound server on request, with
+the permissions its roles imply. This is the operation the Python `hydrate_server` script
+performs today, moved behind an action so an instructor can run it from the panel rather than a
+terminal.
+
+#### SRV-7 Scaffolding is idempotent and reports what it did
+
+Running it twice creates nothing twice: what exists is left alone, what is missing is created,
+and the result names what changed. An instructor who is unsure whether it ran can run it again
+safely, which is the only way a provisioning tool is usable.
+
+#### SRV-8 Scaffolding never deletes
+
+Creating structure is not the same operation as removing it. A category or channel the
+configuration no longer mentions is reported, never deleted — a student's messages live in those
+channels, and DATA-4's transcript is not a substitute for them.
+
+### 28. Roster Import on the Platform
+
+#### ROST-9 A roster is imported as a file, into a job
+
+An instructor uploads the roster the registrar gave them and the import runs as a job (JOB-1),
+because a large roster outlives a request. The file is parsed against a schema, and a row that
+does not parse is reported with its line rather than skipped in silence.
+
+#### ROST-10 A roster row becomes a person, and matching is by handle
+
+A row's Discord handle identifies the person it describes; the roster's name and email are merged
+onto that person without overwriting anything a surface already proved (PPL-4's rule, and the
+reason a roster is corroboration rather than authority). A row whose handle matches nobody yet is
+kept, so the person is recognized when they first appear.
+
+#### ROST-11 Per-student channels are created without exceeding Discord's limits
+
+Private per-student channels are created in batches that respect Discord's cap on channels per
+category, spilling into the next numbered category as the current one fills — the behavior
+ROST-4 describes for the Python tool, on the platform's own job runner.
+
+#### ROST-12 An import says what it could not do
+
+Handles that do not resolve, students already present, channels that could not be created: each
+is reported at the end of the run, with enough detail for an instructor to fix the roster and run
+it again. An import that silently half-worked is worse than one that refused.
+
+### 29. Knowledge Files & Instructions
+
+#### FILE-1 A course's knowledge is files an instructor uploads
+
+An instructor attaches the course's notes, syllabus and schedule to the course in the panel. The
+platform stores the file, tracks which course it belongs to, and makes it available to that
+course's answering — replacing a vector store id typed in from a vendor dashboard.
+
+#### FILE-2 An attachment's lifecycle is visible
+
+An attachment is pending, ready, or failed, and the panel says which. Uploading a file that the
+provider then rejects must not leave a course looking configured while its answers are ungrounded.
+
+#### FILE-3 Removing a file removes it from answering
+
+Detaching a file stops it grounding answers, and the removal reaches the provider rather than only
+the platform's own record. A course's material is what the instructor last said it was.
+
+#### FILE-4 Instructions are versioned
+
+A course's instructions are edited in the panel and each save is a revision with an author and a
+time, so an instructor can see what the assistant was told last week and restore it. This is
+D-3's `course_instruction_revisions`, and it is what makes instructions safe to edit on a live
+course.
+
+#### FILE-5 A file is scoped like every other record
+
+An attachment belongs to an organization and is reachable only through it, and the stored bytes are
+not addressable by anybody who guesses an id. Course material is not public.
+
+### 30. Cost Ledger, Caps & Monitoring
+
+#### COST-1 Every model call is recorded with what it cost
+
+A call records the course, the person, the model, the token counts the provider reported and the
+cost in integer micros. Money as a floating-point number is how a ledger stops adding up.
+
+#### COST-2 A cost is attributed to whoever caused it
+
+Every recorded call names the organization, the course and the person it was made for, so an
+instructor sees what their course spent and an administrator sees what a tenant spent. A call that
+cannot be attributed is a defect, not a row with a null.
+
+#### COST-3 An organization has a spending cap, and the cap is enforced before the call
+
+A cap is checked in the same place the daily allowance is (ACT-4's metering step), before the model
+is asked, so exceeding it costs nothing. A tenant at their cap is refused with a message that says
+so, not a generic failure.
+
+#### COST-4 Usage is visible to the people it concerns
+
+An instructor sees their courses' usage and the students approaching their limits; a platform
+administrator sees usage per organization. Neither has to read a log file or run a query to find
+out what is being spent.
+
+#### COST-5 The bot's own health is monitored, not inferred
+
+Whether each process is running, connected and answering is observable — the gateway connection,
+the queue depth, the model provider's error rate — so a failure is noticed before a student
+reports it.
+
+#### COST-6 An estimate is never presented as a measurement
+
+Where a provider does not report usage, the ledger records that the number is an estimate rather
+than quietly storing a guess in the same column as a fact.
+
+### 31. MCP Server & Agent Access
+
+#### MCP-1 An assistant reaches the platform through the action layer
+
+The MCP server exposes actions as tools and dispatches them through the same pipeline the API
+uses. An assistant's call is an ordinary call by the account that authorized it — same policies,
+same refusals, same audit — not a parallel implementation.
+
+#### MCP-2 The tool surface is chosen, not derived
+
+What an assistant may reach is an explicit list, not everything in the catalog. A new action does
+not silently become an agent-callable tool; adding one to the surface is a deliberate edit that a
+reviewer sees.
+
+#### MCP-3 An agent acts as an account, with that account's authority
+
+A connection authenticates as an account and carries that account's memberships and nothing more.
+There is no service identity that transcends tenancy, because an assistant with more authority than
+the person who ran it is a privilege escalation with a friendly interface.
+
+#### MCP-4 A destructive tool asks first
+
+A tool that deletes, exports, or spends money is marked as such and requires an explicit
+confirmation the assistant cannot supply on the person's behalf.
+
+#### MCP-5 Agent usage is metered and attributed like any other
+
+Calls made through MCP draw on the same allowances and the same cost ledger, attributed to the
+account that authorized the connection. An assistant is not a way around a cap.
+
+### 32. Admin Console, Transcripts & Export
+
+#### ADMIN-1 An instructor can read their course's transcripts
+
+The conversations a course has had are readable in the panel, filtered by student and by date, so
+an instructor can see what was asked and what was answered. This is the record CONV-2 exists to
+keep, made usable.
+
+#### ADMIN-2 Reading a transcript is itself recorded
+
+Who read whose conversation, and when, is written to an audit trail. Transcripts are student
+speech, and access to them is the kind of thing an institution has to be able to account for.
+
+#### ADMIN-3 Export produces a file, as a job
+
+An instructor exports a course's transcripts and usage as a job (JOB-1), and collects the file
+when it is ready. The export carries only that organization's data, and the same audit entry as a
+read.
+
+#### ADMIN-4 A platform administrator sees tenants, not conversations
+
+The platform-administrator console shows organizations, their usage and their health. It does not
+grant a route into a tenant's transcripts: administering the platform is not the same as reading
+a student's questions, and AUTH-4's allowlist is not a master key.
+
+#### ADMIN-5 Deleting a tenant's data is explicit, confirmed and audited
+
+TEN-6 keeps data when a bot is removed; this is the separate, deliberate operation that removes
+it. It names exactly what will be deleted, requires confirmation, and is recorded.
+
+### 33. Production Hardening & Cutover
+
+#### OPS-8 The platform deploys as the processes it actually is
+
+The deployment runs the API, the bot, the worker and the static panel as supervised processes,
+each restarted independently, with the migration applied once before they start rather than by
+whichever process wins the race.
+
+#### OPS-9 Cutover is rehearsed against a copy before it is real
+
+The legacy import runs against a copy of the production database, and the platform answers
+alongside the Python bot in a test server, before anything is switched. MIG-1's rule holds:
+the rehearsal never touches the live file.
+
+#### OPS-10 The old system is retired deliberately, and can be returned to
+
+Cutover stops the Python bot and starts the platform's, in that order, with a documented way back
+that does not depend on anything the cutover deleted. The two systems share a database file
+during the migration (D-9), which is what makes returning possible.
+
+#### OPS-11 Secrets are rotated at cutover
+
+Every credential the Python system used is rotated when the platform takes over, because a
+credential that has been in two systems' environments is a credential with two chances of having
+leaked.
+
+#### OPS-12 A student-facing failure pages somebody
+
+When the bot stops answering — gateway lost, provider failing, database unreachable — an operator
+is notified rather than finding out from an instructor. COST-5 makes it observable; this makes it
+noticed.
+
 ### 25. Account Linking Across Surfaces
 
 #### LINK-1 An unrecognized person is invited to connect, not answered

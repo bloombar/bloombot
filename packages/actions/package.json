@@ -1,0 +1,26 @@
+{
+  "name": "@bloombot/actions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The action layer: every write the platform can perform, dispatched through one validate/authorize/meter/execute pipeline (ACT-1..6).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@bloombot/db": "*",
+    "zod": "^4.5.4"
+  }
+}

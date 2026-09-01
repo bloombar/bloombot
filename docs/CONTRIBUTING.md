@@ -21,7 +21,9 @@ hand-written — so the file's structure is load-bearing:
 > lands on the board pre-closed and the work is lost. Every new id must appear on an `**In scope:**` line in
 > the same pull request that adds it.
 
-See `docs/PROJECT_BOARD.md` for the board tooling itself.
+See `docs/PROJECT_BOARD.md` for the board tooling itself, and `docs/ARCHITECTURE.md` for how the code is
+arranged — the package boundaries it describes are enforced by lint rules and tests, so a change that
+crosses one fails the build rather than the review.
 
 ## Branches
 

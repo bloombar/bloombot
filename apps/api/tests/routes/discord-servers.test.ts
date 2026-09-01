@@ -7,7 +7,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
-import { discordServers, schema } from '@bloombot/db'
+import { discordServers, memberships, schema } from '@bloombot/db'
+import { DiscordRequestError } from '@bloombot/discord-rest'
 
 import { buildTestApp, TEST_PUBLIC_APP_URL } from '../helpers/build-test-app.js'
 import {
@@ -15,7 +16,11 @@ import {
   FAKE_DISCORD_ACCESS_TOKEN,
 } from '../helpers/fake-discord-rest-client.js'
 import { createFakeLogger } from '../helpers/fake-logger.js'
-import { seedSignedInCaller } from '../helpers/seed.js'
+import {
+  seedOtherOrganization,
+  seedSecondCallerInOrganization,
+  seedSignedInCaller,
+} from '../helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -248,6 +253,116 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
     )
   })
 
+  // Findings 4 and 7 of the TEN-4..6 rework: an expired or already-redeemed
+  // authorization code answers with an upstream 4xx (`invalid_grant`, most
+  // commonly) — `exchangeError` (`fake-discord-rest-client.ts`) is what
+  // exercises that path; it existed already but nothing used it (finding
+  // 7). Before the fix, this fell through to `middleware/errors.ts`'s
+  // unexpected-failure branch: a `500` and an `error`-level log line any
+  // authenticated member could grow without bound just by resubmitting a
+  // code that already failed.
+  describe('an upstream 4xx from the token exchange itself', () => {
+    it('is refused the same way every other rejection in this flow is (404), not a 500', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInCaller(testDb.db)
+      const fakeDiscord = createFakeDiscordRestClient({
+        exchangeError: new DiscordRequestError(400, {
+          error: 'invalid_grant',
+        }),
+      })
+      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const { state } = await beginInstall(
+        app,
+        caller.organizationId,
+        caller.cookieHeader
+      )
+
+      const response = await request(app)
+        .post(
+          `/organizations/${caller.organizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', caller.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ code: 'an-expired-code', state, guildId: 'guild-1' })
+
+      expect(response.status).toBe(404)
+      expect(response.body).toEqual({ error: 'action_refused' })
+      expect(
+        discordServers.resolveDiscordServerBinding('guild-1', testDb.db)
+      ).toBeUndefined()
+    })
+
+    it('is logged at warn, not error — the class of thing an authenticated caller can trigger just by retrying, not an unexpected failure', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInCaller(testDb.db)
+      const fakeDiscord = createFakeDiscordRestClient({
+        exchangeError: new DiscordRequestError(400, {
+          error: 'invalid_grant',
+          // Discord's own token-exchange error body can echo the
+          // authorization code back — this must not reach the log either.
+          error_description: 'the-secret-authorization-code',
+        }),
+      })
+      const logger = createFakeLogger()
+      const app = buildTestApp(testDb.db, {
+        discordRestClient: fakeDiscord,
+        logger,
+      })
+      const { state } = await beginInstall(
+        app,
+        caller.organizationId,
+        caller.cookieHeader
+      )
+
+      const response = await request(app)
+        .post(
+          `/organizations/${caller.organizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', caller.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({
+          code: 'the-secret-authorization-code',
+          state,
+          guildId: 'guild-1',
+        })
+      expect(response.status).toBe(404)
+
+      expect(logger.errorCalls).toHaveLength(0)
+      expect(logger.warnCalls).toHaveLength(1)
+      expect(JSON.stringify(logger.warnCalls[0])).not.toContain(
+        'the-secret-authorization-code'
+      )
+    })
+
+    it('a genuine Discord REST failure elsewhere in the flow (not the token exchange) still reaches errorMiddleware as a 500 — this carve-out is for the exchange only', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInCaller(testDb.db)
+      const fakeDiscord = createFakeDiscordRestClient({
+        userGuilds: [ADMIN_GUILD],
+        botGuilds: [BOT_MEMBER_GUILD],
+      })
+      // A non-2xx from the *guild list* read, not the token exchange.
+      fakeDiscord.getUserGuilds = () =>
+        Promise.reject(new DiscordRequestError(503, { error: 'unavailable' }))
+      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      const { state } = await beginInstall(
+        app,
+        caller.organizationId,
+        caller.cookieHeader
+      )
+
+      const response = await request(app)
+        .post(
+          `/organizations/${caller.organizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', caller.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ code: 'the-code', state, guildId: 'guild-1' })
+
+      expect(response.status).toBe(500)
+    })
+  })
+
   describe('state and PKCE', () => {
     it('refuses a callback with an unknown state', async () => {
       testDb = createTestDatabase()
@@ -324,6 +439,114 @@ describe('POST /organizations/:organizationId/discord-servers/install/callback',
         .send({ code: 'the-code', state, guildId: 'guild-1' })
 
       expect(response.status).toBe(404)
+    })
+
+    // Finding 1 of the TEN-4..6 rework: `state` is a URL query parameter,
+    // so it leaks the way any of them can — browser history on a shared
+    // machine, a support screenshot, a proxy log — and this file's own
+    // callback used to check only that the state resolved to the *right
+    // organization*, never the right *account*. Two members of the same
+    // organization must not be interchangeable just because a membership
+    // check alone passes for either of them.
+    it('refuses a callback posted by a different account than the one that began the install, even though both are members of the same organization', async () => {
+      testDb = createTestDatabase()
+      const owner = seedSignedInCaller(testDb.db)
+      const assistant = seedSecondCallerInOrganization(
+        testDb.db,
+        owner.organizationId
+      )
+      const fakeDiscord = createFakeDiscordRestClient({
+        userGuilds: [ADMIN_GUILD],
+        botGuilds: [BOT_MEMBER_GUILD],
+      })
+      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      // The owner begins the install — this is the state that would leak.
+      const { state } = await beginInstall(
+        app,
+        owner.organizationId,
+        owner.cookieHeader
+      )
+
+      // The assistant — a real member of the same organization, with their
+      // own session and their own guild list — posts the owner's state back.
+      const response = await request(app)
+        .post(
+          `/organizations/${owner.organizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', assistant.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ code: 'the-code', state, guildId: 'guild-1' })
+
+      expect(response.status).toBe(404)
+      expect(
+        discordServers.resolveDiscordServerBinding('guild-1', testDb.db)
+      ).toBeUndefined()
+
+      // The owner's own attempt is spent too — it was single-use, and the
+      // assistant's replay consumed it, exactly as any other invalid
+      // caller's replay would (TEN-4's own single-use guarantee).
+      const ownersOwnRetry = await request(app)
+        .post(
+          `/organizations/${owner.organizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', owner.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ code: 'the-code', state, guildId: 'guild-1' })
+      expect(ownersOwnRetry.status).toBe(404)
+    })
+
+    // The organization half of the same check, which — unlike the account
+    // half above — already existed in code before this rework, but had no
+    // test of its own reachable for an account that actually belongs to
+    // both organizations (the case where a membership check alone would
+    // let the request past `routes/discord-servers.ts`'s own membership
+    // guard for either organization).
+    it('refuses a callback whose state resolves to a different organization than the URL names, even for an account that is a member of both', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInCaller(testDb.db, {
+        organizationName: 'Home Org',
+      })
+      const otherOrganizationId = seedOtherOrganization(testDb.db)
+      // The same account joins the second organization too.
+      memberships.createMembership(
+        otherOrganizationId,
+        caller.accountId,
+        'assistant',
+        testDb.db
+      )
+      // A fake that would let the install succeed (`ADMIN_GUILD`/
+      // `BOT_MEMBER_GUILD`, the same as the success-path tests above) — so
+      // that a bypassed organization check would actually show up as a
+      // `200`, not an accidental `404` from an empty default guild list
+      // masking the very thing this test means to prove.
+      const fakeDiscord = createFakeDiscordRestClient({
+        userGuilds: [ADMIN_GUILD],
+        botGuilds: [BOT_MEMBER_GUILD],
+      })
+      const app = buildTestApp(testDb.db, { discordRestClient: fakeDiscord })
+      // Begun against the caller's home organization — the state is scoped
+      // to it.
+      const { state } = await beginInstall(
+        app,
+        caller.organizationId,
+        caller.cookieHeader
+      )
+
+      // Posted against the *other* organization's own URL, with the same,
+      // valid session — the membership check for `otherOrganizationId`
+      // passes, so only the state's own organization check can refuse this.
+      const response = await request(app)
+        .post(
+          `/organizations/${otherOrganizationId}/discord-servers/install/callback`
+        )
+        .set('Cookie', caller.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ code: 'the-code', state, guildId: 'guild-1' })
+
+      expect(response.status).toBe(404)
+      expect(
+        discordServers.resolveDiscordServerBinding('guild-1', testDb.db)
+      ).toBeUndefined()
     })
 
     it('sends the token exchange exactly the verifier that was stored for this state', async () => {

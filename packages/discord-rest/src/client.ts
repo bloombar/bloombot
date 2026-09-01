@@ -39,7 +39,23 @@ export class DiscordRequestError extends Error {
     // it can read `.body`, but a log line built from `.message` alone must
     // never end up carrying whatever Discord echoed back, which on a token
     // exchange failure can include the authorization code itself.
-    this.body = body
+    //
+    // Finding 5 of the TEN-4..6 rework: keeping `body` out of `message`
+    // was not enough — pino's default `err` serializer
+    // (`errorMiddleware`'s `logger.error({ err: error }, ...)`) copies an
+    // error's own *enumerable* properties, `body` included, straight into
+    // the log line regardless of what `message` says. `Object.defineProperty`
+    // with `enumerable: false` is what actually keeps it out: `error.body`
+    // still reads normally for the one caller that is supposed to see it
+    // (`routes/discord-servers.ts`'s own token-exchange `catch`), but
+    // `JSON.stringify`, `pino.stdSerializers.err`, and anything else that
+    // walks an object's own enumerable keys skips it.
+    Object.defineProperty(this, 'body', {
+      value: body,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
   }
 }
 
@@ -80,6 +96,24 @@ export interface CreateDiscordRestClientOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000
+
+// Finding 3 of the TEN-4..6 rework: Discord's own `/users/@me/guilds`
+// endpoint (whether read with a `Bearer` or a `Bot` token) returns one page
+// at a time — up to `limit` entries, `200` being both Discord's own default
+// and its own maximum — sorted ascending by id, paged forward with an
+// `after=<last id seen>` cursor. Reading only the first page meant an
+// install into any guild past the 200th the caller (or the bot) belongs to
+// was refused exactly the way "you do not administer this server" is
+// refused — silently, and permanently, since nothing about that guild ever
+// changes to make a retry succeed.
+const GUILD_LIST_PAGE_LIMIT = 200
+// A page bound, not a guild-count bound: this is "how many round trips
+// `getGuilds` will make before giving up and returning what it has",
+// generous enough that no real account or bot approaches it (50 pages *
+// 200 = 10,000 guilds) while still keeping a misbehaving upstream — one
+// that, say, never stops returning full pages — from turning a single call
+// into an unbounded loop.
+const GUILD_LIST_MAX_PAGES = 50
 
 function stripTrailingSlashes(url: string): string {
   return url.replace(/\/+$/, '')
@@ -133,17 +167,39 @@ export function createDiscordRestClient(
   const fetchFn = options.fetchFn ?? fetch
   const requestOptions: RequestOptions = { fetchFn, timeoutMs }
 
+  /**
+   * Read every page of `/users/@me/guilds` (finding 3 of the TEN-4..6
+   * rework) — the module comment above `GUILD_LIST_PAGE_LIMIT` explains
+   * why a single page is not enough. Stops the moment a page comes back
+   * shorter than the limit (Discord's own signal that it was the last one)
+   * rather than always making `GUILD_LIST_MAX_PAGES` requests.
+   */
   async function getGuilds(
     authorization: string
   ): Promise<DiscordGuildSummary[]> {
-    const response = await getJson(
-      `${apiBase}/users/@me/guilds`,
-      authorization,
-      requestOptions
-    )
-    if (!response.ok)
-      throw new DiscordRequestError(response.status, response.body)
-    return parseGuildList(response.body)
+    const guilds: DiscordGuildSummary[] = []
+    let after: string | undefined
+    for (let page = 0; page < GUILD_LIST_MAX_PAGES; page++) {
+      const query = new URLSearchParams({
+        limit: String(GUILD_LIST_PAGE_LIMIT),
+      })
+      if (after) query.set('after', after)
+      const response = await getJson(
+        `${apiBase}/users/@me/guilds?${query.toString()}`,
+        authorization,
+        requestOptions
+      )
+      if (!response.ok)
+        throw new DiscordRequestError(response.status, response.body)
+      const pageGuilds = parseGuildList(response.body)
+      guilds.push(...pageGuilds)
+      if (pageGuilds.length < GUILD_LIST_PAGE_LIMIT) break
+      after = pageGuilds[pageGuilds.length - 1]?.id
+      // No `id` to page from — nothing left to ask for, however this page
+      // came to be exactly `GUILD_LIST_PAGE_LIMIT` long.
+      if (!after) break
+    }
+    return guilds
   }
 
   return {

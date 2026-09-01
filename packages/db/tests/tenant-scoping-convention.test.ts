@@ -44,10 +44,19 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    `consumeInstallState` are keyed on that state's hash instead;
 //    `organizationId` lives *in* the row (what the callback claims the
 //    eventual binding for), it is just not how the row is found.
+//    `deleteExpiredInstallStates` (cheap-fix 8 of the TEN-4..6 rework) is
+//    one level up again: it sweeps every organization's already-expired
+//    rows on every `beginDiscordInstall` call, deliberately not scoped to
+//    the one organization that call is for — an abandoned attempt from a
+//    different organization is just as much a dead row worth clearing.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
-  'discord-install-states.ts': ['createInstallState', 'consumeInstallState'],
+  'discord-install-states.ts': [
+    'createInstallState',
+    'consumeInstallState',
+    'deleteExpiredInstallStates',
+  ],
   'memberships.ts': ['listMembershipsForAccount'],
   'sign-in-tokens.ts': [
     'createSignInToken',

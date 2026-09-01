@@ -66,9 +66,17 @@ export function beginDiscordInstall(
   db: Database,
   ttlMs: number = DEFAULT_INSTALL_STATE_TTL_MS
 ): BeginDiscordInstall {
+  const now = Date.now()
+  // Cheap-fix 8 of the TEN-4..6 rework: sweep every already-expired row
+  // before adding one more — see `deleteExpiredInstallStates`'s own doc
+  // comment (`@bloombot/db`) for why a sweep-on-write, not a "one live
+  // attempt" refusal, is the guard this function takes against an
+  // unbounded number of dead rows.
+  discordInstallStates.deleteExpiredInstallStates(now, db)
+
   const state = generateSecret()
   const codeVerifier = generateSecret()
-  const expiresAt = Date.now() + ttlMs
+  const expiresAt = now + ttlMs
   discordInstallStates.createInstallState(
     {
       organizationId,

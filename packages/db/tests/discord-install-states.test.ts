@@ -8,6 +8,7 @@ import {
   discordInstallStates,
   openDatabase,
   organizations,
+  schema,
 } from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -117,6 +118,83 @@ describe('discord-install-states repo (TEN-4)', () => {
     expect(
       discordInstallStates.consumeInstallState('hash-1', now, testDb.db)
     ).toBeUndefined()
+  })
+
+  // Cheap-fix 8 of the TEN-4..6 rework.
+  describe('deleteExpiredInstallStates', () => {
+    it('deletes only rows whose expiry has passed, leaving unexpired ones untouched', () => {
+      testDb = createTestDatabase()
+      const { organizationId, accountId } = seedOrgAndAccount(testDb)
+      const now = Date.now()
+      discordInstallStates.createInstallState(
+        {
+          organizationId,
+          accountId,
+          stateHash: 'expired-hash',
+          codeVerifier: 'verifier-1',
+          expiresAt: now - 1,
+        },
+        testDb.db
+      )
+      discordInstallStates.createInstallState(
+        {
+          organizationId,
+          accountId,
+          stateHash: 'live-hash',
+          codeVerifier: 'verifier-2',
+          expiresAt: now + 60_000,
+        },
+        testDb.db
+      )
+
+      const deleted = discordInstallStates.deleteExpiredInstallStates(
+        now,
+        testDb.db
+      )
+
+      expect(deleted).toBe(1)
+      expect(
+        discordInstallStates.consumeInstallState('expired-hash', now, testDb.db)
+      ).toBeUndefined()
+      // Still there, and still redeemable — a live row is not touched by
+      // the sweep, only an expired one.
+      expect(
+        discordInstallStates.consumeInstallState('live-hash', now, testDb.db)
+      ).toMatchObject({ organizationId, accountId })
+    })
+
+    it('deletes an already-used but expired row too, not only an unused one', () => {
+      testDb = createTestDatabase()
+      const { organizationId, accountId } = seedOrgAndAccount(testDb)
+      const now = Date.now()
+      discordInstallStates.createInstallState(
+        {
+          organizationId,
+          accountId,
+          stateHash: 'used-hash',
+          codeVerifier: 'verifier-1',
+          expiresAt: now + 60_000,
+        },
+        testDb.db
+      )
+      discordInstallStates.consumeInstallState('used-hash', now, testDb.db)
+      // Back-date its expiry directly, the same device
+      // `routes/discord-servers.test.ts`'s own expiry test uses.
+      testDb.db
+        .update(schema.discordInstallStates)
+        .set({ expiresAt: now - 1 })
+        .run()
+
+      const deleted = discordInstallStates.deleteExpiredInstallStates(
+        now,
+        testDb.db
+      )
+
+      expect(deleted).toBe(1)
+      expect(
+        testDb.db.select().from(schema.discordInstallStates).all()
+      ).toEqual([])
+    })
   })
 
   // The same single-conditional-`UPDATE` race proof `sign-in-tokens.test.ts`

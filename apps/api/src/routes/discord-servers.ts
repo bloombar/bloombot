@@ -35,11 +35,15 @@ import { memberships, discordServers, type Database } from '@bloombot/db'
 import {
   administersGuild,
   buildDiscordAuthorizationUrl,
+  DiscordRequestError,
   type DiscordRestClient,
 } from '@bloombot/discord-rest'
+import type { Logger } from '@bloombot/logger'
 
 export interface DiscordServersRouterDependencies {
   db: Database
+  /** Finding 4 of the TEN-4..6 rework — where an upstream 4xx from the token exchange is logged, at `warn` rather than `error` (`middleware/errors.ts`'s own unexpected-failure branch is what `error` is reserved for). */
+  logger: Logger
   /** The real client in production, a loopback fake in a test — `@bloombot/discord-rest`'s port. */
   discordRestClient: DiscordRestClient
   /** Discord's "client id"/"application id" — `BOT_APP_ID` in env.example. */
@@ -167,7 +171,14 @@ export function buildDiscordServersRouter(
       }
       const { code, state, guildId } = parsed.data
 
-      completeInstall({ organizationId, code, state, guildId, deps })
+      completeInstall({
+        organizationId,
+        callerAccountId: req.session.accountId,
+        code,
+        state,
+        guildId,
+        deps,
+      })
         .then((serverId) => res.status(200).json({ serverId }))
         .catch(next)
     }
@@ -182,34 +193,84 @@ export function buildDiscordServersRouter(
  * top to bottom rather than nested inside the handler's own callback chain.
  *
  * Every refusal below — an unknown/replayed/expired state, a state that
- * belongs to a different organization than the URL names, a guild the
- * caller does not administer, a guild the bot is not actually a member of,
- * or a server already actively bound elsewhere (TEN-3) — throws the same
+ * belongs to a different organization or a different account than the one
+ * completing it, an upstream refusal of the code itself, a guild the caller
+ * does not administer, a guild the bot is not actually a member of, or a
+ * server already actively bound elsewhere (TEN-3) — throws the same
  * `ActionRefusedError` (TEN-5: indistinguishable, and TEN-4's own "tells the
  * caller nothing about who holds it"). A genuine Discord REST failure (a
- * network error, an unexpected non-2xx) is not caught here — it propagates
- * to the route's own `.catch(next)`, `middleware/errors.ts`'s unexpected-
- * failure branch, and a `500` with no detail in the response.
+ * network error, an unexpected non-2xx from a call other than the token
+ * exchange) is not caught here — it propagates to the route's own
+ * `.catch(next)`, `middleware/errors.ts`'s unexpected-failure branch, and a
+ * `500` with no detail in the response.
  */
 async function completeInstall(input: {
   organizationId: string
+  /** The session that is posting this callback — must be the same account `beginDiscordInstall` issued the state to (finding 1 of the TEN-4..6 rework). */
+  callerAccountId: string
   code: string
   state: string
   guildId: string
   deps: DiscordServersRouterDependencies
 }): Promise<string> {
-  const { organizationId, code, state, guildId, deps } = input
+  const { organizationId, callerAccountId, code, state, guildId, deps } = input
 
   const consumed = consumeDiscordInstallState(state, deps.db)
-  if (!consumed || consumed.organizationId !== organizationId) {
+  // Finding 1 of the TEN-4..6 rework: `consumed.accountId` was checked
+  // nowhere — a state is scoped to the account that began it as much as to
+  // the organization (the row is indexed on both), but only the
+  // organization half was ever compared. Without this, `state` leaking as
+  // it does — a URL query parameter, so it lands in browser history, a
+  // support screenshot, a proxy log — lets any other member of the same
+  // organization complete an install *as* the account that began it: the
+  // installer recorded at line ~250 below is `consumed.accountId`, not
+  // whoever is actually posting this request, so the wrong account's name
+  // would end up on the binding while the account that did the work goes
+  // unrecorded.
+  if (
+    !consumed ||
+    consumed.organizationId !== organizationId ||
+    consumed.accountId !== callerAccountId
+  ) {
     throw new ActionRefusedError()
   }
 
-  const token = await deps.discordRestClient.exchangeAuthorizationCode({
-    code,
-    redirectUri: deps.discordRedirectUri,
-    codeVerifier: consumed.codeVerifier,
-  })
+  let token
+  try {
+    token = await deps.discordRestClient.exchangeAuthorizationCode({
+      code,
+      redirectUri: deps.discordRedirectUri,
+      codeVerifier: consumed.codeVerifier,
+    })
+  } catch (error) {
+    // Finding 4 of the TEN-4..6 rework: an expired or already-redeemed
+    // authorization code (Discord's `invalid_grant`, most commonly) is a
+    // client-shaped 4xx from the token endpoint, not a genuine Discord REST
+    // failure the way a 5xx or a network error is — and every account with
+    // a membership can trigger it just by resubmitting a code that already
+    // failed. Refused the same way every other rejection in this flow is
+    // (TEN-5's own indistinguishable shape) rather than falling through to
+    // `middleware/errors.ts`'s unexpected-failure branch, which would 500
+    // the caller and write an error-level log line — unbounded, since
+    // nothing here throttles a signed-in caller retrying the same request.
+    // Logged at `warn`, not `error` (this is an expected, caller-caused
+    // outcome), and without `error.body` — `@bloombot/discord-rest`'s own
+    // `DiscordRequestError` keeps it out of `.message` for exactly this
+    // reason: on a token-exchange failure it can carry the authorization
+    // code itself.
+    if (
+      error instanceof DiscordRequestError &&
+      error.status >= 400 &&
+      error.status < 500
+    ) {
+      deps.logger.warn(
+        { organizationId, status: error.status },
+        'apps/api: Discord token exchange refused — an expired, replayed, or otherwise invalid authorization code'
+      )
+      throw new ActionRefusedError()
+    }
+    throw error
+  }
 
   // TEN-4: "verify the installing account actually administers the server
   // ... read from Discord, not from the request" — the user's own guild

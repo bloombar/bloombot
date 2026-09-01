@@ -11,7 +11,7 @@
  * `tests/tenant-scoping-convention.test.ts` accordingly.
  */
 
-import { and, eq, gt, isNull } from 'drizzle-orm'
+import { and, eq, gt, isNull, lt } from 'drizzle-orm'
 
 import type { Executor } from '../client.js'
 import { discordInstallStates } from '../schema.js'
@@ -85,4 +85,34 @@ export function consumeInstallState(
     )
     .returning()
     .get()
+}
+
+/**
+ * Delete every install-state row whose `expiresAt` has already passed
+ * (cheap-fix 8 of the TEN-4..6 rework) — called by
+ * `@bloombot/auth#beginDiscordInstall` right before it inserts a new row,
+ * so an account that begins (and abandons) installs over time does not
+ * leave an unbounded number of dead rows behind. Not a "one live attempt at
+ * a time" guard the way `sign-in-tokens.ts#hasActiveSignInToken` is for
+ * AUTH-1: that guard exists because `/auth/request-link` is unauthenticated
+ * and unthrottled, so a single address left unguarded is an unbounded
+ * mail-send. `/install/begin` is neither — a caller is already signed in
+ * and a member of the organization it is installing into — so a second,
+ * legitimate concurrent attempt (a second tab, a retried click after an
+ * abandoned first one) is not the failure mode worth refusing here; only
+ * the row growth from every one of them living forever is, and a sweep on
+ * write closes that without restricting a legitimate retry the way
+ * refusing a second live attempt would.
+ *
+ * Deletes a used-but-expired row too, not only an unused one — once
+ * `expiresAt` has passed, `consumeInstallState` above will never match the
+ * row again either way, so there is nothing left for it to do but occupy
+ * space.
+ */
+export function deleteExpiredInstallStates(now: number, db: Executor): number {
+  const result = db
+    .delete(discordInstallStates)
+    .where(lt(discordInstallStates.expiresAt, now))
+    .run()
+  return result.changes
 }

@@ -54,7 +54,12 @@ export default defineConfig({
     // or `packages/auth`'s own, already held to this floor there; what
     // lives in `apps/api` itself is wiring an Express app around those two
     // packages, tested thoroughly in `apps/api/tests` but not gated by a
-    // percentage a thin translation layer would only game.
+    // percentage a thin translation layer would only game. `packages/discord-rest`
+    // joins the floor too (cheap-fix 6 of the TEN-4..6 rework): it is the
+    // vendor adapter behind the Discord install flow — `packages/openai`'s
+    // own reasoning above applies unchanged, and it is the one adapter in
+    // this list that handles both the OAuth client secret and a user's own
+    // access token, not a lesser case for the floor than `packages/openai`.
     coverage: {
       provider: 'v8',
       include: [
@@ -64,6 +69,7 @@ export default defineConfig({
         'packages/discord/src/**/*.ts',
         'packages/actions/src/**/*.ts',
         'packages/auth/src/**/*.ts',
+        'packages/discord-rest/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,

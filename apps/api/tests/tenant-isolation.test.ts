@@ -11,10 +11,25 @@
  * "found the routes this test is written against" guard immediately below
  * fails the moment that changes the route count, forcing a deliberate
  * decision to widen the list rather than silently leaving a new route
- * unchecked. `BESPOKE_ROUTES` is the two routes TEN-4 adds that are not
- * actions at all (`routes/discord-servers.ts`'s own module comment explains
- * why) and so cannot be derived the same way — added by hand, the same way
- * `BESPOKE_ROUTES` itself would need a second row for any future one.
+ * unchecked. `BESPOKE_ROUTES` (TEN-4's own two routes, not actions —
+ * `routes/discord-servers.ts`'s own module comment explains why) used to be
+ * hand-typed the same way, and was finding 2 of the TEN-4..6 rework because
+ * of it: nothing enumerated the Express route table, so a later route added
+ * to that file without a row here would sail through unnoticed — the
+ * registry it could have been checked against does not exist, because it is
+ * not an action. `collectRouterRoutes` below (Express 5's own `Router`
+ * exposes every route it holds, at any nesting depth, as a `.route` on a
+ * `Layer` — `node_modules/router/lib/layer.js`) walks `buildDiscordServersRouter`'s
+ * own router the same way `ACTION_ROUTES` walks the registry, so a route
+ * added there needs no edit here either: it reaches `BESPOKE_ROUTES`, is
+ * exercised by the loop below, and the same "did the route list change"
+ * guard fails the moment its count does. The one piece this cannot derive —
+ * Express 5's `Layer` carries no textual mount path, only a compiled
+ * `path-to-regexp` matcher closure, so there is nothing to read a *prefix*
+ * back out of — is `DISCORD_SERVERS_MOUNT` below, matching `server.ts`'s own
+ * mount call. That is deliberately the one literal left: it names a router
+ * *family*, not a route, and the failure mode this finding is about (a new
+ * *endpoint* silently missing a row) cannot happen by way of it.
  *
  * **What "identical" means here.** `routes/actions.ts` (every action route)
  * and `routes/discord-servers.ts` (both bespoke routes) already share one
@@ -37,16 +52,48 @@ import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 import type { Express } from 'express'
 
-import { accounts } from '@bloombot/db'
+import { accounts, type Database } from '@bloombot/db'
 import { createPlatformRegistry } from '@bloombot/actions'
 
+import { buildDiscordServersRouter } from '../src/routes/discord-servers.js'
 import { buildTestApp, TEST_PUBLIC_APP_URL } from './helpers/build-test-app.js'
+import { createFakeDiscordRestClient } from './helpers/fake-discord-rest-client.js'
+import { createFakeLogger } from './helpers/fake-logger.js'
 import { seedOtherOrganization, seedSignedInCaller } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
+/** An HTTP method as Express's own `Layer#route.methods` records it — lowercase, matching `router.<method>(...)`. */
+type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete'
+
 interface RouteCase {
   routeName: string
+  method: HttpMethod
   path: (organizationId: string) => string
+}
+
+/** The minimal shape this file reads off Express 5's `Router`/`Layer` — `node_modules/router/lib/layer.js` — to walk a router's own routes without depending on anything not part of that shape. */
+interface ExpressLayer {
+  name: string
+  route?: { path: string; methods: Record<string, boolean> }
+  handle?: { stack?: ExpressLayer[] }
+}
+
+/** Every `.route` a router (or a router nested inside it, at any depth) holds — method(s) and its path *relative to that router's own mount*. The same recursive walk `layer.handle.stack` invites for any router-inside-a-router, which is exactly the shape `buildDiscordServersRouter`'s `Router({ mergeParams: true })` has once mounted. */
+function collectRouterRoutes(
+  stack: ExpressLayer[]
+): { methods: HttpMethod[]; path: string }[] {
+  const routes: { methods: HttpMethod[]; path: string }[] = []
+  for (const layer of stack) {
+    if (layer.route) {
+      routes.push({
+        methods: Object.keys(layer.route.methods) as HttpMethod[],
+        path: layer.route.path,
+      })
+    } else if (layer.name === 'router' && layer.handle?.stack) {
+      routes.push(...collectRouterRoutes(layer.handle.stack))
+    }
+  }
+  return routes
 }
 
 /** One row per registered action — `POST /organizations/:organizationId/actions/:name`, `routes/actions.ts`'s one generic route. */
@@ -54,25 +101,42 @@ const ACTION_ROUTES: RouteCase[] = createPlatformRegistry()
   .list()
   .map((action) => ({
     routeName: `POST /organizations/:organizationId/actions/${action.name}`,
+    method: 'post',
     path: (organizationId: string) =>
       `/organizations/${organizationId}/actions/${action.name}`,
   }))
 
-/** TEN-4's two bespoke routes — not actions, so not derivable from the registry (`routes/discord-servers.ts`'s own module comment). */
-const BESPOKE_ROUTES: RouteCase[] = [
-  {
-    routeName:
-      'POST /organizations/:organizationId/discord-servers/install/begin',
+// The mount prefix `server.ts` gives `buildDiscordServersRouter` — see this
+// file's own module comment for why this, and only this, stays a literal.
+const DISCORD_SERVERS_MOUNT = '/organizations/:organizationId/discord-servers'
+
+/**
+ * TEN-4's bespoke routes (finding 2 of the TEN-4..6 rework) — walked off the
+ * router `buildDiscordServersRouter` actually returns, not hand-typed.
+ * `{} as Database` is never touched: building a router only closes over
+ * `deps.db` for a request this file never sends it, so introspecting the
+ * router's own `.stack` needs no real database.
+ */
+const discordServersRouter = buildDiscordServersRouter({
+  db: {} as Database,
+  logger: createFakeLogger(),
+  discordRestClient: createFakeDiscordRestClient(),
+  discordClientId: 'route-discovery-only',
+  discordBotToken: 'route-discovery-only',
+  discordRedirectUri: 'https://app.bloombot.test/discord/callback',
+  discordOauthBase: 'https://discord.test/oauth2',
+}) as unknown as { stack: ExpressLayer[] }
+
+const BESPOKE_ROUTES: RouteCase[] = collectRouterRoutes(
+  discordServersRouter.stack
+).flatMap((route) =>
+  route.methods.map((method) => ({
+    routeName: `${method.toUpperCase()} ${DISCORD_SERVERS_MOUNT}${route.path}`,
+    method,
     path: (organizationId: string) =>
-      `/organizations/${organizationId}/discord-servers/install/begin`,
-  },
-  {
-    routeName:
-      'POST /organizations/:organizationId/discord-servers/install/callback',
-    path: (organizationId: string) =>
-      `/organizations/${organizationId}/discord-servers/install/callback`,
-  },
-]
+      `/organizations/${organizationId}/discord-servers${route.path}`,
+  }))
+)
 
 const ALL_ROUTES = [...ACTION_ROUTES, ...BESPOKE_ROUTES]
 
@@ -100,8 +164,19 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
     )
   })
 
-  function post(app: Express, path: string, cookieHeader?: string) {
-    const req = request(app).post(path).set('Origin', TEST_PUBLIC_APP_URL)
+  // `route.method`-aware (finding 2 of the TEN-4..6 rework): every route
+  // this file currently derives happens to be `POST`, but a route
+  // `collectRouterRoutes` finds tomorrow need not be — sending every one of
+  // them a hardcoded `POST` regardless of the method it actually registers
+  // would 404 on the method mismatch alone, passing (a) by accident and
+  // failing to exercise the route's own authorization at all.
+  function send(
+    app: Express,
+    method: HttpMethod,
+    path: string,
+    cookieHeader?: string
+  ) {
+    const req = request(app)[method](path).set('Origin', TEST_PUBLIC_APP_URL)
     return cookieHeader ? req.set('Cookie', cookieHeader) : req
   }
 
@@ -113,8 +188,9 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         const otherOrganizationId = seedOtherOrganization(testDb.db)
         const app = buildTestApp(testDb.db)
 
-        const response = await post(
+        const response = await send(
           app,
+          route.method,
           route.path(otherOrganizationId),
           caller.cookieHeader
         ).send({})
@@ -128,8 +204,9 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         const caller = seedSignedInCaller(testDb.db)
         const app = buildTestApp(testDb.db)
 
-        const response = await post(
+        const response = await send(
           app,
+          route.method,
           route.path(caller.organizationId)
         ).send({})
 
@@ -141,14 +218,16 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         const caller = seedSignedInCaller(testDb.db)
         const app = buildTestApp(testDb.db)
 
-        const withoutSession = await post(
+        const withoutSession = await send(
           app,
+          route.method,
           route.path(caller.organizationId)
         ).send({})
 
         accounts.disableAccount(caller.accountId, testDb.db)
-        const withDisabledSession = await post(
+        const withDisabledSession = await send(
           app,
+          route.method,
           route.path(caller.organizationId),
           caller.cookieHeader
         ).send({})

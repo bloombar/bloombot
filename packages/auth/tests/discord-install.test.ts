@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   accounts,
   closeDatabase,
+  discordInstallStates,
   openDatabase,
   organizations,
   schema,
@@ -78,6 +79,61 @@ describe('beginDiscordInstall', () => {
 
   it('defaults to a ten-minute expiry', () => {
     expect(DEFAULT_INSTALL_STATE_TTL_MS).toBe(10 * 60 * 1000)
+  })
+
+  // Cheap-fix 8 of the TEN-4..6 rework: a sweep on write, not a "one live
+  // attempt" refusal — see `@bloombot/db`'s own
+  // `deleteExpiredInstallStates` doc comment for why.
+  it('sweeps every already-expired row before inserting its own — no unbounded growth from abandoned attempts', () => {
+    testDb = createTestDatabase()
+    const { organizationId, accountId } = seedOrgAndAccount(testDb.db)
+    // Two abandoned, already-expired attempts from earlier — written
+    // directly through the repo (not `beginDiscordInstall`, which would
+    // sweep each one before the next existed to be counted).
+    const now = Date.now()
+    discordInstallStates.createInstallState(
+      {
+        organizationId,
+        accountId,
+        stateHash: 'expired-hash-1',
+        codeVerifier: 'verifier-1',
+        expiresAt: now - 1,
+      },
+      testDb.db
+    )
+    discordInstallStates.createInstallState(
+      {
+        organizationId,
+        accountId,
+        stateHash: 'expired-hash-2',
+        codeVerifier: 'verifier-2',
+        expiresAt: now - 1,
+      },
+      testDb.db
+    )
+    expect(
+      testDb.db.select().from(schema.discordInstallStates).all()
+    ).toHaveLength(2)
+
+    // A third, live attempt begins.
+    beginDiscordInstall(organizationId, accountId, testDb.db)
+
+    // The two expired rows are gone; only the live one remains.
+    const rows = testDb.db.select().from(schema.discordInstallStates).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.expiresAt).toBeGreaterThan(Date.now())
+  })
+
+  it('does not sweep a row that has not expired yet', () => {
+    testDb = createTestDatabase()
+    const { organizationId, accountId } = seedOrgAndAccount(testDb.db)
+    beginDiscordInstall(organizationId, accountId, testDb.db)
+
+    beginDiscordInstall(organizationId, accountId, testDb.db)
+
+    expect(
+      testDb.db.select().from(schema.discordInstallStates).all()
+    ).toHaveLength(2)
   })
 })
 

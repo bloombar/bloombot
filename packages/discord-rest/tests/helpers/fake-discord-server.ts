@@ -9,7 +9,12 @@
  * `/users/@me/guilds` is one URL Discord itself reuses for both the user's
  * own guild list and the bot's — which one a request gets back is decided
  * here by the `Authorization` header's own scheme (`Bearer` vs `Bot`), the
- * same way the real API does.
+ * same way the real API does. `setUserGuilds`/`setBotGuilds` each take the
+ * *whole* list; this fake pages it out itself, honoring `limit`/`after` the
+ * same way the real endpoint does, so a test can prove `client.ts` actually
+ * walks every page (finding 3 of the TEN-4..6 rework) against a fake that
+ * genuinely withholds a second page rather than returning everything at
+ * once regardless of `limit`.
  */
 
 import {
@@ -126,22 +131,38 @@ export class FakeDiscordServer {
       return
     }
 
-    if (req.method === 'GET' && req.url === '/users/@me/guilds') {
+    const [pathname, query] = (req.url ?? '').split('?')
+    if (req.method === 'GET' && pathname === '/users/@me/guilds') {
       const queued = this.guildsQueue.shift()
       if (queued) {
         this.respondJson(res, queued.status, queued.body)
         return
       }
       const authorization = req.headers.authorization ?? ''
+      let full: unknown[]
       if (authorization.startsWith('Bearer ')) {
-        this.respondJson(res, 200, this.userGuilds)
+        full = this.userGuilds
+      } else if (authorization.startsWith('Bot ')) {
+        full = this.botGuilds
+      } else {
+        this.respondJson(res, 401, { message: '401: Unauthorized' })
         return
       }
-      if (authorization.startsWith('Bot ')) {
-        this.respondJson(res, 200, this.botGuilds)
-        return
+      // Finding 3 of the TEN-4..6 rework: paginate the stored list the same
+      // way the real endpoint does — `limit` entries at a time, starting
+      // just after `after`'s id — so a test can prove `client.ts#getGuilds`
+      // actually walks every page rather than reading only the first.
+      const params = new URLSearchParams(query)
+      const limit = Number(params.get('limit') ?? '200')
+      const after = params.get('after')
+      let startIndex = 0
+      if (after) {
+        const index = full.findIndex(
+          (guild) => (guild as { id?: string }).id === after
+        )
+        startIndex = index === -1 ? full.length : index + 1
       }
-      this.respondJson(res, 401, { message: '401: Unauthorized' })
+      this.respondJson(res, 200, full.slice(startIndex, startIndex + limit))
       return
     }
 

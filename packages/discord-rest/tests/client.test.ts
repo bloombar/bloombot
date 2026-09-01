@@ -139,4 +139,102 @@ describe('getUserGuilds / getBotGuilds', () => {
       expect.objectContaining({ status: 401 }) as Partial<DiscordRequestError>
     )
   })
+
+  // Finding 3 of the TEN-4..6 rework: a single page (Discord's own 200-entry
+  // maximum) is not the whole story once a caller or the bot belongs to
+  // more guilds than that — `getGuilds` must keep paging with `after` until
+  // a short page tells it to stop, not read page one and call it done.
+  it('walks every page when the guild list is larger than one page', async () => {
+    const fullList = Array.from({ length: 250 }, (_, i) => ({
+      id: String(i + 1).padStart(3, '0'),
+      name: `Guild ${i + 1}`,
+      owner: false,
+      permissions: '0',
+    }))
+    server.setUserGuilds(fullList)
+
+    const guilds = await client.getUserGuilds('a-user-access-token')
+
+    expect(guilds).toHaveLength(250)
+    expect(guilds.map((g) => g.id)).toEqual(fullList.map((g) => g.id))
+    // Two requests: a full 200-entry page, then a short 50-entry one that
+    // told the client to stop — the second one's `after` is the first
+    // page's own last id, proving the cursor was actually threaded through
+    // rather than the same first page being re-read.
+    const guildRequests = server.requests.filter((r) =>
+      r.path.startsWith('/users/@me/guilds')
+    )
+    expect(guildRequests).toHaveLength(2)
+    expect(guildRequests[0]?.path).not.toContain('after=')
+    expect(guildRequests[1]?.path).toContain(`after=${fullList[199]?.id}`)
+  })
+
+  // A page that comes back exactly `GUILD_LIST_PAGE_LIMIT` long ends the
+  // walk in one request when there is nothing further — a single page well
+  // under the limit must not trigger a second, empty round trip.
+  it('makes exactly one request when the guild list fits in a single page', async () => {
+    server.setUserGuilds([
+      { id: '1', name: 'Guild One', owner: true, permissions: '0' },
+    ])
+
+    const guilds = await client.getUserGuilds('a-user-access-token')
+
+    expect(guilds).toHaveLength(1)
+    expect(
+      server.requests.filter((r) => r.path.startsWith('/users/@me/guilds'))
+    ).toHaveLength(1)
+  })
+})
+
+describe('DiscordRequestError (finding 5 of the TEN-4..6 rework)', () => {
+  it("carries body for a caller that reads it directly, but keeps it out of JSON.stringify — the shape a log serializer that walks own enumerable properties (pino's default err serializer) sees", async () => {
+    server.respondToToken({
+      status: 400,
+      body: { error: 'invalid_grant', error_description: 'the-auth-code' },
+    })
+
+    let caught: DiscordRequestError | undefined
+    try {
+      await client.exchangeAuthorizationCode({
+        code: 'the-auth-code',
+        redirectUri: 'https://app.bloombot.test/discord/callback',
+        codeVerifier: 'the-verifier',
+      })
+    } catch (error) {
+      caught = error as DiscordRequestError
+    }
+
+    expect(caught).toBeInstanceOf(DiscordRequestError)
+    expect(caught?.body).toEqual({
+      error: 'invalid_grant',
+      error_description: 'the-auth-code',
+    })
+    // The property a naive log call (`JSON.stringify`, or pino's default
+    // `err` serializer, which copies an error's own enumerable properties)
+    // would see nothing of `body` in.
+    expect(JSON.stringify(caught)).not.toContain('the-auth-code')
+    expect(Object.keys(caught as object)).not.toContain('body')
+  })
+})
+
+describe('a 2xx response with no usable body (cheap-fix 6 of the TEN-4..6 rework)', () => {
+  it('exchangeAuthorizationCode throws when the token endpoint answers 2xx with no access_token', async () => {
+    server.respondToToken({ status: 200, body: { token_type: 'Bearer' } })
+
+    await expect(
+      client.exchangeAuthorizationCode({
+        code: 'the-code',
+        redirectUri: 'https://app.bloombot.test/discord/callback',
+        codeVerifier: 'the-verifier',
+      })
+    ).rejects.toThrow(/no usable access token/)
+  })
+
+  it('getUserGuilds throws when the guild-list endpoint answers 2xx with something other than a JSON array', async () => {
+    server.respondToGuilds({ status: 200, body: { not: 'an array' } })
+
+    await expect(client.getUserGuilds('a-user-access-token')).rejects.toThrow(
+      /no usable JSON array/
+    )
+  })
 })

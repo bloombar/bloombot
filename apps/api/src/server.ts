@@ -91,6 +91,7 @@ export function buildApp(deps: ServerDependencies): Express {
     '/organizations/:organizationId/discord-servers',
     buildDiscordServersRouter({
       db: deps.db,
+      logger: deps.logger,
       discordRestClient: deps.discordRestClient,
       discordClientId: deps.discordClientId,
       discordBotToken: deps.discordBotToken,

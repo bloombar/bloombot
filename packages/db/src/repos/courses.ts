@@ -541,6 +541,84 @@ export function listCourses(
     .all()
 }
 
+/** The projection `routeMessage` (`@bloombot/core`'s `routing.ts`) actually reads for one course — everything `RoutableCourse` needs, plus `title` for the one place a title is needed after routing decides a course. */
+export interface RoutableCourseRow {
+  id: string
+  title: string
+  categoryNames: string[]
+  adminsRole: string
+  studentsRole: string
+  enabled: boolean
+}
+
+/**
+ * Finding 14 of the SURF-1 rework: `@bloombot/discord`'s `handleMention` used
+ * to call `getCourse` once per course to build this same projection —
+ * `getCourse` also loads every channel row routing never reads, so a
+ * forty-course tenant paid roughly 161 queries (`listCourses` plus
+ * `getCourse`'s three selects each) on the hot path for every mention. This
+ * is two queries regardless of course count: one for the course rows
+ * (join `projects` so PROJ-2 can be applied here, not by a caller that would
+ * otherwise have to know about it), one for their category names, joined in
+ * memory rather than per-course.
+ *
+ * PROJ-2/finding 2: a course in an archived project does not route — filtered
+ * here by `isNull(projects.archivedAt)`, the same guard `findCourseNameConflict`
+ * uses for PROJ-3's own candidate set, so an old course from a reused-name
+ * archived term can neither answer nor make the live course `ambiguous` by
+ * colliding with it.
+ */
+export function listRoutableCourses(
+  organizationId: string,
+  db: Database
+): RoutableCourseRow[] {
+  const courseRows = db
+    .select({
+      id: courses.id,
+      title: courses.title,
+      adminsRole: courses.adminsRole,
+      studentsRole: courses.studentsRole,
+      enabled: courses.enabled,
+    })
+    .from(courses)
+    .innerJoin(projects, eq(courses.projectId, projects.id))
+    .where(
+      and(
+        eq(courses.organizationId, organizationId),
+        isNull(projects.archivedAt)
+      )
+    )
+    .all()
+
+  if (courseRows.length === 0) return []
+
+  const categoryRows = db
+    .select({
+      courseId: courseCategories.courseId,
+      name: courseCategories.name,
+    })
+    .from(courseCategories)
+    .where(
+      inArray(
+        courseCategories.courseId,
+        courseRows.map((row) => row.id)
+      )
+    )
+    .all()
+
+  const categoryNamesByCourseId = new Map<string, string[]>()
+  for (const row of categoryRows) {
+    const names = categoryNamesByCourseId.get(row.courseId) ?? []
+    names.push(row.name)
+    categoryNamesByCourseId.set(row.courseId, names)
+  }
+
+  return courseRows.map((row) => ({
+    ...row,
+    categoryNames: categoryNamesByCourseId.get(row.id) ?? [],
+  }))
+}
+
 /**
  * Update a course and replace its categories and channels.
  *

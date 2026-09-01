@@ -370,6 +370,96 @@ describe('courses repo', () => {
     expect(rows[0]).toMatchObject({ title: 'Web Design' })
   })
 
+  // Finding 14 of the SURF-1 rework: the routing projection `@bloombot/discord`
+  // reads instead of one `getCourse` call per course.
+  describe('listRoutableCourses (finding 14)', () => {
+    it('attaches each course its own category names, keyed correctly', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const webDesign = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+      const dataScience = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-ds',
+            studentsRole: 'students-ds',
+            categories: [
+              { name: 'Data Science - A', channels: [] },
+              { name: 'Data Science - B', channels: [] },
+            ],
+          }),
+          testDb.db
+        )
+      )
+
+      const rows = courses.listRoutableCourses(orgA, testDb.db)
+
+      const byId = new Map(rows.map((row) => [row.id, row]))
+      expect(byId.get(webDesign.id)).toMatchObject({
+        title: 'Web Design',
+        categoryNames: ['Web Design - GLOBAL'],
+        adminsRole: 'admins-wd-fa26',
+        studentsRole: 'students-wd-fa26',
+        enabled: true,
+      })
+      expect(byId.get(dataScience.id)?.categoryNames.sort()).toEqual(
+        ['Data Science - A', 'Data Science - B'].sort()
+      )
+    })
+
+    // PROJ-2/finding 2: an archived project's courses do not route — this is
+    // the one function `@bloombot/discord`'s routing reads from, so the
+    // filter belongs here, not left to every caller to apply itself.
+    it("excludes a course whose project is archived, and only that organization's courses", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, projectA, projectB } = seedTwoOrganizations(testDb)
+      const live = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+      const archivedProject = projects.createProject(
+        orgA,
+        { name: 'Spring 2020' },
+        testDb.db
+      )
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(archivedProject.id, {
+            title: 'Old Course',
+            adminsRole: 'admins-old',
+            studentsRole: 'students-old',
+            categories: [{ name: 'Old Course - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      projects.archiveProject(orgA, archivedProject.id, testDb.db)
+      expectOk(
+        courses.createCourse(
+          orgB,
+          courseInput(projectB.id, {
+            adminsRole: 'admins-wd-fa26', // same names are fine: a different organization
+            studentsRole: 'students-wd-fa26',
+          }),
+          testDb.db
+        )
+      )
+
+      const rows = courses.listRoutableCourses(orgA, testDb.db)
+
+      expect(rows.map((row) => row.id)).toEqual([live.id])
+    })
+
+    it('returns an empty array for an organization with no routable courses', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      expect(courses.listRoutableCourses(orgA, testDb.db)).toEqual([])
+    })
+  })
+
   // TEN-2: every read, update and delete on courses (and, through them,
   // their categories and channels) is scoped by organization.
   describe('tenant scoping (TEN-2)', () => {

@@ -25,30 +25,56 @@ export interface HealthServer {
 }
 
 /**
- * Start listening on `port`. Every request gets the same response: `200`
- * with `{ "gatewayConnected": true }` once the gateway has connected, `503`
- * with `{ "gatewayConnected": false }` before that (or after a shutdown
- * begins) — `isGatewayConnected` is read fresh on every request rather than
- * captured once, so the answer changes the moment the gateway's own state
- * does.
+ * Start listening on `port`, bound to `127.0.0.1` only (finding 8 of this
+ * slice's rework — `listen(port)` with no host binds every interface, so an
+ * unfirewalled host would let anyone poll this process's connection state;
+ * this endpoint has no reason to be reachable from outside the machine it
+ * runs on). Every request gets the same response: `200` with
+ * `{ "gatewayConnected": true }` once the gateway has connected, `503` with
+ * `{ "gatewayConnected": false }` before that (or after a shutdown begins) —
+ * `isGatewayConnected` is read fresh on every request rather than captured
+ * once, so the answer changes the moment the gateway's own state does.
+ *
+ * Resolves once the server is actually listening; rejects if it never
+ * manages to bind — most often `EADDRINUSE`, the PLAT-4 "a second instance
+ * of this process is already running" case. Finding 8: with no listener on
+ * the server's own `'error'` event, that failure was an uncaught exception
+ * escaping `main().catch` entirely rather than reaching the same
+ * clear-refusal path `requireEnv` gives a bad environment — rejecting here
+ * routes it through exactly that path instead.
  */
 export function startHealthServer(
   port: number,
   isGatewayConnected: () => boolean
-): HealthServer {
-  const server: Server = createServer((_request, response) => {
-    const connected = isGatewayConnected()
-    response.writeHead(connected ? 200 : 503, {
-      'Content-Type': 'application/json',
+): Promise<HealthServer> {
+  return new Promise((resolve, reject) => {
+    const server: Server = createServer((_request, response) => {
+      const connected = isGatewayConnected()
+      response.writeHead(connected ? 200 : 503, {
+        'Content-Type': 'application/json',
+      })
+      response.end(JSON.stringify({ gatewayConnected: connected }))
     })
-    response.end(JSON.stringify({ gatewayConnected: connected }))
-  })
-  server.listen(port)
 
-  return {
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()))
-      }),
-  }
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      const reason =
+        error.code === 'EADDRINUSE'
+          ? `port ${port} is already in use — is another instance of this process already running? (PLAT-4)`
+          : error.message
+      reject(
+        new Error(`apps/bot: could not start the health server: ${reason}`)
+      )
+    })
+
+    server.listen(port, '127.0.0.1', () => {
+      resolve({
+        close: () =>
+          new Promise((closeResolve, closeReject) => {
+            server.close((error) =>
+              error ? closeReject(error) : closeResolve()
+            )
+          }),
+      })
+    })
+  })
 }

@@ -11,11 +11,16 @@
  * testing — binding lookup, person resolution, routing, mention rewriting,
  * splitting, rendering every `AnswerResult` — lives in `@bloombot/discord`'s
  * `handleMention`, tested there with no discord.js in the loop. This file's
- * only job is translating discord.js's own events into `@bloombot/discord`'s
- * `InboundMention` DTO and `ReplyPort`, which is also why it is the one
- * place in the platform allowed to import discord.js at all — enforced by
- * `packages/discord/tests/no-vendor-sdk.test.ts`, not merely documented
- * here.
+ * own job is translating discord.js's own events into `@bloombot/discord`'s
+ * `InboundMention` DTO and `ReplyPort` (`inbound.ts`, `reply-port.ts`),
+ * which is also why it is the one place in the platform allowed to import
+ * discord.js at all — enforced by `packages/discord/tests/no-vendor-sdk.test.ts`,
+ * not merely documented here. The handful of other concerns this process
+ * itself owns — the health flag's own lifecycle, the local day boundary, and
+ * a shutdown that drains cleanly — are each split into their own small,
+ * discord.js-light module (`gateway-health.ts`, `today.ts`, `shutdown.ts`),
+ * the same way `health.ts` already stood on its own, so each is testable
+ * without a real gateway connection.
  */
 
 import {
@@ -33,16 +38,17 @@ import {
   runMigrations,
   type Database,
 } from '@bloombot/db'
-import {
-  handleMention,
-  type InboundMention,
-  type ReplyPort,
-} from '@bloombot/discord'
+import type { ModelClient } from '@bloombot/core'
+import { handleMention } from '@bloombot/discord'
 import { createLogger, type Logger } from '@bloombot/logger'
 import { createOpenAiModelClient } from '@bloombot/openai'
-import type { ModelClient } from '@bloombot/core'
 
+import { wireGatewayHealth } from './gateway-health.js'
 import { startHealthServer } from './health.js'
+import { buildInboundMention } from './inbound.js'
+import { buildReplyPort, SUPPRESS_ALL_MENTIONS } from './reply-port.js'
+import { createShutdown, InFlightTracker } from './shutdown.js'
+import { today } from './today.js'
 
 const PROCESS_NAME = 'bot'
 
@@ -62,11 +68,6 @@ function requireEnv(name: string): string {
   return value
 }
 
-/** `YYYY-MM-DD` in the server's local time — `handleMention`'s own `day` is always supplied by its caller, never read from a clock inside it (the same CORE-3 discipline `answerQuestion` holds itself to), so this is the one place that clock is read. */
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 interface MessageHandlerDeps {
   botId: string
   botDisplayName: string
@@ -75,7 +76,7 @@ interface MessageHandlerDeps {
   logger: Logger
 }
 
-/** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. The only place in this file that reaches into a discord.js `Message`. */
+/** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
 async function onMessageCreate(
   message: Message,
   deps: MessageHandlerDeps
@@ -85,27 +86,8 @@ async function onMessageCreate(
   // types (`message.channel`, `message.guild`) to their guild-only shape.
   if (!message.inGuild()) return
 
-  const input: InboundMention = {
-    guildId: message.guild.id,
-    channelName: 'name' in message.channel ? (message.channel.name ?? '') : '',
-    categoryName: message.channel.parent?.name ?? null,
-    authorId: message.author.id,
-    // A server nickname when the author has one, their bare username
-    // otherwise — the same "readable name" BOT-6 rewrites a mention to.
-    authorDisplayName: message.member?.displayName ?? message.author.username,
-    authorRoleNames: message.member?.roles.cache.map((role) => role.name) ?? [],
-    text: message.content,
-    botId: deps.botId,
-    authorIsBot: message.author.bot,
-  }
-
-  const reply: ReplyPort = {
-    // SURF-5 — a reply, not `channel.send` (`response_bot.py:345`'s own
-    // choice): see docs/DECISIONS.md for why this diverges from it.
-    reply: async (text: string) => {
-      await message.reply(text)
-    },
-  }
+  const input = buildInboundMention(message, deps.botId)
+  const reply = buildReplyPort(message)
 
   const result = await handleMention(input, {
     db: deps.db,
@@ -150,16 +132,24 @@ async function main(): Promise<void> {
       // has nothing to check a mention against.
       GatewayIntentBits.MessageContent,
     ],
+    // Finding 1 of this slice's rework — the client-level default, so a
+    // reply built anywhere other than `reply-port.ts`'s `buildReplyPort`
+    // (which sets the same value again, deliberately redundant) still
+    // cannot ping anyone by accident. See `docs/DECISIONS.md` D-17.
+    allowedMentions: SUPPRESS_ALL_MENTIONS,
   })
 
   // SURF-7 — what the health endpoint reports: only this, read fresh on
   // every request by `startHealthServer`, never cached at the moment it
-  // last changed.
+  // last changed. Finding 4 — wired to the gateway's full lifecycle
+  // (`gateway-health.ts`), not just latched `true` on the first `ClientReady`.
   let gatewayConnected = false
-  const health = startHealthServer(healthPort, () => gatewayConnected)
+  const health = await startHealthServer(healthPort, () => gatewayConnected)
+  wireGatewayHealth(client, (connected) => {
+    gatewayConnected = connected
+  })
 
   client.once(Events.ClientReady, (readyClient) => {
-    gatewayConnected = true
     logger.info(
       { botId: readyClient.user.id, botTag: readyClient.user.tag },
       'apps/bot: connected to the Discord gateway'
@@ -170,43 +160,54 @@ async function main(): Promise<void> {
     logger.error({ err: error }, 'apps/bot: gateway error')
   })
 
+  // Finding 7 — every in-flight handler is tracked here so shutdown can wait
+  // for it (bounded) instead of abandoning it mid-answer.
+  const inFlight = new InFlightTracker()
+
   client.on(
     Events.MessageCreate,
     (message: OmitPartialGroupDMChannel<Message>) => {
       const botId = client.user?.id
       if (!botId) return // not logged in yet — cannot happen once Events.ClientReady has fired, guarded rather than assumed
-      void onMessageCreate(message, {
-        botId,
-        botDisplayName: client.user?.username ?? 'Bloombot',
-        db,
-        model,
-        logger,
-      }).catch((error: unknown) => {
-        logger.error(
-          { err: error },
-          'apps/bot: failed to handle an incoming message'
-        )
-      })
+      inFlight.track(
+        onMessageCreate(message, {
+          botId,
+          botDisplayName: client.user?.username ?? 'Bloombot',
+          db,
+          model,
+          logger,
+        }).catch((error: unknown) => {
+          logger.error(
+            { err: error },
+            'apps/bot: failed to handle an incoming message'
+          )
+        })
+      )
     }
   )
 
   // SURF-7 — closes the gateway and the database rather than leaving the
   // socket to time out; the health server stops too, so a supervisor
   // watching it sees this process actually go away instead of reporting
-  // stale health after the process has already exited.
-  let shuttingDown = false
-  async function shutdown(signal: string): Promise<void> {
-    if (shuttingDown) return
-    shuttingDown = true
-    logger.info({ signal }, 'apps/bot: shutting down')
-    gatewayConnected = false
-    client.destroy()
-    closeDatabase(db)
-    await health.close()
-    process.exit(0)
+  // stale health after the process has already exited. Finding 7:
+  // `createShutdown` (`shutdown.ts`) awaits the close handshake, drains
+  // in-flight handlers first (bounded), and makes a second signal a no-op
+  // rather than a second teardown racing the first.
+  const shutdown = createShutdown({
+    logger,
+    setDisconnected: () => {
+      gatewayConnected = false
+    },
+    destroyClient: () => client.destroy(),
+    closeDb: () => closeDatabase(db),
+    closeHealth: () => health.close(),
+    inFlight,
+  })
+  const onSignal = (signal: string) => {
+    void shutdown(signal).then(() => process.exit(0))
   }
-  process.once('SIGINT', () => void shutdown('SIGINT'))
-  process.once('SIGTERM', () => void shutdown('SIGTERM'))
+  process.once('SIGINT', () => onSignal('SIGINT'))
+  process.once('SIGTERM', () => onSignal('SIGTERM'))
 
   await client.login(botToken)
 }

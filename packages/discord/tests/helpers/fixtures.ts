@@ -17,6 +17,7 @@ export function inboundMention(
     text: `<@${BOT_ID}> When is the midterm?`,
     botId: BOT_ID,
     authorIsBot: false,
+    repliesToBot: false,
     ...overrides,
   }
 }

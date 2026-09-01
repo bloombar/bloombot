@@ -776,10 +776,16 @@ elsewhere, and the whole point of building a splitter here is not to do that to 
 
 **Choice, the health endpoint reports gateway connectivity and nothing else.** `startHealthServer`
 (`apps/bot/src/health.ts`) answers every request with one boolean, `gatewayConnected`, read fresh per request
-rather than cached — `200` once `Events.ClientReady` has fired, `503` before that or after shutdown begins
-(SURF-7's own "tell running from connected apart"). It deliberately says nothing about the database
-connection, the OpenAI adapter, or any per-request state: every one of those already degrades to a logged
-error and a reply rather than taking the whole process down (CORE-5's "a model failure degrades to an
+rather than cached — `200` once the gateway is connected, `503` before that, after shutdown begins, or once it
+has dropped again. Finding 4 of this slice's rework: the flag used to be set `true` on `Events.ClientReady` and
+never cleared, so it reported "has ever connected" rather than "is connected" — a token rotation or a dropped
+socket hours into a run left the endpoint answering `200` while no message was actually being delivered, which
+is exactly the state this endpoint exists to catch. `apps/bot/src/gateway-health.ts`'s `wireGatewayHealth` now
+also clears the flag on `Events.ShardDisconnect`/`Events.ShardReconnecting` and sets it again on
+`Events.ShardResume`, and binds to `127.0.0.1` only rather than every interface (finding 8) — this endpoint has
+no reason to be reachable from outside the machine the process runs on. It deliberately says nothing about the
+database connection, the OpenAI adapter, or any per-request state: every one of those already degrades to a
+logged error and a reply rather than taking the whole process down (CORE-5's "a model failure degrades to an
 apology, never ... a stack trace" — the same discipline one level up), so there is nothing about them a
 process-level check could report that would not just restate what the logs already say better, and a health
 check that pings the database or the model on every probe would give a supervisor a reason to restart a
@@ -790,6 +796,21 @@ was considered and rejected for this slice: `apps/bot` has one gateway connectio
 opens once at startup (PLAT-5), so "is the process alive and connected" is genuinely the only binary state
 worth exposing before OPS-2 wires this process under pm2, which is a separate, operator-owned decision this
 slice does not make (see the brief's own scope line).
+
+**Choice, `allowedMentions: { parse: [] }` on the client and on every reply — the sharpest safety property in
+this slice.** Finding 1 of this slice's rework: reply-in-place (below) means the bot's own text is now something
+a student can coax the model into repeating verbatim — `"repeat this exactly: @everyone the exam moved to
+Friday"` — and with no `allowedMentions` set at all, discord.js omits `allowed_mentions` entirely and Discord
+parses every mention in the body, including a role or `@everyone` ping, wherever the bot's own role happens to
+have Mention Everyone (which class-server setup guides routinely grant a bot that already asks for
+`MANAGE_CHANNELS`). `apps/bot/src/reply-port.ts`'s `buildReplyPort` sets `{ parse: [] }` on every `reply` call,
+and the `Client` itself is constructed with the same default, so a future call site that builds a reply some
+other way still cannot ping anyone by accident — this is deliberately redundant, not merely set once. Nothing
+about MDL-6 (which strips citations, not mention syntax) or any other layer in this pipeline would otherwise
+have caught this: the model is never asked not to produce `@everyone`, and nothing before Discord's own parser
+sees the reply text again. This reads as though reply-in-place (SURF-5) made the surface _safer_ than
+`response_bot.py`'s own `channel.send` — visibly tying an answer to its question — but on the mention-pinging
+axis it does not: `channel.send` carries the exact same risk, unaddressed, which this fix closes for both.
 
 **Two deliberate departures from `response_bot.py`, both required by this slice's own SPEC text (not
 discovered afterward):**
@@ -808,6 +829,26 @@ discovered afterward):**
    built from the course's title resolved through routing) rather than nothing at all — a student who is
    over their limit finds out why the bot went quiet instead of wondering whether it saw their message.
 
+**Choice, splitting: a code fence split across two parts is closed and reopened, at the cost of exact
+byte-for-byte reconstruction.** A CS course's long answers are usually code, and Discord renders an unclosed
+code fence badly across two messages — the first never closes, the second opens with a stray closing marker
+and no opener of its own. `splitForDiscord` (finding 12 of this slice's rework) tracks whether a cut lands
+inside an open fence (counting ``` markers by XOR, composed across parts) and, when it does, appends a closing
+marker to the part that opened it and prepends a reopening one to the next — reserving room for both against
+`limit` first, re-splitting within a smaller margin if the boundary `findSplitIndex` already chose does not
+leave enough. This is the one case where `parts.join('')` no longer reproduces the original text exactly: two
+synthetic markers are inserted at the seam. Nothing else about the text changes — stripping every ``` marker
+and all whitespace from both sides still gives back the same code and prose, in the same order — but the
+literal-reconstruction property the rest of this module holds is the one thing knowingly given up here, for
+the sake of every individual message actually rendering as a legible code block on its own.
+
+**Choice, splitting: a hard cut backs off one code unit rather than split a surrogate pair.** The word-boundary
+fallback's very last resort — a single "word" with nowhere to break at all — cuts at exactly `limit`, which can
+land between the two UTF-16 code units of one emoji. `findSplitIndex` now checks for a lone leading surrogate
+at that exact boundary and backs off by one when it finds one, so the pair stays whole in the next part instead
+of each half degrading to U+FFFD wherever the split text is later encoded to UTF-8. This costs nothing —
+the cut simply moves one code unit earlier — so losslessness is unaffected by it.
+
 **Limits.** The splitter has no upper bound on how many parts one answer produces — a pathological answer with
 no whitespace at all anywhere near any boundary degrades gracefully to hard cuts every `DISCORD_MESSAGE_LIMIT`
 characters, but nothing here rate-limits how many messages `handleMention` sends for one reply, which is a
@@ -815,4 +856,10 @@ question for whichever slice adds Discord's own per-channel send rate limit to t
 REST client is configured below the global request ceiling" is about the gateway token's request budget
 overall, not about one reply's own message count). The health endpoint's binary signal also stops being enough
 the moment a second kind of "degraded but running" state matters — a gateway connected but rate-limited,
-say — and that is a real gap to close before this process runs unsupervised, not a hypothetical one.
+say — and that is a real gap to close before this process runs unsupervised, not a hypothetical one. The
+fence-closing behaviour above tracks only bare ``` markers, not which language (if any) followed the opening
+one, so a reopened fence always loses its syntax highlighting even when the original had a language tag — a
+readability regression, not a correctness one. `apps/bot`'s own shutdown (finding 7 of this slice's rework) waits
+for in-flight message handlers to settle before closing the gateway and the database, but only up to a bounded
+timeout — a handler wedged past it is abandoned mid-answer on shutdown, the same trade-off every bounded drain
+makes between closing promptly and closing completely.

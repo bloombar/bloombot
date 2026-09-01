@@ -92,37 +92,33 @@ async function sendReply(reply: ReplyPort, text: string): Promise<number> {
 }
 
 /**
- * CORE-2's `routeMessage` wants a flat `RoutableCourse[]`; `listCourses`
- * (`@bloombot/db`) returns base rows with no category names attached, so
- * each course is re-read through `getCourse` for the category list
- * `routeMessage` needs to run its category signal at all. Also returns each
+ * CORE-2's `routeMessage` wants a flat `RoutableCourse[]`; `@bloombot/db`'s
+ * `courses.listRoutableCourses` already builds that exact projection — id,
+ * category names, both role names, `enabled` — filtered to courses whose
+ * project is not archived (PROJ-2/finding 2 of this rework), in two queries
+ * regardless of course count rather than one `getCourse` per course (finding
+ * 14: `getCourse` also loads every channel row routing never reads). This
+ * function only reshapes that into what `routeMessage` takes, and keeps each
  * course's title, keyed by id, for the one place a title is needed after
- * routing decides a course (`overLimitRefusalText`) — `RoutableCourse`
- * itself carries no title, only what `routeMessage` reads.
+ * routing decides a course (`overLimitRefusalText`) — `RoutableCourse` itself
+ * carries no title, only what `routeMessage` reads.
  */
 function loadRoutableCourses(
   organizationId: string,
   db: Database
 ): { routable: RoutableCourse[]; titleById: Map<string, string> } {
-  const routable: RoutableCourse[] = []
+  const rows = courses.listRoutableCourses(organizationId, db)
   const titleById = new Map<string, string>()
-
-  for (const course of courses.listCourses(organizationId, db)) {
-    titleById.set(course.id, course.title)
-    const full = courses.getCourse(organizationId, course.id, db)
-    // Unreachable in practice — `full` is read with the same organizationId
-    // `listCourses` just used — kept as a guard rather than a
-    // non-null assertion, the same belt-and-suspenders `getPerson` calls in
-    // `@bloombot/core`'s `answer.ts` take for a row that "cannot" be missing.
-    if (!full) continue
-    routable.push({
-      id: course.id,
-      categoryNames: full.categories.map((category) => category.name),
-      adminsRole: course.adminsRole,
-      studentsRole: course.studentsRole,
-      enabled: course.enabled,
-    })
-  }
+  const routable: RoutableCourse[] = rows.map((row) => {
+    titleById.set(row.id, row.title)
+    return {
+      id: row.id,
+      categoryNames: row.categoryNames,
+      adminsRole: row.adminsRole,
+      studentsRole: row.studentsRole,
+      enabled: row.enabled,
+    }
+  })
 
   return { routable, titleById }
 }
@@ -157,7 +153,12 @@ export async function handleMention(
   if (input.authorIsBot) {
     return { kind: 'ignored-other-bot' }
   }
-  if (!mentionsBot(input.text, input.botId)) {
+  // Finding 3 — a Discord Reply carries no `<@id>` token of its own, so
+  // `input.repliesToBot` (set from Discord's own reply relationship, not the
+  // message text) is a second, independent way a message can be "addressed
+  // to this bot" — checked here, not folded into `mentionsBot` itself, since
+  // that function only ever knows about text.
+  if (!mentionsBot(input.text, input.botId) && !input.repliesToBot) {
     return { kind: 'ignored-not-a-mention' }
   }
 
@@ -261,7 +262,20 @@ export async function handleMention(
       }
     }
     case 'failed-with-apology': {
-      const messageCount = await sendReply(reply, result.text)
+      let messageCount = await sendReply(reply, result.text)
+      // Finding 9 — `answerQuestion` carries `lastRequestOfDay` on this
+      // variant precisely so a provider outage on a student's last request
+      // does not leave them apologised-to *and* silently locked out with no
+      // notice at all (`@bloombot/core`'s own `AnswerResult` comment); the
+      // apology's own wording never changes (it must stay byte-identical to
+      // `response_bot.py`'s), so the notice is a second message, the same
+      // wording `declined-over-limit` already sends.
+      if (result.lastRequestOfDay) {
+        messageCount += await sendReply(
+          reply,
+          overLimitRefusalText(courseTitle)
+        )
+      }
       return {
         kind: 'failed-with-apology',
         conversationId: result.conversationId,

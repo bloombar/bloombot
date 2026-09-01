@@ -5,9 +5,11 @@
  * requirement id: see the report for how each was confirmed.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { people } from '@bloombot/db'
+import { courses, people, projects, type Database } from '@bloombot/db'
 
 import {
   handleMention,
@@ -52,6 +54,47 @@ function makeDeps(
       ...overrides,
     },
   }
+}
+
+/**
+ * A second, minimal enabled course in its own project — for tests (findings
+ * 2 and 13) that need more than the one course `seedBoundServerWithCourse`
+ * seeds. Every name is randomized so two calls in the same test never
+ * collide with each other by accident, only on purpose when a test sets
+ * `categoryName` to match an existing one.
+ */
+function createExtraCourse(
+  db: Database,
+  organizationId: string,
+  categoryName: string
+): { courseId: string; projectId: string } {
+  const project = projects.createProject(
+    organizationId,
+    { name: `Extra Term ${randomUUID()}` },
+    db
+  )
+  const result = courses.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: 'Extra Course',
+      filePrefix: `ec-${randomUUID().slice(0, 8)}`,
+      enabled: true,
+      adminsRole: `admins-${randomUUID()}`,
+      studentsRole: `students-${randomUUID()}`,
+      maxRequestsPerDay: 10,
+      promptId: null,
+      instructions: 'Be helpful.',
+      categories: [{ name: categoryName, channels: [] }],
+    },
+    db
+  )
+  if (!result.ok) {
+    throw new Error(
+      `createExtraCourse: failed to create course: ${result.conflict.message}`
+    )
+  }
+  return { courseId: result.course.id, projectId: project.id }
 }
 
 describe('handleMention — SURF-2: only a direct mention is answered', () => {
@@ -106,6 +149,30 @@ describe('handleMention — SURF-2: only a direct mention is answered', () => {
     expect(result).toEqual({ kind: 'ignored-not-a-mention' })
     expect(model.calls).toHaveLength(0)
     expect(reply.sent).toHaveLength(0)
+  })
+
+  // Finding 3 of this rework: a Discord Reply carries no `<@id>` token in its
+  // own text — Discord records who it is addressed to through the reply
+  // relationship alone (`response_bot.py:164`'s own comment: "did not
+  // directly mention *or reply to* this bot"). Without this, a student's
+  // natural follow-up to a reply-in-place answer (SURF-5) would be silently
+  // ignored.
+  it('answers a message that replies to the bot even though its text carries no mention token', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db)
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(
+      inboundMention({
+        guildId,
+        text: 'and what about the final?',
+        repliesToBot: true,
+      }),
+      deps
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
   })
 
   it('answers a genuine mention, and the model receives the rewritten name while the transcript keeps what the student typed', async () => {
@@ -246,6 +313,11 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
 
     expect(result.kind).toBe('answered-last-request')
     expect(reply.sent[0]).toMatch(/reached the maximum number of responses/)
+    // Finding 10 — the refusal text above is asserted identically by
+    // `declined-over-limit`'s own test below; without this, a regression
+    // that routed `answered-last-request` into the refusal branch (dropping
+    // the student's actual answer) would keep both tests green.
+    expect(reply.sent[0]).toMatch(/a fake answer/)
   })
 
   it('renders "declined-over-limit" as a refusal reaching the student, not silence', async () => {
@@ -277,6 +349,27 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
 
     expect(result.kind).toBe('failed-with-apology')
     expect(reply.sent[0]).toMatch(/can't respond intelligently/)
+  })
+
+  // Finding 9 of this rework: `answerQuestion`'s `failed-with-apology` also
+  // carries `lastRequestOfDay` when the failed call was itself the day's
+  // last — without rendering it, a provider outage on a student's last
+  // request leaves them apologised to *and* silently locked out, with no
+  // notice at all.
+  it('renders "failed-with-apology" with the last-request notice too, when the failed call was also the day\'s last', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      maxRequestsPerDay: 1,
+    })
+    const model = new FakeModelClient()
+    model.failNext()
+    const { deps, reply } = makeDeps(testDb, { model })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('failed-with-apology')
+    expect(reply.sent[0]).toMatch(/can't respond intelligently/)
+    expect(reply.sent[1]).toMatch(/reached the maximum number of responses/)
   })
 
   it('logs and stays silent for a course configured to answer nothing', async () => {
@@ -333,5 +426,105 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
     expect(result).toEqual({ kind: 'unrouted' })
     expect(reply.sent).toHaveLength(0)
     expect(logger.infoCalls.length).toBeGreaterThan(0)
+  })
+})
+
+describe('handleMention — PROJ-2/finding 2: an archived project stops its courses routing', () => {
+  it('does not answer a message routed to a course whose project has been archived', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db
+    )
+    const course = courses.getCourse(organizationId, courseId, testDb.db)
+    if (!course) throw new Error('setup failed: course not found')
+    projects.archiveProject(organizationId, course.projectId, testDb.db)
+
+    const { deps, model, reply, logger } = makeDeps(testDb)
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'unrouted' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(0)
+    expect(logger.infoCalls.length).toBeGreaterThan(0)
+  })
+
+  it("a live course reusing an archived course's category name still routes, rather than becoming ambiguous", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { categoryName: 'Shared Category' }
+    )
+    const archivedCourse = courses.getCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    )
+    if (!archivedCourse) throw new Error('setup failed: course not found')
+    projects.archiveProject(organizationId, archivedCourse.projectId, testDb.db)
+
+    // PROJ-3 permits this reuse once the first course's project is archived
+    // (`repos/courses.ts`'s own `findCourseNameConflict`) — the case this
+    // test exists to prove the *routing* half of, not just the save.
+    createExtraCourse(testDb.db, organizationId, 'Shared Category')
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Shared Category' }),
+      deps
+    )
+
+    // Routed to the live course, not silenced by the archived one's
+    // (identically-named) category.
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+})
+
+describe('handleMention — CORE-2/finding 13: an ambiguous route is dropped, not answered', () => {
+  it('drops a message that matches two enabled courses on the same category, logging at ERROR', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { categoryName: 'Shared Category' }
+    )
+
+    // PROJ-2/PROJ-3 together make two *live* courses sharing a category name
+    // unreachable through the repo API itself — `createCourse` refuses the
+    // collision outright, and `unarchiveProject` refuses to bring back a
+    // course whose name was taken while it was archived
+    // (`findProjectUnarchiveConflict`, `repos/courses.ts`). So this is
+    // reached the only way it legitimately can be: the second course is
+    // created in its own category first (respecting PROJ-3), then its
+    // category is renamed directly on the schema, below the repo layer that
+    // exists to prevent this exact state — proving `routeMessage`'s own
+    // ambiguity branch (`routing.ts`'s own comment: "this should be
+    // unreachable in ordinary operation") is still reported correctly if it
+    // is ever reached.
+    const { courseId: otherCourseId } = createExtraCourse(
+      testDb.db,
+      organizationId,
+      'Temporary Category'
+    )
+    testDb.db.$client
+      .prepare('UPDATE course_categories SET name = ? WHERE course_id = ?')
+      .run('Shared Category', otherCourseId)
+
+    const { deps, model, reply, logger } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Shared Category' }),
+      deps
+    )
+
+    expect(result.kind).toBe('routing-ambiguous')
+    if (result.kind !== 'routing-ambiguous') {
+      throw new Error('expected routing-ambiguous')
+    }
+    expect(result.signal).toBe('category')
+    expect([...result.courseIds].sort()).toEqual(
+      [courseId, otherCourseId].sort()
+    )
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(0)
+    expect(logger.errorCalls.length).toBeGreaterThan(0)
   })
 })

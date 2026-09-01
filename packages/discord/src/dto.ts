@@ -38,6 +38,18 @@ export interface InboundMention {
   botId: string
   /** `true` when the message's author is itself a bot account — including this bot, but the self case is checked separately (`authorId === botId`) so its own log line can say which one happened. */
   authorIsBot: boolean
+  /**
+   * `true` when this message is a Discord Reply to one of the bot's own
+   * messages (finding 3 of the SURF-1 rework). A Reply carries no `<@id>`
+   * token in its own `text` — Discord shows who it is addressed to through
+   * the reply relationship alone — so a student's natural follow-up to a
+   * reply-in-place answer (SURF-5) would otherwise match neither
+   * `mentionsBot` nor anything else here and be silently ignored, the same
+   * gap `response_bot.py:164`'s own comment ("did not directly mention *or
+   * reply to* this bot") already accounts for. `handleMention` treats this
+   * the same as a mention.
+   */
+  repliesToBot: boolean
 }
 
 /**

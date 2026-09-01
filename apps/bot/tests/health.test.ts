@@ -4,7 +4,9 @@
  * this app's otherwise-untested wiring. No network beyond loopback.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { Server } from 'node:http'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { startHealthServer, type HealthServer } from '../src/health.js'
 
@@ -39,7 +41,7 @@ async function startOnFreePort(
   })
   await new Promise<void>((resolve) => probe.close(() => resolve()))
 
-  return { server: startHealthServer(port, isGatewayConnected), port }
+  return { server: await startHealthServer(port, isGatewayConnected), port }
 }
 
 describe('startHealthServer (SURF-7)', () => {
@@ -70,5 +72,36 @@ describe('startHealthServer (SURF-7)', () => {
     server = undefined
 
     await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toBeTruthy()
+  })
+
+  // Finding 8 — `listen(port)` with no host binds every interface
+  // (`0.0.0.0`); this endpoint has no reason to be reachable from outside
+  // the machine it runs on. Spies on the real `listen` call itself (still
+  // calling through to it, so the server still actually starts) rather than
+  // trying to prove a negative by connecting from a non-loopback address —
+  // which "no network beyond loopback" rules out doing anyway.
+  it('binds only the loopback interface, not every interface', async () => {
+    const listenSpy = vi.spyOn(Server.prototype, 'listen')
+    const { server: started, port } = await startOnFreePort(() => true)
+    server = started
+
+    const call = listenSpy.mock.calls.find((args) => args[0] === port)
+    expect(call?.[1]).toBe('127.0.0.1')
+    listenSpy.mockRestore()
+  })
+
+  // Finding 8 — a bind failure (most often `EADDRINUSE`, the PLAT-4 "a
+  // second instance of this process is already running" case) used to have
+  // no `'error'` listener at all, so it escaped as an uncaught exception
+  // rather than a rejection `main().catch` could handle the same way it
+  // handles a bad environment. Binding the same port twice reproduces
+  // exactly that failure.
+  it('rejects clearly, rather than throwing an uncaught exception, when the port is already in use', async () => {
+    const { server: started, port } = await startOnFreePort(() => true)
+    server = started
+
+    await expect(startHealthServer(port, () => true)).rejects.toThrow(
+      /already in use/
+    )
   })
 })

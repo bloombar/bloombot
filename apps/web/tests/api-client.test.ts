@@ -81,4 +81,21 @@ describe('api/client.ts', () => {
       requestSignInLink('student@example.edu')
     ).resolves.toBeUndefined()
   })
+
+  it('a fetch that never gets a response at all rejects with an ApiError, not a bare exception (finding 3 of the WEB-1..6 rework)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchMe()).rejects.toMatchObject({
+      status: 0,
+      body: { error: 'network_error' },
+    })
+    // The whole point: every caller's existing `caught instanceof ApiError`
+    // narrowing already handles this — a bare TypeError would have skipped
+    // it and rethrown, which is exactly what left App.tsx/SignIn.tsx/
+    // Shell.tsx with unhandled rejections before this fix.
+    await expect(fetchMe()).rejects.toBeInstanceOf(ApiError)
+  })
 })

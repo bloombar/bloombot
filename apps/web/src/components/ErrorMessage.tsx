@@ -67,6 +67,17 @@ export function describeApiError(error: ApiError): {
       }
     case 'origin_refused':
       return { headline: 'That request was refused.', details: [] }
+    case 'network_error':
+      // `api/client.ts`'s own code for a `fetch` that never got a response
+      // at all — this app's own diagnosis of a proxy or network failure,
+      // not something apps/api said, so a distinct message (rather than the
+      // `default` case's generic one) is honest here in the same way
+      // `describeApiError`'s other cases are (WEB-5).
+      return {
+        headline:
+          'Could not reach Bloombot. Check your connection and try again.',
+        details: [],
+      }
     default:
       // internal_error, unreadable_response, or any other code this app
       // does not recognize yet — no stack trace, no internal message, no

@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { fetchMe } from './api/client.js'
+import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { RedeemLink } from './pages/RedeemLink.js'
@@ -29,6 +29,13 @@ type SessionState =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
   | { kind: 'signed-in'; account: AccountSummary }
+  // `fetchMe()` rejected outright — `apps/api` was unreachable
+  // (`api/client.ts`'s own `network_error`) or answered with something this
+  // app cannot make sense of. Distinct from `signed-out`: that is an answer
+  // ("no session"), this is the absence of one (finding 3 of the WEB-1..6
+  // rework — without this state, a rejected `fetchMe()` left `session` at
+  // `loading` forever, an unhandled rejection and a permanent spinner).
+  | { kind: 'unreachable' }
 
 function goToRoot(): void {
   window.history.replaceState(null, '', '/')
@@ -42,13 +49,26 @@ export function App() {
   >(undefined)
 
   const refreshSession = useCallback(() => {
-    fetchMe().then((response) => {
-      setSession(
-        response.account
-          ? { kind: 'signed-in', account: response.account }
-          : { kind: 'signed-out' }
-      )
-    })
+    fetchMe().then(
+      (response) => {
+        setSession(
+          response.account
+            ? { kind: 'signed-in', account: response.account }
+            : { kind: 'signed-out' }
+        )
+      },
+      (caught: unknown) => {
+        // A missing rejection handler here (finding 3 of the WEB-1..6
+        // rework) meant an unreachable apps/api left `session` at `loading`
+        // forever, with no message and no way to retry, and an unhandled
+        // rejection besides — `api/client.ts`'s own `request` now always
+        // rejects with an `ApiError` (never a bare `TypeError`), so this
+        // narrows on it the same way every other screen does rather than
+        // re-throwing.
+        if (caught instanceof ApiError) setSession({ kind: 'unreachable' })
+        else throw caught
+      }
+    )
   }, [])
 
   useEffect(() => {
@@ -84,6 +104,19 @@ export function App() {
 
   if (session.kind === 'loading') {
     return <p>Loading…</p>
+  }
+
+  if (session.kind === 'unreachable') {
+    return (
+      <div>
+        <p role="alert">
+          Could not reach Bloombot. Check your connection and try again.
+        </p>
+        <button type="button" onClick={refreshSession}>
+          Try again
+        </button>
+      </div>
+    )
   }
 
   if (session.kind === 'signed-in') {

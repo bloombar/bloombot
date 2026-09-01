@@ -36,6 +36,8 @@ const FORBIDDEN_PACKAGES = [
   '@bloombot/config',
   '@bloombot/logger',
   '@bloombot/auth',
+  '@bloombot/discord-rest',
+  '@bloombot/openai',
 ]
 
 /**
@@ -54,11 +56,28 @@ const FORBIDDEN_PACKAGES = [
  * `@bloombot/auth` depends on `@bloombot/db` (`eslint.config.js`'s own
  * comment on why it is in `BROWSER_FORBIDDEN_PACKAGES` at all), so
  * importing it would already trip the `@bloombot/db` signatures above.
+ *
+ * `discord.com/api` is `@bloombot/discord-rest`'s own signature — not a
+ * string literal in that package's own files, but in `@bloombot/config`'s
+ * `DISCORD_API_BASE`/`DISCORD_OAUTH_BASE` defaults, which `client.ts` and
+ * `authorize-url.ts` both read at call time (`CONFIG.DISCORD_OAUTH_BASE`);
+ * `@bloombot/discord-rest` depends on nothing else this app cannot already
+ * reach some other way, so this is the one signature reachable only through
+ * it (reproduced while writing this test: the earlier three signatures
+ * above all miss it — finding 1 of the WEB-6 rework). `gpt-4o` is
+ * `@bloombot/openai`'s own — `responses.ts`'s `DEFAULT_MODEL`, read by
+ * `client.ts#ask` — caught today only by luck through the `better-sqlite3`/
+ * `pino` signatures above (`@bloombot/openai` depends on `@bloombot/core`,
+ * which depends on `@bloombot/db`), so it gets a signature of its own
+ * rather than relying on a transitive edge that a future refactor of
+ * `@bloombot/core` could remove.
  */
 const BUNDLED_PACKAGE_SIGNATURES = [
   'better-sqlite3',
   'discord_server_bindings',
   'pino',
+  'discord.com/api',
+  'gpt-4o',
 ]
 
 // Credential-shaped strings: the actual environment-variable names
@@ -88,7 +107,22 @@ describe('apps/web bundle (WEB-6)', () => {
     // `apps/web/package.json#build` runs) — not a dev-server transform,
     // which does not bundle or minify and would not catch a forbidden
     // import the way the shipped artifact needs to be checked.
-    execFileSync('npx', ['vite', 'build'], { cwd: APP_ROOT, stdio: 'pipe' })
+    //
+    // `NODE_ENV: 'production'` is explicit rather than inherited: vitest
+    // itself sets `NODE_ENV=test`, and `execFileSync` inherits the parent
+    // process's environment by default, so without this override `vite
+    // build` produced a *development* bundle — React's own dev build
+    // inlined, ~400 kB, against ~199 kB from `npm run build` run directly —
+    // even though this test's own comment already claimed to check "the
+    // actual output" (cheap-fix 6 of the WEB-1..6 rework, reproduced by
+    // running both and diffing `dist/`'s size). A superset bundle is
+    // conservative for a "must not contain" check — nothing here was a
+    // false negative — but the comment's claim was not true until this.
+    execFileSync('npx', ['vite', 'build'], {
+      cwd: APP_ROOT,
+      stdio: 'pipe',
+      env: { ...process.env, NODE_ENV: 'production' },
+    })
   }, 60_000)
 
   it('produces a dist/ directory with at least one JS bundle', () => {
@@ -97,6 +131,25 @@ describe('apps/web bundle (WEB-6)', () => {
       file.endsWith('.js')
     )
     expect(jsFiles.length).toBeGreaterThan(0)
+  })
+
+  it('is a production build, not a development one (cheap-fix 6 of the WEB-1..6 rework)', () => {
+    // "Download the React DevTools for a better development experience" is
+    // react-dom's own development-only console message — present when
+    // `NODE_ENV` is anything but `production` at build time, absent from a
+    // real production build. A cheap, specific proxy for "this beforeAll
+    // actually built what `npm run build` builds" that a byte-count
+    // assertion would not survive a dependency upgrade to make.
+    const files = listFilesRecursively(DIST_DIR).filter((file) =>
+      file.endsWith('.js')
+    )
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf8')
+      expect(
+        contents.includes('React DevTools'),
+        `${file} contains react-dom's development-only console message — this build was not built with NODE_ENV=production`
+      ).toBe(false)
+    }
   })
 
   it('contains none of the forbidden workspace packages, by specifier or by bundled signature', () => {

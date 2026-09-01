@@ -20,9 +20,31 @@ export interface ShellProps {
 }
 
 export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
-  const [activeOrganizationId, setActiveOrganizationId] = useState(
-    account.memberships[0]?.organizationId ?? ''
-  )
+  // WEB-3/WEB-4 — an install navigates the whole browser away to Discord and
+  // back (`components/InstallButton.tsx`'s own module comment), so the
+  // callback lands on a fresh mount of this component: `justInstalled` is a
+  // prop, not state this component already had. Defaulting to
+  // `memberships[0]` unconditionally left a successful install into any
+  // *other* organization stranded — the switcher showed the first
+  // membership while the API had bound the server to whichever organization
+  // the install actually ran for. Preferring `justInstalled.organizationId`
+  // (when the account really is a member of it — defensive against a value
+  // this app did not itself just hand back) makes the panel open on the
+  // organization the install belonged to, so `installedServerId` below
+  // actually matches on the first render rather than only after a manual
+  // switch.
+  const [activeOrganizationId, setActiveOrganizationId] = useState(() => {
+    if (
+      justInstalled &&
+      account.memberships.some(
+        (membership) =>
+          membership.organizationId === justInstalled.organizationId
+      )
+    ) {
+      return justInstalled.organizationId
+    }
+    return account.memberships[0]?.organizationId ?? ''
+  })
   const [removedServerId, setRemovedServerId] = useState<string | undefined>(
     undefined
   )
@@ -60,6 +82,18 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
     setSigningOut(true)
     try {
       await signOut()
+    } catch {
+      // A `catch` with nothing in it, not merely a `finally` — without one,
+      // a rejected `signOut()` (a network failure, `api/client.ts`'s own
+      // `network_error`) propagated past `finally` and out of this
+      // `async` function, and `<button onClick={() => void handleSignOut()}>`
+      // above discards the returned promise rather than awaiting it, so the
+      // rejection had nowhere to land but an unhandled rejection (finding 3
+      // of the WEB-1..6 rework). Nothing to show for it here either way:
+      // `onSignedOut` below already triggers `App.tsx`'s own `/auth/me`
+      // re-check, the source of truth for whether the session actually
+      // ended — if it did not, that re-check is what puts this account back
+      // in the shell, not anything this component decides.
     } finally {
       // AUTH-3: sign-out revokes the session server-side even if this
       // request somehow fails to round-trip — the caller should not be

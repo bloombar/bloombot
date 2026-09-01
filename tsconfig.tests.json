@@ -10,7 +10,19 @@
   "include": [
     "packages/*/tests/**/*.ts",
     "apps/*/tests/**/*.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    // QA-7's Playwright harness (cheap-fix 7 of the WEB-1..6 rework): it was
+    // outside every tsconfig, so `npm run typecheck` never checked it and
+    // neither Playwright nor `tsx` typechecks it at run time — against this
+    // file's own stated reason for existing ("an untypechecked test is a
+    // test that can quietly stop asserting"). `e2e/support/start-api.ts`
+    // already imports `apps/api`'s own `src/server.js` and
+    // `@bloombot/auth`/`@bloombot/db`/`@bloombot/discord-rest`/
+    // `@bloombot/logger` by relative/bare specifier — every one of those
+    // projects is already in `references` below (`apps/api/tests` imports
+    // `apps/api/src` the same way), so no new reference is needed here.
+    "e2e/**/*.ts",
+    "playwright.config.ts"
   ],
   // apps/web's own tests are .tsx and need the DOM lib and the JSX runtime,
   // neither of which the rest of this project's plain-Node test suites want

@@ -10,6 +10,10 @@
  *    (`components/ErrorMessage.tsx`) is the one place that turns an
  *    `ApiError` into words a person reads, kept separate so this module's
  *    only job is "what did the server actually say" (WEB-5).
+ *  - turns a `fetch` that never got a response at all — a proxy or network
+ *    failure between this browser and `apps/api` — into the same `ApiError`
+ *    every caller already narrows on (`error: 'network_error'`), rather than
+ *    letting a rejected `fetch` reach app code un-narrowed.
  *
  * Every request path here is relative (`/auth/...`, `/organizations/...`)
  * — `vite.config.ts`'s `server.proxy`/`preview.proxy` puts this app and
@@ -53,12 +57,25 @@ async function request<T>(
   // `body: undefined` explicitly — `RequestInit#body` may be omitted, but
   // not present-and-undefined — so a GET/body-less call spreads in nothing
   // rather than an explicit `undefined`.
-  const response = await fetch(path, {
-    method: init?.method ?? 'GET',
-    credentials: 'include',
-    headers: init?.body ? { 'Content-Type': 'application/json' } : {},
-    ...(init?.body ? { body: JSON.stringify(init.body) } : {}),
-  })
+  let response: Response
+  try {
+    response = await fetch(path, {
+      method: init?.method ?? 'GET',
+      credentials: 'include',
+      headers: init?.body ? { 'Content-Type': 'application/json' } : {},
+      ...(init?.body ? { body: JSON.stringify(init.body) } : {}),
+    })
+  } catch {
+    // `fetch` itself rejected — no response ever arrived: a DNS failure, a
+    // refused connection, a proxy or nginx that dropped the request before
+    // `apps/api` saw it (finding 3 of the WEB-1..6 rework). Distinct from
+    // `unreadable_response` below, which is a response that *did* arrive
+    // and failed to parse — this is no response at all. Turning it into an
+    // `ApiError` here, in the one module every screen calls through, means
+    // every caller's existing `caught instanceof ApiError` narrowing
+    // already handles it — nobody has to add its own fetch-level try/catch.
+    throw new ApiError(0, { error: 'network_error' })
+  }
 
   if (response.status === 204) {
     return undefined as T
@@ -68,10 +85,13 @@ async function request<T>(
   try {
     parsed = await response.json()
   } catch {
-    // A response this app cannot even parse as JSON — a proxy or network
-    // failure between this browser and apps/api, not anything apps/api
-    // itself reported. `describeApiError` still needs something to render
-    // (WEB-5: no stack trace, no raw exception).
+    // A response arrived but this app cannot even parse it as JSON — a body
+    // truncated in transit, a proxy's own HTML error page standing in for
+    // apps/api's, not anything apps/api itself reported. (A response that
+    // never arrived at all is `network_error`, thrown above this function's
+    // own `fetch` call — this branch only runs once a `Response` exists.)
+    // `describeApiError` still needs something to render (WEB-5: no stack
+    // trace, no raw exception).
     parsed = { error: 'unreadable_response' }
   }
 

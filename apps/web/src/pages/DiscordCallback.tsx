@@ -23,7 +23,7 @@
  * different ones the API itself does not distinguish.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, completeDiscordInstall } from '../api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../components/InstallButton.js'
@@ -46,9 +46,25 @@ export function DiscordCallback({
   onDone,
 }: DiscordCallbackProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
+  // `main.tsx` renders under `StrictMode`, which mounts, cleans up and
+  // re-mounts every effect once in development. `completeDiscordInstall`
+  // consumes the install-state row TEN-4 scopes to one use (`docs/
+  // DECISIONS.md`), so calling it twice for the same callback means the
+  // second call is always a refusal, and a successful install rendered as
+  // one (finding 4 of the WEB-1..6 rework — the identical shape to
+  // `pages/RedeemLink.tsx`'s own token-redemption bug, and fixed the same
+  // way: a ref that survives the mount/cleanup/remount, and no
+  // `cancelled`-flag guard on the promise itself, since StrictMode's
+  // practice cleanup would flip it before the still-in-flight call
+  // resolves and silently discard a real response — see that file's own
+  // module comment for the fuller account). Keyed on `search` rather than a
+  // plain boolean: a *genuine* new `search` value — a different callback
+  // landing on the same mounted instance, which does not happen in this
+  // app's own navigation but is not ruled out here either — should still be
+  // dispatched.
+  const dispatchedSearchRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    let cancelled = false
     const organizationId = sessionStorage.getItem(PENDING_INSTALL_ORG_KEY)
     const params = new URLSearchParams(search)
     const code = params.get('code')
@@ -62,6 +78,9 @@ export function DiscordCallback({
       return
     }
 
+    if (dispatchedSearchRef.current === search) return
+    dispatchedSearchRef.current = search
+
     completeDiscordInstall(organizationId, {
       code,
       state: stateParam,
@@ -69,19 +88,15 @@ export function DiscordCallback({
     }).then(
       (result) => {
         sessionStorage.removeItem(PENDING_INSTALL_ORG_KEY)
-        if (!cancelled) onInstalled(organizationId, result.serverId)
+        onInstalled(organizationId, result.serverId)
       },
       (caught: unknown) => {
         sessionStorage.removeItem(PENDING_INSTALL_ORG_KEY)
-        if (cancelled) return
         if (caught instanceof ApiError)
           setState({ kind: 'error', error: caught })
         else throw caught
       }
     )
-    return () => {
-      cancelled = true
-    }
     // `search` is the only input this effect depends on — `onInstalled` is a
     // stable callback from `App.tsx`, not state this page re-reads.
   }, [search])

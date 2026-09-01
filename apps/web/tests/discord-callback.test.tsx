@@ -6,6 +6,7 @@
  * for beginning the flow.
  */
 
+import { StrictMode } from 'react'
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -85,5 +86,32 @@ describe('DiscordCallback (WEB-4)', () => {
       screen.getByText('There is nothing to complete here.')
     ).toBeInTheDocument()
     expect(completeDiscordInstall).not.toHaveBeenCalled()
+  })
+
+  // `main.tsx` renders under `StrictMode`, which mounts, cleans up and
+  // re-mounts every effect once in development — a bare `render` (the tests
+  // above) is not the configuration this page actually runs in. Finding 4 of
+  // the WEB-1..6 rework: `completeDiscordInstall` consumes a one-use
+  // install-state row, so calling it twice for the same callback meant a
+  // successful install rendered as the second call's refusal.
+  it('completes the install exactly once under StrictMode, even though the effect runs twice', async () => {
+    sessionStorage.setItem(PENDING_INSTALL_ORG_KEY, 'org-1')
+    completeDiscordInstall.mockResolvedValue({ serverId: 'guild-42' })
+    const onInstalled = vi.fn()
+
+    render(
+      <StrictMode>
+        <DiscordCallback
+          search="?code=abc&state=xyz&guild_id=guild-42"
+          onInstalled={onInstalled}
+          onDone={vi.fn()}
+        />
+      </StrictMode>
+    )
+
+    await vi.waitFor(() =>
+      expect(onInstalled).toHaveBeenCalledWith('org-1', 'guild-42')
+    )
+    expect(completeDiscordInstall).toHaveBeenCalledTimes(1)
   })
 })

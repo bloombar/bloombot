@@ -6,7 +6,7 @@
  * that opening it is the action.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, redeemSignInLink } from '../api/client.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
@@ -21,23 +21,31 @@ type State = { kind: 'pending' } | { kind: 'error'; error: ApiError }
 
 export function RedeemLink({ token, onRedeemed }: RedeemLinkProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
+  // `main.tsx` renders under `StrictMode`, which in development mounts,
+  // cleans up and re-mounts every effect once as a way of surfacing effects
+  // that are not idempotent (React's own documented reason). This one
+  // redeems a single-use token — calling it twice means the *second* call
+  // is the one whose response wins the race, and it is always a 401
+  // ("already redeemed"), so a successful sign-in rendered as a refusal
+  // (finding 4 of the WEB-1..6 rework). This ref is what prevents the
+  // second call: it survives StrictMode's mount/cleanup/remount (a ref is
+  // not reset by an effect's own cleanup), so the second invocation for the
+  // same token sees it already set and skips redeeming again. No
+  // `cancelled`-flag guard on the promise itself, deliberately: StrictMode's
+  // practice cleanup runs the first invocation's cleanup before the
+  // still-in-flight redemption resolves, so a flag flipped there would have
+  // silently discarded a real response — and React 18+ no longer warns on
+  // (or needs guarding against) a state update after a genuine unmount.
+  const redeemedTokenRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    let cancelled = false
-    redeemSignInLink(token).then(
-      () => {
-        if (!cancelled) onRedeemed()
-      },
-      (caught: unknown) => {
-        if (cancelled) return
-        if (caught instanceof ApiError)
-          setState({ kind: 'error', error: caught })
-        else throw caught
-      }
-    )
-    return () => {
-      cancelled = true
-    }
+    if (redeemedTokenRef.current === token) return
+    redeemedTokenRef.current = token
+
+    redeemSignInLink(token).then(onRedeemed, (caught: unknown) => {
+      if (caught instanceof ApiError) setState({ kind: 'error', error: caught })
+      else throw caught
+    })
     // `token` is the only input this effect depends on — `onRedeemed` is a
     // stable callback from `App.tsx`, not state this page re-reads.
   }, [token])

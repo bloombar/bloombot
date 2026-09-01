@@ -45,9 +45,13 @@ describe('runMigrations', () => {
     expect(Object.keys(schema).sort()).toEqual([
       '__drizzle_migrations',
       'accounts',
+      'course_categories',
+      'course_channels',
+      'courses',
       'discord_server_bindings',
       'memberships',
       'organizations',
+      'projects',
     ])
     expect(schema.organizations).toEqual([
       'created_at',
@@ -74,6 +78,46 @@ describe('runMigrations', () => {
       'organization_id',
       'removed_at',
       'server_id',
+    ])
+    expect(schema.projects).toEqual([
+      'archived_at',
+      'created_at',
+      'id',
+      'name',
+      'organization_id',
+    ])
+    expect(schema.courses).toEqual([
+      'admins_role',
+      'created_at',
+      'enabled',
+      'file_prefix',
+      'id',
+      'instructions',
+      'max_requests_per_day',
+      'model',
+      'organization_id',
+      'project_id',
+      'prompt_id',
+      'students_role',
+      'title',
+      'vector_store_id',
+    ])
+    expect(schema.course_categories).toEqual([
+      'course_id',
+      'created_at',
+      'id',
+      'name',
+      'ordering',
+      'organization_id',
+    ])
+    expect(schema.course_channels).toEqual([
+      'admins_only',
+      'category_id',
+      'created_at',
+      'id',
+      'name',
+      'ordering',
+      'organization_id',
     ])
   })
 

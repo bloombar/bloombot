@@ -197,6 +197,11 @@ export const FAMILY_LABEL = {
     color: '8b0000',
     description: 'Platform administration, audit & export',
   },
+  ENRL: {
+    name: 'area:enrolment',
+    color: '0052cc',
+    description: 'Course enrolment, eligibility and staff roles',
+  },
   LINK: {
     name: 'area:account-linking',
     color: 'fbca04',

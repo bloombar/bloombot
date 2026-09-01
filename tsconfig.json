@@ -10,6 +10,8 @@
     { "path": "./packages/legacy-import" },
     { "path": "./packages/core" },
     { "path": "./packages/openai" },
+    { "path": "./packages/discord" },
+    { "path": "./apps/bot" },
     { "path": "./tsconfig.tests.json" }
   ]
 }

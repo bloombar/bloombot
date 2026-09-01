@@ -22,7 +22,8 @@
     "typecheck": "tsc --build",
     "build": "tsc --build",
     "test": "node --test \"scripts/board/*.test.mjs\" \".claude/hooks/*.test.mjs\" && vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "bot:dev": "tsx watch apps/bot/src/index.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0"
@@ -34,6 +35,7 @@
     "eslint": "^10.0.1",
     "globals": "^17.11.0",
     "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.11"

@@ -142,6 +142,11 @@ export const FAMILY_LABEL = {
     color: '0075ca',
     description: 'Conversations, transcripts & daily usage counters',
   },
+  CORE: {
+    name: 'area:conversation-core',
+    color: '0e8a16',
+    description: 'The surface-agnostic answering pipeline',
+  },
   MIG: {
     name: 'area:legacy-import',
     color: '8250df',

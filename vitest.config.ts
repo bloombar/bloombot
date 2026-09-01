@@ -19,16 +19,19 @@ export default defineConfig({
       '@bloombot/schemas': sourceEntry('schemas'),
       '@bloombot/db': sourceEntry('db'),
       '@bloombot/legacy-import': sourceEntry('legacy-import'),
+      '@bloombot/core': sourceEntry('core'),
     },
   },
   test: {
-    // QA-4: the coverage floor sits over the data-access layer, not a blanket
-    // percentage across the tree — a package like `db` has plenty of code
-    // (schema definitions, the migration runner) that is exercised end-to-end
-    // by every other test rather than meaningfully unit-testable on its own.
+    // QA-4: the coverage floor sits over the logic that matters — the
+    // data-access layer and the answering pipeline (`.claude/CLAUDE.md`) —
+    // not a blanket percentage across the tree — a package like `db` has
+    // plenty of code (schema definitions, the migration runner) that is
+    // exercised end-to-end by every other test rather than meaningfully
+    // unit-testable on its own.
     coverage: {
       provider: 'v8',
-      include: ['packages/db/src/repos/**/*.ts'],
+      include: ['packages/db/src/repos/**/*.ts', 'packages/core/src/**/*.ts'],
       thresholds: {
         lines: 90,
         functions: 90,
@@ -78,6 +81,15 @@ export default defineConfig({
         test: {
           name: 'legacy-import',
           root: './packages/legacy-import',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'core',
+          root: './packages/core',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

@@ -578,3 +578,56 @@ importer is ever pressed into service as a recurring sync rather than a single c
 database _and_ lets them accidentally run a rehearsal against it if they pass it out of habit — a narrower risk
 than the pre-fix state (no guard at all), but worth knowing since it is the one place in this package an escape
 hatch exists at all.
+
+---
+
+## D-15 — `packages/core`: a discriminated result instead of exceptions, and how the port carries D-3's escape hatch
+
+**Problem.** `answerQuestion` (CORE-1, 3, 5, 6) has two outcomes the brief calls "ordinary" — an over-limit
+request and a failed model call — that a naive port would signal by throwing, the same way a bug would. A
+caller (the Discord adapter, the web chat, MCP) then has to distinguish "the pipeline told me the allowance
+is spent" from "the pipeline itself broke" by inspecting an error message, which is exactly the kind of thing
+a `catch` block gets wrong under review pressure. Separately, `ModelClient.ask` (`src/ports.ts`) has to carry
+D-3's `promptId`/`instructions` pair to an adapter that has not been written yet — the OpenAI adapter lands in
+the next slice — so this slice has to decide what the port hands across that boundary without knowing the
+adapter's own shape.
+
+**Choice, result type.** `AnswerResult` is a discriminated union — `answered` / `answered-last-request` /
+`declined-over-limit` / `failed-with-apology` — and `answerQuestion` returns one instead of throwing for
+either of the two ordinary cases. A `courseId`/`personId` that does not resolve to this organization is kept
+out of that union and thrown instead: CORE-2 (routing) and PPL-3 (identity resolution) are what is supposed to
+guarantee the ids `answerQuestion` receives already belong to the organization, so a resolution failure here
+is a caller bug, not a state a student's own request can reach — the same "ordinary vs. exceptional" line
+`repos/courses.ts`'s `SaveCourseResult` already draws between a name collision (returned) and a malformed
+input (thrown).
+
+**Choice, D-3 through the port.** `ModelRequest` (`src/ports.ts`) carries both `promptId` and `instructions`
+unresolved — it does not pick a winner. `courses.promptId` wins when set (D-3), but _which one wins_ is
+encoded once, in `answer.ts` reading `course.promptId`/`course.instructions` straight off the row and handing
+both to the port, not duplicated into every future adapter's own resolution logic. An adapter that only
+understands one of the two (a provider with no concept of a stored prompt reference) still receives both
+fields and is free to ignore the one it cannot use — the port stays a plain description of "what the course
+says to answer with," not a resolved instruction ready for one specific vendor's call shape.
+
+**Choice, a model failure still counts against the daily allowance.** `response_bot.py`'s own counter update
+runs unconditionally after the `try`/`except` around its OpenAI call — a request whose model call raised still
+increments `num_requests_today` (the `is_response` flag it sets is computed and never read). CORE-3 and CORE-5
+are both silent on whether a failed call spends part of the allowance, so `answer.ts` matches the bot: `usage.
+incrementUsage` runs after the reply is recorded whether the model answered or raised, and only the
+`declined-over-limit` path (which returns before either write) never increments. This is carried over
+deliberately, not rediscovered by accident — worth revisiting if a future slice decides a provider outage
+should not cost a student part of their day.
+
+**Why not let a combined "last request, and it failed" state exist.** `response_bot.py` can produce that
+combination (the rate-limit notice is prepended to whichever text ends up in `openai_response`, including the
+apology, when the _n_-th request happens to be the one whose call fails). The brief's own result list is four
+outcomes, not a matrix of allowance × success; `answer.ts` decides the last-request notice before the model is
+asked and only ever applies it to a successful answer, so that combination cannot occur here. Narrower than
+the Python bot's behaviour, on purpose: the combined message reads oddly ("you have reached your limit... sorry,
+I can't respond") and nothing in CORE-3 or CORE-5 asks for it to be preserved.
+
+**Limits.** The two `throw`s (course/conversation not found) mean `answer.ts` is not safe to call with
+unvalidated input — a future MCP or web surface that accepts a raw `courseId` from outside the platform must
+resolve and validate it first, the same way CORE-2's routing and PPL-3's identity resolution already do for
+Discord. If a later slice finds a legitimate reason for `answerQuestion` to be called with an id it cannot
+resolve, that is a new discriminated outcome to add, not a reason to swallow the exception.

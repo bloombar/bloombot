@@ -1431,7 +1431,7 @@
   section: §12 Platform Architecture
   family: PLAT
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: PLAT-4
   title: Process topology
@@ -1442,7 +1442,7 @@
   section: §12 Platform Architecture
   family: PLAT
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-1
   title: The bot process holds the only gateway connection
@@ -1454,7 +1454,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-2
   title: Only a direct mention is answered
@@ -1466,7 +1466,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-3
   title: A server that is not bound to an organization is ignored
@@ -1477,7 +1477,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-4
   title: A person is recognized by their Discord account
@@ -1488,7 +1488,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-5
   title: The answer is a reply, and a long answer is split rather than lost
@@ -1499,7 +1499,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-6
   title: Every outcome reaches the student or the log, and none reaches neither
@@ -1511,7 +1511,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: SURF-7
   title: The process starts, reports its health, and stops cleanly
@@ -1522,7 +1522,7 @@
   section: §22 Discord Surface
   family: SURF
   phase: 4
-  status: In review
+  status: Done
   review: false
 - id: ACT-1
   title: Every operation is an action

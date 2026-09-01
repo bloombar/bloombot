@@ -1,6 +1,12 @@
 /** Public surface of `@bloombot/db`. */
 
-export { openDatabase, closeDatabase, type Database } from './client.js'
+export {
+  openDatabase,
+  closeDatabase,
+  type Database,
+  type Executor,
+  type TransactingExecutor,
+} from './client.js'
 export { runMigrations } from './migrate.js'
 export { resolveReal, repoDataDir, isUnderRepoData } from './path-guard.js'
 export * as schema from './schema.js'
@@ -14,3 +20,5 @@ export * as courses from './repos/courses.js'
 export * as people from './repos/people.js'
 export * as conversations from './repos/conversations.js'
 export * as usage from './repos/usage.js'
+export * as signInTokens from './repos/sign-in-tokens.js'
+export * as sessions from './repos/sessions.js'

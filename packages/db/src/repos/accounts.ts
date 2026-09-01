@@ -11,7 +11,7 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor, TransactingExecutor } from '../client.js'
 import { accounts, memberships, type MembershipRole } from '../schema.js'
 
 export type Account = typeof accounts.$inferSelect
@@ -32,10 +32,14 @@ export interface NewAccount {
  * TEN-2 exception #1: unscoped by design. An account exists before any
  * organization does, so this is how sign-in and invitation flows find an
  * existing account without already knowing which organization it belongs to.
+ *
+ * `db` accepts `Executor`, not just `Database`: `@bloombot/auth`'s
+ * `sign-in.ts` calls this from inside its own transaction, deciding whether
+ * a sign-in is first-time or returning before it writes anything.
  */
 export function getAccountByEmail(
   email: string,
-  db: Database
+  db: Executor
 ): Account | undefined {
   return db
     .select()
@@ -53,11 +57,19 @@ export function getAccountByEmail(
  * belongs to more than one organization already exists; give it a second
  * membership with `memberships.createMembership` instead of calling this
  * again.
+ *
+ * `db` accepts `TransactingExecutor`, not just `Database`: called with a
+ * top-level connection this opens a real transaction, exactly as before;
+ * called with another transaction's own `tx` (`@bloombot/auth`'s
+ * `sign-in.ts`, composing a first-time sign-in's organization, account and
+ * session atomically — TEN-1) `db.transaction(...)` opens a nested
+ * savepoint instead, so a later failure in that outer transaction rolls
+ * this back too.
  */
 export function createAccount(
   organizationId: string,
   input: NewAccount,
-  db: Database
+  db: TransactingExecutor
 ): Account {
   return db.transaction((tx) => {
     const account = tx

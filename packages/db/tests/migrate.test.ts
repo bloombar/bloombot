@@ -72,6 +72,8 @@ describe('runMigrations', () => {
       'people',
       'person_identities',
       'projects',
+      'sessions',
+      'sign_in_tokens',
       'usage_counters',
     ])
     expect(schema.organizations).toEqual([
@@ -189,6 +191,23 @@ describe('runMigrations', () => {
       'day',
       'organization_id',
       'person_id',
+    ])
+    expect(schema.sign_in_tokens).toEqual([
+      'created_at',
+      'email',
+      'expires_at',
+      'id',
+      'token_hash',
+      'used_at',
+    ])
+    expect(schema.sessions).toEqual([
+      'account_id',
+      'created_at',
+      'expires_at',
+      'id',
+      'last_seen_at',
+      'revoked_at',
+      'token_hash',
     ])
   })
 

@@ -20,9 +20,22 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - discord-servers.ts#resolveDiscordServerBinding: this *is* the lookup
 //    that establishes which organization an incoming Discord message
 //    belongs to, so it cannot itself take an organization id as input.
+//  - sign-in-tokens.ts / sessions.ts: AUTH-1/AUTH-3. A sign-in token exists
+//    to find or create an account, and a session authenticates an account
+//    across every organization it belongs to — both sit one level above
+//    organization scoping, the same way `accounts.ts` itself does, so every
+//    exported function in these two files is keyed on an email or an
+//    account id rather than an `organizationId`.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
+  'sign-in-tokens.ts': ['createSignInToken', 'consumeSignInToken'],
+  'sessions.ts': [
+    'createSession',
+    'validateSession',
+    'revokeSessionByHash',
+    'revokeAllSessionsForAccount',
+  ],
 }
 
 interface ExportedFunction {
@@ -95,7 +108,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the nine repo files this test is written against', () => {
+  it('found the eleven repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -108,6 +121,8 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'organizations.ts',
         'people.ts',
         'projects.ts',
+        'sessions.ts',
+        'sign-in-tokens.ts',
         'usage.ts',
       ].sort()
     )

@@ -536,3 +536,39 @@ export const sessions = sqliteTable(
   },
   (table) => [index('sessions_account_id_idx').on(table.accountId)]
 )
+
+// TEN-4 — the Discord install flow's server-side OAuth+PKCE state: one row
+// per installation attempt, from a signed-in caller beginning it
+// (`@bloombot/auth`'s `discord-install.ts#beginDiscordInstall`) to the
+// callback redeeming it exactly once. `stateHash` is looked up the same way
+// `sign_in_tokens.token_hash` is — the plaintext `state` value is generated
+// and returned to the caller exactly once, and never written here. Unlike
+// every other secret in this schema, `codeVerifier` is stored in plain
+// text: PKCE's verifier is not a bearer credential a caller ever presents
+// back to us to prove anything, it is a value this server generated for
+// itself and must hand to Discord's token endpoint, verbatim, to complete
+// the exchange — hashing it would make it unusable rather than safer. See
+// docs/DECISIONS.md D-21. `usedAt` is the single-use marker, the same
+// device `signInTokens` uses; `organizationId`/`accountId` are what the
+// callback claims the eventual binding for and records as its installer,
+// carried forward from whichever signed-in session began the attempt.
+export const discordInstallStates = sqliteTable(
+  'discord_install_states',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    stateHash: text('state_hash').notNull().unique(),
+    codeVerifier: text('code_verifier').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    usedAt: integer('used_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('discord_install_states_account_id_idx').on(table.accountId),
+  ]
+)

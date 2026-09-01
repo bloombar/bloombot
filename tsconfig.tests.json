@@ -22,6 +22,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/openai" },
     { "path": "./packages/discord" },
+    { "path": "./packages/discord-rest" },
     { "path": "./packages/actions" },
     { "path": "./apps/bot" },
     { "path": "./apps/api" }

@@ -22,12 +22,29 @@ import {
   runMigrations,
   type Database,
 } from '@bloombot/db'
+import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createLogger, type Logger } from '@bloombot/logger'
 
 import { buildLoggingEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
 
 const PROCESS_NAME = 'api'
+
+/**
+ * TEN-4 — credentials `@bloombot/config`'s schema does not cover, the same
+ * CFG-5 convention `apps/bot`'s own `requireEnv` already holds itself to:
+ * read directly here, at startup, rather than widening the shared schema
+ * for this slice, and checked explicitly so a missing one fails loudly
+ * before this process ever accepts a request instead of the first time an
+ * install is attempted.
+ */
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`apps/api: ${name} must be set (see env.example)`)
+  }
+  return value
+}
 
 async function main(): Promise<void> {
   // API-6 — refuses to start on an environment that does not validate:
@@ -39,6 +56,23 @@ async function main(): Promise<void> {
   const port = CONFIG.API_PORT
   const publicAppUrl = CONFIG.PUBLIC_APP_URL
   const nodeEnv = CONFIG.NODE_ENV
+
+  // TEN-4 — the same fail-loudly-at-startup discipline `apps/bot`'s own
+  // `BOT_TOKEN`/`OPENAI_API_KEY` checks hold themselves to, applied to the
+  // three Discord credentials the install flow needs. `BOT_APP_ID` doubles
+  // as the OAuth "client id" — Discord's own client id and application id
+  // are the same value.
+  const discordClientId = requireEnv('BOT_APP_ID')
+  const discordBotToken = requireEnv('BOT_TOKEN')
+  const discordClientSecret = requireEnv('DISCORD_CLIENT_SECRET')
+  // Not a credential (it is a bot permission bitmask, not a secret) and not
+  // every deployment sets one — omitted from the authorization URL entirely
+  // when unset (`routes/discord-servers.ts`), rather than defaulted here.
+  const discordPermissions = process.env['BOT_PERMISSIONS']
+  // Read once, here, alongside every other `CONFIG` value this process
+  // reads at startup — `routes/discord-servers.ts` takes it as an explicit
+  // dependency rather than reaching for `CONFIG` itself mid-request.
+  const discordOauthBase = CONFIG.DISCORD_OAUTH_BASE
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -56,6 +90,20 @@ async function main(): Promise<void> {
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.
     googleVerifier: createGoogleIdTokenVerifier(),
+    // TEN-4 — real Discord REST calls, base URLs from `CONFIG` (QA-2), never
+    // this file.
+    discordRestClient: createDiscordRestClient({
+      clientId: discordClientId,
+      clientSecret: discordClientSecret,
+    }),
+    discordClientId,
+    discordBotToken,
+    ...(discordPermissions ? { discordPermissions } : {}),
+    // Must exactly match a redirect URI registered with the Discord
+    // application — the web shell's own callback page (next slice), read
+    // off `code`/`state`/`guild_id` and posted here.
+    discordRedirectUri: `${publicAppUrl}/discord/callback`,
+    discordOauthBase,
   })
 
   const server = createServer(app)

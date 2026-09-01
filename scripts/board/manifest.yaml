@@ -1724,7 +1724,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 6
-  status: Backlog
+  status: In review
   review: false
 - id: TEN-5
   title: Cross-tenant access is indistinguishable from absence
@@ -1735,7 +1735,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 6
-  status: Backlog
+  status: In review
   review: false
 - id: TEN-6
   title: Removal preserves data
@@ -1747,7 +1747,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 6
-  status: Backlog
+  status: In review
   review: false
 - id: PROJ-4
   title: Duplicating a project

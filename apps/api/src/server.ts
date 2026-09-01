@@ -10,7 +10,8 @@
  *      request never reaches `sessionMiddleware`, let alone a route.
  *   3. `sessionMiddleware` (API-2) — attaches `req.session`, or not.
  *   4. The routes themselves (API-1) — `routes/auth.ts`, `routes/actions.ts`,
- *      and this process's own `GET /health` (API-6).
+ *      `routes/discord-servers.ts` (TEN-4), and this process's own
+ *      `GET /health` (API-6).
  *   5. `errorMiddleware` (API-4 / ACT-4) — last, so every thrown error from
  *      every route above lands here and nowhere else.
  */
@@ -20,6 +21,7 @@ import express, { type Express } from 'express'
 import { createPlatformRegistry, type ActionRegistry } from '@bloombot/actions'
 import type { EmailSender, GoogleIdTokenVerifier } from '@bloombot/auth'
 import type { Database } from '@bloombot/db'
+import type { DiscordRestClient } from '@bloombot/discord-rest'
 import type { Logger } from '@bloombot/logger'
 
 import { checkHealth } from './health.js'
@@ -28,6 +30,7 @@ import { originCheck } from './middleware/origin.js'
 import { sessionMiddleware } from './middleware/session.js'
 import { buildActionsRouter } from './routes/actions.js'
 import { buildAuthRouter } from './routes/auth.js'
+import { buildDiscordServersRouter } from './routes/discord-servers.js'
 
 export interface ServerDependencies {
   db: Database
@@ -39,6 +42,18 @@ export interface ServerDependencies {
   googleVerifier: GoogleIdTokenVerifier
   /** Defaults to `createPlatformRegistry()` — every action this slice ports. Overridable so a test can dispatch against a registry of its own, e.g. a recording action, without registering it alongside the platform's real ones. */
   registry?: ActionRegistry
+  /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
+  discordRestClient: DiscordRestClient
+  /** Discord's "client id"/"application id" — `BOT_APP_ID` in env.example. */
+  discordClientId: string
+  /** The bot's own token — `BOT_TOKEN` in env.example, the same credential `apps/bot` logs in with (API-5: "reaches Discord over REST with the same token"). Used only for `getBotGuilds`; never persisted, never logged. */
+  discordBotToken: string
+  /** Bot permission integer for the authorize URL's `permissions` param — `BOT_PERMISSIONS` in env.example. Omitted from the URL entirely when unset. */
+  discordPermissions?: string
+  /** Must exactly match a redirect URI registered with the Discord application — `${publicAppUrl}/discord/callback` in production. */
+  discordRedirectUri: string
+  /** `CONFIG.DISCORD_OAUTH_BASE`, read once in `src/index.ts` — see `routes/discord-servers.ts`'s own doc comment on why this is passed in rather than read lazily inside that router. */
+  discordOauthBase: string
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -71,6 +86,21 @@ export function buildApp(deps: ServerDependencies): Express {
   app.use(
     '/organizations/:organizationId/actions',
     buildActionsRouter(registry, deps.db)
+  )
+  app.use(
+    '/organizations/:organizationId/discord-servers',
+    buildDiscordServersRouter({
+      db: deps.db,
+      logger: deps.logger,
+      discordRestClient: deps.discordRestClient,
+      discordClientId: deps.discordClientId,
+      discordBotToken: deps.discordBotToken,
+      discordRedirectUri: deps.discordRedirectUri,
+      discordOauthBase: deps.discordOauthBase,
+      ...(deps.discordPermissions
+        ? { discordPermissions: deps.discordPermissions }
+        : {}),
+    })
   )
 
   // Must be registered last — Express identifies an error handler by its

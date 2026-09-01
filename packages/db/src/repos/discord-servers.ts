@@ -180,6 +180,35 @@ export function removeDiscordServerBinding(
   return result.changes
 }
 
+/**
+ * The active binding for `serverId`, scoped to `organizationId` —
+ * `undefined` both when no such binding exists and when it exists but
+ * belongs to a different organization (TEN-5) or has already been removed
+ * (TEN-6). Unlike `resolveDiscordServerBinding` above (TEN-2 exception #2,
+ * organization-independent by necessity — nothing has determined an
+ * organization yet at that point), this is reached only once an
+ * organization is already known — `@bloombot/actions`'
+ * `discordServers.remove`'s own policy — so it takes one, the convention
+ * every other function in this file but that one holds itself to.
+ */
+export function getActiveDiscordServerBinding(
+  organizationId: string,
+  serverId: string,
+  db: Database
+): DiscordServerBinding | undefined {
+  return db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.serverId, serverId),
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .get()
+}
+
 /** Every binding — active or removed — an organization has ever held. */
 export function listDiscordServerBindingsForOrganization(
   organizationId: string,

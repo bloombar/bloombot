@@ -1,0 +1,25 @@
+{
+  "name": "@bloombot/discord-rest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discord's OAuth2 and REST API, behind a port (TEN-4) — the authorization-code exchange and the two guild-list reads the install flow needs, and nothing about apps/api's own routes or @bloombot/db's schema.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@bloombot/config": "*"
+  }
+}

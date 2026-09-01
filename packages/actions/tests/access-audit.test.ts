@@ -35,6 +35,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'courses.save': { resource: 'project', access: 'write' },
   'courses.enable': { resource: 'course', access: 'write' },
   'courses.disable': { resource: 'course', access: 'write' },
+  // TEN-6: marks a binding inactive; deletes nothing. Installing is not an
+  // action at all (`actions/discord-servers.ts`'s own module comment) — it
+  // needs the caller's account id, which nothing in this package's dispatch
+  // context carries.
+  'discordServers.remove': { resource: 'discordServer', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

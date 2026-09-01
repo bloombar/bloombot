@@ -48,9 +48,10 @@
  * (a) is asserted separately as TEN-5's own not-found shape, `404`.
  */
 
+import type { Server } from 'node:http'
+
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
-import type { Express } from 'express'
 
 import { accounts, type Database } from '@bloombot/db'
 import { createPlatformRegistry } from '@bloombot/actions'
@@ -176,7 +177,7 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
   // would 404 on the method mismatch alone, passing (a) by accident and
   // failing to exercise the route's own authorization at all.
   function send(
-    app: Express,
+    app: Server,
     method: HttpMethod,
     path: string,
     cookieHeader?: string
@@ -191,7 +192,7 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         testDb = createTestDatabase()
         const caller = seedSignedInCaller(testDb.db)
         const otherOrganizationId = seedOtherOrganization(testDb.db)
-        const app = buildTestApp(testDb.db)
+        const app = await buildTestApp(testDb.db)
 
         const response = await send(
           app,
@@ -207,7 +208,7 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
       it('(b) no session: refused (401)', async () => {
         testDb = createTestDatabase()
         const caller = seedSignedInCaller(testDb.db)
-        const app = buildTestApp(testDb.db)
+        const app = await buildTestApp(testDb.db)
 
         const response = await send(
           app,
@@ -221,7 +222,7 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
       it('(c) a disabled account session: refused identically to (b), no session at all', async () => {
         testDb = createTestDatabase()
         const caller = seedSignedInCaller(testDb.db)
-        const app = buildTestApp(testDb.db)
+        const app = await buildTestApp(testDb.db)
 
         const withoutSession = await send(
           app,

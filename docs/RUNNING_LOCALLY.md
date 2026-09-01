@@ -35,6 +35,10 @@ cp env.example .env
 
 `.env` is gitignored and a hook blocks writes to it — nothing in this repository will edit it for you.
 
+Each process loads `.env` itself at startup, the way the Python bot's entry points call `python-dotenv`
+(CFG-5). A variable already set in your shell wins over the file, so `NODE_ENV=production npm run api:dev`
+does what it says.
+
 ### What you can reuse from the Python bot's `.env`
 
 | variable | reuse? |

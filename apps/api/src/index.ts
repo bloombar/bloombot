@@ -15,7 +15,7 @@
 import { createServer } from 'node:http'
 
 import { createGoogleIdTokenVerifier } from '@bloombot/auth'
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, loadDotEnv } from '@bloombot/config'
 import {
   closeDatabase,
   openDatabase,
@@ -47,6 +47,10 @@ function requireEnv(name: string): string {
 }
 
 async function main(): Promise<void> {
+  // CFG-5: credentials live in `.env`; load it before anything reads CONFIG,
+  // which validates the whole environment on first access.
+  loadDotEnv()
+
   // API-6 — refuses to start on an environment that does not validate:
   // touching `CONFIG` forces the whole zod schema to validate before
   // anything else runs, the same discipline `apps/bot`'s own `SURF-7`

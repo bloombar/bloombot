@@ -16,3 +16,4 @@ export {
   type ModelRate,
   type PricingTable,
 } from './pricing.js'
+export { loadDotEnv, type LoadDotEnvResult } from './dotenv.js'

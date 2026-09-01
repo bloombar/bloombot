@@ -22,6 +22,7 @@ export default defineConfig({
       '@bloombot/core': sourceEntry('core'),
       '@bloombot/openai': sourceEntry('openai'),
       '@bloombot/discord': sourceEntry('discord'),
+      '@bloombot/actions': sourceEntry('actions'),
     },
   },
   test: {
@@ -39,6 +40,9 @@ export default defineConfig({
     // stays outside the floor: it is the thin, deliberately-untested wiring
     // to the gateway this slice's brief asks to keep "thin enough that its
     // untested part is obvious", not logic this floor exists to hold.
+    // `packages/actions` joins it too (ACT-1..6): it is the single write
+    // path every surface dispatches through, exactly the kind of
+    // logic-that-matters this floor exists to hold.
     coverage: {
       provider: 'v8',
       include: [
@@ -46,6 +50,7 @@ export default defineConfig({
         'packages/core/src/**/*.ts',
         'packages/openai/src/**/*.ts',
         'packages/discord/src/**/*.ts',
+        'packages/actions/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,
@@ -123,6 +128,15 @@ export default defineConfig({
         test: {
           name: 'discord',
           root: './packages/discord',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'actions',
+          root: './packages/actions',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

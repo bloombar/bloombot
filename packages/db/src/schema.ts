@@ -26,6 +26,7 @@ import {
   text,
   integer,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core'
 
 // TEN-1 — the tenant is an organization. An account gets a personal
@@ -287,6 +288,22 @@ export type Surface = (typeof SURFACES)[number]
 // surface first names them — never invented here (D-10's "no default value
 // is invented" reasoning applies the same way to "no roster data is
 // invented").
+// LINK-1/LINK-4 — `connectedAt` is the platform's own record of "this
+// identity is attributed to a connected account" (LINK-1's own phrase): null
+// for a person PPL-3 created on first sight and never proven since,
+// non-null from the moment `repos/people.ts#mergePeople` first merges
+// another identity into this person (LINK-3's proof, LINK-4's merge) — set
+// once and never moved backward on a later merge (`mergePeople`'s own
+// comment), so it always reads as "when this person first connected", not
+// "when they were last merged". `mergedIntoPersonId`/`mergedAt` are the
+// other half of LINK-4's "recorded, because it rewrites who owns a
+// transcript": a person who has been merged away is never deleted (the same
+// never-delete discipline `discordServerBindings.removedAt` already holds
+// itself to) — its row, and everything still keyed on its old id that a
+// merge deliberately leaves in place (see `mergePeople`'s own comment), stay
+// exactly where they were, with `mergedIntoPersonId` naming who to read
+// instead. Both are nullable and self-referencing, so a fresh person (the
+// ordinary case) carries neither.
 export const people = sqliteTable('people', {
   id: text('id').primaryKey(),
   organizationId: text('organization_id')
@@ -297,6 +314,11 @@ export const people = sqliteTable('people', {
   firstName: text('first_name'),
   lastName: text('last_name'),
   githubHandle: text('github_handle'),
+  connectedAt: integer('connected_at'),
+  mergedIntoPersonId: text('merged_into_person_id').references(
+    (): AnySQLiteColumn => people.id
+  ),
+  mergedAt: integer('merged_at'),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -947,3 +969,56 @@ export const courseJoinLinks = sqliteTable('course_join_links', {
     .references(() => accounts.id),
   createdAt: integer('created_at').notNull(),
 })
+
+// LINK-3 — the proof half of connecting a second surface: one row per
+// attempt, from `@bloombot/auth#beginDiscordPersonLink`/`issueMcpPersonLinkToken`
+// generating a secret (and, for Discord, a PKCE verifier — the same
+// OAuth+PKCE shape `discordInstallStates` already uses for TEN-4, mirrored
+// here rather than shared: that table's `accountId` anchors an
+// *administrator* proving they run a server, this table's `personId`
+// anchors "the account being connected" (D-28), a person, not an account),
+// to the caller consuming it exactly once. `surface` distinguishes the two
+// proof shapes LINK-3 names — `discord` (Discord's own OAuth, `codeVerifier`
+// set) and `mcp` (a bearer token with nothing else to verify against,
+// `codeVerifier` null) — one table rather than two, since both are
+// otherwise the same "single-use, expiring, hashed" secret shape
+// `sign_in_tokens` already is. `secretHash` only, never the plaintext value
+// — the same "returned once, stored only as a hash" reasoning `sign_in_tokens`/
+// `discord_install_states` already give themselves. Structurally does not
+// bind anything by itself (LINK-3's "an identity is never bound on a visit
+// alone"): nothing in this table's own shape can attach an identity to a
+// person — only `repos/people.ts#connectIdentity`/`mergePeople`, called
+// after `consumeChallenge` here succeeds, does that.
+export const LINK_PROOF_SURFACES = ['discord', 'mcp'] as const
+export type LinkProofSurface = (typeof LINK_PROOF_SURFACES)[number]
+
+export const personLinkChallenges = sqliteTable(
+  'person_link_challenges',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    // The survivor: whichever person "the account being connected" already
+    // is (D-28) when the attempt began — never the identity being proved,
+    // which is only known once the proof itself comes back.
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    surface: text('surface', { enum: LINK_PROOF_SURFACES }).notNull(),
+    secretHash: text('secret_hash').notNull().unique(),
+    // Only set for `surface: 'discord'` — see `discordInstallStates.codeVerifier`'s
+    // own comment (D-21) for why this is plain text rather than hashed.
+    codeVerifier: text('code_verifier'),
+    expiresAt: integer('expires_at').notNull(),
+    usedAt: integer('used_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('person_link_challenges_person_id_idx').on(table.personId),
+    check(
+      'person_link_challenges_surface_check',
+      sql`${table.surface} in ('discord', 'mcp')`
+    ),
+  ]
+)

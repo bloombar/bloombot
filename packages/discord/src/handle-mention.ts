@@ -7,6 +7,18 @@
  * (SURF-5, SURF-6). `apps/bot` itself holds none of this logic (CORE-1's
  * own "a surface adapter ... holds no answering logic of its own"); it only
  * builds an `InboundMention` and a `ReplyPort` and calls this.
+ *
+ * D-34's own "what the linking slice should change in routing" lands here
+ * too (LINK-5): once a message resolves to a person and a matched course,
+ * this now also ensures (`enrolments.enrolViaDiscordRole`) that a role
+ * holder has an explicit `enrolments` row for it before answering — turning
+ * "holds the role, so route it" into "holds the role, so admit them once,
+ * then route through the stored enrolment" (D-34's own words). This does
+ * not change *whether* a message is answered — `routeMessage`'s own
+ * category-or-role match is still the only thing that decides that, exactly
+ * as before — it only makes a role holder's enrolment auditable from their
+ * first message rather than left implicit forever. See this file's own
+ * report for what that means for Discord in practice.
  */
 
 import {
@@ -17,7 +29,13 @@ import {
   type PricingTable,
   type RoutableCourse,
 } from '@bloombot/core'
-import { courses, discordServers, people, type Database } from '@bloombot/db'
+import {
+  courses,
+  discordServers,
+  enrolments,
+  people,
+  type Database,
+} from '@bloombot/db'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
@@ -56,6 +74,18 @@ export interface HandleMentionDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, passed straight through to `answerQuestion`'s own `AnswerDependencies.pricing`. Optional, the same reason `admission` is optional above: `apps/bot`'s own `main()` builds the real, configured table once (from `@bloombot/config`'s `getModelPricingTable`) and passes it here; a caller that omits it gets `answerQuestion`'s own zero-rate default. */
   pricing?: PricingTable
+  /**
+   * LINK-2's own address: the control panel's URL, embedded verbatim (and
+   * alone — no token, see this file's own `connectInvitationText`) in the
+   * invitation an unconnected person is answered with. Required, not
+   * defaulted: unlike `botDisplayName`/`admission`/`pricing`, there is no
+   * safe placeholder for a URL a student would actually be told to visit —
+   * `apps/bot`'s own `main()` reads it from `CONFIG.PUBLIC_APP_URL`, the
+   * same "packages/core/packages/discord never read CONFIG" discipline
+   * (D-29) every other configured value already crosses this boundary
+   * under.
+   */
+  connectUrl: string
 }
 
 /**
@@ -78,6 +108,7 @@ export type HandleMentionResult =
     }
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
+  | { kind: 'invited-to-connect' }
   | { kind: 'declined-over-limit' }
   | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
@@ -106,6 +137,18 @@ function busyRefusalText(): string {
 /** COST-3 — the same "reaches the student, not just the log" treatment `overLimitRefusalText` already gets: an organization at its own spending cap is a refusal that says so, not a silent drop or a generic apology. */
 function overSpendingCapRefusalText(courseTitle: string): string {
   return `Bloombot is unable to answer right now. See ${courseTitle} admins for help.`
+}
+
+/**
+ * LINK-1/LINK-2 — the invitation an unconnected identity's first message
+ * gets, instead of an answer: `connectUrl` and nothing else. No token, no
+ * course name, no student-specific detail of any kind — LINK-2's own
+ * reasoning is that a course channel is public, so anything more than a
+ * plain address here is something the first person to read it could spend
+ * on this student's behalf.
+ */
+function connectInvitationText(connectUrl: string): string {
+  return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectUrl}, then ask again.`
 }
 
 /**
@@ -306,6 +349,31 @@ export async function handleMention(
   const courseId = routing.course.id
   const courseTitle = titleById.get(courseId) ?? courseId
 
+  // D-34/LINK-5 — a role holder is admitted (once) through the stored
+  // enrolment relation rather than only ever routed by re-checking their
+  // Discord role on every message. `enrolViaDiscordRole` is itself the
+  // no-op when the author does not hold `courseId`'s own `studentsRole`
+  // (`repos/enrolments.ts`'s own doc comment), or when they already hold an
+  // active enrolment for it, so this is safe to call on every matched
+  // message rather than only the first. Best-effort: this never gates
+  // *whether* `answerQuestion` runs below — `routeMessage`'s own
+  // category-or-role match already decided that — so a write failure here
+  // is logged and never blocks the reply, the same "a broken write degrades
+  // to a log line, not a lost answer" discipline `@bloombot/core`'s own
+  // `answer.ts` holds every non-essential write to.
+  try {
+    enrolments.enrolViaDiscordRole(
+      organizationId,
+      { courseId, personId: person.id, roleNames: input.authorRoleNames },
+      db
+    )
+  } catch (error) {
+    logger.error(
+      { err: error, organizationId, courseId, personId: person.id },
+      'handleMention: failed to record a Discord-role enrolment'
+    )
+  }
+
   // BOT-6 — the raw mention token is rewritten to a readable name before
   // the model ever sees the question; `text` (unrewritten) is what the
   // transcript records via `answerQuestion`'s own `text`/`modelText` split.
@@ -395,6 +463,20 @@ export async function handleMention(
         'handleMention: dropped, course is not configured to answer'
       )
       return { kind: result.kind }
+    }
+    case 'not-connected': {
+      // LINK-1/LINK-2 — the invitation reaches the student (unlike
+      // `course-disabled`/`not-configured` above, this is not a
+      // configuration problem to log and drop silently; it is the ordinary
+      // first-message outcome for anyone not yet connected). No model call
+      // was made and no allowance was spent (`@bloombot/core`'s own
+      // `answer.ts` guarantees that, before this ever runs).
+      await sendReply(reply, connectInvitationText(deps.connectUrl))
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: declined, person is not yet connected to a verified account'
+      )
+      return { kind: 'invited-to-connect' }
     }
     case 'declined-busy': {
       // JOB-4/rework finding 1 — no admission slot became free within the

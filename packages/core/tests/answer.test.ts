@@ -1047,10 +1047,12 @@ describe('answerQuestion: a courseId or personId that does not resolve is caller
 
     // Finding 8 of the CORE-1 rework moved the allowance reservation ahead
     // of `getOrCreateConversation` (so an over-limit request still costs
-    // nothing) — an invalid `personId` is now caught there instead, by
-    // `reserveUsageSlot`'s own tenant-scoping check, not by conversation
-    // creation. The thrown message changes; the "still throws, never calls
-    // the model" behaviour does not.
+    // nothing), so an invalid `personId` used to be caught there, by
+    // `reserveUsageSlot`'s own tenant-scoping check. LINK-1's own guard now
+    // resolves `person` earlier still (it has to, to read `connectedAt`
+    // before admission or the allowance are ever touched), so a foreign
+    // `personId` is caught there instead — even earlier, but "still throws,
+    // never calls the model" behaviour is unchanged.
     await expect(
       answerQuestion(
         {
@@ -1063,7 +1065,7 @@ describe('answerQuestion: a courseId or personId that does not resolve is caller
         },
         { db: testDb.db, model, logger }
       )
-    ).rejects.toThrow(/usage slot/)
+    ).rejects.toThrow(/person no-such-person does not exist/)
     expect(model.calls).toHaveLength(0)
   })
 })
@@ -1152,6 +1154,88 @@ describe('answerQuestion (finding 3 of the CORE-1 rework): a course with neither
     )
     const model = new FakeModelClient({ answerText: 'an answer' })
     const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+})
+
+describe('answerQuestion (LINK-1): an unconnected person is declined before admission, the allowance or the model', () => {
+  it('declines with `not-connected`, calls no model, spends no allowance, and writes nothing', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { connect: false }
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result).toEqual({ kind: 'not-connected' })
+    // LINK-1: "no model call is made and no allowance is spent."
+    expect(model.calls).toHaveLength(0)
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        personId,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+    // No conversation was opened and nothing was recorded to a transcript.
+    expect(
+      conversations.listConversationsForCourse(
+        organizationId,
+        courseId,
+        testDb.db
+      )
+    ).toHaveLength(0)
+  })
+
+  it('answers once the person is connected', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { connect: false }
+    )
+    const model = new FakeModelClient({ answerText: 'an answer' })
+    const logger = createFakeLogger()
+
+    // Connect the same way `@bloombot/auth`'s `person-link.ts` does once a
+    // proof succeeds — merging a second (throwaway) identity onto the
+    // person, which is what actually sets `connectedAt`.
+    const other = people.createPerson(organizationId, {}, testDb.db)
+    const merged = people.mergePeople(
+      organizationId,
+      personId,
+      other.id,
+      testDb.db
+    )
+    expect(merged?.alreadyMerged).toBe(false)
 
     const result = await answerQuestion(
       {

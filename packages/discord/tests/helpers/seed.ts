@@ -13,9 +13,12 @@ import {
   courses,
   discordServers,
   organizations,
+  people,
   projects,
   type Database,
 } from '@bloombot/db'
+
+import { DEFAULT_AUTHOR_ID } from './fixtures.js'
 
 export interface SeedResult {
   organizationId: string
@@ -32,6 +35,18 @@ export interface SeedOptions {
   adminsRole?: string
   studentsRole?: string
   enabled?: boolean
+  /**
+   * LINK-1 — connect a person under `fixtures.ts#DEFAULT_AUTHOR_ID` by
+   * default, so the great majority of this suite's tests (which use
+   * `inboundMention`'s own default `authorId` and were written before
+   * LINK-1 existed) keep answering exactly as before, without every one of
+   * them individually opting in. `false` for a test that specifically wants
+   * an unconnected default author (LINK-1's own tests, and the SURF-4/D-31
+   * identity tests, which use their own distinct `authorId`s and would
+   * otherwise pick up an extra, unrelated person in `people.listPeople`'s
+   * count).
+   */
+  connectDefaultAuthor?: boolean
 }
 
 /** One organization, one Discord server bound to it, and one enabled course with a single category. */
@@ -101,6 +116,34 @@ export function seedBoundServerWithCourse(
     throw new Error(
       `seedBoundServerWithCourse: failed to create course: ${courseResult.conflict.message}`
     )
+  }
+
+  // LINK-1 — see `SeedOptions.connectDefaultAuthor`'s own comment. Connected
+  // the same way a real proof would (`@bloombot/auth`'s `person-link.ts`):
+  // resolving a Discord identity, then merging a second (throwaway) identity
+  // onto it, which is what actually sets `connectedAt`.
+  if (options.connectDefaultAuthor ?? true) {
+    const discordPerson = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      db
+    )
+    const other = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'web', externalId: `seed-web-${randomUUID()}` },
+      db
+    )
+    const merged = people.mergePeople(
+      organizationId,
+      discordPerson.id,
+      other.id,
+      db
+    )
+    if (!merged) {
+      throw new Error(
+        'seedBoundServerWithCourse: failed to connect the default author'
+      )
+    }
   }
 
   return { organizationId, courseId: courseResult.course.id, guildId }

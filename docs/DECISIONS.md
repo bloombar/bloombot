@@ -663,3 +663,63 @@ unvalidated input — a future MCP or web surface that accepts a raw `courseId` 
 resolve and validate it first, the same way CORE-2's routing and PPL-3's identity resolution already do for
 Discord. If a later slice finds a legitimate reason for `answerQuestion` to be called with an id it cannot
 resolve, that is a new discriminated outcome to add, not a reason to swallow the exception.
+
+---
+
+## D-16 — `packages/openai`: raw `fetch` over the SDK, retry-per-attempt, a forgotten conversation id, and a port gap this slice did not close
+
+**Problem.** MDL-1..7 need an adapter that talks the Responses and Conversations APIs, bounds and retries a
+request (MDL-5), survives the provider forgetting a conversation id (MDL-4), and is provably reachable by no
+test over the real network (MDL-7). Three judgment calls fell out of building it, plus one the brief asked to
+be reported rather than guessed at.
+
+**Choice, `fetch` over the `openai` package.** The adapter is raw HTTP (`src/http.ts`'s `postJson`) rather than
+the official SDK. The SDK is a large, in this repo entirely unaudited dependency for what this slice actually
+needs — two POST calls with a bearer header and a JSON body — and pulling it in would add a second thing
+MDL-7's "no test ever calls OpenAI" has to prove holds through (the SDK's own retry/timeout defaults, its own
+base-URL handling) on top of this adapter's. `fetch` is native to Node 22 (`tsconfig.base.json` already targets
+it) and needs no new dependency at all. The cost: this adapter re-derives, by hand, the one shape the SDK would
+have given for free — walking the Responses API's `output` array for `output_text` (`responses.ts`'s
+`extractOutputText`) — rather than reading a convenience property `response_bot.py`'s own SDK call already
+computes. Revisit if a second vendor call (embeddings, moderation, …) needs enough of the SDK's surface that
+re-deriving it by hand stops being cheaper than auditing the dependency.
+
+**Choice, the retry applies per attempt, not to a shared budget.** MDL-5 says "bounded" and "retried once";
+it does not say whether a retry gets its own fresh clock or shares one with the attempt it followed. This
+adapter gives every attempt (`src/http.ts`'s `postJson`, called fresh by `conversations.ts` and by
+`client.ts`'s `postResponses`) its own `timeoutMs` window, so a retried request can take up to roughly twice
+`timeoutMs` end to end in the worst case. The alternative — one shared deadline across both attempts — makes a
+slow-but-not-quite-timed-out first attempt eat into the retry's own budget, which is a subtler failure mode to
+reason about (and to test) than "each attempt gets the bound the caller configured." Revisit if a real
+`timeoutMs` proves too generous once doubled for a retry.
+
+**Choice, a forgotten conversation id creates one and retries once, never in a loop.** MDL-4's stored id can be
+rejected as a 404 the provider's own error body names as the conversation (`errors.ts`'s
+`classifyHttpError`/`isUnknownConversation`) rather than any other 404 (a bad prompt id, a bad vector store
+id). `client.ts`'s `ask` only takes this path once — `newConversationId === null` guards it, so a 404 on the
+_freshly created_ replacement conversation is treated as a provider bug and propagated rather than retried
+again, the same "once, not a loop" MDL-4's own text asks for. This is a second, independent retry mechanism
+from MDL-5's transient-failure retry (`askOnceWithTransientRetry`), not a special case folded into it: a
+transient failure retries the _same_ call; a forgotten conversation id changes the call (a new `conversation`
+field) before retrying it, and conflating the two would make either one harder to reason about in isolation.
+
+**Reported, not guessed: `ModelRequest` cannot express MDL-4's own opening item.** `response_bot.py` seeds a
+new conversation with the student's Discord name, their Discord id and the course name
+(`response_bot.py:264-273`); MDL-4 asks for the same. `ModelRequest` (`packages/core/src/ports.ts`) carries
+`promptId`, `instructions`, `vectorStoreId`, `model`, `upstreamThreadId` and `question` — no person id, no
+display name, no course title — and `answer.ts` does not pass any of the three to `model.ask` either. This
+slice's own brief says not to widen the port for a gap like this without reporting it first, so
+`conversations.ts`'s `createUpstreamConversation`/`buildSeedText` are written and unit-tested to seed a real
+name and course title when given them, but `client.ts`'s call to it — constrained to what `ModelRequest`
+actually carries — falls back to a generic opening item (`buildSeedText(null, null)`, "Starting a new
+conversation.") every time, today. Closing this properly means widening `ModelRequest` (and `answer.ts`'s call
+into it) with whatever of `personId`/a resolved display name/`course.title` CORE-1's own pipeline already has
+in hand at the point it calls `model.ask` — a `packages/core` change, out of this slice's own scope, and a
+decision for whoever picks it up next rather than one this slice made unilaterally.
+
+**Limits.** The per-attempt timeout (above) means a caller budgeting "this request will return within
+`timeoutMs`" is wrong by up to 2x on the retry path; a future slice that needs a hard wall-clock bound across
+the whole call (not just each attempt) will need to thread a deadline through instead of a duration. The
+generic conversation seed (above) is a real behavioural gap against `response_bot.py`, not a cosmetic one —
+every conversation this adapter starts is less personalized than the one it replaces until `ModelRequest` is
+widened.

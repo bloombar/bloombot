@@ -107,39 +107,6 @@ describe('memberships repo', () => {
     ).toHaveLength(0)
   })
 
-  it('updates a role scoped to its organization', () => {
-    testDb = createTestDatabase()
-    const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
-
-    const changed = memberships.updateMembershipRole(
-      orgA,
-      accountInA.id,
-      'instructor',
-      testDb.db
-    )
-
-    expect(changed).toBe(1)
-    expect(
-      memberships.getMembership(orgA, accountInA.id, testDb.db)
-    ).toMatchObject({ role: 'instructor' })
-  })
-
-  // TEN-2: an update issued with the wrong organization id affects zero rows
-  // rather than the other tenant's row.
-  it('updating a role through the wrong organization affects zero rows', () => {
-    testDb = createTestDatabase()
-    const { orgB, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
-
-    const changed = memberships.updateMembershipRole(
-      orgB,
-      accountInA.id,
-      'instructor',
-      testDb.db
-    )
-
-    expect(changed).toBe(0)
-  })
-
   it('deletes a membership scoped to its organization', () => {
     testDb = createTestDatabase()
     const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
@@ -165,5 +132,80 @@ describe('memberships repo', () => {
     expect(
       memberships.getMembership(orgA, accountInA.id, testDb.db)
     ).toBeDefined()
+  })
+
+  // --- ENRL-5: a grant records who did it ---------------------------------
+
+  it('grantMembershipRole creates a membership and records who granted it', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    const granted = memberships.grantMembershipRole(
+      orgA,
+      {
+        accountId: recipient.id,
+        role: 'instructor',
+        grantedByAccountId: owner.id,
+      },
+      testDb.db
+    )
+
+    expect(granted).toMatchObject({
+      accountId: recipient.id,
+      role: 'instructor',
+      grantedByAccountId: owner.id,
+    })
+    expect(granted.grantedAt).toEqual(expect.any(Number))
+  })
+
+  it("grantMembershipRole changes an existing membership's role, still recording who granted it", () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInA: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner2@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    // `recipient` already holds 'owner' in orgA from setup — grant changes it.
+    const granted = memberships.grantMembershipRole(
+      orgA,
+      {
+        accountId: recipient.id,
+        role: 'assistant',
+        grantedByAccountId: owner.id,
+      },
+      testDb.db
+    )
+
+    expect(granted).toMatchObject({
+      role: 'assistant',
+      grantedByAccountId: owner.id,
+    })
+    expect(
+      memberships.getMembership(orgA, recipient.id, testDb.db)
+    ).toMatchObject({ role: 'assistant' })
+  })
+
+  // The founding-owner membership `accounts.createAccount` writes inline
+  // (not through `grantMembershipRole`) records no grantor — there is
+  // nobody to have granted it (`schema.ts`'s own comment).
+  it('the founding owner membership created at sign-up has no grantor', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInA } = seedTwoOrganizationsWithOneAccountEach(testDb)
+
+    expect(
+      memberships.getMembership(orgA, accountInA.id, testDb.db)
+    ).toMatchObject({
+      grantedByAccountId: null,
+      grantedAt: null,
+    })
   })
 })

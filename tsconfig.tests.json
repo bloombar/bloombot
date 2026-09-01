@@ -11,6 +11,7 @@
   "references": [
     { "path": "./packages/config" },
     { "path": "./packages/logger" },
-    { "path": "./packages/schemas" }
+    { "path": "./packages/schemas" },
+    { "path": "./packages/db" }
   ]
 }

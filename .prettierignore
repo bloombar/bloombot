@@ -9,6 +9,11 @@ package-lock.json
 # byte. Reformatting it would show up as a spurious board diff.
 scripts/board/manifest.yaml
 
+# Generated: `drizzle-kit generate` writes the migration SQL and its metadata.
+# Reformatting them would diverge from what the next `generate` produces,
+# turning every future migration into a spurious diff on top of the real one.
+packages/db/migrations/
+
 # Files this monorepo conversion did not author. Prettier disagrees with all of
 # them, and reformatting them would bury the real change under whitespace. They
 # can be brought in deliberately, as their own change.

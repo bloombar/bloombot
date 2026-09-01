@@ -219,3 +219,63 @@ reader nobody has changed yet — but it is a decision about the format, not a b
 **Limits.** Because the schema now permits what the reader tolerates, a course silently missing a field
 (nobody ever set `model`) parses identically to one that intentionally omitted it. If that distinction ever
 matters, it needs the config format to say so explicitly, not a stricter schema.
+
+---
+
+## D-11 — `packages/db`: two unscoped repo functions, application-generated ids, and app-set timestamps
+
+**Problem.** TEN-2 requires that "every data-access function takes the organization id as its first
+parameter" and that "there is no function that fetches a scoped record by id alone" — but `accounts` and
+`discord_server_bindings` each have exactly one operation that cannot satisfy that literally, because the
+organization is not yet known at the point the function is called.
+
+**Choice.** Two documented exceptions, enforced by an allowlist a test checks against (rather than left as a
+comment nobody re-reads):
+
+- `accounts.getAccountByEmail(email, db)` — an account is a sign-in identity, not something scoped to one
+  organization (the same account can belong to several, through `memberships`), and it has to be found by
+  email _before_ sign-in knows which organization is relevant. Every other function in `accounts.ts` reaches
+  the account through an organization's membership instead (`getAccountInOrganization`), so a cross-tenant
+  read still looks like absence (TEN-5).
+- `discord-servers.resolveDiscordServerBinding(serverId, db)` — this _is_ the lookup that establishes which
+  organization an incoming Discord message belongs to; it cannot itself take an organization id as input
+  without begging the question. It returns `undefined` for both an unbound server and a released one
+  (`removed_at` set), which is the correct behaviour either way: no organization currently owns that server's
+  messages.
+
+Everything else — including `organizations.ts`'s own `createOrganization`/`getOrganizationById`, where the
+"organization id" being scoped by is the row's own id — takes `organizationId` as its first parameter, and
+`tests/tenant-scoping-convention.test.ts` reads the actual source of `src/repos/**` to prove it, rather than
+trusting every future PR to remember the rule.
+
+**Ids and timestamps.** Every primary key is an application-generated UUID (`crypto.randomUUID()`, called in
+the repo layer or supplied by the caller — `organizations.createOrganization` takes its id as an argument, the
+same way every scoped function takes its scoping id as one), not `AUTOINCREMENT`: an auto-incrementing integer
+key is a SQLite/Postgres detail a schema held to D-2's portable subset should not depend on, and it lets a
+repo function hand back the id of a row before reading it back. Timestamps are `INTEGER` epoch milliseconds,
+set with `Date.now()` in the repo layer rather than a SQL default — `CURRENT_TIMESTAMP` means seconds-as-text
+in SQLite and a native timestamp type in Postgres, so a SQL default would be one more thing to rewrite the day
+the engine changes.
+
+**TEN-3's re-claim.** `claimDiscordServerBinding` is a `SELECT` followed by an `INSERT` or `UPDATE` chosen in
+application code, not an `INSERT ... ON CONFLICT DO UPDATE ... WHERE`. The latter is still portable SQL (D-2
+allows it), but the explicit select-then-write reads plainly as the three cases TEN-3 actually describes
+(never bound / released and re-claimable / actively bound elsewhere) without leaning on `ON CONFLICT`'s
+less-obvious "conditional no-op" semantics. What protects each branch from a second, genuinely concurrent
+writer process is _not_ that better-sqlite3 is single-threaded — D-2 and PLAT-4 both describe several
+processes (bot, API, worker) writing this one database, so "nothing else can run between this call's own
+`SELECT` and its own write" is a per-process property, not a guarantee about a _different_ process racing it.
+What actually holds, per branch: the never-bound insert is backstopped structurally by the primary key on
+`server_id`, so a losing concurrent insert fails at the database level regardless of what its own `SELECT`
+believed, and the failure is caught and reported as `undefined` rather than left to escape as a raw driver
+error; the re-claim update repeats `removed_at IS NOT NULL` in its own `WHERE`, making it a single conditional
+statement the database itself refuses once the row no longer matches, rather than a blind write based on an
+earlier read. Any future two-step read-then-write added to this package needs the same shape — a write whose
+own `WHERE` (or a structural constraint) re-checks the condition its read relied on — not an assumption that
+nothing else can have changed the row in between.
+
+**Limits.** The specific two-step claim above is now safe against a second, concurrent writer process racing
+the same snowflake, for the reason above — but that safety is a property of _this_ function's two branches,
+not of read-then-write in general. A future two-step operation in this package that reads one thing and writes
+based on it needs to be checked against the same question this one now answers, rather than assumed safe by
+analogy.

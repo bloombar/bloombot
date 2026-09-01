@@ -7,8 +7,10 @@ rosters/*.csv
 data/*.db
 logs/*.log
 
-# ignore any cloned repos
-repos/
+# ignore any cloned repos (anchored to the repo root — packages/db/src/repos/
+# is source code, not a clone, and an unanchored pattern here would silently
+# gitignore it)
+/repos/
 
 # ignore generated reports
 reports/
@@ -173,6 +175,12 @@ node_modules/
 
 # SQLite message log — contains real student conversations, never commit it
 data/*.db
+
+# Throwaway SQLite files test suites create and clean up (packages/db/tests)
+# — anchored to the repo root, the same reasoning as /repos/ above: an
+# unanchored pattern here would also ignore any nested tmp/ a later package
+# creates.
+/tmp/
 
 # TypeScript build output and incremental state
 *.tsbuildinfo

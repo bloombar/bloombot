@@ -23,21 +23,46 @@
  * is an acceptable simplification for this slice rather than a bug to
  * chase (a course's own categories are named by an instructor who has every
  * reason not to reuse a name, and the platform's own `courses.save` action
- * does not police it either).
+ * does not police it either). A *channel*'s own name needs one more
+ * transform before that comparison: Discord silently slugs a `GUILD_TEXT`
+ * channel's name at creation (lowercases it, collapses whitespace to `-`),
+ * so a declared `general chat` comes back from the guild as `general-chat`
+ * — `normalizeChannelName`, below, applies that same transform to both
+ * sides before comparing, which `normalizeName` alone does not (finding 1 of
+ * the SRV-6..8 rework). Categories are not slugged this way and keep using
+ * `normalizeName`.
  *
  * SRV-8's "never delete" is structural, not a rule this file remembers to
  * follow: `DiscordRestClient` (`packages/discord-rest/src/client.ts`) has no
  * method that edits or removes a category or channel at all, so there is
  * nothing here to call even for a guild holding a category or channel the
- * course no longer declares — `undeclaredCategories` in the report below is
- * exactly that: named, never touched.
+ * course no longer declares — `undeclaredCategories`/`undeclaredChannels` in
+ * the report below are exactly that: named, never touched. Both are diffed
+ * against every course *this organization* declares, not only the one being
+ * scaffolded (finding 2/3 of the rework) — a guild can host more than one
+ * course at once (one Discord server binding per organization, courses
+ * spread across its projects), so diffing against a single course's own
+ * declarations reported every other course's categories and channels as
+ * undeclared, which is precisely the "hand-delete a live course's channels"
+ * outcome SRV-8 exists to prevent.
+ *
+ * A category or channel this run finds `already_present` never had its own
+ * permissions written by this run (SRV-8's structural no-edit, above) — so
+ * `ScaffoldCategoryReport.everyoneDenied`/`ScaffoldChannelReport.adminsOnly`
+ * for one of those is *read* from Discord's own response, not copied from
+ * what the course declares, and `establishedByThisRun: false` says so
+ * (finding 4 of the rework). See `docs/DECISIONS.md` for what a wrong
+ * observed value means for an instructor, given this package's structural
+ * inability to fix it.
  */
 
-import { courses, discordServers } from '@bloombot/db'
+import { courses, discordServers, type Database } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import {
   allowRoleOverwrite,
   denyEveryoneOverwrite,
+  overwriteAllowsView,
+  overwriteDeniesView,
   type DiscordChannel,
   type DiscordPermissionOverwrite,
   type DiscordRestClient,
@@ -72,12 +97,39 @@ export interface DiscordScaffoldHandlerDependencies {
 export interface ScaffoldChannelReport {
   name: string
   status: 'created' | 'already_present'
+  /**
+   * Whether this channel is actually admins-only right now. For `status:
+   * 'created'` this is exactly what this run just requested (SRV-3) — a
+   * fact, not an observation. For `status: 'already_present'` this run wrote
+   * nothing (SRV-8), so it is read from the channel's own overwrites
+   * instead, falling back to its category's cascade for a channel with none
+   * of its own — see `channelIsAdminsOnly`, below. Finding 4 of the SRV-6..8
+   * rework: this used to be copied from the *declaration* regardless of
+   * status, so an instructor who set `admins_only: true` on a channel
+   * students could already read was told `adminsOnly: true` even though
+   * nothing had changed.
+   */
   adminsOnly: boolean
+  /** `true` only for `status: 'created'` — whether `adminsOnly` above is a permission state this run actually set, or merely one it observed on a pre-existing channel it never wrote to. See this file's own module comment and `docs/DECISIONS.md`. */
+  establishedByThisRun: boolean
 }
 
 export interface ScaffoldCategoryReport {
   name: string
   status: 'created' | 'already_present'
+  /**
+   * Whether `@everyone` is actually denied view access on this category
+   * right now — `true` unconditionally for `status: 'created'` (SRV-2 always
+   * denies it at creation), read from the category's own overwrites for
+   * `status: 'already_present'`, the same "observe, do not assume" fix as
+   * `ScaffoldChannelReport.adminsOnly` (finding 4 of the SRV-6..8 rework): a
+   * pre-existing, still-public category is never locked down by this run,
+   * and every channel created inside it inherits that openness whether or
+   * not this field says so honestly.
+   */
+  everyoneDenied: boolean
+  /** `true` only for `status: 'created'` — see `ScaffoldChannelReport.establishedByThisRun`. */
+  establishedByThisRun: boolean
   channels: ScaffoldChannelReport[]
 }
 
@@ -86,15 +138,37 @@ export interface ScaffoldReport {
   courseId: string
   guildId: string
   categories: ScaffoldCategoryReport[]
-  /** A category present in the guild that this course does not declare (SRV-8) — reported, never removed. */
+  /** A category present in the guild that no course in this organization declares (SRV-8, finding 2 of the rework) — reported, never removed. */
   undeclaredCategories: string[]
+  /** A channel present in a *declared* category that no course in this organization declares (SRV-8, finding 3 of the rework) — a category the organization does not declare at all is already covered by naming the category itself, above; this only names a channel one level inside a category that is still recognised. Reported, never removed. */
+  undeclaredChannels: string[]
   /** A course role name (`adminsRole`/`studentsRole`) that did not resolve to a role in the guild (SRV-2's "skipped rather than treated as fatal") — reported instead of guessed at. */
   unresolvedRoles: string[]
 }
 
-/** Case- and whitespace-insensitive name matching — `discord_manager.py`'s own `.lower().strip()` comparison, carried over so a category or channel named identically but for casing is recognised as the same one. */
+/** Case- and whitespace-insensitive name matching — `discord_manager.py`'s own `.lower().strip()` comparison, carried over so a *category* named identically but for casing is recognised as the same one. Not used for a channel's own name — see `normalizeChannelName`, below, and this file's own module comment. */
 function normalizeName(name: string): string {
   return name.trim().toLowerCase()
+}
+
+/**
+ * Finding 1 of the SRV-6..8 rework: Discord slugs a `GUILD_TEXT` channel's
+ * own name at creation time — lowercases it and collapses each run of
+ * whitespace to a single `-` — silently, with no way to opt out through the
+ * API. A declared channel named `general chat` therefore comes back from
+ * `listGuildChannels` as `general-chat`, never `general chat`; comparing a
+ * declared name against the guild's own by `normalizeName` alone (case and
+ * whitespace only) never matches it, so every scaffold run after the first
+ * created a fresh duplicate — SRV-7 broken on the first channel name with a
+ * space in it. Applying this same transform to *both* sides of a channel
+ * name comparison before normalizing is what fixes that: a declared `general
+ * chat` and a guild's own `general-chat` compare equal. `GUILD_CATEGORY`
+ * names are not slugged this way — Discord stores and returns a category's
+ * name verbatim but for case/whitespace, so categories keep using
+ * `normalizeName` above.
+ */
+function normalizeChannelName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, '-')
 }
 
 function resolveRoleId(
@@ -125,6 +199,89 @@ function declaredChannels(
 ): { name: string; adminsOnly: boolean }[] {
   if (category.channels.length > 0) return category.channels
   return [{ name: PLACEHOLDER_CHANNEL_NAME, adminsOnly: false }]
+}
+
+/** Every category name, and every channel name within it, every course in `organizationId` declares — the diff base for `undeclaredCategories`/`undeclaredChannels` (finding 2/3 of the SRV-6..8 rework, this file's own module comment). Deliberately every course, not only enabled ones in a non-archived project: PROJ-3's name-uniqueness guarantee only covers those, so a disabled or archived-project course could still share a name with something real on the guild, and treating it as undeclared risks exactly the false positive — reporting a live course's own category as safe to delete — this fix exists to remove. Under-reporting a genuinely stale leftover is the direction it is safe to err in; over-reporting a live course's own category is not. */
+function loadOrganizationDeclaredNames(
+  organizationId: string,
+  db: Database
+): {
+  categoryNames: Set<string>
+  channelNamesByCategory: Map<string, Set<string>>
+} {
+  const categoryNames = new Set<string>()
+  const channelNamesByCategory = new Map<string, Set<string>>()
+
+  for (const courseRow of courses.listCourses(organizationId, db)) {
+    const fullCourse = courses.getCourse(organizationId, courseRow.id, db)
+    if (!fullCourse) continue // Deleted between the list and this read — nothing left to declare.
+
+    for (const category of fullCourse.categories) {
+      const normalizedCategory = normalizeName(category.name)
+      categoryNames.add(normalizedCategory)
+      const channelNames =
+        channelNamesByCategory.get(normalizedCategory) ?? new Set<string>()
+      for (const channel of declaredChannels(category)) {
+        channelNames.add(normalizeChannelName(channel.name))
+      }
+      channelNamesByCategory.set(normalizedCategory, channelNames)
+    }
+  }
+
+  return { categoryNames, channelNamesByCategory }
+}
+
+/**
+ * Whether `@everyone` is actually denied view access on `overwrites` right
+ * now, read directly rather than assumed (finding 4 of the SRV-6..8
+ * rework). `overwrites` comes straight from Discord's own response
+ * (`DiscordChannel.permissionOverwrites`) — `[]` when Discord did not carry
+ * usable overwrites at all, which this correctly treats as "not denied"
+ * (Discord's own default is that `@everyone` *can* see a channel unless
+ * something says otherwise).
+ */
+function everyoneIsDenied(
+  overwrites: DiscordPermissionOverwrite[],
+  guildId: string
+): boolean {
+  const everyoneOverwrite = overwrites.find((entry) => entry.id === guildId)
+  return (
+    everyoneOverwrite !== undefined && overwriteDeniesView(everyoneOverwrite)
+  )
+}
+
+/**
+ * Whether a channel is actually admins-only right now (finding 4 of the
+ * SRV-6..8 rework) — read from `channelOverwrites` (the channel's own) when
+ * it has any, since an explicit overwrite for `@everyone`/the students role
+ * on the channel itself always decides it regardless of its category.
+ * A channel with none of its own (SRV-3's "omitted entirely... the channel
+ * then inherits its category's" — `client.ts`'s own `createGuildChannel` doc
+ * comment) falls back to `categoryOverwrites` — the same cascade Discord
+ * itself applies, one level deep, which is as deep as this platform's own
+ * category/channel nesting ever goes.
+ */
+function channelIsAdminsOnly(
+  channelOverwrites: DiscordPermissionOverwrite[],
+  categoryOverwrites: DiscordPermissionOverwrite[],
+  studentsRoleId: string | undefined,
+  guildId: string
+): boolean {
+  const overwrites =
+    channelOverwrites.length > 0 ? channelOverwrites : categoryOverwrites
+
+  // The students role, explicitly granted or denied view on `overwrites`,
+  // always settles it — an admin-only channel/category never grants it.
+  if (studentsRoleId) {
+    const studentOverwrite = overwrites.find(
+      (entry) => entry.id === studentsRoleId
+    )
+    if (studentOverwrite) return !overwriteAllowsView(studentOverwrite)
+  }
+
+  // No resolved students role, or no overwrite naming it: whether
+  // `@everyone` itself is denied is the only signal left.
+  return everyoneIsDenied(overwrites, guildId)
 }
 
 /**
@@ -170,8 +327,22 @@ export function createDiscordScaffoldHandler(
       context.db
     )
     if (!binding) {
+      // `getActiveDiscordServerBindingForOrganization` returns `undefined`
+      // both for "no active binding at all" and for "more than one"
+      // (`repos/discord-servers.ts`'s own module comment) — a single
+      // message for both reads as "none bound" to an instructor who has, in
+      // fact, bound two. Finding 8 of the SRV-6..8 rework: count them here
+      // to say which one actually happened.
+      const activeBindingCount = discordServers
+        .listDiscordServerBindingsForOrganization(
+          context.organizationId,
+          context.db
+        )
+        .filter((row) => row.removedAt === null).length
       throw new Error(
-        `discordServers.scaffold: organization "${context.organizationId}" has no single active Discord server bound`
+        activeBindingCount > 1
+          ? `discordServers.scaffold: organization "${context.organizationId}" has ${activeBindingCount} active Discord server bindings — cannot tell which one this course belongs to`
+          : `discordServers.scaffold: organization "${context.organizationId}" has no active Discord server bound`
       )
     }
     const guildId = binding.serverId
@@ -224,9 +395,19 @@ export function createDiscordScaffoldHandler(
 
       let categoryId: string
       let categoryStatus: 'created' | 'already_present'
+      // What this run knows the category's overwrites actually are, used
+      // both for the report below and as the channel loop's own fallback
+      // for a channel with no overwrites of its own (finding 4 of the
+      // rework). For `created`, this is `categoryOverwrites` itself — what
+      // this run just requested, known accurate regardless of how faithfully
+      // Discord's create response happens to echo it back. For
+      // `already_present`, this run wrote nothing, so it is read from the
+      // existing row instead.
+      let categoryOverwritesObserved: DiscordPermissionOverwrite[]
       if (existingCategory) {
         categoryId = existingCategory.id
         categoryStatus = 'already_present'
+        categoryOverwritesObserved = existingCategory.permissionOverwrites ?? []
       } else {
         const created: DiscordChannel =
           await deps.discordRestClient.createGuildCategory(
@@ -236,6 +417,7 @@ export function createDiscordScaffoldHandler(
           )
         categoryId = created.id
         categoryStatus = 'created'
+        categoryOverwritesObserved = categoryOverwrites
         guildCategories = [...guildCategories, created]
       }
 
@@ -244,13 +426,23 @@ export function createDiscordScaffoldHandler(
         const existingChannel = guildChannels.find(
           (candidate) =>
             candidate.parentId === categoryId &&
-            normalizeName(candidate.name) === normalizeName(channel.name)
+            normalizeChannelName(candidate.name) ===
+              normalizeChannelName(channel.name)
         )
         if (existingChannel) {
           channelReports.push({
             name: channel.name,
             status: 'already_present',
-            adminsOnly: channel.adminsOnly,
+            // Finding 4 of the rework: read, not copied from the
+            // declaration — this run wrote nothing to an existing channel's
+            // permissions (SRV-8).
+            adminsOnly: channelIsAdminsOnly(
+              existingChannel.permissionOverwrites ?? [],
+              categoryOverwritesObserved,
+              studentsRoleId,
+              guildId
+            ),
+            establishedByThisRun: false,
           })
           continue
         }
@@ -275,31 +467,67 @@ export function createDiscordScaffoldHandler(
           name: channel.name,
           status: 'created',
           adminsOnly: channel.adminsOnly,
+          establishedByThisRun: true,
         })
       }
 
       categoryReports.push({
         name: category.name,
         status: categoryStatus,
+        everyoneDenied:
+          categoryStatus === 'created'
+            ? true // SRV-2 always denies it at creation — a fact, not an observation.
+            : everyoneIsDenied(categoryOverwritesObserved, guildId),
+        establishedByThisRun: categoryStatus === 'created',
         channels: channelReports,
       })
     }
 
-    // SRV-8: named, never removed.
-    const declaredCategoryNames = new Set(
-      course.categories.map((category) => normalizeName(category.name))
+    // SRV-8, finding 2/3 of the rework: named, never removed, diffed against
+    // every course this organization declares — not only the one being
+    // scaffolded. See this file's own module comment and
+    // `loadOrganizationDeclaredNames` for why.
+    const declaredNames = loadOrganizationDeclaredNames(
+      context.organizationId,
+      context.db
     )
     const undeclaredCategories = guildCategories
       .filter(
-        (channel) => !declaredCategoryNames.has(normalizeName(channel.name))
+        (channel) =>
+          !declaredNames.categoryNames.has(normalizeName(channel.name))
       )
       .map((channel) => channel.name)
+
+    // Finding 3 of the rework: a channel inside a category the organization
+    // *does* declare, whose own name no course lists any more. Scoped to
+    // declared categories only — an undeclared category's own channels are
+    // already covered by naming the category itself, above; naming them too
+    // would just be noise on top of a category a human is already looking
+    // at.
+    const undeclaredChannels = guildCategories
+      .filter((category) =>
+        declaredNames.categoryNames.has(normalizeName(category.name))
+      )
+      .flatMap((category) => {
+        const declaredChannelNames =
+          declaredNames.channelNamesByCategory.get(
+            normalizeName(category.name)
+          ) ?? new Set<string>()
+        return guildChannels
+          .filter((channel) => channel.parentId === category.id)
+          .filter(
+            (channel) =>
+              !declaredChannelNames.has(normalizeChannelName(channel.name))
+          )
+          .map((channel) => channel.name)
+      })
 
     return {
       courseId: course.id,
       guildId,
       categories: categoryReports,
       undeclaredCategories,
+      undeclaredChannels,
       unresolvedRoles,
     }
   }

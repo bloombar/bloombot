@@ -18,6 +18,8 @@ export { administersGuild, type DiscordGuildSummary } from './permissions.js'
 export {
   allowRoleOverwrite,
   denyEveryoneOverwrite,
+  overwriteAllowsView,
+  overwriteDeniesView,
   type DiscordOverwriteType,
   type DiscordPermissionOverwrite,
 } from './channel-overwrites.js'

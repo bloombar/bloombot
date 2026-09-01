@@ -21,6 +21,16 @@
  * This fake implements no route that edits or deletes a channel or
  * category — SRV-8's "never delete" has nothing to call even if a test
  * wanted to prove otherwise by accident.
+ *
+ * Finding 1 of the SRV-6..8 rework: a created `GUILD_TEXT` channel's own
+ * `name` is slugged before it is stored and echoed back — lowercased, each
+ * run of whitespace collapsed to a single `-` — the same transform Discord's
+ * real API silently applies at creation and that this fake used to skip,
+ * which is exactly why the bug this rework fixes (a declared channel with a
+ * space in its name duplicating on every run) went unnoticed: a fake that
+ * merely echoes whatever it was posted never disagrees with a handler that
+ * only compares declared names. A `GUILD_CATEGORY`'s own `name` is left
+ * untouched — Discord does not slug a category's name the same way.
  */
 
 import {
@@ -35,6 +45,14 @@ export interface RecordedRequest {
   path: string
   headers: IncomingMessage['headers']
   body: Record<string, unknown> | undefined
+}
+
+/** Discord's own channel-type enum (API v10) — `0` is `GUILD_TEXT`, the only type this fake slugs a created name for; see this file's own module comment. */
+const CHANNEL_TYPE_GUILD_TEXT = 0
+
+/** Discord's own slugging of a `GUILD_TEXT` channel's name at creation — lowercase, whitespace runs collapsed to a single `-`. See this file's own module comment for why echoing it here (finding 1 of the SRV-6..8 rework) matters. */
+function slugifyChannelName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, '-')
 }
 
 export class FakeDiscordGuildServer {
@@ -86,6 +104,11 @@ export class FakeDiscordGuildServer {
     this.guildRoles.set(guildId, roles)
   }
 
+  /** `guildId`'s channels/categories as they stand right now — including anything a create call has appended since `setGuildChannels`, and with a `GUILD_TEXT` channel's name already slugged — the same escape hatch `packages/discord-rest`'s own `FakeDiscordServer#guildChannelsFor` provides, for a test that wants to assert on the guild's actual state rather than only on `requests`/`writeRequests()`. */
+  guildChannelsFor(guildId: string): unknown[] {
+    return this.guildChannels.get(guildId) ?? []
+  }
+
   /** Every `POST`/`PATCH`/`DELETE` this fake has ever received — a test's own structural proof, alongside `DiscordRestClient`'s own missing methods, that SRV-8 held: no delete call of any kind reached even a fake willing to record one. */
   writeRequests(): RecordedRequest[] {
     return this.requests.filter((request) => request.method !== 'GET')
@@ -120,10 +143,19 @@ export class FakeDiscordGuildServer {
         return
       }
       if (req.method === 'POST') {
+        const postedName = parsedBody?.['name']
+        const postedType = parsedBody?.['type']
         const created = {
           id: String(this.nextChannelId++),
           parent_id: null,
           ...parsedBody,
+          // Finding 1 of the SRV-6..8 rework — see this file's own module
+          // comment: a `GUILD_TEXT` channel's `name` is slugged the way
+          // Discord's real API slugs it; a `GUILD_CATEGORY`'s is not.
+          ...(postedType === CHANNEL_TYPE_GUILD_TEXT &&
+          typeof postedName === 'string'
+            ? { name: slugifyChannelName(postedName) }
+            : {}),
         }
         const existing = this.guildChannels.get(guildId) ?? []
         this.guildChannels.set(guildId, [...existing, created])

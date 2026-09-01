@@ -76,18 +76,23 @@ async function main(): Promise<void> {
     baseDelayMs: CONFIG.JOB_RETRY_BASE_DELAY_MS,
     backoffFactor: CONFIG.JOB_RETRY_BACKOFF_FACTOR,
   }
-  // SRV-6 — the same three Discord credentials `apps/api`'s own `main()`
-  // reads for its install flow: this process reaches Discord over REST with
-  // the same bot token `apps/bot`'s gateway connection uses (`apps/bot`'s
-  // own module comment), never a gateway connection of its own.
-  // `discordClientId`/`discordClientSecret` are unused by the scaffold
-  // handler's own guild-management calls (bot-token authenticated, not
-  // OAuth) — required here anyway only because
-  // `createDiscordRestClient` takes them, the same construction
-  // `apps/api` already performs.
-  const discordClientId = requireEnv('BOT_APP_ID')
+  // SRV-6 — this process reaches Discord over REST with the same bot token
+  // `apps/bot`'s gateway connection uses (`apps/bot`'s own module comment),
+  // never a gateway connection of its own. `BOT_TOKEN` is the only one of
+  // `apps/api`'s three install-flow credentials this process actually needs:
+  // the scaffold handler's own guild-management calls are bot-token
+  // authenticated, never OAuth (this file's own module comment). Finding 7
+  // of the SRV-6..8 rework — `BOT_APP_ID`/`DISCORD_CLIENT_SECRET` used to be
+  // `requireEnv`'d anyway, for no reason beyond `createDiscordRestClient`'s
+  // own signature wanting *some* `clientId`/`clientSecret` — so a deployment
+  // that gave this process only `BOT_TOKEN` crash-looped on two secrets it
+  // had no use for, and needlessly widened where the OAuth client secret has
+  // to be distributed just to run the worker. Optional here, defaulting to
+  // `''`: `exchangeAuthorizationCode`, the one `DiscordRestClient` call that
+  // actually reads them, is never called from this process.
+  const discordClientId = process.env['BOT_APP_ID'] ?? ''
   const discordBotToken = requireEnv('BOT_TOKEN')
-  const discordClientSecret = requireEnv('DISCORD_CLIENT_SECRET')
+  const discordClientSecret = process.env['DISCORD_CLIENT_SECRET'] ?? ''
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)

@@ -1913,9 +1913,14 @@ the lease and the handler timeout `D-29`'s rework already put in place.
 **Choice, on "never delete."** `SRV-8` is enforced structurally, not by convention: `packages/discord-rest`'s
 `DiscordRestClient` (`client.ts`) has no method that edits or deletes a category or channel at all — only
 `listGuildChannels`, `listGuildRoles`, `createGuildCategory` and `createGuildChannel`. There is nothing for
-`apps/worker/src/handlers/discord-scaffold.ts` to call even if it wanted to remove a category the course no
-longer declares; `undeclaredCategories` in its own `ScaffoldReport` names one, but the handler is refused the
-means to act on that name beyond reporting it. This is the same "refuse structurally, not by remembering a
+`apps/worker/src/handlers/discord-scaffold.ts` to call even if it wanted to remove a category or channel no
+course declares; `undeclaredCategories`/`undeclaredChannels` in its own `ScaffoldReport` name one, but the
+handler is refused the means to act on that name beyond reporting it. Findings 2/3 of the rework: both are
+diffed against every course _this organization_ declares (`loadOrganizationDeclaredNames`), not only the course
+being scaffolded — a guild can host more than one of an organization's courses at once (one binding per
+organization, `TEN-3`), so the first version of this diff reported every _other_ course's own categories and
+channels as undeclared, which is exactly the "hand-delete a live course's channels" outcome `SRV-8` exists to
+prevent. This is the same "refuse structurally, not by remembering a
 rule" discipline `TEN-3`'s primary-key binding and `courses.ts`'s partial unique indexes already apply
 elsewhere in this codebase — a reviewer can confirm `SRV-8` by reading one interface's method list rather than
 auditing every call site that touches it. The test suite backs this twice: `DiscordRestClient`'s own missing
@@ -1923,6 +1928,25 @@ methods (a compile-time fact — nothing in `apps/worker` can even name a delete
 `FakeDiscordGuildServer` (`apps/worker/tests/helpers/`) and `FakeDiscordServer`
 (`packages/discord-rest/tests/helpers/`) implement no route that would honour one, so a test can assert zero
 `DELETE`/`PATCH` requests reached the fake at all, not merely that the handler's own report looked right.
+
+**Choice, on reporting a pre-existing category or channel's actual permissions, not the declared ones.**
+Finding 4 of the SRV-6..8 rework: the same structural no-edit above means this handler never writes to an
+`already_present` category or channel's overwrites — but the first version of this report copied
+`adminsOnly`/the category's own privacy straight from what the course _declared_ regardless of status, so an
+instructor who set `admins_only: true` on a channel students could already read was told `adminsOnly: true`
+with nothing about it actually having changed. The fix is necessarily report-side, not a `PATCH` — this package
+still has none — so `ScaffoldChannelReport.adminsOnly`/`ScaffoldCategoryReport.everyoneDenied` are read from
+Discord's own response for `already_present` (`channelIsAdminsOnly`/`everyoneIsDenied`,
+`apps/worker/src/handlers/discord-scaffold.ts`) rather than copied from the declaration, and
+`establishedByThisRun: false` marks that this run did not set it. **What this means for an instructor:** if a
+category or channel's actual permissions are wrong — public when a course declares it should not be, or vice
+versa — this package has no way to correct it. Fixing a channel `already_present`'s permissions needs an edit
+capability this package deliberately does not have (`SRV-8`'s own structural refusal, above, applies to a
+permission write exactly as it does to a delete); the only remedy today is an administrator fixing the
+overwrite directly in Discord. A future slice that wants scaffolding to _repair_ a wrong permission, not merely
+report it, needs to reopen that refusal on purpose — this rework does not, since nothing in `SRV-6..8`'s own
+text asks for it and it is exactly the kind of capability `SRV-8` exists to keep this package from having by
+accident.
 
 **Choice, on matching by name.** A course's categories and channels carry no Discord id of their own
 (`schema.ts`'s `course_categories`/`course_channels` — nothing this platform writes back once created), so the
@@ -1943,17 +1967,31 @@ config is ever found relying on two identically-named categories meaning two dif
 for a Discord failure — a rate limit, a transport error, the guild becoming unreachable partway through a
 run — beyond letting it propagate as a thrown error out of the handler. `JOB-2`'s ordinary retry/backoff (built
 in the previous slice, `D-29`) takes it from there: the attempt fails, and — attempts remaining — is
-rescheduled with backoff. What makes that safe, rather than merely convenient, is the same by-name matching
-above: a retried attempt re-lists the guild's channels and re-resolves roles from scratch, so whatever the
-failed attempt already created (say, three of a course's five declared channels, before the fourth `POST`
-failed) is found "already present" on the retry rather than recreated — `SRV-7`'s idempotence is exactly what
-makes a partial failure resumable without special-casing resumption. The same reasoning covers `D-29`'s own
-open question about `JOB_HANDLER_TIMEOUT_MS` firing on a handler still running underneath it
-(`packages/jobs/src/runner.ts`'s own module comment): a scaffold call that is timed out by `runNextJob` while
-still genuinely in flight against Discord may still create a category or channel *after* the row has already
-been marked failed or rescheduled — the next attempt (a retry, or a second worker reclaiming the row once the
-lease lapses) simply finds it already there and moves on, the general obligation `D-29`'s rework already
-placed on every future handler, now concretely satisfied by this one.
+rescheduled with backoff. What makes an _ordinary_ failure (the handler itself threw, and so stopped running)
+safe to retry, rather than merely convenient, is the same by-name matching above: a retried attempt re-lists
+the guild's channels and re-resolves roles from scratch, so whatever the failed attempt already created (say,
+three of a course's five declared channels, before the fourth `POST` failed) is found "already present" on the
+retry rather than recreated — `SRV-7`'s idempotence is exactly what makes a partial failure resumable without
+special-casing resumption.
+
+**Limit this does not cover — `JOB_HANDLER_TIMEOUT_MS` firing on a handler still running underneath it.**
+Finding 5 of the SRV-6..8 rework: an earlier version of this section claimed the same by-name matching covers
+`D-29`'s own open question about a fired handler timeout too — "the next attempt simply finds it already there
+and moves on" — and that claim is stronger than `runHandlerWithTimeout` (`packages/jobs/src/runner.ts`) actually
+supports. JavaScript has no way to cancel a `Promise` already in flight, so that function only stops _awaiting_
+the handler; the handler itself keeps running. A scaffold call timed out mid-run does not stop creating
+categories and channels the moment `runNextJob` gives up on it — it keeps going, against the same guild, for as
+long as its own in-flight Discord calls take. If the next attempt (a retry, or a second worker reclaiming the
+row once the lease lapses) starts before the abandoned one has actually finished, both are now creating the
+same course's missing categories and channels concurrently: two `GET`s can both miss the same not-yet-created
+row, and two `POST`s can both then succeed, since nothing here makes "check, then create" atomic against a
+second caller doing the same thing at the same time. `SRV-7`'s idempotence check only ever guards against a
+_sequential_ re-run finding something already there — it was never built to arbitrate between two calls racing
+each other, and does not. This is a known, unclosed gap, not one this slice engineers around: closing it for
+real would need either a lock this queue does not have (one job's claim does not stop a _different_ in-flight
+call from touching the same guild) or an idempotency key Discord's own create endpoints do not accept. An
+operator who raises `JOB_HANDLER_TIMEOUT_MS` well above how long a real scaffold run ever takes narrows the
+window this matters in; it does not close it.
 
 **Choice, on where a handler's report lives.** `SRV-6..8`'s brief asks for "a way to see the outcome," which
 needs the report to outlive the handler call that produced it — `apps/worker`'s own process, and the
@@ -1979,4 +2017,3 @@ real deployment ever needs one organization teaching across multiple Discord ser
 own explicit server reference — this slice does not add one, since nothing in `SRV-6..8`'s own text calls for
 it and speculative schema is exactly what `CLAUDE.md`'s "do not add abstraction for a future the brief did not
 describe" warns against.
-than one process concurrently, or if the ceiling needs to be enforced platform-wide rather than per process.

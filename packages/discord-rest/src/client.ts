@@ -78,6 +78,21 @@ export interface DiscordChannel {
   name: string
   /** The owning category's id, or `null` for a category itself (or an uncategorized channel, which SRV-6 never creates). */
   parentId: string | null
+  /**
+   * Finding 4 of the SRV-6..8 rework: this row's own permission overwrites,
+   * as Discord's channel object actually carries them — `[]` when the field
+   * is missing or unusable, not merely when Discord sent an empty list, so a
+   * caller cannot tell "no overwrites" from "the response didn't say"
+   * without also checking for that itself. `apps/worker`'s scaffold handler
+   * reads this for a category or channel `listGuildChannels` already found
+   * (`already_present`) to report what its privacy actually is, since
+   * `SRV-8`'s structural no-edit means this package never sends a write for
+   * one of those. Optional so an in-memory `DiscordRestClient` fake that
+   * predates this field (`apps/api/tests/helpers/fake-discord-rest-client.ts`,
+   * which never calls SRV-6's guild-write endpoints at all) keeps satisfying
+   * this interface without also having to fabricate one.
+   */
+  permissionOverwrites?: DiscordPermissionOverwrite[]
 }
 
 /** A guild role, as `listGuildRoles` returns it — enough for `apps/worker`'s scaffold handler to resolve a course's `adminsRole`/`studentsRole` names to the ids `denyEveryoneOverwrite`/`allowRoleOverwrite` (`channel-overwrites.ts`) need. */
@@ -228,6 +243,41 @@ function parseGuildList(body: unknown): DiscordGuildSummary[] {
   return body as DiscordGuildSummary[]
 }
 
+/**
+ * Parse one overwrite entry out of a channel's own `permission_overwrites` —
+ * tolerant of a malformed or missing entry (dropped, not thrown on): this is
+ * read-side, best-effort data for a report (finding 4 of the SRV-6..8
+ * rework), not a value this package's own writes depend on being exact.
+ */
+function parsePermissionOverwrite(
+  entry: unknown
+): DiscordPermissionOverwrite | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const payload = entry as {
+    id?: unknown
+    type?: unknown
+    allow?: unknown
+    deny?: unknown
+  }
+  if (typeof payload.id !== 'string') return undefined
+  return {
+    id: payload.id,
+    type: payload.type === 1 ? 1 : 0,
+    allow: typeof payload.allow === 'string' ? payload.allow : '0',
+    deny: typeof payload.deny === 'string' ? payload.deny : '0',
+  }
+}
+
+/** `[]` for a missing or non-array `permission_overwrites` — see `DiscordChannel.permissionOverwrites`'s own doc comment for why that is indistinguishable from "really has none" on purpose. */
+function parsePermissionOverwrites(
+  value: unknown
+): DiscordPermissionOverwrite[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(parsePermissionOverwrite)
+    .filter((entry): entry is DiscordPermissionOverwrite => entry !== undefined)
+}
+
 /** Parse one Discord channel object — snake_case `parent_id` into this package's own camelCase `parentId`, tolerant of every other field Discord sends and this package does not read. */
 function parseChannel(body: unknown): DiscordChannel {
   const payload = body as {
@@ -235,6 +285,7 @@ function parseChannel(body: unknown): DiscordChannel {
     type?: unknown
     name?: unknown
     parent_id?: unknown
+    permission_overwrites?: unknown
   }
   if (
     typeof payload.id !== 'string' ||
@@ -250,6 +301,9 @@ function parseChannel(body: unknown): DiscordChannel {
     type: payload.type,
     name: payload.name,
     parentId: typeof payload.parent_id === 'string' ? payload.parent_id : null,
+    permissionOverwrites: parsePermissionOverwrites(
+      payload.permission_overwrites
+    ),
   }
 }
 

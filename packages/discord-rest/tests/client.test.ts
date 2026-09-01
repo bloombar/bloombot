@@ -253,8 +253,20 @@ describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuild
     const channels = await client.listGuildChannels('bot-token', 'guild-1')
 
     expect(channels).toEqual([
-      { id: 'cat-1', type: 4, name: 'Week 1', parentId: null },
-      { id: 'chan-1', type: 0, name: 'general', parentId: 'cat-1' },
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parentId: null,
+        permissionOverwrites: [],
+      },
+      {
+        id: 'chan-1',
+        type: 0,
+        name: 'general',
+        parentId: 'cat-1',
+        permissionOverwrites: [],
+      },
     ])
     expect(server.requests[0]).toMatchObject({
       method: 'GET',
@@ -290,6 +302,12 @@ describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuild
 
     expect(created).toMatchObject({ type: 4, name: 'Week 1', parentId: null })
     expect(created.id).toEqual(expect.any(String))
+    // Finding 4 of the SRV-6..8 rework: `parseChannel` now reads a channel's
+    // own `permission_overwrites` back, not just `id`/`type`/`name`/`parentId`
+    // — `apps/worker`'s scaffold handler needs this to report an existing
+    // category or channel's actual privacy rather than merely the declared
+    // one.
+    expect(created.permissionOverwrites).toEqual(overwrites)
     expect(server.requests[0]).toMatchObject({
       method: 'POST',
       path: '/guilds/guild-1/channels',

@@ -57,3 +57,29 @@ export function allowRoleOverwrite(roleId: string): DiscordPermissionOverwrite {
     deny: '0',
   }
 }
+
+/**
+ * The read half of `VIEW_CHANNEL_BIT` — whether one overwrite entry actually
+ * *grants* it. Finding 4 of the SRV-6..8 rework: `discord-scaffold.ts`'s
+ * report used to copy a category or channel's `adminsOnly`/privacy state
+ * straight from what the course declared, even when the row already existed
+ * and this run never touched its permissions at all — so a pre-existing
+ * `grades` channel students could already read stayed readable to them the
+ * moment `admins_only: true` was set, while the report said `adminsOnly:
+ * true` regardless. `SRV-8`'s structural no-edit (this package's own module
+ * comment) means the report is the only place that can ever be honest about
+ * that, so it needs to read what an existing row's own overwrites actually
+ * grant, not merely echo the declaration.
+ */
+export function overwriteAllowsView(
+  overwrite: DiscordPermissionOverwrite
+): boolean {
+  return (BigInt(overwrite.allow) & VIEW_CHANNEL_BIT) !== 0n
+}
+
+/** The write half's inverse — whether one overwrite entry actually *denies* `VIEW_CHANNEL_BIT`. Same reasoning as `overwriteAllowsView`, above. */
+export function overwriteDeniesView(
+  overwrite: DiscordPermissionOverwrite
+): boolean {
+  return (BigInt(overwrite.deny) & VIEW_CHANNEL_BIT) !== 0n
+}

@@ -1862,7 +1862,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: TEN-7
   title: An organization has a name a person recognizes
@@ -1897,7 +1897,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: WEB-8
   title: A course is defined in the panel, not in a file
@@ -1909,7 +1909,7 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 7
-  status: In review
+  status: Done
   review: false
 - id: WEB-9
   title: The panel shows what will route, and why a save was refused
@@ -1921,5 +1921,5 @@
   section: §24 Web Control Panel
   family: WEB
   phase: 7
-  status: In review
+  status: Done
   review: false

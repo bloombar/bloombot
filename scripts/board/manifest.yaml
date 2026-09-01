@@ -1609,7 +1609,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: API-2
   title: The session is a cookie the browser cannot read
@@ -1620,7 +1620,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: API-3
   title: A state-changing request must come from the site
@@ -1632,7 +1632,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: API-4
   title: One place turns a failure into a status
@@ -1643,7 +1643,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: API-5
   title: The API reaches Discord over REST, never the gateway
@@ -1653,7 +1653,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: API-6
   title: The process reports readiness honestly
@@ -1664,7 +1664,7 @@
   section: §23 HTTP API
   family: API
   phase: 5
-  status: In review
+  status: Done
   review: false
 - id: AUTH-1
   title: Passwordless email sign-in

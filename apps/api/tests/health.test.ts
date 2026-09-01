@@ -26,7 +26,7 @@ afterEach(() => {
 describe('API-6 — the health endpoint', () => {
   it('reports ready when the database is reachable', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app).get('/health')
 
@@ -44,7 +44,7 @@ describe('API-6 — the health endpoint', () => {
     const path = join(tmpRoot, `${randomUUID()}.db`)
     const db = openDatabase(path)
     runMigrations(db)
-    const app = buildTestApp(db)
+    const app = await buildTestApp(db)
 
     // The connection is closed while the app still holds a reference to
     // it — the same "reachable one moment, gone the next" shape a real

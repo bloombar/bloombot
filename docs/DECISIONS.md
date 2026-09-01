@@ -1534,3 +1534,56 @@ the same one this slice already uses for categories and channels: read the sourc
 insert new rows pointing at the same underlying file (or a copy of it, if a file's own lifecycle turns out to
 be tied to one course) under the new course's id — the same "bring the settings, not the roster" pattern PROJ-4
 already describes, extended to a table this slice never touched.
+
+---
+
+## D-24 — `apps/api/tests`: why every test's server must bind loopback itself, and why the bind has to be awaited
+
+**Problem.** Roughly one run in ten of `apps/api`'s test project failed, always shaped as a session or
+membership that should exist reading as absent — a live investigation traced this to `supertest`'s own
+`Test#serverAddress` (`node_modules/supertest/lib/test.js`), which calls `app.listen(0)` with no host when
+handed a bare Express app. That binds the IPv6 wildcard `::`, then dials the hard-coded literal
+`http://127.0.0.1:<port>`. `SO_REUSEADDR` lets the OS hand that wildcard listen an ephemeral port some other
+process already holds bound specifically to `127.0.0.1` — this machine runs plenty (VS Code's helper sockets,
+`vite`'s own dev server) — and the more specific binding wins the connection, so the request never reaches
+the app under test and whatever that other process answers gets parsed as if it had. Measured at 0.10% per
+request, against ~50-60 requests an `api` run makes: about the observed one-in-ten failure rate. Nothing in
+`apps/api/src`, the database, the clock, or the token/tenancy layers was at fault.
+
+**Choice.** `apps/api/tests/helpers/build-test-app.ts`'s `startTestServer` wraps the built Express app in
+`http.createServer(app)` and awaits `server.listen(0, '127.0.0.1')` itself, handing supertest an
+already-listening server rather than a bare app — supertest reads the address off a server it did not create
+instead of picking one itself. `buildTestApp` (and `health.test.ts`'s own inline second app) call it, and are
+now async as a result: every `const app = buildTestApp(...)` call site became `await buildTestApp(...)`, and
+every helper that took an `Express` now takes the `http.Server` supertest is handed instead
+(`tenant-isolation.test.ts`'s `send`, `discord-servers.test.ts`'s `beginInstall`).
+
+**Why the bind has to be awaited, not patched around.** `listen(0, '127.0.0.1')` runs `dns.lookup` even for an
+IP literal, so it is asynchronous regardless of how synchronous it looks — `server.address()` is still `null`
+immediately after the call returns. A monkey-patch of `Test.prototype.serverAddress` cannot work for the same
+reason: there is no synchronous moment at which the address exists to read.
+
+**Why not dial `[::1]` instead.** `vite` already binds `[::1]:5173-5175` on this machine, so the same
+collision class would survive, just rarer — the fix has to be a specific loopback address that nothing else
+plausibly shares, not merely a different specific address.
+
+**Who owns closing the servers.** supertest closes only a server it created itself (`this._server` is set
+only on the `!addr` branch of `serverAddress`) — handing it a pre-bound server means the tests own its
+lifetime. `build-test-app.ts` makes that structural rather than a convention each file has to remember: every
+server `startTestServer` opens is tracked in a module-level `Set`, and a single `afterEach` registered by the
+helper itself (at import time, so it runs once per test file under vitest's own per-file module isolation)
+closes whatever that file's tests opened. A test file that imports `buildTestApp` gets this for free; nothing
+in the file itself has to call a cleanup function.
+
+**Proof this is the actual fix, not a plausible-sounding one.** `build-test-app.test.ts` binds a squatter to a
+specific `127.0.0.1` port, then asks `startTestServer` for that exact port, and asserts the bind rejects with
+`EADDRINUSE` rather than silently landing somewhere else — the property that makes this whole class of bug
+impossible rather than merely unlikely, and the one a fix that only reduced the odds (a retry loop, a
+different but still-shared address) would not have. Separately, `npx vitest run --project api` was run 30
+times after the fix, with 0 failures (`docs/DECISIONS.md`'s own author has the raw log; the pre-fix rate was
+roughly 1 in 10).
+
+**Limits.** This only fixes `apps/api`'s own suite — the only package in this repo using supertest (checked
+by grep, along with every other `.listen(0)` call site in the repo; none found). If a future package adds
+HTTP tests over supertest, it needs the same `startTestServer`-style helper, not a bare `request(app)` — the
+squatter-collision test above is the regression to copy alongside it.

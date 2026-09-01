@@ -39,7 +39,7 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
   it('requests a link, redeems it, receives a cookie, reports "who am I", then dies on sign-out', async () => {
     testDb = createTestDatabase()
     const emailSender = new RecordingEmailSender()
-    const app = buildTestApp(testDb.db, { emailSender })
+    const app = await buildTestApp(testDb.db, { emailSender })
 
     // 1. Request a sign-in link — captured by the recording mail port, not
     //    a real transport.
@@ -126,7 +126,7 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
   it('rotates the session on a second sign-in: the old token stops validating', async () => {
     testDb = createTestDatabase()
     const emailSender = new RecordingEmailSender()
-    const app = buildTestApp(testDb.db, { emailSender })
+    const app = await buildTestApp(testDb.db, { emailSender })
 
     async function requestAndRedeem(): Promise<string> {
       await request(app)
@@ -163,7 +163,7 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
 describe('POST /auth/google (AUTH-2, API-2)', () => {
   it('signs in with a verified identity: 200, a full-attribute session cookie, and "who am I" reflects it', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp(testDb.db, {
+    const app = await buildTestApp(testDb.db, {
       googleVerifier: createFakeGoogleVerifier({
         ok: true,
         identity: {
@@ -206,7 +206,7 @@ describe('POST /auth/google (AUTH-2, API-2)', () => {
       email: 'returning-google@example.edu',
       emailVerified: true,
     }
-    const app = buildTestApp(testDb.db, {
+    const app = await buildTestApp(testDb.db, {
       googleVerifier: createFakeGoogleVerifier({ ok: true, identity }),
     })
 
@@ -236,7 +236,7 @@ describe('POST /auth/google (AUTH-2, API-2)', () => {
   it('refuses with 401 when the verifier rejects the token', async () => {
     testDb = createTestDatabase()
     // `createFakeGoogleVerifier()` with no argument defaults to `ok: false`.
-    const app = buildTestApp(testDb.db, {
+    const app = await buildTestApp(testDb.db, {
       googleVerifier: createFakeGoogleVerifier(),
     })
 
@@ -257,7 +257,7 @@ describe('POST /auth/google (AUTH-2, API-2)', () => {
 describe('POST /auth/request-link — malformed address (AUTH-1)', () => {
   it('is a 400 carrying field errors, not a 500', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post('/auth/request-link')
@@ -285,7 +285,7 @@ describe('a disabled account (AUTH-3, API-2)', () => {
   it('its session cookie no longer authenticates, over HTTP', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     // Confirm the session works before disabling, so the refusal below is
     // actually caused by disabling the account, not some other mistake.

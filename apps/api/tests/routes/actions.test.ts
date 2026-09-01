@@ -45,7 +45,7 @@ describe('API-1 — routes carry, they do not decide', () => {
     }
     const registry = new ActionRegistry()
     registry.register(action)
-    const app = buildTestApp(testDb.db, { registry })
+    const app = await buildTestApp(testDb.db, { registry })
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/test.record`)
@@ -61,7 +61,7 @@ describe('API-1 — routes carry, they do not decide', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const otherOrganizationId = seedOtherOrganization(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post(`/organizations/${otherOrganizationId}/actions/projects.create`)
@@ -79,7 +79,7 @@ describe('API-1 — routes carry, they do not decide', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const otherOrganizationId = seedOtherOrganization(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/projects.create`)
@@ -114,7 +114,7 @@ describe('API-1 — routes carry, they do not decide', () => {
   it('a zero-input read action succeeds on a body-less POST, not just an explicit {}', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const app = buildTestApp(testDb.db)
+    const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
       .post(`/organizations/${caller.organizationId}/actions/projects.list`)

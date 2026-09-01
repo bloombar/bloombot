@@ -1608,7 +1608,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-2
   title: Google sign-in
@@ -1619,7 +1619,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-3
   title: Sessions
@@ -1630,7 +1630,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-4
   title: Platform administrators
@@ -1641,7 +1641,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 5
-  status: Backlog
+  status: In review
   review: false
 - id: TEN-4
   title: Installation

@@ -1923,3 +1923,43 @@
   phase: 7
   status: Done
   review: false
+- id: PPL-4
+  title: A surface is linked by proving it, never by matching an address
+  full: A person gains an identity on a second surface by proving control of the
+    account that surface knows — signing in with Discord to link a Discord
+    identity, and so on — never by an address matching one already on file. A
+    roster's email is an instructor's assertion about somebody else and is
+    corroboration at best; a self-asserted one is worth nothing. Matching on an
+    address is how one person inherits another's conversations and allowance.
+  section: §18 People, Conversations & Transcripts
+  family: PPL
+  phase: 12
+  status: Backlog
+  review: false
+- id: PPL-5
+  title: Seeing or exporting a person's history requires a verified address
+  full: "Answering a question needs no address at all — the bot already knows who
+    asked. Reading a transcript back, exporting one, or carrying a conversation
+    onto a second surface is a disclosure, and disclosure requires an address
+    the platform verified itself. The two controls are separate on purpose: one
+    proves which account is speaking, the other decides what may be shown."
+  section: §18 People, Conversations & Transcripts
+  family: PPL
+  phase: 12
+  status: Backlog
+  review: false
+- id: WEB-10
+  title: Chat renders Markdown, and renders it safely
+  full: Messages in the web chat render standard Markdown — headings, emphasis,
+    lists, links, and fenced code blocks with their formatting intact, which is
+    what makes a programming course's answers readable. The text being rendered
+    is model output and student input, so raw HTML in it is never passed
+    through, links carry no script scheme, and nothing reaches the page through
+    an unsanitized HTML sink. A chat surface that renders assistant output as
+    HTML is the shortest path to a student's session, and WEB-6 exists to keep
+    that path closed.
+  section: §24 Web Control Panel
+  family: WEB
+  phase: 12
+  status: Backlog
+  review: false

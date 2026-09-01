@@ -910,6 +910,22 @@ the identity are created together. No import step stands between a student and t
 answer, and roster fields — name, email, GitHub handle — are merged onto the person later
 when a roster is imported.
 
+#### PPL-4 A surface is linked by proving it, never by matching an address
+
+A person gains an identity on a second surface by proving control of the account that
+surface knows — signing in with Discord to link a Discord identity, and so on — never by an
+address matching one already on file. A roster's email is an instructor's assertion about
+somebody else and is corroboration at best; a self-asserted one is worth nothing. Matching
+on an address is how one person inherits another's conversations and allowance.
+
+#### PPL-5 Seeing or exporting a person's history requires a verified address
+
+Answering a question needs no address at all — the bot already knows who asked. Reading a
+transcript back, exporting one, or carrying a conversation onto a second surface is a
+disclosure, and disclosure requires an address the platform verified itself. The two
+controls are separate on purpose: one proves which account is speaking, the other decides
+what may be shown.
+
 #### CONV-1 Conversations key on course and person
 
 A conversation is the continuity of one person's exchange with one course, keyed on the
@@ -1214,3 +1230,12 @@ A course screen shows the category and role names that decide which questions re
 an instructor can see what a save will claim before making it. A save refused because those
 names collide with another course names that course and its project, because that refusal is
 about a record in the instructor's own organization and is theirs to resolve.
+
+#### WEB-10 Chat renders Markdown, and renders it safely
+
+Messages in the web chat render standard Markdown — headings, emphasis, lists, links, and
+fenced code blocks with their formatting intact, which is what makes a programming course's
+answers readable. The text being rendered is model output and student input, so raw HTML in
+it is never passed through, links carry no script scheme, and nothing reaches the page
+through an unsanitized HTML sink. A chat surface that renders assistant output as HTML is
+the shortest path to a student's session, and WEB-6 exists to keep that path closed.

@@ -1669,3 +1669,68 @@ screens is exactly the configuration `handleMention` routes and answers a matchi
 in this repository edited and no process restarted between the two — and it does not prove discord.js itself
 wires correctly to `handleMention` or that a real OpenAI call succeeds, both of which are untouched by this
 slice.
+
+---
+
+## D-26 — Surfaces are providers, and the schema is not yet written that way
+
+**Problem.** Everything above Discord is already surface-agnostic: `CORE-1` makes answering one pipeline
+for every surface, the core takes a plain inbound message and a reply port, `discord.js` lives in exactly
+one file, and `person_identities.surface` is already an enum (`discord | web | mcp`). But three things are
+Discord-shaped in the schema and the SPEC, and a second provider — Slack most likely — would collide with
+all three.
+
+**What is Discord-shaped today.**
+
+1. `discord_server_bindings`, keyed on the guild snowflake alone, and `TEN-3`'s "one organization per
+   Discord server". A provider-keyed binding — unique on `(provider, workspace_id)` — is the same rule
+   stated once instead of once per provider.
+2. **Routing.** `CORE-2` matches on a Discord *category* name, then on the author's *roles*. Slack has
+   neither: channels are flat, and user groups are not roles. This is the substantive work — routing needs
+   a provider-agnostic "the container this arrived in" plus a per-provider resolver, not a second copy of
+   `routeMessage`.
+3. The install flow (`TEN-4`) is Discord OAuth end to end, including the guild-administration check.
+
+**Choice.** Do not generalize speculatively now, and do not let more Discord-specific structure accumulate
+either. The roster and knowledge-file phases hang new tables off courses and servers; **generalizing the
+binding and the routing contract is cheaper before those land than after**, so this is scheduled work
+rather than a someday. When a second provider is actually wanted, the order is: rename the binding table
+to a provider-keyed one with a migration, widen `routeMessage`'s input to a container plus a provider tag,
+then add the adapter package and its app.
+
+**Why not now.** No second provider is asked for, and a generalization with one implementation is a guess
+about the second. The cost of waiting is one migration and one contract change, both bounded and both
+covered by tests that already exist.
+
+**Limits.** The estimate holds only while `discord.js` stays in `apps/bot` and all SQL stays in
+`packages/db/src/repos/` — the two rules that keep the blast radius to a rename. If either is broken, this
+becomes a rewrite.
+
+---
+
+## D-27 — Linking a person across surfaces is proof of the account, not a matching address
+
+**Problem.** A student answers questions in Discord as a `person` with a `discord` identity; an instructor
+signs into the panel as an `account`. Nothing joins the two, and nothing should join them by guessing. When
+the web chat surface lands, a student arriving in a browser has to be recognized as the same person the bot
+has been talking to — `CONV-1` keys conversations and the daily allowance on the person, not the surface,
+and that is the whole point.
+
+**Choice.** Two separate controls, written as `PPL-4` and `PPL-5`.
+
+- **Linking is proof of the surface account.** Signing in with Discord proves control of the snowflake the
+  bot already knows, needs no address, and works for the many students who have a person record and no
+  email at all — the bot fills its own roster as students arrive (`PPL-3`).
+- **Disclosure requires a verified address.** Answering a question needs none. Reading a transcript back,
+  exporting one, or carrying a conversation onto a second surface is a disclosure, and that gate is an
+  address the platform verified itself.
+
+**Why not match on the roster email.** It inherits `AUTH-2`'s lesson, which cost a real defect in this
+build: an unverified assertion now signs nobody in, because matching an address that somebody else asserted
+is how one person inherits another's account. A roster address is an instructor's claim about a third
+party — good corroboration, poor authority — and it strands every student who was never on a roster.
+
+**Limits.** Discord sign-in on the student surface means a second OAuth client and a second callback to get
+right, and the guard rails `TEN-4` already established (single-use state, PKCE, discard the token) apply
+there too. A person who genuinely loses access to their Discord account needs an instructor-initiated
+re-link, which is an audited action nobody has specified yet.

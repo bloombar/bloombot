@@ -86,6 +86,13 @@ describe('env.example (QA-6)', () => {
       'BOT_TOKEN',
       'DISCORD_CLIENT_SECRET',
       'MAIL_FILE',
+      // AUTH-5 — the SMTP relay's own credentials, read directly by
+      // apps/api rather than through the schema (CFG-5): a credential, the
+      // same reason BOT_TOKEN/OPENAI_API_KEY are not part of envSchema
+      // either. MAIL_SMTP_HOST/MAIL_SMTP_PORT/MAIL_FROM are not credentials
+      // and go through the schema instead, so they need no entry here.
+      'MAIL_SMTP_USER',
+      'MAIL_SMTP_PASSWORD',
       'OPENAI_API_KEY',
     ]
     const missing = readDirectly.filter((key) => !documented.has(key))

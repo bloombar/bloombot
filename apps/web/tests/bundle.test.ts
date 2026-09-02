@@ -38,6 +38,7 @@ const FORBIDDEN_PACKAGES = [
   '@bloombot/auth',
   '@bloombot/discord-rest',
   '@bloombot/openai',
+  '@bloombot/mail',
 ]
 
 /**

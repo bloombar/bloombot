@@ -19,6 +19,7 @@ export default defineConfig({
       '@bloombot/schemas': sourceEntry('schemas'),
       '@bloombot/db': sourceEntry('db'),
       '@bloombot/auth': sourceEntry('auth'),
+      '@bloombot/mail': sourceEntry('mail'),
       '@bloombot/legacy-import': sourceEntry('legacy-import'),
       '@bloombot/core': sourceEntry('core'),
       '@bloombot/openai': sourceEntry('openai'),
@@ -61,6 +62,12 @@ export default defineConfig({
     // own reasoning above applies unchanged, and it is the one adapter in
     // this list that handles both the OAuth client secret and a user's own
     // access token, not a lesser case for the floor than `packages/openai`.
+    // `packages/mail` joins the floor too (AUTH-5, D-44): the SMTP adapter
+    // behind `EmailSender` — `packages/openai`'s own "vendor adapter, so it
+    // belongs on the floor" reasoning applies unchanged, and this one
+    // specifically carries a bearer credential (a sign-in link) through
+    // every code path, exactly the security-critical territory this floor
+    // exists for.
     // `apps/web` (WEB-1..6, QA-7) stays outside the floor for the same
     // reason `apps/bot` and `apps/api` do: it is a thin translation layer —
     // here, HTTP calls and JSX markup around the rules `packages/actions`
@@ -112,6 +119,7 @@ export default defineConfig({
         'packages/auth/src/**/*.ts',
         'packages/discord-rest/src/**/*.ts',
         'packages/jobs/src/**/*.ts',
+        'packages/mail/src/**/*.ts',
       ],
       thresholds: {
         lines: 90,
@@ -162,6 +170,15 @@ export default defineConfig({
         test: {
           name: 'auth',
           root: './packages/auth',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'mail',
+          root: './packages/mail',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

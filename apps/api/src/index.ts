@@ -104,6 +104,17 @@ async function main(): Promise<void> {
   // file's module comment already gives.
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // AUTH-5 — the real mail transport's non-secret configuration, through
+  // `CONFIG` like everything else above; `MAIL_SMTP_USER`/`MAIL_SMTP_PASSWORD`
+  // are read directly just below, alongside the Discord/OpenAI credentials,
+  // for the same CFG-5 reason those are.
+  const smtp = {
+    host: CONFIG.MAIL_SMTP_HOST,
+    port: CONFIG.MAIL_SMTP_PORT,
+    from: CONFIG.MAIL_FROM,
+    user: process.env['MAIL_SMTP_USER'],
+    password: process.env['MAIL_SMTP_PASSWORD'],
+  }
 
   // TEN-4 — the same fail-loudly-at-startup discipline `apps/bot`'s own
   // `BOT_TOKEN`/`OPENAI_API_KEY` checks hold themselves to, applied to the
@@ -169,7 +180,12 @@ async function main(): Promise<void> {
     // Must-fix 1 of the API-1..6 rework: refuses outright rather than
     // silently logging sign-in links in production — see
     // `logging-email-sender.ts`.
-    emailSender: buildEmailSender(nodeEnv, process.env['MAIL_FILE'], logger),
+    emailSender: buildEmailSender(
+      nodeEnv,
+      process.env['MAIL_FILE'],
+      smtp,
+      logger
+    ),
     buildSignInLink: (token) => `${publicAppUrl}/sign-in/${token}`,
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.

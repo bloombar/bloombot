@@ -3728,3 +3728,83 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
+## D-44 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
+
+**Problem.** `apps/api/src/logging-email-sender.ts#buildEmailSender` refused outright under
+`NODE_ENV=production` (must-fix 1 of the API-1..6 rework) because no real transport existed yet for it to
+defer to — a deliberate, correct refusal at the time, but its consequence is that a production deployment
+cannot start at all. A sign-in link is the primary way anybody reaches the panel (AUTH-1), so this is not
+"email is unconfigured," it is a process that refuses to boot. `email.ts`'s own module comment already named
+the shape the fix would take: "the real implementation ... is a later slice's adapter package, the same
+relationship `packages/openai` has to `packages/core`." This entry is that slice.
+
+**Choice — SMTP, not a transactional-email API, and a new `packages/mail` adapter package.** Every
+institution this platform targets already has an SMTP relay it is comfortable issuing credentials against —
+its own, or its Google Workspace/Microsoft 365 tenant's — so SMTP needs no vendor account to create and no
+SDK to trust, and it keeps `EmailSender` (`packages/auth/src/email.ts`) honest as a port: "send this address
+this subject and this body" is exactly what SMTP does, with nothing provider-specific (delivery tracking,
+templating) tempting the interface to grow past that. `packages/mail` is the adapter, following
+`packages/openai`'s own shape exactly: a factory (`createSmtpEmailSender`) that dials nothing until `send()`
+is called (PLAT-5), built on `nodemailer` (pinned, widely maintained, the de facto standard Node SMTP
+client) rather than a hand-rolled SMTP implementation — the same "do not reimplement the protocol" reasoning
+`jose` already got in D-19 for JWT verification.
+
+**Choice — the production check still runs first, unconditionally, and now decides SMTP-or-refuse rather
+than always-refuse.** `buildEmailSender`'s `NODE_ENV=production` branch is still the first thing checked,
+before `MAIL_FILE` is even read — that ordering was must-fix 1's own point (a stray `MAIL_FILE` in production
+must fail loudly, not silently start writing credentials to disk) and stays exactly as strict now that
+production has somewhere real to send mail. What changed is what the branch does once it is reached: instead
+of unconditionally throwing, it builds the SMTP sender when `MAIL_SMTP_HOST`/`MAIL_FROM` are both set, and
+throws — naming exactly what is missing — when they are not. Outside production, `MAIL_FILE` still wins when
+both `MAIL_FILE` and SMTP are set (the more convenient way to read a link back locally), but a configured
+SMTP relay is now usable in development/staging too, once `MAIL_FILE` is unset, for a developer or a staging
+deployment who wants to exercise the real transport before a deployment does.
+
+**Choice — misconfiguration is a startup failure; a relay that is configured but cannot currently be reached,
+or that rejects one send, is a per-send failure surfaced to the caller.** These are different failures and
+this slice treats them differently on purpose. A structural gap — no host, no `From:` address, half an
+`MAIL_SMTP_USER`/`MAIL_SMTP_PASSWORD` pair — is something an operator can only fix by editing configuration
+and restarting, so `buildSmtpEmailSender` throws immediately, before `server.listen` (`src/index.ts`'s own
+`main()` calls `buildEmailSender` synchronously ahead of that call) — the same "fail loudly, at startup"
+discipline `CONFIG` itself already holds a bad environment to. A relay that is fully configured but
+unreachable right now, or that rejects a specific address, is transient or address-specific — retrying it at
+startup would either delay every boot on a slow DNS lookup or bake in a retry policy this slice has no basis
+to size — so `EmailSender.send()`'s own contract ("implementations may throw; `sign-in.ts` does not catch on
+the caller's behalf") is honored exactly: a failed send propagates out of `requestSignInLink`, through
+`routes/auth.ts`'s `.catch(next)`, to `middleware/errors.ts`, which answers `500` and logs the error. This
+does **not** turn `/auth/request-link` into an account-existence oracle (AUTH-1's own concern) — a transport
+failure happens identically whether or not the address has an account, since `requestSignInLink` issues a
+token and attempts to send *before* it could know the difference, so every caller sees the same `500` for the
+same underlying cause. The route's ordinary `204` (no account, or a healthy send) is unchanged.
+
+**Choice — TLS is required, not merely offered, and a nodemailer error's own free-text `response` is never
+logged.** Both follow from the same fact this whole slice's brief states directly: a sign-in link is a
+bearer credential. `createSmtpEmailSender` treats port 465 as implicit TLS and sets `requireTLS: true` for
+everything else, so a relay that does not offer STARTTLS is refused rather than sent to in the clear —
+verified against a real loopback server in `packages/mail/tests/smtp.test.ts` (a fake with STARTTLS disabled
+never receives a message; nodemailer throws first). Every SMTP failure this adapter can produce was
+reproduced by hand against that same fake before `errors.ts#classifySmtpError` was written, and one finding
+shaped it directly: a rejected-message error's own `response` field echoed the server's free-text reply back
+verbatim (`"550 message rejected: contains a blocked link"`), which is exactly the shape a spam or content
+filter could use to quote a fragment of a rejected body. `MailTransportError` is built only from the bounded,
+protocol-level facts a nodemailer error carries — `code`, `command`, `responseCode` — and never touches
+`response` or the original error's own `message`, so whatever ends up inside `middleware/errors.ts`'s
+`logger.error({ err: error, ... })` carries nothing from the message that failed to send.
+
+**Not chosen.** A transactional-email API (SendGrid, Postmark, SES, ...): faster to integrate and often
+better deliverability tooling, but a second vendor account and SDK per institution, and a worse fit for
+`EmailSender`'s own minimal port — most of these APIs' value is in features (templates, analytics, suppression
+lists) this platform has no use for and that would pull the port toward looking like one specific vendor's
+API. Left open as a second adapter behind the same port, the way a second model provider would be
+(`docs/ARCHITECTURE.md`'s "a second provider is an adapter, not a rewrite"), if a deployment specifically
+needs one. A startup connectivity check (`transporter.verify()`) before `server.listen`: would catch a wrong
+host or bad credentials slightly earlier than the first real send, but costs every restart a network round
+trip to the mail relay and conflates "configured" (a property this slice can prove offline) with "currently
+reachable" (a transient property better left to the per-send path already described above).
+
+**Limits.** Auth is optional on the SMTP connection (some internal, IP-allowlisted relays need none), so a
+relay that silently accepts unauthenticated mail from this box is a relay-side policy this slice cannot see
+or enforce. `MAIL_SMTP_PORT` has no default derived from a "real" service the way `OPENAI_BASE_URL` does — a
+mail relay is always institution-specific — so `env.example` documents `587` (STARTTLS) as the common case
+rather than leaving it unset.
+

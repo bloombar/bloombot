@@ -5272,3 +5272,71 @@ organization *something* has already connected an identity in. Nothing here chan
 or introduces a second membership-like relationship — `connectedOrganizations` is read-only, and the one write
 path that could turn a connected person into a member (`memberships.ts#createMembership`/`grantMembershipRole`)
 is untouched.
+
+---
+
+## D-51 — `apps/worker`: SRV-9 — repairing the bot's own access on a hand-made channel, and how "inherits fine" is told apart from "has its own overwrites that exclude the bot"
+
+**Problem.** SRV-9 already repaired a category adopted with the bot missing from its overwrites
+(`allowBotOverwrite`/`grantBotChannelAccess`, shipped ahead of this slice) — a course category denies
+`@everyone`, and Discord applies that denial to the bot too, so scaffolding needs its own overwrite to act
+inside a category it manages. The repair stopped one level too shallow: Discord copies a category's own
+overwrites into a channel *at creation time*, then stops syncing them the moment the channel gets any
+overwrites of its own. A channel an instructor made by hand before the category was repaired — or one this
+handler itself made admins-only before `allowBotOverwrite` existed — holds a permanently stale snapshot that
+the category's own repair never reaches. That is precisely the channel a student is already using, so a
+question asked there gets silence even after the category looks fixed.
+
+**Choice — extend the same single-target `PUT /channels/{id}/permissions/{botId}` repair to an adopted
+channel, gated on whether it has overwrites of its own at all, not on whether the bot happens to be missing
+from the category's.** `existingChannel.permissionOverwrites` is `[]` for two different reasons a caller
+cannot otherwise tell apart from the response alone — Discord genuinely sending none (the channel inherits
+its category's, cascade included) — and this codebase's own `DiscordChannel.permissionOverwrites` convention
+of using `[]` for "the field was missing or unusable" (`client.ts`'s own doc comment). Both read as "no
+overwrites of its own" here, and both mean the channel already inherits whatever the category grants,
+including a category-level repair — so nothing is written. A channel with `length > 0` has overwrites Discord
+stopped syncing with its category, and if none of them name the bot, it gets the repair; if the bot is already
+there, nothing is written either. This reuses `channelIsAdminsOnly`'s own existing reasoning about the
+category/channel overwrite cascade (`discord-scaffold.ts`'s own module comment) rather than inventing a
+second rule for the same fallback.
+
+**Why not repair every adopted channel unconditionally.** A channel with no overwrites of its own already
+resolves to the bot having access, through Discord's own cascade, the moment its category does — writing an
+identical overwrite there would be redundant, and worse, would desync the channel from its category in
+Discord's own permissions UI (Discord marks a channel "synced" only while it carries none of its own), a real
+cost to an instructor who manages permissions at the category level and now has one more channel to check by
+hand. Under-repairing (leaving a channel that genuinely has no overwrites alone) costs nothing; over-writing
+costs an instructor's own mental model of their server.
+
+**Why the admins-only case needed its own test, not just coverage by the general one.** The repair is the
+same single-target `PUT` the category version already uses — `PUT` on one target replaces only that target's
+own entry, never the channel's other overwrites — but an admins-only channel is exactly the row where
+"accidentally regranting everyone" would be worst: its own `@everyone` denial and the absence of a students
+grant are deliberate, and a repair that touched anything but the bot's own id would reopen it. Verified
+directly against the fake's own stored state (`repairs an admins-only channel without widening who can see
+it`), not only against the request the handler sent.
+
+**Choice — a new `ScaffoldChannelReport.accessRepaired` field, not an overload of `establishedByThisRun`.**
+`establishedByThisRun` already means something specific (SRV-3's permission state was actually just set, a
+fact rather than an observation) and stays `false` for every adopted channel, repaired or not — collapsing
+"this run wrote nothing" and "this run wrote exactly the bot's own overwrite" into the same boolean would
+have made an honest, targeted repair indistinguishable from `already_present` untouched, which is the
+opposite of what SRV-7's "the result names what changed" asks for. `accessRepaired` is `true` only when this
+run actually sent the repair `PUT`; `false` for a channel it created (the overwrite, if any, was baked into
+the create call, never adopted missing it) and for one it adopted that already had the bot or inherited
+cleanly.
+
+**Idempotence, proved against the fake's own recorded calls.** A second run against a guild this run just
+repaired must write nothing at all — the existing "creates nothing on a second run" test only ever proved
+that for *creates*; SRV-9's own repair is a legitimate, idempotence-sensitive `PUT` on the adoption path, so a
+dedicated test (`writes nothing on a second run once the category and channel access have both been
+repaired`) reruns the handler against the fake's now-updated guild state and asserts `writeRequests()` grows
+by zero, the same structural proof the create-side test already used.
+
+**Limits.** The repair still only ever writes the bot's own single overwrite entry — it does not attempt to
+reconcile any other drift between a hand-edited channel and its category (a students role an instructor
+revoked on the channel but not the category, say), which remains exactly the kind of edit SRV-8's own
+discipline puts out of scope for this handler to make on its own. Two categories or channels that share a name
+after `normalizeName`/`normalizeChannelName` are still indistinguishable to the adoption match this repair
+rides on (D-30's own acceptable simplification) — a repair aimed at "the" adopted row is aimed at whichever
+one that match found first, unchanged by this slice.

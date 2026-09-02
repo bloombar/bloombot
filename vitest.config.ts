@@ -75,7 +75,14 @@ export default defineConfig({
     // the same thin-process call already made for `apps/bot`/`apps/api`
     // above: claim, run, complete or fail, sleep, repeat around
     // `packages/jobs`'s own `runNextJob`, tested in `apps/worker/tests` but
-    // not gated by a number here.
+    // not gated by a number here. `apps/mcp` (MCP-1..5) stays outside the
+    // floor too, the same call already made for every other app in this
+    // list: every rule it enforces — dispatch, refusals, tenancy — is
+    // `packages/actions`'s own, already held to this floor there; what
+    // lives in `apps/mcp` itself (`tool-surface.ts`'s allowlist,
+    // `call-tool.ts`'s dispatch wiring, `server.ts`'s transport adapter) is
+    // tested thoroughly in `apps/mcp/tests` but not gated by a percentage
+    // here.
     // Timeouts sized for a loaded developer machine, not for an idle one.
     //
     // Vitest's 5s test and 10s hook defaults are comfortable when the suite
@@ -245,6 +252,15 @@ export default defineConfig({
         test: {
           name: 'worker',
           root: './apps/worker',
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'mcp',
+          root: './apps/mcp',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
         },

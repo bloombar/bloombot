@@ -32,33 +32,57 @@ export interface NewTranscriptExport {
   endAt?: number
 }
 
-/** Insert a fresh export row, `status: 'pending'` — `apps/worker`'s handler is what moves it to `ready` or `failed` once it has actually produced the file. */
+/**
+ * Insert a fresh export row, `status: 'pending'` — `apps/worker`'s handler
+ * is what moves it to `ready` or `failed` once it has actually produced
+ * the file.
+ *
+ * `sequence` (`schema.ts`'s own comment on the column) is computed inside
+ * this function's own transaction, as one more than the highest already
+ * recorded for this course — the same "read the previous max, write the
+ * next value, in one transaction" shape
+ * `course-instruction-revisions.ts#createRevision` already uses for its
+ * own `sequence`, for the same reason: two exports requested in the same
+ * millisecond must still get a real, distinguishable order.
+ */
 export function createPendingExport(
   organizationId: string,
   input: NewTranscriptExport,
   db: Database
 ): TranscriptExport {
-  const now = Date.now()
-  return db
-    .insert(transcriptExports)
-    .values({
-      id: input.id ?? crypto.randomUUID(),
-      organizationId,
-      courseId: input.courseId,
-      personId: input.personId ?? null,
-      requestedByAccountId: input.requestedByAccountId,
-      status: 'pending',
-      startAt: input.startAt ?? null,
-      endAt: input.endAt ?? null,
-      filename: null,
-      contentType: null,
-      sizeBytes: null,
-      failureReason: null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning()
-    .get()
+  return db.transaction((tx) => {
+    const previous = tx
+      .select({ sequence: transcriptExports.sequence })
+      .from(transcriptExports)
+      .where(eq(transcriptExports.courseId, input.courseId))
+      .orderBy(desc(transcriptExports.sequence))
+      .limit(1)
+      .get()
+    const sequence = (previous?.sequence ?? -1) + 1
+    const now = Date.now()
+
+    return tx
+      .insert(transcriptExports)
+      .values({
+        id: input.id ?? crypto.randomUUID(),
+        organizationId,
+        courseId: input.courseId,
+        personId: input.personId ?? null,
+        requestedByAccountId: input.requestedByAccountId,
+        status: 'pending',
+        startAt: input.startAt ?? null,
+        endAt: input.endAt ?? null,
+        filename: null,
+        contentType: null,
+        sizeBytes: null,
+        failureReason: null,
+        sequence,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning()
+      .get()
+  })
 }
 
 /** One export, scoped to `organizationId` — `undefined` both when it does not exist and when it belongs to another organization (TEN-5), identically. */
@@ -79,7 +103,7 @@ export function getExport(
     .get()
 }
 
-/** Every export a course has requested, most recent first — what an instructor's own "collect the file" screen reads (ADMIN-3). */
+/** Every export a course has requested, most recent first (by `sequence` — see `schema.ts`'s own comment on why not `createdAt` alone) — what an instructor's own "collect the file" screen reads (ADMIN-3). */
 export function listExportsForCourse(
   organizationId: string,
   courseId: string,
@@ -94,7 +118,7 @@ export function listExportsForCourse(
         eq(transcriptExports.organizationId, organizationId)
       )
     )
-    .orderBy(desc(transcriptExports.createdAt))
+    .orderBy(desc(transcriptExports.sequence))
     .all()
 }
 

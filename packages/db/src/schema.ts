@@ -1159,6 +1159,15 @@ export const transcriptExports = sqliteTable(
     contentType: text('content_type'),
     sizeBytes: integer('size_bytes'),
     failureReason: text('failure_reason'),
+    // A real tiebreaker for `listExportsForCourse`'s "most recent first"
+    // order — the same reason `course_instruction_revisions.sequence`
+    // exists (that table's own comment): `createdAt` is millisecond
+    // precision, two exports can be requested within the same millisecond,
+    // and SQL defines no order among rows tied on the `ORDER BY` column.
+    // Assigned by `repos/transcript-exports.ts#createPendingExport` inside
+    // its own transaction, one more than the highest already recorded for
+    // this course.
+    sequence: integer('sequence').notNull(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

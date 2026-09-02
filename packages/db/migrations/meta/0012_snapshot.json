@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "31a75e5a-2697-4222-8937-dc876c79c9d9",
+  "id": "1f8cd747-9769-4b38-9405-e9ff334c38a1",
   "prevId": "7e4aaa5e-785a-444d-9f31-98610a1a78a3",
   "tables": {
     "accounts": {
@@ -2639,6 +2639,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false,
+          "autoincrement": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
           "autoincrement": false
         },
         "created_at": {

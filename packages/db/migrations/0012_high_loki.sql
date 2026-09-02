@@ -40,6 +40,7 @@ CREATE TABLE `transcript_exports` (
 	`content_type` text,
 	`size_bytes` integer,
 	`failure_reason` text,
+	`sequence` integer NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,

@@ -39,7 +39,7 @@
  * been verified (`hasVerifiedAddress`); an unfiltered, whole-course export
  * (transcripts and usage together, ADMIN-3's own text) carries no single
  * person's history to gate on and is not refused this way. Recorded in
- * `docs/DECISIONS.md` D-46.
+ * `docs/DECISIONS.md` D-48.
  */
 
 import {

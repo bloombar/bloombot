@@ -3730,7 +3730,7 @@ than a separate in-app case to intercept.
 
 ---
 
-## D-46 — `packages/db`/`packages/actions`/`apps/worker`/`apps/api`/`apps/web`: reading a transcript is audited where the read happens, PPL-5 applied to a read versus an export, and the deliberate operation that deletes a tenant
+## D-48 — `packages/db`/`packages/actions`/`apps/worker`/`apps/api`/`apps/web`: reading a transcript is audited where the read happens, PPL-5 applied to a read versus an export, and the deliberate operation that deletes a tenant
 
 **Problem.** ADMIN-1..5 is the last phase: an instructor reads a course's transcript in the panel, filtered by
 student and by date; every read is written to an audit trail; export runs as a job and produces a file; a

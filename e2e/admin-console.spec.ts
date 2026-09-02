@@ -54,6 +54,35 @@ async function signIn(page: import('@playwright/test').Page, email: string) {
   await page.goto(`/sign-in/${token}`)
 }
 
+/**
+ * This spec's own seeding writes directly to `E2E_DATABASE_PATH`
+ * (this file's own module comment) through a *second* connection to the
+ * same file `apps/api`'s own process already holds open — the same thing
+ * `course-configuration.spec.ts` already does. SQLite's own "database is
+ * locked" (`SQLITE_LOCKED`) is a different condition from "database is
+ * busy" (`SQLITE_BUSY`) — `client.ts`'s own `busy_timeout` pragma governs
+ * only the latter, so a genuine, if rare, lock contention between this
+ * process's own writes and the live API process's (four Playwright workers
+ * and one shared API process, all against one file) is not something that
+ * pragma alone absorbs. Each call below is its own atomic write (a single
+ * repo function, its own transaction) — safe to retry outright on this
+ * specific condition, since a failed attempt commits nothing.
+ */
+async function withRetry<T>(fn: () => T): Promise<T> {
+  const attempts = 5
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return fn()
+    } catch (error) {
+      const locked =
+        error instanceof Error && /database is locked/i.test(error.message)
+      if (!locked || attempt === attempts) throw error
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+    }
+  }
+  throw new Error('unreachable')
+}
+
 test('an instructor reads their course’s transcript in the panel, and it is written to the audit trail (ADMIN-1, ADMIN-2)', async ({
   page,
 }) => {
@@ -78,52 +107,63 @@ test('an instructor reads their course’s transcript in the panel, and it is wr
     if (!membership) throw new Error('setup failed: membership not found')
     organizationId = membership.organizationId
 
-    const project = projects.createProject(
-      organizationId,
-      { name: projectName },
-      db
+    const project = await withRetry(() =>
+      projects.createProject(organizationId, { name: projectName }, db)
     )
-    const courseResult = courses.createCourse(
-      organizationId,
-      {
-        projectId: project.id,
-        title: courseTitle,
-        filePrefix: `oh-${suffix}`,
-        enabled: true,
-        adminsRole: `admins-${suffix}`,
-        studentsRole: `students-${suffix}`,
-        categories: [],
-      },
-      db
+    const courseResult = await withRetry(() =>
+      courses.createCourse(
+        organizationId,
+        {
+          projectId: project.id,
+          title: courseTitle,
+          filePrefix: `oh-${suffix}`,
+          enabled: true,
+          adminsRole: `admins-${suffix}`,
+          studentsRole: `students-${suffix}`,
+          categories: [],
+        },
+        db
+      )
     )
     if (!courseResult.ok) throw new Error('setup failed: course not saved')
     courseId = courseResult.course.id
 
-    const student = people.createPerson(
-      organizationId,
-      { displayName: `QA Student ${suffix}` },
-      db
+    const student = await withRetry(() =>
+      people.createPerson(
+        organizationId,
+        { displayName: `QA Student ${suffix}` },
+        db
+      )
     )
-    const conversation = conversations.getOrCreateConversation(
-      organizationId,
-      { courseId, personId: student.id, surface: 'web' },
-      db
+    const conversation = await withRetry(() =>
+      conversations.getOrCreateConversation(
+        organizationId,
+        { courseId, personId: student.id, surface: 'web' },
+        db
+      )
     )
     if (!conversation) throw new Error('setup failed: conversation not created')
-    conversations.appendMessage(
-      organizationId,
-      conversation.id,
-      {
-        direction: 'from_person',
-        content: 'Are office hours cancelled this week?',
-      },
-      db
+    await withRetry(() =>
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        {
+          direction: 'from_person',
+          content: 'Are office hours cancelled this week?',
+        },
+        db
+      )
     )
-    conversations.appendMessage(
-      organizationId,
-      conversation.id,
-      { direction: 'to_person', content: 'No, they run as usual on Thursday.' },
-      db
+    await withRetry(() =>
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        {
+          direction: 'to_person',
+          content: 'No, they run as usual on Thursday.',
+        },
+        db
+      )
     )
 
     // Before this spec's own read: no audit entry exists yet.
@@ -184,28 +224,30 @@ test('a platform administrator deletes a tenant’s data, confirmed by typing it
   let organizationId: string
   try {
     organizationId = randomUUID()
-    organizations.createOrganization(
-      organizationId,
-      { name: tenantName, isPersonal: false },
-      seedDb
+    await withRetry(() =>
+      organizations.createOrganization(
+        organizationId,
+        { name: tenantName, isPersonal: false },
+        seedDb
+      )
     )
-    const project = projects.createProject(
-      organizationId,
-      { name: 'Fall 2026' },
-      seedDb
+    const project = await withRetry(() =>
+      projects.createProject(organizationId, { name: 'Fall 2026' }, seedDb)
     )
-    const courseResult = courses.createCourse(
-      organizationId,
-      {
-        projectId: project.id,
-        title: 'A Course',
-        filePrefix: `ac-${suffix}`,
-        enabled: true,
-        adminsRole: `admins-${suffix}`,
-        studentsRole: `students-${suffix}`,
-        categories: [],
-      },
-      seedDb
+    const courseResult = await withRetry(() =>
+      courses.createCourse(
+        organizationId,
+        {
+          projectId: project.id,
+          title: 'A Course',
+          filePrefix: `ac-${suffix}`,
+          enabled: true,
+          adminsRole: `admins-${suffix}`,
+          studentsRole: `students-${suffix}`,
+          categories: [],
+        },
+        seedDb
+      )
     )
     if (!courseResult.ok) throw new Error('setup failed: course not saved')
   } finally {

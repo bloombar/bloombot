@@ -278,11 +278,26 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
  * forgets to release" is worth more than shaving the hold time by the cost
  * of a few synchronous local database writes.
  *
- * A failure to record (step 6 or step 8), the cost ledger entry (step 7),
- * or to persist the model's own upstream thread id, is logged and never
- * stops the reply (CORE-6): every
- * write from here on is wrapped so a broken database write degrades to a
- * log line, not a lost answer.
+ * CONV-4/D-51 — step 6 and step 8 are no longer among the writes that
+ * degrade to a log line: recording the question and recording the reply
+ * are what CONV-2's retention guarantee and ADMIN-1's transcript actually
+ * rest on, so a failure to write either now propagates out of this
+ * function instead of being caught here and continued past. This is a real
+ * behaviour change, not only a safety net: `conversations.ts#appendMessage`
+ * itself now retries a genuinely transient write conflict before either of
+ * these calls ever throws (its own doc comment has the mechanism), so what
+ * reaches this function is a failure retrying has already given up on, and
+ * "surface it" is the only honest thing left to do with it — an answered
+ * student and an unrecorded record of it (the bug this fixes) is worse
+ * than a student who sees an error, which every caller already turns into
+ * one (`apps/api/src/routes/chat.ts`'s own `.catch(next)`,
+ * `apps/bot/src/index.ts`'s own `onMessageCreate(...).catch(...)`), not a
+ * silently wrong transcript.
+ *
+ * The cost ledger entry (step 7) and the model's own upstream thread id are
+ * unchanged: neither is retention data an instructor can be required to
+ * produce (COST-1/CONV-2's own scope, respectively) — losing either still
+ * degrades to a log line here, the same as before this slice.
  */
 export async function answerQuestion(
   input: AnswerQuestionInput,
@@ -443,25 +458,29 @@ export async function answerQuestion(
     // transcript even if the model call below fails (CORE-5). DATA-4's
     // Discord context travels with it, the same as the reply below (finding
     // 6) — both directions of one exchange carry the same context.
-    try {
-      conversations.appendMessage(
-        organizationId,
-        conversation.id,
-        {
-          direction: 'from_person',
-          content: text,
-          surface,
-          channelRef: input.channelRef ?? null,
-          categoryRef: input.categoryRef ?? null,
-        },
-        db
-      )
-    } catch (error) {
-      logger.error(
-        { err: error, organizationId, conversationId: conversation.id },
-        'answerQuestion: failed to record the inbound message'
-      )
-    }
+    //
+    // CONV-4/D-51 — deliberately not wrapped in a `try`/`catch` that
+    // continues: writing the question is part of answering it, not a side
+    // effect of answering it. A write `appendMessage`'s own retry cannot
+    // recover throws straight out of `answerQuestion`, before the model is
+    // ever asked (this function's own module comment has the full
+    // reasoning) — the allowance reserved above is still spent (there is
+    // no `usage.ts` operation that gives it back), the same cost a model
+    // failure already pays under `failed-with-apology` below, paid here one
+    // step earlier. Smaller than the alternative: answering a question this
+    // platform then has no record was ever asked.
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      {
+        direction: 'from_person',
+        content: text,
+        surface,
+        channelRef: input.channelRef ?? null,
+        categoryRef: input.categoryRef ?? null,
+      },
+      db
+    )
 
     // Finding 1 of the MDL-1 rework (D-16) — `person` was already resolved
     // above (the LINK-1 gate needed it first); reused here so a new upstream
@@ -578,11 +597,15 @@ export async function answerQuestion(
     }
 
     // CONV-1 — "the model's own context can be resumed" (D-13's own text for
-    // why this write exists at all). Finding 4: guarded like the two
-    // `appendMessage` calls around it, so a database write failing here
-    // degrades to a log line rather than losing the answer the model already
-    // produced — the allowance was already reserved above, so nothing here
-    // can cost more than an un-resumable next turn.
+    // why this write exists at all). Finding 4: a database write failing
+    // here still degrades to a log line rather than losing the answer the
+    // model already produced — the allowance was already reserved above,
+    // so nothing here can cost more than an un-resumable next turn.
+    // CONV-4/D-51 — unlike the two `appendMessage` calls this used to sit
+    // between (this function's own module comment explains the split): the
+    // upstream thread id is a resumption pointer, not retention data
+    // CONV-2/ADMIN-1 require, so losing it costs a fresh upstream
+    // conversation next turn, never a hole in a transcript.
     if (newUpstreamThreadId) {
       try {
         conversations.setUpstreamThreadId(
@@ -599,28 +622,35 @@ export async function answerQuestion(
       }
     }
 
-    // CORE-6 — recorded after the model call regardless of outcome, and a
-    // failure to record here still returns the reply below. DATA-4's Discord
-    // context travels with the reply too (finding 6), not just the question.
-    try {
-      conversations.appendMessage(
-        organizationId,
-        conversation.id,
-        {
-          direction: 'to_person',
-          content: replyText,
-          surface,
-          channelRef: input.channelRef ?? null,
-          categoryRef: input.categoryRef ?? null,
-        },
-        db
-      )
-    } catch (error) {
-      logger.error(
-        { err: error, organizationId, conversationId: conversation.id },
-        'answerQuestion: failed to record the reply'
-      )
-    }
+    // CORE-6 — recorded after the model call regardless of outcome (a
+    // failed call's own apology, `replyText`, still gets a transcript
+    // entry — CORE-5). DATA-4's Discord context travels with the reply
+    // too (finding 6), not just the question.
+    //
+    // CONV-4/D-51 — not wrapped, for the same reason the question's own
+    // `appendMessage` above is not (this function's own module comment has
+    // the full reasoning): the model has already answered by the time this
+    // runs, so a write that still fails after `appendMessage`'s own retry
+    // means this function throws *after* paying for the call — a real
+    // cost, named here rather than hidden, and the same one a model
+    // failure already pays under `failed-with-apology` (both reach this
+    // point with the allowance already spent and nothing to show for it
+    // once caller-side error handling takes over). The alternative this
+    // slice rejects is cheaper for this one request and wrong for what
+    // CONV-2/ADMIN-1 promise: a reply the student received with no record
+    // it was ever sent.
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      {
+        direction: 'to_person',
+        content: replyText,
+        surface,
+        channelRef: input.channelRef ?? null,
+        categoryRef: input.categoryRef ?? null,
+      },
+      db
+    )
 
     if (failed) {
       return {

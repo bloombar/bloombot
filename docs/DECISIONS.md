@@ -4643,3 +4643,109 @@ call, not a number derived from anything AUTH-5 names — long enough for a real
 relay both resolve in milliseconds) and short enough that a relay which never will does not hold the request
 open indefinitely.
 
+## D-51 — `packages/db`/`packages/core`: CONV-4 — a message is never silently lost, `BEGIN IMMEDIATE` versus `busy_timeout`, and what surfacing the failure costs
+
+**Problem.** A reviewer chased `e2e/course-configuration.spec.ts`'s own ~1-in-8 flake to its cause rather
+than retrying it away: the transcript it asserts comes back with one message missing, sometimes the
+question, sometimes the reply. The cause is `answer.ts`'s own `answerQuestion` (pre-CONV-4): both calls to
+`conversations.appendMessage` were wrapped in `try`/`catch { logger.error(...) }` and continued past — the
+same "a broken write degrades to a log line, never a lost answer" discipline this file still applies to the
+cost ledger entry and the upstream thread id, applied one place too many. Under the write contention four
+processes sharing one SQLite file actually produce (`ecosystem.config.cjs`; the e2e spec itself reproduces an
+equivalent shape — its own module comment explains why — with the test process's direct `handleMention` call
+and `apps/api`'s browser-driven writes both landing on one database file), `appendMessage`'s own transaction
+can throw `SQLITE_BUSY_SNAPSHOT`. `client.ts`'s own `busy_timeout` (D-2) does not cover this: it retries a
+lock that is *held*; a stale snapshot is not that — SQLite reports it immediately, nothing to wait out. The
+student was still answered; the platform's own record of it was not — exactly the gap CONV-2's retention
+guarantee and ADMIN-1's transcript cannot tolerate.
+
+**Reproduced directly, not assumed.** `packages/db/tests/client.test.ts`'s own two new tests open two real
+`openDatabase` connections to one file and force the exact interleaving by hand — no mock, no
+`Atomics.wait`/worker thread needed, because every call in the sequence is itself synchronous and
+non-blocking, so plain sequential statements across the two connections reproduce it deterministically, every
+run: a deferred transaction reads (establishing its snapshot), a second connection commits a write, and the
+first connection's own attempt to write fails as `SQLITE_BUSY_SNAPSHOT`, reported in well under a second —
+not the 5,000ms `busy_timeout` itself proves is configured, two tests up, in the same file. The same
+interleaving against an `immediate` transaction instead blocks the second connection behind `busy_timeout`
+and fails as ordinary `SQLITE_BUSY` — the qualitative shift the fix below relies on.
+
+**Choice — `appendMessage`'s own transaction opens `immediate`, not Drizzle's default `deferred`.** A
+deferred transaction takes no lock at `BEGIN`, only at its first write — so `appendMessage`'s own `select`
+(reading the previous `sequence`) establishes a read snapshot *before* the lock is ever acquired, and a
+concurrent committer in between leaves the later `insert` unable to upgrade that now-stale snapshot.
+`{ behavior: 'immediate' }` takes the write lock at `BEGIN`, before the `select` runs, so this transaction's
+own snapshot cannot go stale out from under it at all — a concurrent writer now blocks behind `busy_timeout`
+(an ordinary, already-covered wait) rather than racing this one to a silent loss. This is the fix's own root
+cause, not a workaround: `SQLITE_BUSY_SNAPSHOT` is close to eliminated for this transaction specifically,
+converted into the `SQLITE_BUSY` `busy_timeout` was always meant to absorb.
+
+**Choice — a bounded retry (`MAX_APPEND_MESSAGE_ATTEMPTS = 3`) around the whole transaction, for
+`SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` only.** `immediate` closes the hole for this transaction alone; a
+`SQLITE_BUSY_SNAPSHOT` is still possible from a plain `db.transaction` call elsewhere in the codebase
+touching the same rows, and `busy_timeout` itself can still be exhausted under genuinely extreme contention.
+Both are transient by construction — the conflicting writer has, by definition, already finished — so
+`isTransientBusyError` (`repos/conversations.ts`) retries exactly these two codes and nothing else: a
+constraint violation or a corrupt database would fail identically on a second attempt, and retrying either
+would only delay an honest failure. No manual delay between attempts — a snapshot conflict resolves
+immediately (the conflicting writer already committed), and a lock wait already spent up to `busy_timeout`
+waiting inside the failed attempt itself, so a second attempt costs nothing extra to try.
+
+**Choice — the two `appendMessage` calls in `answer.ts` are no longer wrapped in a swallowing `try`/`catch`;
+the cost ledger entry and the upstream thread id still are.** CONV-4's own text: writing a message is part of
+answering, not a side effect of it. A write `appendMessage`'s own retry cannot recover now propagates out of
+`answerQuestion` — for the question, before the model is ever asked, so a question this platform cannot
+record is not one it answers; for the reply, after the model has already answered, so the caller sees an
+honest failure instead of a reply with no transcript entry behind it. Every existing caller already turns a
+thrown `answerQuestion` into exactly that: `apps/api/src/routes/chat.ts`'s own `.catch(next)` (a `500` to the
+browser, `middleware/errors.ts`'s own already-established path — D-47 reasons about the identical shape for a
+failed mail send), and `apps/bot/src/index.ts`'s own `onMessageCreate(...).catch(...)` (logged at error level,
+no reply sent — silence, not a false answer). Neither call site needed to change: this fix is contained to
+`answer.ts` and `conversations.ts`. The cost ledger entry and the upstream thread id are deliberately
+unchanged — neither is retention data an instructor can be required to produce (COST-1's own scope; the
+upstream thread id is an internal resumption pointer, D-13's own "the model's own context can be resumed"),
+so losing either still degrades to a log line, the same as before this slice.
+
+**What this costs, named rather than hidden.** A reply's own write failing after the model has already
+answered means `answerQuestion` throws *after* the daily allowance was already reserved and the model already
+called — the same cost `failed-with-apology` already pays for a model failure, extended to this one further
+case rather than a new kind of cost. There is no `usage.ts` operation that gives an already-reserved slot
+back (this file's own module comment, unchanged by this slice), so a student whose reply-write failed loses
+one of their day's requests and gets no answer for it — worse, for that one request, than the swallow-and-
+continue behaviour this replaces. Weighed and accepted anyway: the alternative is the bug CONV-4 exists to
+fix, and it fails silently rather than loudly. `appendMessage`'s own retry is what keeps this cost rare rather
+than routine — it is paid only once retrying has already given up.
+
+**Not chosen.** Moving `appendMessage` onto `packages/jobs`' own queue (retry/backoff, D-30): rejected for the
+same reason D-47 rejects it for mail — `appendMessage` is called from inside `answerQuestion`'s own
+synchronous request/response cycle (three different surfaces' own request handlers), not a fire-and-forget
+background operation; queuing it would change what "answered" means (the reply would have to wait on a
+queued write landing, or risk returning before the record exists) for a problem `appendMessage`'s own retry
+already solves at the transaction layer, cheaper and without moving the write out of the request path.
+Retrying inside `answer.ts` itself, around the `appendMessage` call, rather than inside `appendMessage`: kept
+the fix in `packages/db`, where the SQLite-specific mechanism (WAL, snapshots, `busy_timeout`) already lives
+(D-2's own home for it) and where `packages/legacy-import`'s own caller benefits too, rather than duplicating
+retry logic at every one of `appendMessage`'s callers. A richer discriminated `AnswerResult` kind (e.g.
+`failed-to-record`) instead of a thrown error: rejected to keep this fix contained — `answerQuestion` already
+throws for conditions this deliberate ("caller misuse," this file's own module comment) rather than expected,
+and a persistent write failure after retrying fits that shape better than it fits alongside `declined-*`/
+`failed-with-apology`'s ordinary outcomes, without forcing every existing `switch (result.kind)`
+(`packages/discord/src/handle-mention.ts`) to grow a branch for a case this rare.
+
+**Swept, not fixed.** `grep`ed `packages/core`, `packages/discord`, `apps/worker` and `apps/api` for the same
+shape (a `catch` around a database write that logs and continues). Two more turned up, both left alone on
+purpose: `answer.ts`'s own cost ledger entry and upstream-thread-id writes (COST-1/CONV-1, reasoned about
+above — not retention data); and `handle-mention.ts`'s `enrolViaDiscordRole` write (ENRL-1..6) — a failure
+there is retried naturally on the *next* message from the same person, unlike a transcript entry, which is a
+one-shot event that will never recur if lost. Everything else found (`apps/worker`'s Discord REST calls in
+`roster-import.ts`/`course-attachments.ts`, `apps/api`'s OAuth code exchanges) either already surfaces the
+failure into a caller-visible report/response or is already governed by `packages/jobs`' own retry/permanent-
+failure machinery (D-30). Fixing any of these was out of this slice's own scope — CONV-4 is a defect in the
+transcript specifically, not a general audit of every write in the platform.
+
+**Limits.** `MAX_APPEND_MESSAGE_ATTEMPTS = 3` is this slice's own judgment call, not a number CONV-4 names —
+enough to absorb a snapshot conflict (resolves on the first retry, by construction) and one further genuinely
+unlucky contention window, without turning a stuck lock into a long hang on top of `busy_timeout`'s own 5s.
+This fix narrows the window for message loss to "an operator's own database problem" (a corrupt file, a full
+disk, a lock genuinely stuck past every retry) — it does not, and cannot, make a write to a single SQLite file
+never fail; CONV-4's own bar is that a failure is never silent, not that it never happens.
+

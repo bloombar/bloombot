@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto'
 
+import BetterSqlite3 from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -927,13 +928,60 @@ describe('answerQuestion (CORE-6): both directions are recorded, and a failed wr
     expect(logger.errorCalls.length).toBeGreaterThan(0)
   })
 
-  it('still returns the answer when the reply write fails', async () => {
+  // CONV-4/D-51 rework: a write that `appendMessage`'s own retry cannot
+  // recover used to be caught here, logged, and continued past — an
+  // answered student with a hole in their transcript, exactly the bug this
+  // slice fixes (see `answer.ts`'s own module comment). The two tests
+  // below replace `still returns the answer when the reply write fails`
+  // and `still asks the model and returns the answer when the inbound
+  // write fails`, which asserted that swallowing behaviour directly and
+  // now fail against the fix; a third proves a *transient* failure never
+  // reaches this far at all — `appendMessage`'s own retry absorbs it
+  // first.
+
+  it('throws, and never asks the model, when the inbound write fails', async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId, personId } = seedCourseAndPerson(
       testDb.db
     )
     const model = new FakeModelClient({
-      answerText: 'an answer despite the failed write',
+      answerText: 'never reached',
+    })
+    const logger = createFakeLogger()
+
+    // The inbound message's own transaction is the first `db.transaction`
+    // call `answerQuestion` makes. Not a busy/snapshot code, so
+    // `appendMessage`'s own retry does not apply — this fails on the first
+    // attempt, the same as a non-transient error genuinely would.
+    makeTransactionFailOnce(testDb.db, 1)
+
+    await expect(
+      answerQuestion(
+        {
+          organizationId,
+          courseId,
+          personId,
+          surface: 'discord',
+          text: 'a question whose own write will fail',
+          day: '2026-01-01',
+        },
+        { db: testDb.db, model, logger }
+      )
+    ).rejects.toThrow('simulated transaction failure')
+
+    // The model is never asked — CONV-4's own "part of answering, not a
+    // side effect of it": a question this platform cannot record is not
+    // one this platform answers.
+    expect(model.calls).toHaveLength(0)
+  })
+
+  it('throws after the model has already answered, when the reply write fails', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient({
+      answerText: 'an answer that never reaches the caller',
     })
     const logger = createFakeLogger()
 
@@ -941,49 +989,69 @@ describe('answerQuestion (CORE-6): both directions are recorded, and a failed wr
     // the failure is isolated to the reply's — the second.
     makeTransactionFailOnce(testDb.db, 2)
 
-    const result = await answerQuestion(
-      {
-        organizationId,
-        courseId,
-        personId,
-        surface: 'discord',
-        text: 'a question whose reply write will fail',
-        day: '2026-01-01',
-      },
-      { db: testDb.db, model, logger }
-    )
-
-    expect(result.kind).toBe('answered')
-    if (result.kind === 'answered') {
-      expect(result.text).toBe('an answer despite the failed write')
-
-      // Only the inbound message made it onto the transcript — the reply's
-      // write failed and was logged, not silently retried or swallowed.
-      const transcript = conversations.getTranscript(
-        organizationId,
-        result.conversationId,
-        testDb.db
+    await expect(
+      answerQuestion(
+        {
+          organizationId,
+          courseId,
+          personId,
+          surface: 'discord',
+          text: 'a question whose reply write will fail',
+          day: '2026-01-01',
+        },
+        { db: testDb.db, model, logger }
       )
-      expect(transcript).toHaveLength(1)
-      expect(transcript[0]?.direction).toBe('from_person')
-    }
-    expect(logger.errorCalls.length).toBeGreaterThan(0)
+    ).rejects.toThrow('simulated transaction failure')
+
+    // The model was already asked by the time this write failed — that
+    // cost is real and this slice does not undo it (this function's own
+    // module comment names it). What it does not do any more is answer the
+    // student anyway: the question made it onto the transcript, the reply
+    // never did, and nothing here claims otherwise.
+    expect(model.calls).toHaveLength(1)
+    const conversationId = conversations.findExistingConversation(
+      organizationId,
+      { courseId, personId, surface: 'discord' },
+      testDb.db
+    )?.id
+    if (!conversationId) throw new Error('conversation was not created')
+    const transcript = conversations.getTranscript(
+      organizationId,
+      conversationId,
+      testDb.db
+    )
+    expect(transcript).toHaveLength(1)
+    expect(transcript[0]?.direction).toBe('from_person')
   })
 
-  it('still asks the model and returns the answer when the inbound write fails', async () => {
+  it('recovers from a transient write conflict and still answers — the failure never reaches the caller', async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId, personId } = seedCourseAndPerson(
       testDb.db
     )
     const model = new FakeModelClient({
-      answerText: 'an answer despite the failed inbound write',
+      answerText: 'answered despite one transient conflict',
     })
     const logger = createFakeLogger()
 
-    // The inbound message's own transaction is the first `db.transaction`
-    // call `answerQuestion` makes — failing it must not stop the model from
-    // being asked or the reply from being recorded.
-    makeTransactionFailOnce(testDb.db, 1)
+    // A `SQLITE_BUSY_SNAPSHOT` on the reply's own write — the condition
+    // `client.ts`'s own `busy_timeout` does not cover (this file's own
+    // module comment). `appendMessage`'s own retry (`repos/conversations.ts`)
+    // absorbs exactly one of these before this test's mock lets the real
+    // transaction through, so `answerQuestion` never sees it at all.
+    const original = testDb.db.transaction.bind(testDb.db)
+    let callCount = 0
+
+    ;(testDb.db as any).transaction = (...args: any[]) => {
+      callCount += 1
+      if (callCount === 2) {
+        throw new BetterSqlite3.SqliteError(
+          'simulated transient conflict',
+          'SQLITE_BUSY_SNAPSHOT'
+        )
+      }
+      return (original as any)(...args)
+    }
 
     const result = await answerQuestion(
       {
@@ -991,28 +1059,25 @@ describe('answerQuestion (CORE-6): both directions are recorded, and a failed wr
         courseId,
         personId,
         surface: 'discord',
-        text: 'a question whose own write will fail',
+        text: 'a question whose reply write conflicts once',
         day: '2026-01-01',
       },
       { db: testDb.db, model, logger }
     )
 
     expect(result.kind).toBe('answered')
-    expect(model.calls).toHaveLength(1)
     if (result.kind === 'answered') {
-      expect(result.text).toBe('an answer despite the failed inbound write')
-
-      // Only the reply made it onto the transcript — the inbound write
-      // failed and was logged, not silently retried or swallowed.
+      expect(result.text).toBe('answered despite one transient conflict')
       const transcript = conversations.getTranscript(
         organizationId,
         result.conversationId,
         testDb.db
       )
-      expect(transcript).toHaveLength(1)
-      expect(transcript[0]?.direction).toBe('to_person')
+      expect(transcript.map((m) => m.direction)).toEqual([
+        'from_person',
+        'to_person',
+      ])
     }
-    expect(logger.errorCalls.length).toBeGreaterThan(0)
   })
 })
 

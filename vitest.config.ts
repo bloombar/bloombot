@@ -62,7 +62,7 @@ export default defineConfig({
     // own reasoning above applies unchanged, and it is the one adapter in
     // this list that handles both the OAuth client secret and a user's own
     // access token, not a lesser case for the floor than `packages/openai`.
-    // `packages/mail` joins the floor too (AUTH-5, D-46): the SMTP adapter
+    // `packages/mail` joins the floor too (AUTH-5, D-47): the SMTP adapter
     // behind `EmailSender` — `packages/openai`'s own "vendor adapter, so it
     // belongs on the floor" reasoning applies unchanged, and this one
     // specifically carries a bearer credential (a sign-in link) through

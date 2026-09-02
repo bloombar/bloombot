@@ -6,7 +6,7 @@
  *
  * `@bloombot/auth`'s `email.ts` ships the `EmailSender` port and a
  * `RecordingEmailSender` for tests (docs/DECISIONS.md D-19: "the real
- * implementation ... is a later slice's adapter package", D-46 for that
+ * implementation ... is a later slice's adapter package", D-47 for that
  * slice's own reasoning); this file is this process's own chooser, so
  * `src/index.ts` has something to hand `requestSignInLink` that is honest
  * about what it does. `LoggingEmailSender` below is that stand-in — a

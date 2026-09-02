@@ -3728,7 +3728,7 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
-## D-46 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
+## D-47 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
 
 **Problem.** `apps/api/src/logging-email-sender.ts#buildEmailSender` refused outright under
 `NODE_ENV=production` (must-fix 1 of the API-1..6 rework) because no real transport existed yet for it to

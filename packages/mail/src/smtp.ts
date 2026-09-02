@@ -12,7 +12,7 @@
  * as a port: "send this to that address" is exactly what SMTP does, with
  * nothing provider-specific leaking into the interface the way a
  * transactional-email API's own delivery-tracking or template features
- * would tempt one to. `docs/DECISIONS.md`'s D-46 has the full reasoning.
+ * would tempt one to. `docs/DECISIONS.md`'s D-47 has the full reasoning.
  *
  * `createSmtpEmailSender` is a factory, not a module-level client (PLAT-5):
  * nothing here opens a connection until `send()` is actually called —

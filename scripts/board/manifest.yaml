@@ -2256,7 +2256,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-2
   title: The invitation carries no secret
@@ -2269,7 +2269,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-3
   title: Proof is the surface's own sign-in, or a token that never left a private
@@ -2284,7 +2284,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-4
   title: Connecting merges, and merging never resets
@@ -2298,7 +2298,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-5
   title: One person, one allowance, across every surface
@@ -2310,7 +2310,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address
@@ -2323,7 +2323,7 @@
   section: §18 People, Conversations & Transcripts
   family: PPL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: PPL-5
   title: Seeing or exporting a person's history requires a verified address
@@ -2335,7 +2335,7 @@
   section: §18 People, Conversations & Transcripts
   family: PPL
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-10
   title: Chat renders Markdown, and renders it safely

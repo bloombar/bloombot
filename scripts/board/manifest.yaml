@@ -2350,7 +2350,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-11
   title: One styling system, not several
@@ -2362,7 +2362,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-12
   title: One icon set, used to mean something
@@ -2374,7 +2374,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-13
   title: The panel works on the screen a person actually has
@@ -2386,7 +2386,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-14
   title: A conventional application shell
@@ -2399,7 +2399,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-15
   title: A primary action looks different from a secondary one
@@ -2410,7 +2410,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-16
   title: Forms say what they want and what went wrong
@@ -2421,7 +2421,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: WEB-17
   title: The panel is usable from the keyboard
@@ -2432,7 +2432,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In progress
+  status: In review
   review: false
 - id: MCP-1
   title: An assistant reaches the platform through the action layer
@@ -2443,7 +2443,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In progress
+  status: In review
   review: false
 - id: MCP-2
   title: The tool surface is chosen, not derived
@@ -2453,7 +2453,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In progress
+  status: In review
   review: false
 - id: MCP-3
   title: An agent acts as an account, with that account's authority
@@ -2464,7 +2464,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In progress
+  status: In review
   review: false
 - id: MCP-4
   title: A destructive tool asks first
@@ -2474,7 +2474,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In progress
+  status: In review
   review: false
 - id: MCP-5
   title: Agent usage is metered and attributed like any other
@@ -2484,7 +2484,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-1
   title: An instructor can read their course's transcripts

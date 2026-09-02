@@ -436,6 +436,30 @@ describe('handleMention — LINK-1/LINK-2: an unconnected identity is invited to
     )
   })
 
+  // Rework finding 9 — `CONFIG.PUBLIC_APP_URL`'s own `z.url()` accepts a
+  // trailing slash, and it used to be harmless (the bare URL travelled
+  // verbatim). Appending a path made it not harmless: unstripped, this
+  // produces `https://app.bloombot.test//connect/<org>` — a double slash
+  // `apps/web`'s own route regex does not match, so a student following it
+  // lands on the shell or sign-in with no connect screen and no error.
+  it('strips a trailing slash from connectUrl before appending the connect path — no double slash', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test/',
+    })
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain(
+      `https://app.bloombot.test/connect/${organizationId}`
+    )
+    expect(reply.sent[0]).not.toContain('//connect/')
+  })
+
   it('answers normally once the person is connected', async () => {
     testDb = createTestDatabase()
     const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {

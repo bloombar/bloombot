@@ -57,6 +57,7 @@ describe('DiscordCallback (WEB-4)', () => {
     render(
       <DiscordCallback
         search="?code=abc&state=xyz&guild_id=guild-42"
+        account={undefined}
         onInstalled={onInstalled}
         onConnected={vi.fn()}
         onDone={vi.fn()}
@@ -85,6 +86,7 @@ describe('DiscordCallback (WEB-4)', () => {
     render(
       <DiscordCallback
         search="?code=abc&state=xyz&guild_id=guild-42"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={vi.fn()}
@@ -101,6 +103,7 @@ describe('DiscordCallback (WEB-4)', () => {
     render(
       <DiscordCallback
         search=""
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={onDone}
@@ -127,6 +130,7 @@ describe('DiscordCallback (WEB-4)', () => {
       <StrictMode>
         <DiscordCallback
           search="?code=abc&state=xyz&guild_id=guild-42"
+          account={undefined}
           onInstalled={onInstalled}
           onConnected={vi.fn()}
           onDone={vi.fn()}
@@ -157,6 +161,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     render(
       <DiscordCallback
         search="?code=abc&state=xyz"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={vi.fn()}
@@ -179,6 +184,47 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     ).toBeInTheDocument()
   })
 
+  // LINK-6's own three things a page that waits must name: the account
+  // signed in, the identity being attached, and whether anything merges.
+  // The case this guards against: a lab machine where account A left a
+  // session open, B follows A's own invitation, authorizes with Discord as
+  // themselves, and lands on a screen that used to say only "Discord
+  // account: b-student — connecting will merge that record into your
+  // account", with nothing saying *whose* account "your" refers to.
+  it("names the account signed in ('Signed in as ...') above the confirm row", async () => {
+    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
+    previewDiscordPersonLink.mockResolvedValue({
+      preview: {
+        organizationId: 'org-1',
+        survivorPersonId: 'person-1',
+        identity: { surface: 'discord', externalId: 'snowflake-1' },
+        outcome: { kind: 'attach' },
+      },
+      discordUsername: 'b-student',
+    })
+
+    render(
+      <DiscordCallback
+        search="?code=abc&state=xyz"
+        account={{
+          id: 'account-a',
+          email: 'account-a@example.edu',
+          memberships: [],
+        }}
+        onInstalled={vi.fn()}
+        onConnected={vi.fn()}
+        onDone={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('b-student')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        (_, node) => node?.textContent === 'Signed in as account-a@example.edu'
+      )
+    ).toBeInTheDocument()
+  })
+
   it('confirms only on an explicit click, and reports the connection', async () => {
     sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
     previewDiscordPersonLink.mockResolvedValue({
@@ -195,6 +241,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     render(
       <DiscordCallback
         search="?code=abc&state=xyz"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={onConnected}
         onDone={vi.fn()}
@@ -227,6 +274,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     render(
       <DiscordCallback
         search="?code=abc&state=xyz"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={vi.fn()}
@@ -247,6 +295,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     render(
       <DiscordCallback
         search="?code=abc&state=xyz"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={vi.fn()}
@@ -264,6 +313,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
     render(
       <DiscordCallback
         search="?code=abc&state=xyz&guild_id=guild-42"
+        account={undefined}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}
         onDone={vi.fn()}

@@ -31,7 +31,7 @@ import {
   confirmDiscordPersonLink,
   previewDiscordPersonLink,
 } from '../api/client.js'
-import type { PersonLinkPreview } from '../api/types.js'
+import type { AccountSummary, PersonLinkPreview } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { PENDING_INSTALL_ORG_KEY } from '../components/InstallButton.js'
@@ -40,6 +40,8 @@ import { PENDING_CONNECT_ORG_KEY } from './Connect.js'
 
 export interface DiscordCallbackProps {
   search: string
+  /** LINK-6 — "the page names ... the account signed in". `undefined` only while `App.tsx`'s own session check is still in flight; the preview screen below does not render until an API call resolves, by which point this has settled in practice, but the render below tolerates it being briefly absent rather than assuming it never is. */
+  account: AccountSummary | undefined
   /** Called with the organization id and the bound server id once installation succeeds — `App.tsx` carries this back into `pages/Shell.tsx`'s own state. */
   onInstalled: (organizationId: string, serverId: string) => void
   /** LINK-7 — called once a person-link connect attempt is confirmed, so `App.tsx` can return the browser to this same organization's own connect screen rather than the ordinary shell (which a first-time student, with no other membership, would otherwise land on with nothing useful to do there yet). */
@@ -63,6 +65,7 @@ type State =
 
 export function DiscordCallback({
   search,
+  account,
   onInstalled,
   onConnected,
   onDone,
@@ -180,6 +183,11 @@ export function DiscordCallback({
         <h1 className="text-page-title font-semibold text-neutral-900">
           Connect Discord
         </h1>
+        {account && (
+          <p className="text-sm text-neutral-700">
+            Signed in as <strong>{account.email}</strong>
+          </p>
+        )}
         {discordUsername && (
           <p className="text-sm text-neutral-700">
             Discord account: <strong>{discordUsername}</strong>

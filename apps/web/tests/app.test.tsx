@@ -23,13 +23,21 @@ import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
 // 'projects' (`docs/DECISIONS.md` D-25), so the shell this file renders now
 // mounts `ProjectsPanel` on first render, not only when a test opts into the
 // Projects tab.
-const { fetchMe, completeDiscordInstall, listProjects, redeemSignInLink } =
-  vi.hoisted(() => ({
-    fetchMe: vi.fn(),
-    completeDiscordInstall: vi.fn(),
-    listProjects: vi.fn(),
-    redeemSignInLink: vi.fn(),
-  }))
+const {
+  fetchMe,
+  completeDiscordInstall,
+  listProjects,
+  redeemSignInLink,
+  previewDiscordPersonLink,
+  confirmDiscordPersonLink,
+} = vi.hoisted(() => ({
+  fetchMe: vi.fn(),
+  completeDiscordInstall: vi.fn(),
+  listProjects: vi.fn(),
+  redeemSignInLink: vi.fn(),
+  previewDiscordPersonLink: vi.fn(),
+  confirmDiscordPersonLink: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
@@ -41,6 +49,8 @@ vi.mock('../src/api/client.js', async () => {
     completeDiscordInstall,
     listProjects,
     redeemSignInLink,
+    previewDiscordPersonLink,
+    confirmDiscordPersonLink,
   }
 })
 
@@ -189,6 +199,52 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Connect your account' })
     ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/connect/org-1')
+  })
+
+  // Rework finding 8 — `DiscordCallback.tsx`'s own doc comment promises a
+  // confirmed connect returns the browser to this same organization's own
+  // connect screen. Before the fix, `onConnected` was `returnToShell`
+  // itself, which reads a `sessionStorage` key `DiscordCallback.tsx`'s own
+  // preview step had *already* deleted — so a freshly connected student
+  // landed on the ordinary shell instead, silently: every existing test
+  // stayed green because none of them checked where a confirmed connect
+  // actually lands.
+  it('a confirmed Discord connect returns to this organization own connect screen, not the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+      },
+    })
+    previewDiscordPersonLink.mockResolvedValue({
+      preview: {
+        organizationId: 'org-1',
+        survivorPersonId: 'person-1',
+        identity: { surface: 'discord', externalId: 'snowflake-1' },
+        outcome: { kind: 'attach' },
+      },
+      discordUsername: 'a-student',
+    })
+    confirmDiscordPersonLink.mockResolvedValue({ connected: true })
+    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
+    window.history.pushState(null, '', '/discord/callback?code=abc&state=xyz')
+
+    renderWithModal(<App />)
+
+    const confirmButton = await screen.findByRole('button', {
+      name: 'Confirm connecting',
+    })
+    fireEvent.click(confirmButton)
+
+    await screen.findByRole('heading', { name: 'Connect your account' })
     expect(window.location.pathname).toBe('/connect/org-1')
   })
 })

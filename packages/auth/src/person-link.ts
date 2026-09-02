@@ -392,6 +392,46 @@ export function consumeMcpPersonLinkToken(
   }
 }
 
+/** What `peekMcpPersonLink` reports — enough to check *which organization* a token belongs to, without needing (or creating) a survivor at all. */
+export interface PeekedMcpPersonLink {
+  organizationId: string
+  identity: PersonIdentityInput
+}
+
+/**
+ * Peek at an MCP token's own organization and identity, with no survivor
+ * involved at all — the rework this app's own connect route needed:
+ * `previewMcpPersonLink`/`completeMcpPersonLink` both require a
+ * `callerPersonId` up front, which `apps/api`'s route used to obtain by
+ * *creating* one (`ensureWebPersonForAccount`) before ever checking whether
+ * the token was worth anything — a caller-supplied `organizationId` alone
+ * was enough to plant a connected person in an organization the caller had
+ * proven nothing about (D-44's own account of the rework this closes). This
+ * function lets a caller check "is this token even real, and for which
+ * organization" first — a plain read, the same `peekChallenge` lookup every
+ * other peek in this file already uses — and only create anything once that
+ * question is answered and matches what the caller expected.
+ */
+export function peekMcpPersonLink(
+  token: string,
+  db: Executor
+): PeekedMcpPersonLink | undefined {
+  const peeked = personLinkChallenges.peekChallenge(
+    hashSecret(token),
+    'mcp',
+    Date.now(),
+    db
+  )
+  if (!peeked) return undefined
+  return {
+    organizationId: peeked.organizationId,
+    identity: {
+      surface: 'mcp',
+      externalId: peeked.identityExternalId as string,
+    },
+  }
+}
+
 /**
  * Peek at an MCP person-link token without redeeming it — the same
  * non-committing preview `previewDiscordPersonLink` gives, for a caller

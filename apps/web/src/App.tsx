@@ -114,15 +114,32 @@ export function App() {
     }
   }
 
+  // LINK-6/7 rework, finding 8 — `onConnected` used to be `returnToShell`
+  // itself, which reads `PENDING_CONNECT_ORG_KEY` from `sessionStorage` —
+  // already removed by `DiscordCallback.tsx`'s own preview step, well
+  // before confirm (and this callback) ever runs. That silently sent a
+  // freshly connected student to the ordinary shell instead of back to
+  // this same organization's own connect screen, exactly the outcome that
+  // page's own doc comment says must not happen — and every existing test
+  // stayed green, because none of them checked *where* a confirmed connect
+  // actually landed. Fixed by navigating on the argument this callback
+  // already receives, not a sessionStorage key that is gone by the time it
+  // fires.
   if (path === '/discord/callback') {
     return (
       <DiscordCallback
         search={window.location.search}
+        account={session.kind === 'signed-in' ? session.account : undefined}
         onInstalled={(organizationId, serverId) => {
           setJustInstalled({ organizationId, serverId })
           returnToShell()
         }}
-        onConnected={returnToShell}
+        onConnected={(organizationId) => {
+          const target = `/connect/${organizationId}`
+          window.history.replaceState(null, '', target)
+          setPath(target)
+          refreshSession()
+        }}
         onDone={returnToShell}
       />
     )

@@ -166,7 +166,18 @@ function connectInvitationText(
   connectUrl: string,
   organizationId: string
 ): string {
-  const connectAddress = `${connectUrl}/connect/${organizationId}`
+  // `CONFIG.PUBLIC_APP_URL` (`packages/config/src/env.ts`'s own `z.url()`)
+  // accepts a trailing slash, and before this file appended a path itself
+  // a trailing slash was harmless — the bare URL was sent verbatim either
+  // way. Now it is not: `https://app.example.edu/` plus `/connect/<org>`
+  // produces `https://app.example.edu//connect/<org>`, which `apps/web`'s
+  // own `App.tsx` route regex (`/^\/connect\/([^/]+)$/`) does not match —
+  // a student following it lands on the shell or sign-in with no connect
+  // screen and no error at all. Stripped here, the same
+  // `stripTrailingSlashes` device `packages/discord-rest`'s own
+  // `authorize-url.ts`/`client.ts` already use for the identical class of
+  // "a configured base URL might carry one" defect.
+  const connectAddress = `${connectUrl.replace(/\/+$/, '')}/connect/${organizationId}`
   return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectAddress}, then ask again.`
 }
 

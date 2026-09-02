@@ -31,6 +31,7 @@ import {
   consumeMcpPersonLinkToken,
   DEFAULT_PERSON_LINK_TTL_MS,
   issueMcpPersonLinkToken,
+  peekMcpPersonLink,
   previewDiscordPersonLink,
   previewMcpPersonLink,
 } from '../src/person-link.js'
@@ -569,6 +570,59 @@ describe('issueMcpPersonLinkToken / consumeMcpPersonLinkToken (LINK-3)', () => {
     const row = testDb.db.select().from(schema.personLinkChallenges).get()
     expect(row?.surface).toBe('mcp')
     expect(row?.codeVerifier).toBeNull()
+  })
+})
+
+describe("peekMcpPersonLink — checking a token's own organization with no survivor involved", () => {
+  it('reports the organization and identity a live token belongs to', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+
+    const peeked = peekMcpPersonLink(issued.token, testDb.db)
+
+    expect(peeked).toEqual({
+      organizationId,
+      identity: { surface: 'mcp', externalId: 'mcp-client-1' },
+    })
+  })
+
+  it('does not consume the token — a real preview afterward still succeeds', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+
+    peekMcpPersonLink(issued.token, testDb.db)
+
+    expect(
+      previewMcpPersonLink(issued.token, personId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('refuses for a token that was never issued, is expired, or was issued for the other surface', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+
+    expect(peekMcpPersonLink('never-issued', testDb.db)).toBeUndefined()
+
+    const expired = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db,
+      -1
+    )
+    expect(peekMcpPersonLink(expired.token, testDb.db)).toBeUndefined()
+
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+    expect(peekMcpPersonLink(begun.state, testDb.db)).toBeUndefined()
   })
 })
 

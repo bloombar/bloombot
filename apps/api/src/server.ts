@@ -47,7 +47,7 @@ import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
 import {
   buildPersonLinkRouter,
-  type PendingDiscordIdentity,
+  type PendingDiscordConnect,
 } from './routes/person-link.js'
 
 export interface ServerDependencies {
@@ -80,8 +80,8 @@ export interface ServerDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, threaded through the same way — omitted, `answerQuestion` prices every call at its own zero-rate default and logs a warning each time (see that file's own `NO_PRICING_CONFIGURED` comment). */
   pricing?: PricingTable
-  /** LINK-6/7 — `routes/person-link.ts`'s own in-memory cache of a Discord identity already proven (via `/discord/preview`'s own code exchange) but not yet bound. Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
-  pendingDiscordIdentities?: Map<string, PendingDiscordIdentity>
+  /** LINK-6/7 — `routes/person-link.ts`'s own in-memory record of an in-flight Discord connect attempt (D-44's own session-binding rework). Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
+  pendingDiscordConnects?: Map<string, PendingDiscordConnect>
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -167,8 +167,8 @@ export function buildApp(deps: ServerDependencies): Express {
       // share one physical page.
       discordRedirectUri: deps.discordRedirectUri,
       discordOauthBase: deps.discordOauthBase,
-      ...(deps.pendingDiscordIdentities
-        ? { pendingDiscordIdentities: deps.pendingDiscordIdentities }
+      ...(deps.pendingDiscordConnects
+        ? { pendingDiscordConnects: deps.pendingDiscordConnects }
         : {}),
     })
   )

@@ -148,17 +148,23 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
 
-  // Cleared the moment this screen has an account to work with — its only
-  // job was surviving a full-page navigation (a sign-in redemption's own
-  // round trip, `App.tsx`'s own `returnToShell`) that has now already
-  // happened; a stale value left behind would otherwise redirect a later,
-  // unrelated sign-in back to this organization's connect screen.
+  // A side effect (writing `sessionStorage`), not something to run during
+  // render itself — kept in an effect, gated on `account`/`organizationId`,
+  // rather than called directly in the render body below. Signed out: set
+  // the marker so a sign-in redemption's own round trip (`App.tsx`'s own
+  // `returnToShell`) can find its way back here. Signed in: clear it — its
+  // only job was surviving that one round trip, which has now already
+  // happened, and a stale value left behind would otherwise redirect a
+  // later, unrelated sign-in back to this organization's connect screen.
   useEffect(() => {
-    if (account) sessionStorage.removeItem(PENDING_CONNECT_ORG_KEY)
-  }, [account])
+    if (account) {
+      sessionStorage.removeItem(PENDING_CONNECT_ORG_KEY)
+    } else {
+      sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, organizationId)
+    }
+  }, [account, organizationId])
 
   if (!account) {
-    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, organizationId)
     return <SignIn onSignedIn={onSignedIn} />
   }
 

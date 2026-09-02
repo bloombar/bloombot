@@ -102,6 +102,14 @@ platform's own code already trusts rather than a hand-written `INSERT`:
    const db = openDatabase()
    const account = accounts.getAccountByEmail(email, db)
    if (!account) throw new Error(`no account for ${email} — sign in once first`)
+   // A bootstrap, not a grant: refuse an organization that already has
+   // members. Without this the script happily makes you an owner of any
+   // tenant whose id you paste, and at this point in the runbook you have
+   // at least two real organization ids on screen — the imported one and
+   // your own personal one. A wrong-but-own id is caught by the primary
+   // key; a wrong-but-someone-else's id would not be.
+   if (memberships.listMembershipsForOrganization(organizationId, db).length > 0)
+     throw new Error(`${organizationId} already has members — this is a first-member bootstrap only`)
    memberships.createMembership(organizationId, account.id, 'owner', db)
    console.log(`${email} is now owner of ${organizationId}`)
    closeDatabase(db)
@@ -184,9 +192,25 @@ before it could be the thing discovered at 9pm; see `scripts/deploy.sh`'s own
 > `apps/api/src/logging-email-sender.ts#buildEmailSender` refuses to start this process at all
 > in `NODE_ENV=production` — `packages/auth/src/email.ts` ships only a port and a test fake
 > (see `docs/DEPLOY_DROPLET.md`'s own lead callout). That gap is tracked as **AUTH-5**, built
-> and in review as of this writing — confirm it has actually merged and this droplet has
-> deployed it (`api` stays up against `NODE_ENV=production`, not merely that the PR exists)
-> before running §2.2.
+> and in review as of this writing.
+>
+> **Check it on this droplet, not on GitHub.** Nothing else in these documents produces that
+> observation: `docs/DEPLOY_DROPLET.md` §6 explicitly routes a cutover droplet away from
+> starting the platform's processes, Phase 1's §1.3 runs under `NODE_ENV=development` and so
+> cannot exercise the production refusal at all, and the droplet is pinned to `master` while
+> AUTH-5 targets the integration branch — so "is it merged" is not the same question as "will
+> this box start". Run this, here, before §2.2:
+>
+> ```bash
+> pm2 start ecosystem.config.cjs --only api
+> pm2 status api        # expect status "online", not "restarting" or "errored"
+> pm2 logs api --lines 20 --nostream   # expect "apps/api: listening", not a mail-transport error
+> pm2 stop api
+> ```
+>
+> This is safe against the still-running Python bot: a different port, and the same database
+> file through WAL. If `api` restart-loops here, stop — you have lost nothing, and everything
+> below this line is irreversible.
 >
 > **Do not begin this phase without it.** §2.2 stops the Python bot and §2.3 resets the
 > Discord token, both irreversibly, before `api` is ever needed — reaching that point only to
@@ -292,10 +316,17 @@ category matching runs. This is the exact same gate §1.3's own rehearsal relies
 safe; here, it is the thing standing between the cutover and a working platform, and there is
 no rehearsal-style "disposable test server" to substitute — it has to be the real one.
 
-1. **Bootstrap the founding owner of the imported organization**, the same one-time procedure
-   §1.3 describes and explains in full (there is no panel action for this yet — see that
-   section, and `docs/DECISIONS.md`'s own entry, for why). Use the *real* organization id from
-   §2.4's own printed report this time, not the rehearsal's:
+1. **Sign in at the production panel once, then bootstrap the founding owner of the imported
+   organization** — the same one-time procedure §1.3 describes and explains in full (there is
+   no panel action for this yet — see that section, and `docs/DECISIONS.md`'s own entry, for
+   why).
+
+   The sign-in is a separate step and easy to skip: the account you created during §1.3's
+   rehearsal lives in `tmp/rehearsal-platform.db`, not in the live database, so running the
+   script first here fails with `no account for … — sign in once first`. It is a loud, quick
+   failure, but this is the one procedure being run under time pressure. Sign in at the real
+   panel, then use the *real* organization id from §2.4's own printed report — not the
+   rehearsal's:
 
    ```bash
    node tmp/bootstrap-membership.mjs instructor@example.edu <organization-id-from-2.4s-report>

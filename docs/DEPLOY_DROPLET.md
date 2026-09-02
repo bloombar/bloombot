@@ -470,9 +470,11 @@ rm -f data/data.db-wal data/data.db-shm   # stale WAL/shared-memory sidecars fro
 cp "$BACKUP" data/data.db
 rm -rf data/attachments && tar -xzf "/tmp/attachments-backup-$(date +%F).tar.gz" -C data
 node packages/db/dist/run-migrate.js --i-know   # the restored file may predate a later migration
-pm2 start api bot worker mcp ops-monitor
-# Restart bloombot too, only if it was stopped above (i.e. this droplet is
-# still mid-migration) — a fully cut-over droplet has no such process left.
+# `bloombot` is in this line because the stop above includes it. On a fully
+# cut-over droplet that process no longer exists, and pm2 simply reports it
+# as not found — harmless. On a droplet still mid-migration it must come
+# back, which is why it is here rather than in a comment somebody has to act on.
+pm2 start bloombot api bot worker mcp ops-monitor
 ```
 
 ### 8.2 Log rotation

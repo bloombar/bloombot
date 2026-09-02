@@ -4143,7 +4143,306 @@ the same verify-before-relying discipline that paragraph asks for.
 
 ---
 
-## D-44 — `docs/CUTOVER.md`: a legacy-imported organization has no members, and nothing in the panel can add its first one
+## D-44 — `packages/auth`/`apps/api`/`apps/web`/`apps/mcp`/`packages/discord`: the connect surface — LINK-6..8's own server and screens, why a first version could write into any tenant, and what changed to close it
+
+**Problem.** LINK-1 (D-35) declines anyone whose person has no `connectedAt`, and `beginDiscordPersonLink`/
+`completeDiscordPersonLink`/`issueMcpPersonLinkToken`/`completeMcpPersonLink` (`packages/auth/src/person-link.ts`)
+prove an identity and attach or merge it — but nothing in `apps/` ever called any of them. A student's first
+Discord message got LINK-1's invitation to a page that did not exist; the web chat listed no courses for
+anybody admitted by a roster or a Discord role, because nothing had ever proven their Discord identity belongs
+to the account signing into the panel. D-37's own "Limits" named this gap directly and pointed at this slice
+to close it. A rework round (two independent reviewers, one on conformance and reachability, one on security)
+found the mechanism itself sound — every identity-takeover shape either reviewer could construct was refused,
+`peekDiscordPersonLinkCodeVerifier`'s own lifecycle held, and a reviewer's own reproduction proved a
+roster-admitted student really can connect and reach an answer — but found the *authorization* wrong: **any
+signed-in account could write a `people` row into any organization**, gated on nothing but the organization
+existing.
+
+**Choice — the survivor is the caller's own web person *in the organization the connect attempt names*, not
+the account's personal one.** `beginDiscordPersonLink`/`issueMcpPersonLinkToken` need a survivor `personId`
+before any proof exists (D-35's own "bound at issue" — getting this backwards is an account takeover). A
+student's Discord identity almost always lives in an *institution's* organization, admitted by a roster import
+or a Discord role, long before that student has a reason to sign into the panel — proving the identity there,
+in *that* organization, is what lets `connectOrMerge` (`person-link.ts`) find the already-admitted person and
+merge into it (LINK-4), rather than attaching a fresh, never-enrolled identity nobody can reach a course
+through. This part of the design held through the rework unchanged.
+
+**What the rework actually found.** A first version resolved (or created) that survivor — `@bloombot/auth`'s
+`ensureWebPersonForAccount` — gated only on `organizationExists`, *before* any Discord or MCP proof existed.
+Reproduced directly: `POST .../mcp/preview {"token":"not-a-token"}` against a real organization the caller had
+never touched created a *connected* person there (a `web` identity, `connectedAt` set) — a junk request with no
+proof at all — and `GET .../chat/courses` for that organization went from `404` to `200 {"courses":[]}`
+permanently, converting an unrelated route into a tenant-existence oracle. `/discord/begin` showed the same
+shape even more directly: `200` for a real organization the caller had no relationship to, `404` for one that
+did not exist — a plain existence oracle — while planting an unbounded stream of `person_link_challenges` rows
+in the foreign tenant either way. "Require a membership first" is not the fix: a student connecting for the
+first time legitimately has *no* membership in the institution's own organization — that is the entire point of
+the flow. The actual fix is ordering: **nothing is created, and nothing is connected, until organization-specific
+proof is already in hand.**
+
+**Choice — MCP peeks the token's own organization before writing anything.** An MCP token is already bound to
+an organization the moment it is issued (LINK-3's own identity-bound-at-issue design for that surface) — so the
+proof was available for free, just not checked first. `peekMcpPersonLink` (new, `person-link.ts`) is a plain
+read: given a token, it reports the organization and identity it names, with no survivor and no write involved
+at all. `/mcp/preview` and `/mcp/confirm` (`routes/person-link.ts`) both peek first — refusing not-found-shaped,
+before `ensureWebPersonForAccount` is ever called, when the token does not exist or names a different
+organization than the URL. A junk token, or a token real for a *different* organization, now creates nothing:
+proven directly (`apps/api/tests/routes/person-link.test.ts`'s own "the tenant-write oracle is closed" block,
+replaying the reviewer's exact reproduction and asserting no `people` row and no oracle afterward).
+
+**Choice — Discord cannot do the same, so it writes a *bare* survivor instead.** `beginDiscordPersonLink` needs
+a real, already-persisted `personId` before Discord's OAuth ever starts — PPL-4's own "survivor bound at issue,"
+unchanged, and not something this rework revisits. There is genuinely no organization-specific proof to check
+before that first write: the caller has proven their *account*, nothing about this particular institution.
+`resolveOrCreateBareDiscordSurvivor` (`routes/person-link.ts`) resolves the account's *existing* survivor in
+this organization when one already exists (a legitimate repeat visit, found by `web` identity — a plain read),
+and otherwise creates a genuinely bare person: no identity attached at all, `connectedAt` left `null`. That row
+is indistinguishable, to every other route in this app, from the organization not existing: `routes/chat.ts`
+resolves a caller by `web` identity, this row has none; LINK-1's own gate reads `connectedAt`, this row's stays
+`null`. It costs a little inert storage in a foreign organization — an accepted, bounded residual, not a
+resource this app reclaims today — and grants nothing until Discord's own OAuth genuinely completes, at which
+point `/discord/confirm` attaches the account's own `web` identity too (`attachWebIdentityOrMerge`, falling back
+to a merge on the one genuine race two concurrent `begin()` calls for the same account could produce), *after*
+the Discord identity has already set `connectedAt` for a real reason.
+
+**Choice — session binding moved in-memory, because the database challenge has nowhere to carry it.**
+`person_link_challenges` carries a survivor `personId`, never an `accountId` — there was no column to check "is
+the caller confirming this the same account that began it" against. Before the rework that check did not really
+exist: whichever account happened to resolve the *same* `web`-connected survivor passed, silently, and because
+that resolution itself created a person on demand, *any* signed-in account resolved to *some* person, so the
+check was satisfiable by construction. A reviewer proved this precisely: replacing the resolved survivor with
+`peeked.personId` read directly off the challenge — a tautological self-check — left the entire `apps/api` suite
+green, 13 files, 168 tests. `PendingDiscordConnect` (`routes/person-link.ts`) is this router's own in-memory
+record of which account began a given attempt — the same process-local, never-persisted device the OAuth code
+exchange itself already used, extended to carry the binding this flow actually needs checked.
+`/discord/preview` and `/discord/confirm` both refuse not-found-shaped, before touching the database at all, the
+moment the caller's own session names a different account than the one recorded at `begin`. Verified by mutating
+the shipped code the identical way the reviewer's own mutation did (deleting the `accountId` comparison) and
+watching the new cross-account test fail — restoring it, the test passes again.
+
+**Choice — a caller mismatch spends nothing, unlike a genuine redemption.** `completeDiscordPersonLink`'s own
+"consumed either way" rule exists because a *redeemed* secret proves something regardless of what it is redeemed
+against — replaying it teaches an attacker nothing new. A session mismatch is a different failure: `state` was
+never touched, so the rule does not apply, and applying it anyway hands a stranger who merely learned a
+previewed `state` (browser history, a shared machine) a way to permanently deny the real owner's own connect
+attempt. `routes/person-link.ts` only calls `completeDiscordPersonLink` — the one call that actually
+consumes — once the caller's own session has already matched; a mismatch refuses without reaching it, leaving
+`state` exactly as live as it was. Proven the same way as the session-binding check itself: sabotaging the route
+to consume on a mismatch (matching the pre-rework shape) makes the same cross-account test fail on its own
+second half — the victim's later, legitimate confirm.
+
+**Choice — `bloombot_connectAssistant` (`apps/mcp/src/server.ts`) checks the organization exists but not
+membership, deliberately, and catches whatever the insert still throws.** A first version took `organizationId`
+straight from the model's tool arguments into `issueMcpPersonLinkToken` with no check at all: a foreign but real
+organization minted a valid, redeemable token with no proof; a nonexistent one threw `better-sqlite3`'s own
+`FOREIGN KEY constraint failed` straight into the tool result — a raw driver error handed to an untrusted
+client, and a cruder existence oracle than the one already accepted for the HTTP surface. `memberships.getMembership`
+(`call-tool.ts`'s own tenancy check for the dispatch catalog) is the wrong fix here for the identical reason it
+is wrong for the HTTP routes above: MCP-3's "exactly one account's authority and nothing more" describes what a
+*dispatched action* may see, not who may attempt to connect — a student's assistant legitimately requests a
+token for the student's own institution, an organization the student has no membership in by design. What
+actually gates this tool, the same as its HTTP siblings, is that minting a token creates nothing in `people` at
+all (only a `person_link_challenges` row, swept by its own TTL); the write happens only once a human redeems it
+against a matching organization on the panel. The fix here is narrower: check the organization exists first
+(closing the raw-error leak, and the cruder oracle it was), and catch whatever the insert still throws as a
+last resort, logged rather than surfaced. An organization id is still not a secret — minting a token for a
+real, foreign organization is accepted and tested as a deliberate choice, not an oversight.
+
+**Two defects in the preview primitive, unchanged by this round, still worth restating plainly.**
+`previewOutcome` (`person-link.ts`) did not check the *survivor's* own `mergedIntoPersonId` — a survivor merged
+away after their own attempt began (a fast, concurrent proof from elsewhere) previewed as `{kind: 'attach'}`
+even though the real completion would refuse; fixed by checking `people.getPerson(...).mergedIntoPersonId`
+first. `previewDiscordPersonLink` took no caller identity at all, unlike `completeDiscordPersonLink`'s own
+`callerPersonId` — fixed by adding and checking it, refusing a mismatch the identical "no oracle" way. Both
+remain mutation-verified: reverting either fix locally fails the regression test written for it and no other.
+
+**Reusing the install flow's own redirect URI, and the preview/confirm split — unchanged.** LINK-7's OAuth round
+trip lands back on `${PUBLIC_APP_URL}/discord/callback` — the same physical page `discord-servers.ts`'s own
+install flow already uses, told apart client-side by which `sessionStorage` marker is present, rather than
+registering a second redirect URI with the real Discord application. `/discord/preview` spends the OAuth code
+once (Discord's own codes are single-use) and previews the outcome without redeeming `state` itself (LINK-6's
+"a visit is not consent"); `/discord/confirm` never trusts a client-resupplied identity, only what preview
+already proved and this router recorded.
+
+**The framing this decision got wrong the first time, corrected here.** The first version of this record
+claimed "the web chat now works" without qualification. That overstates what actually ships: connecting creates
+a *person*, not a *membership*, and `apps/web/src/pages/Shell.tsx` derives which organization the panel acts
+in from `account.memberships` alone. A student who connects through the Discord invitation is fully reachable
+*on Discord* — the acceptance test proves that end to end, over real HTTP, for an account with no membership
+anywhere relevant — but that same student opening the web panel directly sees only their own personal
+organization (the one membership every account gets), whose own Chat tab has no course to show and whose own
+"not connected" link (`pages/Chat.tsx`) points at `/connect/<personal-org>`, not the institution's. Connecting
+again there succeeds and still lists nothing, because the institution's organization — where the actual
+enrolment lives — is not something the panel's own organization switcher offers a connected-but-not-a-member
+account any way to reach. This is not a defect this rework introduces or claims to close: `Shell.tsx`'s own
+organization selection is membership-shaped throughout, a UI/read-surface question (something like "which
+organizations does this account have a *connected person* in, not only a membership" would need its own
+endpoint and its own switcher behaviour) genuinely separate from proving an identity, which is this slice's own
+scope. Recorded here as a real, correctly-scoped gap for a follow-up slice, not fixed in this one.
+
+**Rework, round two — the write was deferred, not authorized, and the actual exploit used a hop this same
+slice added.** The choices above closed a *junk* proof (a made-up token, an unrelated code) — they did not
+check that a *genuine* proof was organization-specific. A reviewer reproduced the original exploit end to end,
+over a live API and a live MCP server, using one ordinary account with no membership, enrolment or person
+anywhere near a victim tenant: `bloombot_connectAssistant` (`apps/mcp/src/server.ts`) mints a person-link token
+for *any* organization id, membership-free, by design (its own doc comment, D-44's own first-round choice,
+unchanged and still correct on its own terms) — so the "organization-specific proof" `/mcp/preview`/
+`/mcp/confirm` waited for was something the attacker could simply mint for themselves. Redeeming that
+self-minted token against the victim organization returned `200`/`200` and left a `connectedAt`-set person
+there, LINK-1's own gate granted with nothing an institution ever admitted. The Discord half had the identical
+shape by a different route: a caller with no relationship to an organization can always produce a *genuine*
+OAuth proof of their own, real, never-before-seen-there snowflake — this file's own original text ("nothing is
+created, and nothing is connected, until organization-specific proof is already in hand") was wrong, because
+neither a snowflake the caller owns nor a token the platform mints on demand is organization-specific; both
+only ever proved *a* identity, never one the organization itself had any reason to trust.
+
+**The actual rule: a caller with no membership in an organization may complete only a `merge` or
+`already-connected` outcome there, never a fresh `attach`.** "Organization-specific proof" has to mean the
+identity being proved already resolves to a person *that organization already admitted* — a roster import or a
+Discord role, `connectOrMerge`'s own `merge` branch — not a person this router would be minting the first
+record of. This preserves the real student flow exactly (this file's own acceptance test previews
+`outcome.kind === 'merge'`, because a roster-admitted student's Discord identity already belongs to someone)
+while refusing a caller who merely proved *an* identity, not one this organization ever admitted. Implemented
+two ways, matching each surface's own shape (`routes/person-link.ts#attachWithoutMembershipIsForbidden`,
+`memberships.getMembership` — the same tenancy check `routes/actions.ts` already runs before dispatching
+anything): for MCP, `ensureWebPersonForAccount` (which creates) is dropped from `/mcp/preview`/`/mcp/confirm`
+entirely, replaced by `people.resolveIdentity` — the same read-only shape `routes/chat.ts`'s own
+`resolveConnectedCallerPerson` already uses — refusing outright when the account has no existing person there
+at all (an MCP connect into an organization the account has never otherwise reached is meaningless regardless,
+since there is no enrolment for an assistant to help with); for Discord, which still has to write a bare
+survivor before OAuth even starts (unchanged), the gate moves to `/discord/preview` — an `attach` outcome for a
+non-member is refused as an ordinary preview failure, before the identity is ever cached for confirm to
+redeem, so the screen never promises an outcome it does not allow (LINK-6's own "the page names ... whether
+anything will be merged into it").
+
+**A second, independent finding in the same round — the bare-survivor deferral was not bounded.**
+`resolveOrCreateBareDiscordSurvivor`'s own first-round doc comment claimed a "repeat visit" reuse branch that,
+for a bare person (no identity at all), could never actually fire — every `/discord/begin` call before a
+connect completed minted a fresh row, unbounded: reproduced directly, 200 calls left 200 `people` rows and 200
+`person_link_challenges` rows in the same victim organization, nothing sweeping either. Fixed by extending the
+reuse check to the in-memory `pendingDiscordConnects` map itself (an attempt still live for the exact
+`(accountId, organizationId)` pair reuses its own survivor rather than minting a second one), and by sweeping
+expired entries at `/discord/begin` too, not only at `preview`/`confirm`.
+
+This bounds the `people` rows and nothing else, which is worth stating exactly, because the first version of
+this paragraph claimed more than it delivered and a verification round re-measured it: 200 `/discord/begin`
+calls from one account against one foreign organization now leave **one** `people` row — the fix works — but
+still **200** `person_link_challenges` rows and **200** `pendingDiscordConnects` map entries, one per request
+each, held for the full `DEFAULT_PERSON_LINK_TTL_MS` window (ten minutes) and swept afterwards. The permanent
+row is the one that mattered, since nothing sweeps `people`; the challenge rows and map entries expire on their
+own. Growth of the bounded resource is therefore roughly one row per account per organization per TTL window,
+not one per request — an account that waits out the TTL between attempts still adds a new bare row each time, a
+residual accepted and stated plainly rather than solved further (`apps/mcp`'s own session-eviction rework, D-36, bounds a comparable
+resource the identical way, by TTL, not by eliminating repeat use).
+
+**Also fixed, this round.** A test titled "reuses the same survivor" asserted `toBeGreaterThanOrEqual(1)` —
+true for any value — while its own in-body comment admitted the reuse it claimed to prove never fired; deleting
+the reuse branch entirely left the whole suite green. Fixed to assert an exact count across five repeat calls,
+not two. The two MCP routes answered a nonexistent organization and a real organization the token simply did
+not name with two different error codes (`organization_not_found` vs. `person_link_not_found`) — an oracle
+`peekMcpPersonLink`'s own match check already made the separate existence check redundant for; removed, so both
+answer identically now (`/discord/begin`'s own equivalent `200`-vs-`404` distinction was checked and does *not*
+become moot the same way — begin still has to reject a nonexistent organization before its own insert, and
+nothing about the merge-only rule changes that; left as-is, matching the "an organization id is not a secret"
+choice this file already made, now further justified since the row it gates is bare, inert and bounded). The
+now-unreachable `organizationExists` check inside `/discord/confirm` (the `pending.organizationId` comparison
+already refuses any mismatch first) was removed rather than merely re-commented as redundant. A stray reference
+to `pendingDiscordIdentities` — a name that was renamed to `pendingDiscordConnects` in round one and never
+updated in one leftover comment — cited a precedent that never existed under that name; corrected to cite
+PLAT-4 (`docs/SPEC.md`: "Four processes, each single-instance … Never clustered"), the actual thing that
+licenses process-local state here, alongside the residual cost that state carries: a restart between `begin`
+and `confirm` loses the in-memory record even though the database challenge is still live, answering
+`person_link_not_found` for an attempt that has not actually expired, and permanently orphaning the bare
+survivor `begin` already wrote.
+
+**`e2e/connect.spec.ts` — the missing Playwright coverage, added.** LINK-6/8 span front and back end, and
+`CLAUDE.md` asks for e2e coverage there; the API-level acceptance test is genuinely end to end against a real
+database but never touches a browser. The new spec drives a real browser through `/connect/:organizationId`
+signed out (asking to sign in, the same as a real invitation would), redeems a real emailed sign-in link, and
+returns to that same organization's own connect screen — then redeems a real, freshly-minted MCP token through
+the real `/mcp/preview`/`/mcp/confirm` routes, the LINK-8 half `apps/mcp/tests/server.test.ts`'s own test suite
+already proves the *minting* side of with a real MCP SDK client. What it does not cover: Discord's own OAuth
+screen, which would need a second, fake OAuth provider standing in for discord.com that this harness does not
+build (`e2e/support/start-api.ts` already points `apps/api`'s own Discord configuration at unreachable loopback
+addresses on purpose) — the Discord half of LINK-7 stays proven at the API-integration level, not through a
+browser, and this spec's own module comment says so plainly rather than overclaiming, the same discipline
+`chat.spec.ts`'s own module comment already holds itself to.
+
+**Limits.** `redeemJoinLink`/`course_join_links` (ENRL-3/ENRL-4) remain unwired from any route — a *web-only*
+student who has never touched Discord still has no way to reach a course through this slice; that mechanism
+admits (enrols), while this one connects (proves an identity), and D-37's own "Limits" already named the
+join-link route as separate, deferred work. `apps/mcp` is touched only for `bloombot_connectAssistant` — no
+other tool, no change to `tool-surface.ts`'s own catalog or `call-tool.ts`'s dispatch path. LINK-9's own
+decision — what happens to a person who already existed before connecting was required — is D-45, immediately
+below.
+
+---
+
+## D-45 — `packages/discord`/`packages/auth`: LINK-9 — nobody who could already ask is locked out, and why "ask them once" needed no code of its own
+
+**Problem.** LINK-1 (D-35) declined every unconnected person's first message the moment it merged — including
+every student who already had a working conversation before connecting was required. LINK-9 asks for a
+deliberate, written answer to what happens to them: connect them on their next proven sign-in, admit them until
+a deadline, or ask them once — not a consequence of a migration that happened to leave a column null.
+
+**Choice — "ask them once," and it needed no migration or backfill because D-44 already builds the mechanism
+that makes it true.** Before this slice, "ask them once" was not actually available as an option: LINK-1's
+invitation pointed at a connect screen that did not exist, so an already-active student's first post-LINK-1
+message was not "asked once and then fine" — it was declined, permanently, with no working way back. D-44
+closes exactly that: the *same* invitation (`connectInvitationText`, already sent to every unconnected person
+on every surface, new and returning alike) now leads to a real page, and following it does not create a new,
+empty account — `connectOrMerge`'s own attach-or-merge shape (unchanged by this slice) means an *already-
+existing*, previously-active person's identity is either attached directly to the caller's survivor or merges
+that survivor's history in, never dropped (LINK-4). Concretely: a student who has been asking a course
+questions for a month, unconnected only because LINK-1 shipped after they started, gets the identical
+invitation a brand-new student gets, follows it once, and every prior conversation, enrolment and usage row is
+still there afterward under the survivor they end up connected as. The friction is real but bounded to exactly
+one interruption — the same friction D-28 already priced in for every new student ("thirty students each meet
+a connect prompt instead of a reply") — not a *second*, additional cost layered on top of it for anyone who
+merely happened to exist first.
+
+**Why not a grace period or a deadline-based admission.** Both would mean re-opening LINK-1's own gate — an
+allowance answered *before* `connectedAt` is set, whether bounded by a clock or not, is precisely the
+unattributed-allowance window D-28 refused to reopen ("the alternative ... leaves a window where a person has
+an unattributed allowance ... that is D-4's evasion, reintroduced"). A deadline also has no natural expiry this
+platform can compute on its own: unlike an account or a course, a Discord-surface person has no "when did this
+start mattering" timestamp distinct from `createdAt`, which already predates LINK-1 for every person this
+question is about — a deadline keyed on it would not distinguish "existed for a year" from "existed for a day
+before this shipped."
+
+**Why not an automatic connect on next proven sign-in, the way the web surface's own healing path
+(`healWebPersonForReturningAccount`, D-37) works.** That path works because a *web* account's own sign-in event
+is itself a proof this package already trusts (D-37's own "a signed-in web caller is the account — they proved
+control of it by signing in") — healing simply extends an already-authenticated event to a person row that
+happened not to exist yet. Discord has no equivalent "proven sign-in" event this platform can observe
+passively: nothing about a returning Discord message proves anything beyond what it already proved before
+LINK-1 shipped (the sender controls that snowflake, which `resolvePersonByIdentity` already believed). The only
+thing that *actually* proves a Discord identity belongs to a specific, signed-in account is Discord's own
+OAuth — which is precisely LINK-7's connect flow, reachable only by a person taking an action, not something
+this platform can trigger silently on their behalf. "Ask them once" is therefore not a fallback chosen for lack
+of a better option; it is the *only* sound option once "connect on next proven sign-in" is read literally for
+this surface — Discord supplies no sign-in event this platform did not already have before LINK-1.
+
+**Cost, stated plainly.** Every Discord student active before this slice shipped hits exactly one connect
+prompt on their next message, identical in kind (not merely similar) to what a brand-new student meets from
+their very first message onward — D-28's own already-accepted cost, not a new one this decision introduces.
+Nothing here is reversible by a configuration flag the way D-28's own "Cost, stated plainly" flags LINK-1
+itself as ("reversible per course later if it proves worse than the evasion it prevents") — LINK-9 is a
+statement about what happens to *existing* data under an already-shipped gate, not a second gate with its own
+on/off switch.
+
+**Limits.** This says nothing about a student who was active, then stopped asking questions, and returns after
+a long gap with no memory of ever needing to connect — the UX cost of that surprise is real and unmeasured;
+nothing in this slice instruments how often it actually happens. An operator-initiated bulk notification ("your
+course now requires connecting; here is the link") is a real mitigation this decision does not build — it would
+need every affected student's own contact information, which an unconnected Discord person may not have at all
+(no verified address — PPL-5's own `hasVerifiedAddress`, D-35's rework finding 4), and is therefore its own,
+separate requirement this SPEC does not currently name. Reachability through the *panel itself*, as opposed to
+Discord, carries the same limit D-44 now states plainly: a connected person is not a membership, and
+`Shell.tsx`'s own organization switcher does not yet offer a connected-but-not-a-member account any way to
+reach the institution's organization from inside the panel.
+
+## D-46 — `docs/CUTOVER.md`: a legacy-imported organization has no members, and nothing in the panel can add its first one
 
 **Problem, found while driving Phase 2 of the cutover runbook end to end.** The must-fix-1
 finding from this rework round's own review (a missing bind step left every real course
@@ -4199,5 +4498,5 @@ the runbook, is so it is discoverable as a follow-up requirement rather than red
 next time someone runs a legacy import.
 
 **Numbering note.** Taken as the next number after D-43 in this branch's own history; a
-commit on the (unmerged, in-review) AUTH-5 branch also references "D-44" for its own entry —
+commit on the (unmerged, in-review) AUTH-5 branch also references "D-46" for its own entry —
 flagged to the supervisor to resolve at merge, per this project's own numbering convention.

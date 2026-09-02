@@ -61,7 +61,8 @@ test('evaluate: a high error rate within one window (no previous snapshot) does 
     },
   })
   assert.equal(result.healthy, true)
-  assert.deepEqual(result.model, { calls: 10, errors: 8 })
+  assert.equal(result.model.calls, 10)
+  assert.equal(result.model.errors, 8)
 })
 
 test('evaluate: a high error rate in the delta since the previous snapshot pages, even though the lifetime rate is low', () => {
@@ -83,7 +84,8 @@ test('evaluate: a high error rate in the delta since the previous snapshot pages
   assert.equal(result.healthy, false)
   assert.match(result.reason, /75%/)
   assert.match(result.reason, /last 8 calls/)
-  assert.deepEqual(result.model, { calls: 108, errors: 8 })
+  assert.equal(result.model.calls, 108)
+  assert.equal(result.model.errors, 8)
 })
 
 test('evaluate: a lifetime error rate over 50% does not page when the delta since the last poll is clean — the old lifetime-average bug, inverted', () => {
@@ -135,7 +137,8 @@ test('evaluate: a process restart (counters reset lower than the previous snapsh
     { calls: 500, errors: 20 }
   )
   assert.equal(result.healthy, false)
-  assert.deepEqual(result.model, { calls: 6, errors: 5 })
+  assert.equal(result.model.calls, 6)
+  assert.equal(result.model.errors, 5)
 })
 
 test('evaluate: an unreachable result carries the previous model snapshot forward unchanged', () => {
@@ -143,7 +146,8 @@ test('evaluate: an unreachable result carries the previous model snapshot forwar
     { ok: false, reachable: false, error: 'ECONNREFUSED' },
     { calls: 100, errors: 2 }
   )
-  assert.deepEqual(result.model, { calls: 100, errors: 2 })
+  assert.equal(result.model.calls, 100)
+  assert.equal(result.model.errors, 2)
 })
 
 test('planNotifications: a first, healthy observation notifies nobody', () => {
@@ -221,7 +225,8 @@ test("planNotifications: carries each process's own model snapshot forward indep
     },
     { name: 'api', ok: true, reachable: true, status: 200 },
   ])
-  assert.deepEqual(nextModel.get('bot'), { calls: 110, errors: 3 })
+  assert.equal(nextModel.get('bot').calls, 110)
+  assert.equal(nextModel.get('bot').errors, 3)
   assert.equal(nextModel.has('api'), false)
 })
 
@@ -310,6 +315,33 @@ test('planNotifications: a low-traffic total outage still pages eventually — t
   assert.deepEqual(
     allNotifications.map((n) => n.healthy),
     [false]
+  )
+
+  // Keep going past the page, which is where the real defect lived. The
+  // baseline resets at poll 4, so polls 5 and 6 hold barely any calls and
+  // cannot be evaluated — and while accumulating, `evaluate` used to
+  // return `healthy: true`, so the operator was told the provider had
+  // recovered 30 seconds after being paged, while it was still totally
+  // down, over and over. A sustained outage must page once and stay
+  // silent, which is what `docs/CUTOVER.md` §5 promises.
+  tick(10, 8) // poll 5: window 2 (< 5) — undecidable, must not claim recovery
+  tick(12, 10) // poll 6: window 4 (< 5) — still undecidable
+  tick(14, 12) // poll 7: window 6 (>= 5), still 100% errors — still down
+
+  assert.deepEqual(
+    allNotifications.map((n) => n.healthy),
+    [false],
+    'a sustained outage pages once; no phantom recovery while a window accumulates'
+  )
+
+  // And a genuine recovery, once there is enough evidence for one, still
+  // notifies — the carried verdict holds the last decision, it does not
+  // latch it forever.
+  tick(20, 12) // poll 8: 6 new calls, none of them errors
+  assert.deepEqual(
+    allNotifications.map((n) => n.healthy),
+    [false, true],
+    'a real recovery still notifies once the window is decidable again'
   )
 })
 

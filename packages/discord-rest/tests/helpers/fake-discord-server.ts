@@ -75,6 +75,11 @@ export class FakeDiscordServer {
   private guildsQueue: (FakeResponse | undefined)[] = []
   private userGuilds: unknown[] = []
   private botGuilds: unknown[] = []
+  // LINK-7 — `GET /users/@me`'s own fixed response, distinct from
+  // `userGuilds`/`botGuilds` above (those are `/users/@me/guilds`, a
+  // different endpoint Discord happens to nest under the same prefix).
+  private currentUser: unknown = { id: 'fake-user-id', username: 'fake-user' }
+  private currentUserQueue: (FakeResponse | undefined)[] = []
   // SRV-6 — one channel/category list and one role list per guild id, so a
   // test can seed more than one guild independently. `POST
   // /guilds/{id}/channels` (below) appends to `guildChannels` itself, which
@@ -145,6 +150,16 @@ export class FakeDiscordServer {
     this.userGuilds = guilds
   }
 
+  /** What `getCurrentUser` (LINK-7's `GET /users/@me`) returns for every subsequent request, until changed again. Discord's own raw shape (`id`, `username`). */
+  setCurrentUser(user: unknown): void {
+    this.currentUser = user
+  }
+
+  /** Queue one response for the next `GET /users/@me` — for a test proving `getCurrentUser` surfaces a non-2xx response rather than assuming every call succeeds. */
+  respondToCurrentUser(response: FakeResponse): void {
+    this.currentUserQueue.push(response)
+  }
+
   /** What `getBotGuilds` (an `Authorization: Bot ...` call) returns for every subsequent request, until changed again. */
   setBotGuilds(guilds: unknown[]): void {
     this.botGuilds = guilds
@@ -209,6 +224,20 @@ export class FakeDiscordServer {
     }
 
     const [pathname, query] = (req.url ?? '').split('?')
+    if (req.method === 'GET' && pathname === '/users/@me') {
+      const queued = this.currentUserQueue.shift()
+      if (queued) {
+        this.respondJson(res, queued.status, queued.body)
+        return
+      }
+      const authorization = req.headers.authorization ?? ''
+      if (!authorization.startsWith('Bearer ')) {
+        this.respondJson(res, 401, { message: '401: Unauthorized' })
+        return
+      }
+      this.respondJson(res, 200, this.currentUser)
+      return
+    }
     if (req.method === 'GET' && pathname === '/users/@me/guilds') {
       const queued = this.guildsQueue.shift()
       if (queued) {

@@ -158,22 +158,51 @@ export function evaluate(result, previousModel) {
     // baseline exactly as it was, so the next tick's window keeps
     // accumulating from the same starting point instead of discarding
     // what this tick already saw.
-    return { healthy: true, reason: undefined, model: previousModel }
+    //
+    // Carry the last *evaluated* verdict forward rather than asserting
+    // health. Returning `healthy: true` here was a real defect: after a
+    // page, the baseline has just been reset, so the very next tick's
+    // window holds almost nothing and this branch declared the provider
+    // recovered — 30 seconds after saying it was down, while it was still
+    // totally down. On a course making a couple of model calls per poll
+    // that produced an endless page/recover flap, contradicting
+    // `docs/CUTOVER.md` §5's promise that a sustained outage pages once.
+    // "Too little evidence to decide" must mean "nothing changed", not
+    // "everything is fine".
+    return {
+      healthy: previousModel.verdict?.healthy ?? true,
+      reason: previousModel.verdict?.reason,
+      model: previousModel,
+    }
   }
 
   // Enough accumulated to decide. Reset the baseline to right now — the
   // next window starts fresh from this point, whether or not this one
   // paged, which is what keeps this a windowed measurement rather than a
   // lifetime average that merely resets less often.
-  const nextModel = { calls: model.calls, errors: model.errors }
   if (windowErrors / windowCalls >= MODEL_ERROR_RATE_THRESHOLD) {
+    const reason = `model provider error rate ${Math.round((windowErrors / windowCalls) * 100)}% over the last ${windowCalls} calls`
     return {
       healthy: false,
-      reason: `model provider error rate ${Math.round((windowErrors / windowCalls) * 100)}% over the last ${windowCalls} calls`,
-      model: nextModel,
+      reason,
+      // The verdict rides along with the baseline so the accumulating
+      // branch above can hold it until the next window is decidable.
+      model: {
+        calls: model.calls,
+        errors: model.errors,
+        verdict: { healthy: false, reason },
+      },
     }
   }
-  return { healthy: true, reason: undefined, model: nextModel }
+  return {
+    healthy: true,
+    reason: undefined,
+    model: {
+      calls: model.calls,
+      errors: model.errors,
+      verdict: { healthy: true, reason: undefined },
+    },
+  }
 }
 
 /**

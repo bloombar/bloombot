@@ -50,6 +50,24 @@ export function getAccountByEmail(
 }
 
 /**
+ * Look up an account by id, with no organization scoping at all — the same
+ * TEN-2 exception `getAccountByEmail` already is, for the identical reason:
+ * `apps/api`'s own `GET /auth/me` (LINK-6's own "the account signed in")
+ * already knows exactly which account a *valid, already-authenticated
+ * session* proved, before any organization is in play — scoping this
+ * lookup to one would ask the caller to already know something (which
+ * organization to check) the session itself does not carry, for a read
+ * that discloses nothing beyond what the caller's own session already
+ * proved about itself.
+ */
+export function getAccountById(
+  accountId: string,
+  db: Executor
+): Account | undefined {
+  return db.select().from(accounts).where(eq(accounts.id, accountId)).get()
+}
+
+/**
  * Create a new account and its first membership, atomically.
  *
  * `organizationId` is the organization the account joins immediately — a

@@ -22,6 +22,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
             role: 'owner',
           },
         ]}
+        connectedOrganizations={[]}
         activeOrganizationId="org-1"
         onChange={vi.fn()}
       />
@@ -55,6 +56,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
             role: 'assistant',
           },
         ]}
+        connectedOrganizations={[]}
         activeOrganizationId="org-1"
         onChange={onChange}
       />
@@ -72,6 +74,53 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     // The caller decides what "active" means (`pages/Shell.tsx`'s own
     // state) — this component only reports the switch, so `onChange` firing
     // with the new id is the whole contract under test here.
+    expect(onChange).toHaveBeenCalledWith('org-2')
+  })
+
+  // --- LINK-10: a connected-but-not-a-member organization ------------------
+
+  it('shows a single connected-only organization plainly, as "connected" rather than inventing a role it does not have', () => {
+    render(
+      <OrganizationSwitcher
+        memberships={[]}
+        connectedOrganizations={[
+          { organizationId: 'org-1', organizationName: 'A University' },
+        ]}
+        activeOrganizationId="org-1"
+        onChange={vi.fn()}
+      />
+    )
+    const switcher = screen.getByTestId('organization-switcher')
+    expect(switcher).toHaveTextContent('A University')
+    // Not a membership role (owner/instructor/assistant) — connecting
+    // proves an identity, not administrative authority.
+    expect(switcher).toHaveTextContent('connected')
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  })
+
+  it('offers a membership organization alongside a connected-only one, and labels each correctly', () => {
+    const onChange = vi.fn()
+    render(
+      <OrganizationSwitcher
+        memberships={[
+          {
+            organizationId: 'org-1',
+            organizationName: "The student's own organization",
+            role: 'owner',
+          },
+        ]}
+        connectedOrganizations={[
+          { organizationId: 'org-2', organizationName: 'A University' },
+        ]}
+        activeOrganizationId="org-1"
+        onChange={onChange}
+      />
+    )
+    const select = screen.getByRole('combobox', { name: 'Organization' })
+    expect(select).toHaveTextContent("The student's own organization (owner)")
+    expect(select).toHaveTextContent('A University (connected)')
+
+    fireEvent.change(select, { target: { value: 'org-2' } })
     expect(onChange).toHaveBeenCalledWith('org-2')
   })
 })

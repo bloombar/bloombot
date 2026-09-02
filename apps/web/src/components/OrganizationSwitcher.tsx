@@ -10,29 +10,62 @@
  * this component just did not read the name back yet. Before this fix, an
  * account in two organizations picked between two UUIDs — exactly the case
  * TEN-7 exists for.
+ *
+ * LINK-10: also offers every organization the account has a *connected*
+ * person in but no membership — a student reaching the institution running
+ * their course, not an administrator. Combined into one list of `Option`s
+ * rather than two separate controls, since "which organization is this
+ * panel acting in" is one question regardless of which relationship got the
+ * account there; a connected-only option carries no `role` (there is none
+ * to show — connecting proves an identity, LINK-3, not administrative
+ * authority) and reads "(connected)" in its place, so it never claims a
+ * role this account does not actually hold.
  */
 
-import type { MembershipSummary } from '../api/types.js'
+import type {
+  ConnectedOrganizationSummary,
+  MembershipSummary,
+} from '../api/types.js'
 
 export interface OrganizationSwitcherProps {
   memberships: MembershipSummary[]
+  connectedOrganizations: ConnectedOrganizationSummary[]
   activeOrganizationId: string
   onChange: (organizationId: string) => void
 }
 
+/** One organization this switcher can offer — a membership's own role, or `undefined` for a connected-only relationship (this file's own module comment). */
+interface Option {
+  organizationId: string
+  organizationName: string
+  role?: string
+}
+
 export function OrganizationSwitcher({
   memberships,
+  connectedOrganizations,
   activeOrganizationId,
   onChange,
 }: OrganizationSwitcherProps) {
-  const active = memberships.find(
-    (membership) => membership.organizationId === activeOrganizationId
+  const options: Option[] = [
+    ...memberships.map((membership) => ({
+      organizationId: membership.organizationId,
+      organizationName: membership.organizationName,
+      role: membership.role,
+    })),
+    ...connectedOrganizations.map((connection) => ({
+      organizationId: connection.organizationId,
+      organizationName: connection.organizationName,
+    })),
+  ]
+  const active = options.find(
+    (option) => option.organizationId === activeOrganizationId
   )
 
-  // A single membership is the common case (TEN-1's personal organization,
+  // A single option is the common case (TEN-1's personal organization,
   // created on first sign-in) — shown plainly rather than as a one-item
   // dropdown nobody needs to operate.
-  if (memberships.length <= 1) {
+  if (options.length <= 1) {
     return (
       <p
         className="text-sm text-neutral-600"
@@ -42,7 +75,7 @@ export function OrganizationSwitcher({
         <strong className="text-neutral-900">
           {active?.organizationName ?? activeOrganizationId}
         </strong>
-        {active ? ` (${active.role})` : ''}
+        {active ? ` (${active.role ?? 'connected'})` : ''}
       </p>
     )
   }
@@ -59,12 +92,9 @@ export function OrganizationSwitcher({
         onChange={(event) => onChange(event.target.value)}
         className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm text-neutral-900 focus:border-brand-500"
       >
-        {memberships.map((membership) => (
-          <option
-            key={membership.organizationId}
-            value={membership.organizationId}
-          >
-            {membership.organizationName} ({membership.role})
+        {options.map((option) => (
+          <option key={option.organizationId} value={option.organizationId}>
+            {option.organizationName} ({option.role ?? 'connected'})
           </option>
         ))}
       </select>

@@ -30,11 +30,27 @@ export interface MembershipSummary {
   role: string
 }
 
+/**
+ * One organization a signed-in account has a *connected person* in, but no
+ * membership (LINK-10) — a student reaching the institution's course they
+ * connected to, not an administrator. No `role`, unlike `MembershipSummary`:
+ * connecting proves an identity (LINK-3), it does not grant any of the
+ * administrative authority a membership role names, so there is no role
+ * here to show. `GET /auth/me` never lists the same organization in both
+ * `memberships` and `connectedOrganizations` — `apps/api`'s own
+ * `routes/auth.ts` excludes anything already present in `memberships`.
+ */
+export interface ConnectedOrganizationSummary {
+  organizationId: string
+  organizationName: string
+}
+
 /** `GET /auth/me`'s `account` field — `null` for an anonymous or dead session. `email` (LINK-6): `pages/Connect.tsx` names the account signed in, not merely which organizations it belongs to. */
 export interface AccountSummary {
   id: string
   email: string
   memberships: MembershipSummary[]
+  connectedOrganizations: ConnectedOrganizationSummary[]
 }
 
 export interface MeResponse {

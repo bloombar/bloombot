@@ -210,6 +210,7 @@ describe('DiscordCallback — the person-link connect branch (LINK-6/7)', () => 
           id: 'account-a',
           email: 'account-a@example.edu',
           memberships: [],
+          connectedOrganizations: [],
         }}
         onInstalled={vi.fn()}
         onConnected={vi.fn()}

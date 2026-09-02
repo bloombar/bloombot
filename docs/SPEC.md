@@ -951,6 +951,15 @@ surface and channel context it occurred in, and the person, course and conversat
 belongs to. A transcript is a record an instructor may be required to retain, so removing
 a bot from a server never deletes one.
 
+#### CONV-4 A message is never silently lost from the record
+
+Writing a message to the conversation is part of answering, not a side effect of it. If the
+record cannot be written, that is a failure worth surfacing and retrying — not something to log
+and continue past, leaving a student who was answered and a transcript that says they were not.
+CONV-2's retention guarantee and ADMIN-1's transcript are only as good as this: a record with
+holes in it cannot be audited, exported, or trusted, and the holes appear precisely under load,
+when several processes are writing at once.
+
 #### CONV-3 Daily usage counters key on course, person and day
 
 A person's daily allowance is counted per course per calendar day, never pooled across a

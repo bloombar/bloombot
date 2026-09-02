@@ -2172,6 +2172,21 @@
   phase: 11
   status: Done
   review: false
+- id: CONV-4
+  title: A message is never silently lost from the record
+  full: "Writing a message to the conversation is part of answering, not a side
+    effect of it. If the record cannot be written, that is a failure worth
+    surfacing and retrying — not something to log and continue past, leaving a
+    student who was answered and a transcript that says they were not. CONV-2's
+    retention guarantee and ADMIN-1's transcript are only as good as this: a
+    record with holes in it cannot be audited, exported, or trusted, and the
+    holes appear precisely under load, when several processes are writing at
+    once."
+  section: §18 People, Conversations & Transcripts
+  family: CONV
+  phase: 12
+  status: In progress
+  review: false
 - id: ENRL-1
   title: A person's courses are a record, not a guess
   full: Which courses a person may ask is a stored relation rather than something
@@ -2376,7 +2391,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: Backlog
+  status: In progress
   review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address

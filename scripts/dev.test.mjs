@@ -13,11 +13,19 @@ import assert from 'node:assert/strict'
 
 import { planProcesses, PROCESSES } from './dev.mjs'
 
-test('starts the API and the panel with no credentials configured', () => {
+test('starts the API, the panel and the MCP server with no credentials configured', () => {
   const plan = planProcesses({})
   const started = plan.filter((entry) => entry.start).map((entry) => entry.name)
 
-  assert.deepEqual(started, ['api', 'web'])
+  assert.deepEqual(started, ['api', 'web', 'mcp'])
+})
+
+test('the MCP server needs no credential of its own (MCP-3: a connection authenticates itself, at request time)', () => {
+  const plan = planProcesses({})
+  const mcp = plan.find((entry) => entry.name === 'mcp')
+
+  assert.equal(mcp.start, true)
+  assert.deepEqual(mcp.missing, [])
 })
 
 test('skips the bot and the worker, naming what they are missing', () => {
@@ -33,7 +41,7 @@ test('starts everything once the bot token is present', () => {
 
   assert.deepEqual(
     plan.filter((entry) => entry.start).map((entry) => entry.name),
-    ['api', 'web', 'worker', 'bot']
+    ['api', 'web', 'mcp', 'worker', 'bot']
   )
 })
 

@@ -17,7 +17,7 @@
  * authorizes against exactly that — an active enrolment
  * (`enrolments.getActiveEnrolment`) — rather than a membership row.
  *
- * **Person resolution — rework, D-36.** This router used to resolve the
+ * **Person resolution — rework, D-37.** This router used to resolve the
  * caller with `people.resolvePersonByIdentity` — create on demand, PPL-3's
  * own first-contact shape. That was wrong for this surface specifically,
  * for three reasons a review round caught together: it minted a *second*,

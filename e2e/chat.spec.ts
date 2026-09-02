@@ -40,7 +40,7 @@
  *    a roster import — a `discord`-surface person in a *different*
  *    organization than the account's own personal one — can reach that
  *    conversation; nothing in this repository unites the two records yet.
- *    `docs/DECISIONS.md` (D-36) has the fuller account of why that is
+ *    `docs/DECISIONS.md` (D-37) has the fuller account of why that is
  *    correctly deferred, and to which phase.
  */
 

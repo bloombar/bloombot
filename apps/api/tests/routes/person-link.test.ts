@@ -1011,13 +1011,21 @@ describe('acceptance — a roster-admitted student who has never signed in conne
     // the caller's organization from `memberships.getMembership` before it
     // even looks up which action was requested, so this would refuse
     // identically whichever action name were dispatched.
+    //
+    // The action dispatched here is deliberately a *read* that would
+    // otherwise succeed. A write like `discordServers.remove` refuses for a
+    // second reason regardless — there is no such server — so it cannot tell
+    // the membership gate from its own not-found, and a review confirmed the
+    // gate can be deleted outright with this file still green. `projects.list`
+    // and `discordServers.list` are precisely what the withheld Projects and
+    // Discord tabs read, and under that same mutation both answer `200` with
+    // the institution's own project catalogue and bound servers. So this is
+    // the assertion that actually discriminates.
     const dispatch = await request(app)
-      .post(
-        `/organizations/${roster.organizationId}/actions/discordServers.remove`
-      )
+      .post(`/organizations/${roster.organizationId}/actions/projects.list`)
       .set('Cookie', student.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
-      .send({ serverId: 'some-server' })
+      .send({})
     expect(dispatch.status).toBe(404)
     expect(dispatch.body).toMatchObject({ error: 'action_refused' })
   })

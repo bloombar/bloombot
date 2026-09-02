@@ -398,6 +398,29 @@ describe('GET /auth/me — connectedOrganizations (LINK-10)', () => {
     )
     expect(connected).toBeDefined()
 
+    // The exclusion this test is named for only fires when the caller has a
+    // connected person in an organization they are ALSO a member of — and a
+    // real sign-in produces exactly that, because `createConnectedWebPerson`
+    // connects the account's own person in its own personal organization.
+    // `seedSignedInCaller` builds the account directly rather than through
+    // sign-in, so without this the filter is never exercised and removing it
+    // from `routes/auth.ts` leaves the whole suite green.
+    //
+    // What it costs when the filter is gone: `OrganizationSwitcher` builds
+    // its options from both lists, so a brand-new single-organization user
+    // gets a dropdown offering "X (owner)" and "X (connected)" — the same
+    // organization twice, two React children sharing a key — where they
+    // should see a plain label.
+    const ownPerson = people.createPerson(caller.organizationId, {}, testDb.db)
+    expect(
+      people.connectIdentity(
+        caller.organizationId,
+        ownPerson.id,
+        { surface: 'web', externalId: caller.accountId },
+        testDb.db
+      )
+    ).toBeDefined()
+
     const me = await request(app)
       .get('/auth/me')
       .set('Cookie', caller.cookieHeader)

@@ -120,7 +120,11 @@ The surface that makes the platform more than a Discord bot: a student asks in a
 and gets the same course, the same conversation and the same allowance they would in
 Discord. That is why the identity rules land here rather than being invented per surface.
 
-**In scope:** PPL-4/5, WEB-10..17, LINK-1..5, ENRL-1..6
+Connecting is part of this phase, not a follow-up: LINK-1 declines anybody the platform
+cannot attribute to a connected account, so the gate and the way through it have to ship
+together. A build that has the gate and no connect surface answers nobody.
+
+**In scope:** PPL-4/5, WEB-10..17, LINK-1..9, ENRL-1..6
 
 ## Phase 13 — MCP server & agent access
 

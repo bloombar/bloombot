@@ -155,7 +155,19 @@ export const saveCourseAction: Action<
       enabled: input.enabled,
       adminsRole: input.adminsRole,
       studentsRole: input.studentsRole,
-      promptId: keepOrClear(input.promptId, entity.existingCourse?.promptId),
+      // MDL-8 — a stored prompt id is only ever inherited from the Python
+      // era (D-3's escape hatch), never newly acquired: a course being
+      // *created* here (`entity.existingCourse` unset) gets `null`
+      // regardless of what `input.promptId` carries, even an explicit
+      // value — `keepOrClear` is only reached on update, where an existing
+      // `promptId` may still be kept or explicitly cleared. The panel
+      // itself already stopped offering the field at all
+      // (`pages/CourseEditor.tsx`); this is the same refusal enforced
+      // where a caller cannot route around the panel's own choice not to
+      // ask.
+      promptId: entity.existingCourse
+        ? keepOrClear(input.promptId, entity.existingCourse.promptId)
+        : null,
       instructions: keepOrClear(
         input.instructions,
         entity.existingCourse?.instructions

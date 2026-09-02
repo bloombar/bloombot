@@ -212,6 +212,26 @@ export interface Course extends CourseSummary {
   categories: CourseCategory[]
 }
 
+/**
+ * FILE-1..3 (WEB-18) — one of a course's knowledge-file attachments, as
+ * `courseAttachments.list` returns it. Deliberately narrower than
+ * `packages/db`'s own `CourseAttachment` row: `providerFileId` and the
+ * course's `vectorStoreId` are never mirrored here at all — an instructor
+ * never needs the provider's own bookkeeping (FILE-1's own "replacing a
+ * vector store id typed in from a vendor dashboard"), only what a file is
+ * called, its size, and whether it is grounding answers yet (FILE-2).
+ */
+export interface CourseAttachmentSummary {
+  id: string
+  filename: string
+  contentType: string
+  sizeBytes: number
+  status: 'pending' | 'ready' | 'failed'
+  /** The provider's own rejection message — set only when `status: 'failed'` (FILE-2). */
+  failureReason: string | null
+  createdAt: number
+}
+
 /** WEB-10 — `GET /organizations/:organizationId/chat/courses`'s own entries: just enough to pick one, not `CourseSummary`'s full instructor-facing shape. */
 export interface ChatCourse {
   id: string

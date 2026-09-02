@@ -7,27 +7,48 @@
  */
 
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { Course, Project } from '../src/api/types.js'
 import { CourseEditor } from '../src/pages/CourseEditor.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { getCourse, saveCourse, enableCourse, disableCourse } = vi.hoisted(
-  () => ({
-    getCourse: vi.fn(),
-    saveCourse: vi.fn(),
-    enableCourse: vi.fn(),
-    disableCourse: vi.fn(),
-  })
-)
+const {
+  getCourse,
+  saveCourse,
+  enableCourse,
+  disableCourse,
+  listCourseAttachments,
+} = vi.hoisted(() => ({
+  getCourse: vi.fn(),
+  saveCourse: vi.fn(),
+  enableCourse: vi.fn(),
+  disableCourse: vi.fn(),
+  listCourseAttachments: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, getCourse, saveCourse, enableCourse, disableCourse }
+  return {
+    ...actual,
+    getCourse,
+    saveCourse,
+    enableCourse,
+    disableCourse,
+    listCourseAttachments,
+  }
+})
+
+// WEB-18: every "existing course" case in this file renders
+// `components/CourseAttachments.tsx` too, which fetches on mount — an
+// empty list by default so its own request never goes un-stubbed here;
+// `tests/course-attachments.test.tsx` is what actually exercises that
+// component's own behaviour.
+beforeEach(() => {
+  listCourseAttachments.mockResolvedValue([])
 })
 
 const PROJECT: Project = {
@@ -87,6 +108,9 @@ describe('CourseEditor (WEB-8)', () => {
     expect(screen.getByLabelText('Admins role')).toBeInTheDocument()
     expect(screen.getByLabelText('Students role')).toBeInTheDocument()
     expect(screen.getByLabelText(/^Enabled$/)).not.toBeChecked()
+    // MDL-8: no new course may acquire a stored prompt id — the field
+    // is not offered at all, not merely blank.
+    expect(screen.queryByLabelText('Prompt id')).not.toBeInTheDocument()
   })
 
   it('editing an existing course prefills the form from courses.get', async () => {
@@ -138,8 +162,12 @@ describe('CourseEditor (WEB-8)', () => {
     // entirely, which `courses.save` would instead read as "keep the
     // stored value."
     expect(input).toHaveProperty('model', null)
-    // Every other unedited nullable field is still sent explicitly too.
-    expect(input).toHaveProperty('promptId', 'prompt-1')
+    // MDL-8: `promptId` is the one deliberate exception to "every other
+    // unedited nullable field is still sent explicitly" — this form has no
+    // control that can change it any more, so it is never sent at all,
+    // relying on `courses.save`'s own "omitted preserves what is stored"
+    // to keep this course answered through it, unchanged.
+    expect(input).not.toHaveProperty('promptId')
     // `categories` is sent too, and carries the fetched course's own
     // categories/channels — not dropped, and not an empty replacement
     // (finding 1 of the WEB-7 rework: a `handleSave` that hard-coded
@@ -303,6 +331,122 @@ describe('CourseEditor (WEB-8)', () => {
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
     expect(saveCourse).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * MDL-8: a course with a stored prompt id is answered through it —
+ * `buildResponsesRequestBody` (`packages/openai`) sends `prompt` instead of
+ * `instructions` whenever one is set — so this form must say so plainly
+ * rather than let an instructor edit Instructions believing it does
+ * anything. The field itself becomes read-only and disappears entirely for
+ * a course that has none, or one not yet saved.
+ */
+describe('CourseEditor stored-prompt notice (MDL-8)', () => {
+  // WEB-18: the vector store is the platform's own bookkeeping, and offering
+  // a text box for it beside a knowledge-files list would give an instructor
+  // two contradictory ways to say what a course is grounded in.
+  it('offers no vector store id field, and a save preserves the one a course already had', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.queryByLabelText('Vector store id')).toBeNull()
+
+    // The deprecation must not blank an inherited value on the next
+    // unrelated save — a course answered through a hand-typed store keeps
+    // being answered through it.
+    fireEvent.click(screen.getByRole('button', { name: /Save course/ }))
+    await waitFor(() => expect(saveCourse).toHaveBeenCalled())
+    // Never sent, rather than sent back: `courses.save`'s own "omitted
+    // preserves what is stored" rule is what keeps an inherited store
+    // attached, the same way the prompt id is preserved.
+    expect(saveCourse.mock.calls[0]?.[1] ?? {}).not.toHaveProperty(
+      'vectorStoreId'
+    )
+  })
+
+  it('a course with a stored prompt id shows the notice and the id, read-only', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(
+      screen.getByText(/answered through a stored OpenAI prompt/)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/instructions below are not being used/)
+    ).toBeInTheDocument()
+    const field = screen.getByLabelText('Prompt id')
+    expect(field).toHaveValue('prompt-1')
+    expect(field).toHaveAttribute('readonly')
+
+    // Read-only, not merely styled — typing into it changes nothing.
+    fireEvent.change(field, { target: { value: 'something-else' } })
+    expect(field).toHaveValue('prompt-1')
+  })
+
+  it('a course with no stored prompt id shows neither the notice nor the field', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, promptId: null })
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(
+      screen.queryByText(/answered through a stored OpenAI prompt/)
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Prompt id')).not.toBeInTheDocument()
+  })
+
+  it('saving a course that already has a stored prompt id never sends promptId — courses.save preserves it by omission', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+    const [, input] = saveCourse.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ]
+    expect(input).not.toHaveProperty('promptId')
   })
 })
 

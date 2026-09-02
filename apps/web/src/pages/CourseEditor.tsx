@@ -24,6 +24,24 @@
  * leaving it out of the request body is a deliberate use of "omitted", not
  * an oversight — the save preserves it on an update and lets `courses.save`
  * apply its own default on a create.
+ *
+ * MDL-8: `promptId` is the other field this form does not manage as an
+ * editable control — it is read-only where a course already has one (a
+ * banner above Instructions says the stored prompt is what actually
+ * answers, and the field itself, plain text below it), and never rendered
+ * for a course that does not. The request never carries the key at all
+ * (see `handleSave`'s own comment on why) — this is not another instance of
+ * this file's own "always submit every field it manages" rule, since this
+ * form does not manage this one; `courses.save`'s own execute enforces the
+ * write-side half (no new course may acquire one even if a caller supplies
+ * one directly, `packages/actions/src/actions/courses.ts`'s own comment).
+ *
+ * WEB-18/FILE-1..3: a course's knowledge files (what it is grounded in) are
+ * `components/CourseAttachments.tsx`'s own screen, embedded below — see
+ * that file's module comment for the upload/pending/ready/failed/detach
+ * shape; this file only decides where it sits and that it is offered for
+ * an existing course, the same "existing record only" gate the Discord
+ * channels section and the enable/disable toggle both already use.
  */
 
 import { useEffect, useState } from 'react'
@@ -33,6 +51,7 @@ import { disableCourse, enableCourse } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
 import type { Course, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
+import { CourseAttachments } from '../components/CourseAttachments.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { FormField } from '../components/FormField.js'
@@ -45,6 +64,7 @@ import {
   DisableIcon,
   EnableIcon,
   RemoveFromListIcon,
+  WarningIcon,
 } from '../icons.js'
 
 export interface CourseEditorProps {
@@ -302,13 +322,16 @@ export function CourseEditor({
         studentsRole: form.studentsRole,
         // Every optional field below is sent explicitly — `null` when the
         // input is empty, the value otherwise — per this module's own
-        // comment on why this form never relies on "omitted."
-        promptId: form.promptId.trim() === '' ? null : form.promptId.trim(),
+        // comment on why this form never relies on "omitted." `promptId`
+        // and `vectorStoreId` are the two deliberate exceptions (MDL-8,
+        // WEB-18): this form has no control that can change either any
+        // more, so neither is ever sent at all
+        // — `courses.save`'s own "omitted preserves what is stored" rule
+        // is exactly what keeps a course that already has one answered
+        // through it, unchanged, save after save.
         instructions:
           form.instructions.trim() === '' ? null : form.instructions,
         model: form.model.trim() === '' ? null : form.model.trim(),
-        vectorStoreId:
-          form.vectorStoreId.trim() === '' ? null : form.vectorStoreId.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
         categories,
       }
@@ -645,6 +668,25 @@ export function CourseEditor({
         </section>
       )}
 
+      {/* WEB-18/FILE-1: a course's knowledge files — same gate as Discord
+          channels above, an attachment belongs to an existing course. */}
+      {courseId !== undefined && (
+        <section aria-label="Knowledge files" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            Knowledge files
+          </h2>
+          <p className="text-sm text-neutral-600">
+            The notes, syllabus and schedule this course is grounded in.
+            Detaching one stops it grounding answers immediately, and reaches
+            the provider — it cannot be undone.
+          </p>
+          <CourseAttachments
+            organizationId={organizationId}
+            courseId={courseId}
+          />
+        </section>
+      )}
+
       <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
         <legend className="px-1 text-section-title font-semibold text-neutral-900">
           Categories
@@ -736,6 +778,30 @@ export function CourseEditor({
         </Button>
       </fieldset>
 
+      {/* MDL-8: a course with a stored prompt id (D-3's Python-era escape
+          hatch) is answered through it — `buildResponsesRequestBody`
+          (`packages/openai/src/responses.ts`) sends `prompt` instead of
+          `instructions` whenever one is set, so the field below is inert on
+          exactly these courses. This is the visibility half of MDL-8: an
+          instructor editing Instructions here must know that, not discover
+          it by an answer never changing. The field itself is never offered
+          for a new course (`blankForm` carries no way to set one) and is no
+          longer editable at all here — MDL-8's own "stop offering it,"
+          applied to an update as well as a create; see
+          `packages/actions/src/actions/courses.ts`'s own `promptId` comment
+          for the write-side half of the same refusal. */}
+      {form.promptId && (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-warning-600 bg-warning-50 px-3 py-2 text-sm text-warning-600"
+        >
+          <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
+          This course is answered through a stored OpenAI prompt (configured
+          outside this panel, before it existed). The instructions below are not
+          being used.
+        </p>
+      )}
+
       <FormField label="Instructions">
         <textarea
           aria-label="Instructions"
@@ -766,33 +832,39 @@ export function CourseEditor({
           />
         </FormField>
 
-        <FormField label="Prompt id">
-          <input
-            aria-label="Prompt id"
-            value={form.promptId}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                promptId: event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
+        {/* Read-only, and only ever rendered for a course that already has
+            one — MDL-8's "keep reading it... no new course can acquire
+            one." Shown so an instructor can still see (and copy) the id
+            behind the banner above, never so it can be typed into or
+            cleared here. */}
+        {form.promptId && (
+          <FormField
+            label="Prompt id"
+            help="Inherited from before this panel existed. Deprecated — see the notice above."
+          >
+            <input
+              aria-label="Prompt id"
+              value={form.promptId}
+              readOnly
+              className={textInputClasses}
+            />
+          </FormField>
+        )}
 
-        <FormField label="Vector store id">
-          <input
-            aria-label="Vector store id"
-            value={form.vectorStoreId}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                vectorStoreId: event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
+        {/*
+          WEB-18: an instructor never sees a vector store id. The store is the
+          platform's own bookkeeping — `courseAttachments.attach` creates one
+          on the first upload and adopts a hand-typed one if the course already
+          has it — and offering a text box for it is the vendor-dashboard
+          workflow FILE-1 exists to replace. Leaving it beside a knowledge-files
+          list would give an instructor two contradictory ways to say what a
+          course is grounded in.
+
+          Deprecated on the same terms as the prompt id: a course that already
+          has a value keeps working and keeps being answered through it, the
+          value is never cleared behind anybody's back, and no new course can
+          acquire one because the field it was typed into is gone.
+        */}
 
         <FormField
           label="Max requests per day"

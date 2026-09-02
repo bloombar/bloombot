@@ -46,6 +46,7 @@ import {
   Power,
   Send,
   Trash2,
+  Upload,
   X,
   XCircle,
 } from 'lucide-react'
@@ -79,6 +80,8 @@ export const ArchiveIcon = Archive
 export const RestoreIcon = ArchiveRestore
 /** Run the scaffold job for a course's Discord categories and channels (SRV-6). */
 export const ScaffoldIcon = Hammer
+/** Attach a file to a course's knowledge base (FILE-1). */
+export const AttachIcon = Upload
 /** Leave this panel for another site (Discord's own consent screen, a footer link). */
 export const ExternalLinkIcon = ExternalLink
 /** A collapsible section, or a select control, is closed and can be opened. */

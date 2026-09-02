@@ -21,6 +21,8 @@ import {
 import { createLogger, type Logger } from '@bloombot/logger'
 
 import { buildApp } from './server.js'
+import { createShutdown } from './shutdown.js'
+import { buildToolDefinitions } from './tool-surface.js'
 
 const PROCESS_NAME = 'mcp'
 
@@ -49,7 +51,19 @@ async function main(): Promise<void> {
   runMigrations(db)
 
   const registry = createPlatformRegistry({ attachmentStorageDir })
-  const app = buildApp({ db, logger, registry })
+  // Built once, here, before this process ever accepts a request — not
+  // lazily on the first session. `buildToolDefinitions` throws if the
+  // allowlist (`tool-surface.ts#MCP_TOOL_SURFACE`) names an action that is
+  // not registered, or a destructive one with no `describeTarget`; calling
+  // it here means that failure happens before `server.listen` below, so a
+  // supervisor (OPS-8) or a liveness probe never sees a process that
+  // reports healthy while its whole tool surface is actually dead — a
+  // rework finding: this call used to happen lazily, per session, inside
+  // `server.ts`'s own request handler, so a stale allowlist entry crashed
+  // the *first real session* with a `500` and a healthy-looking `/health`
+  // moments earlier, instead of failing this process's own startup.
+  const toolDefinitions = buildToolDefinitions(registry)
+  const app = buildApp({ db, logger, toolDefinitions })
 
   const server = createServer(app)
 
@@ -66,24 +80,25 @@ async function main(): Promise<void> {
     // be reachable from outside the machine it runs on, and PLAT-4 puts
     // nginx in front of whatever does need to reach it remotely.
     server.listen(port, '127.0.0.1', () => {
-      logger.info({ port }, 'apps/mcp: listening')
+      logger.info(
+        { port, tools: toolDefinitions.length },
+        'apps/mcp: listening'
+      )
       resolve()
     })
   })
 
   // Closes the server and the database rather than exiting under load; a
   // second signal is a no-op rather than a second teardown racing the
-  // first, the same guard `apps/api`'s own entry point uses.
-  let shuttingDown = false
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return
-    shuttingDown = true
-    logger.info({ signal }, 'apps/mcp: shutting down')
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-    closeDatabase(db)
-  }
+  // first (`shutdown.ts`'s own module comment).
+  const shutdown = createShutdown({
+    logger,
+    closeServer: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+      }),
+    closeDb: () => closeDatabase(db),
+  })
   const onSignal = (signal: string) => {
     shutdown(signal).then(
       () => process.exit(0),

@@ -6,17 +6,24 @@
  */
 
 import { createPlatformRegistry } from '@bloombot/actions'
-import { courseAttachments, jobs } from '@bloombot/db'
+import {
+  courseAttachments,
+  courseInstructionRevisions,
+  jobs,
+} from '@bloombot/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   callTool,
   ConfirmationRequiredError,
+  InvalidToolArgumentsError,
   UnknownMcpToolError,
 } from '../src/call-tool.js'
+import { buildToolDefinitions } from '../src/tool-surface.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 import {
   seedAttachment,
+  seedCourse,
   seedOtherOrganization,
   seedSignedInAccount,
 } from './helpers/seed.js'
@@ -27,9 +34,9 @@ afterEach(() => {
   testDb.cleanup()
 })
 
-/** Every test dispatches through the real platform registry — MCP-1's own "the same dispatcher", not a stand-in. */
-function registry() {
-  return createPlatformRegistry()
+/** Every test dispatches through the real platform registry, resolved by the real allowlist — MCP-1's own "the same dispatcher", not a stand-in. */
+function toolDefinitions() {
+  return buildToolDefinitions(createPlatformRegistry())
 }
 
 describe('MCP-1 — an assistant reaches the platform through the action layer', () => {
@@ -41,7 +48,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
       'projects.create',
       { organizationId: caller.organizationId, name: 'A New Term' },
       {
-        registry: registry(),
+        toolDefinitions: toolDefinitions(),
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation: () => Promise.resolve(false),
@@ -64,7 +71,7 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         'discordServers.remove',
         { organizationId: caller.organizationId, serverId: 'srv-1' },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -83,13 +90,104 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
         // `name` fails `projects.create`'s own zod schema (`z.string().min(1)`).
         { organizationId: caller.organizationId, name: '' },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
         }
       )
     ).rejects.toThrow(/validation/)
+  })
+
+  it('rejects a missing organizationId as a malformed call — InvalidToolArgumentsError, not the tenancy refusal', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+
+    await expect(
+      callTool(
+        'projects.create',
+        { name: 'No org at all' },
+        {
+          toolDefinitions: toolDefinitions(),
+          db: testDb.db,
+          accountId: caller.accountId,
+          requestConfirmation: () => Promise.resolve(false),
+        }
+      )
+    ).rejects.toThrow(InvalidToolArgumentsError)
+  })
+
+  describe('MCP-5 — attribution: the calling account is threaded to dispatch, not merely implied by success', () => {
+    it("records the calling account as a course instruction revision's own author — this action refuses outright with no accountId, so a passing test here is only possible if attribution actually happened", async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId)
+      const definitions = toolDefinitions()
+      const context = {
+        toolDefinitions: definitions,
+        db: testDb.db,
+        accountId: caller.accountId,
+        requestConfirmation: () => Promise.resolve(false),
+      }
+
+      await callTool(
+        'courseInstructions.save',
+        {
+          organizationId: caller.organizationId,
+          courseId,
+          instructions: 'Be kind. Cite the syllabus.',
+        },
+        context
+      )
+
+      // Read the authorship back through the repository directly, rather
+      // than through another `callTool` — the strongest available proof
+      // that `dispatch`'s own `accountId` argument (`call-tool.ts`'s own
+      // module comment) is what actually reached
+      // `courseInstructionRevisions.createRevision`, not merely that the
+      // call happened not to throw.
+      const revisions = courseInstructionRevisions.listRevisionsForCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+      expect(revisions).toHaveLength(1)
+      expect(revisions[0]?.savedByAccountId).toBe(caller.accountId)
+    })
+  })
+
+  describe("jobs.get's own output never carries a job's payload — a roster-import job's payload is a raw CSV of students' names and emails, and roster.import is deliberately off this surface for exactly that reason (tool-surface.ts's own module comment)", () => {
+    it('strips payload from a real callTool result, not merely from the sanitizer function in isolation', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const job = jobs.enqueueJob(
+        caller.organizationId,
+        {
+          kind: 'roster.import',
+          payload: {
+            courseId: 'course-1',
+            csvText: 'name,email\nAda Lovelace,ada@example.edu',
+          },
+          maxAttempts: 5,
+        },
+        testDb.db
+      )
+
+      const result = await callTool(
+        'jobs.get',
+        { organizationId: caller.organizationId, jobId: job.id },
+        {
+          toolDefinitions: toolDefinitions(),
+          db: testDb.db,
+          accountId: caller.accountId,
+          requestConfirmation: () => Promise.resolve(false),
+        }
+      )
+
+      expect(result.output).not.toHaveProperty('payload')
+      expect(JSON.stringify(result.output)).not.toContain('ada@example.edu')
+      expect(result.output).toMatchObject({ id: job.id, kind: 'roster.import' })
+    })
   })
 })
 
@@ -104,7 +202,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         'projects.create',
         { organizationId: otherOrganizationId, name: 'Should Not Be Created' },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -131,7 +229,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
           name: 'x',
         },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -145,7 +243,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         'projects.create',
         { organizationId: 'org-does-not-exist', name: 'x' },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -170,7 +268,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
         'projects.list',
         { organizationId: otherOrganizationId },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () => Promise.resolve(false),
@@ -187,7 +285,7 @@ describe("MCP-3 — an agent acts as an account, with that account's authority",
       'projects.list',
       { organizationId: caller.organizationId },
       {
-        registry: registry(),
+        toolDefinitions: toolDefinitions(),
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation: () => Promise.resolve(false),
@@ -209,7 +307,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         'courseAttachments.detach',
         { organizationId: caller.organizationId, attachmentId },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation,
@@ -240,7 +338,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
       'courseAttachments.detach',
       { organizationId: caller.organizationId, attachmentId },
       {
-        registry: registry(),
+        toolDefinitions: toolDefinitions(),
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation,
@@ -249,6 +347,55 @@ describe('MCP-4 — a destructive tool asks first', () => {
 
     expect(requestConfirmation).toHaveBeenCalledTimes(1)
     expect(result.output).toMatchObject({ jobId: expect.any(String) })
+  })
+
+  it('names the specific record in the confirmation it asks for, not merely the tool name (a real, live-listener finding: the tool name and a raw org id alone read identically for any two attachments)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const attachmentId = seedAttachment(testDb.db, caller.organizationId)
+    const requestConfirmation = vi.fn(() => Promise.resolve(true))
+
+    await callTool(
+      'courseAttachments.detach',
+      { organizationId: caller.organizationId, attachmentId },
+      {
+        toolDefinitions: toolDefinitions(),
+        db: testDb.db,
+        accountId: caller.accountId,
+        requestConfirmation,
+      }
+    )
+
+    expect(requestConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'courseAttachments.detach' }),
+      caller.organizationId,
+      expect.stringContaining('notes.pdf')
+    )
+  })
+
+  it('does not ask for confirmation at all — and never touches dispatch — when the target itself does not resolve (a made-up attachmentId)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const requestConfirmation = vi.fn(() => Promise.resolve(true))
+
+    await expect(
+      callTool(
+        'courseAttachments.detach',
+        { organizationId: caller.organizationId, attachmentId: 'nope' },
+        {
+          toolDefinitions: toolDefinitions(),
+          db: testDb.db,
+          accountId: caller.accountId,
+          requestConfirmation,
+        }
+      )
+    ).rejects.toThrow(/does not exist or you do not have access to it/)
+
+    // Asking a human to confirm deleting something that does not exist is
+    // not a question worth asking — `dispatch`'s own refusal is what a
+    // caller sees instead, the same refusal it would give with no
+    // confirmation gate in front of it at all.
+    expect(requestConfirmation).not.toHaveBeenCalled()
   })
 
   it("is asked to confirm a tool the caller cannot reach — the tenancy refusal happens first, so a caller cannot use a destructive tool to probe another organization's existence", async () => {
@@ -262,7 +409,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         'courseAttachments.detach',
         { organizationId: otherOrganizationId, attachmentId: 'whatever' },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation,
@@ -283,7 +430,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
         'courseAttachments.detach',
         { organizationId: caller.organizationId, attachmentId },
         {
-          registry: registry(),
+          toolDefinitions: toolDefinitions(),
           db: testDb.db,
           accountId: caller.accountId,
           requestConfirmation: () =>
@@ -302,7 +449,7 @@ describe('MCP-4 — a destructive tool asks first', () => {
       'projects.create',
       { organizationId: caller.organizationId, name: 'Ordinary' },
       {
-        registry: registry(),
+        toolDefinitions: toolDefinitions(),
         db: testDb.db,
         accountId: caller.accountId,
         requestConfirmation,
@@ -310,5 +457,55 @@ describe('MCP-4 — a destructive tool asks first', () => {
     )
 
     expect(requestConfirmation).not.toHaveBeenCalled()
+  })
+
+  describe('courses.save — the second destructive tool this rework round added (it replaces every category and channel on every call)', () => {
+    it('never dispatches courses.save when confirmation is declined — the course keeps its existing categories', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId, projectId } = seedCourse(
+        testDb.db,
+        caller.organizationId,
+        {
+          title: 'Intro to Testing',
+          categories: [
+            {
+              name: 'Lectures',
+              channels: [{ name: 'general', adminsOnly: false }],
+            },
+          ],
+        }
+      )
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'courses.save',
+          {
+            organizationId: caller.organizationId,
+            id: courseId,
+            projectId,
+            title: 'Intro to Testing',
+            filePrefix: 'tc',
+            enabled: true,
+            adminsRole: 'admins',
+            studentsRole: 'students',
+            categories: [],
+          },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'courses.save' }),
+        caller.organizationId,
+        expect.stringContaining('Intro to Testing')
+      )
+    })
   })
 })

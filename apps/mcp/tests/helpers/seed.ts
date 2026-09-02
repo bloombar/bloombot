@@ -54,14 +54,22 @@ export function seedSignedInAccount(
 }
 
 /**
- * `organizationId`'s own attachment, ready for `courseAttachments.detach`
- * (MCP-4's one destructive tool) to resolve and delete — a course inside a
- * project inside the organization, and one `pending` attachment on it, the
- * same minimal graph `packages/actions/tests/helpers/seed.ts#seedOrganizationWithCourse`
+ * `organizationId`'s own course, ready for anything that needs a real
+ * `courseId` to resolve — a project, then a course inside it, the same
+ * minimal graph `packages/actions/tests/helpers/seed.ts#seedOrganizationWithCourse`
  * builds, duplicated here rather than imported across an app boundary test
- * helpers are not published through.
+ * helpers are not published through. `categories`, when given, seeds
+ * `courses.save`'s own destructive replace (MCP-4) with something real to
+ * replace.
  */
-export function seedAttachment(db: Database, organizationId: string): string {
+export function seedCourse(
+  db: Database,
+  organizationId: string,
+  options: {
+    title?: string
+    categories?: courses.NewCourse['categories']
+  } = {}
+): { courseId: string; projectId: string } {
   const project = projects.createProject(
     organizationId,
     { name: 'Test Term' },
@@ -71,20 +79,26 @@ export function seedAttachment(db: Database, organizationId: string): string {
     organizationId,
     {
       projectId: project.id,
-      title: 'Test Course',
+      title: options.title ?? 'Test Course',
       filePrefix: 'tc',
       enabled: true,
       adminsRole: `admins-${randomUUID()}`,
       studentsRole: `students-${randomUUID()}`,
-      categories: [],
+      categories: options.categories ?? [],
     },
     db
   )
   if (!result.ok) throw new Error('setup failed: unexpected conflict')
+  return { courseId: result.course.id, projectId: project.id }
+}
+
+/** `organizationId`'s own attachment, ready for `courseAttachments.detach` (MCP-4's one destructive tool) to resolve and delete — a course (`seedCourse`, above) with one `pending` attachment on it. */
+export function seedAttachment(db: Database, organizationId: string): string {
+  const { courseId } = seedCourse(db, organizationId)
   const attachment = courseAttachments.createPendingAttachment(
     organizationId,
     {
-      courseId: result.course.id,
+      courseId,
       filename: 'notes.pdf',
       contentType: 'application/pdf',
       sizeBytes: 10,

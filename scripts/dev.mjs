@@ -42,6 +42,11 @@ const RESET = '[0m'
 export const PROCESSES = [
   { name: 'api', script: 'apps/api/src/index.ts', requires: [] },
   { name: 'web', npmScript: 'web:dev', requires: [] },
+  // MCP-1..5 — no credential of its own (it authenticates a *connection* via
+  // an AUTH-3 session token presented at request time, never a startup
+  // secret this process reads itself), so it starts alongside `api`/`web`
+  // rather than being gated like the bot and the worker below.
+  { name: 'mcp', script: 'apps/mcp/src/index.ts', requires: [] },
   {
     name: 'worker',
     script: 'apps/worker/src/index.ts',

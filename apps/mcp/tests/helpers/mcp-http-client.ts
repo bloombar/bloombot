@@ -126,3 +126,17 @@ export function sendMcpRequest(
 ): Promise<McpHttpResponse> {
   return postToMcp(app, message, token, session.sessionId)
 }
+
+/** Terminates a session with `DELETE /mcp` (the MCP spec's own client-driven close) — `server.ts`'s own `onsessionclosed`/`onclose` wiring, exercised from the HTTP side. */
+export async function closeMcpSession(
+  app: Express,
+  session: McpSession,
+  token: string
+): Promise<number> {
+  const response = await request(app)
+    .delete('/mcp')
+    .set('Accept', ACCEPT_HEADER)
+    .set('Authorization', `Bearer ${token}`)
+    .set('Mcp-Session-Id', session.sessionId)
+  return response.status
+}

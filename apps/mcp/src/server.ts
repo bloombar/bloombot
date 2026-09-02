@@ -9,20 +9,18 @@
  * the tool definitions and the dispatch logic — import nothing from the SDK
  * and are testable with no transport standing up at all.
  *
- * Builds an Express app: `/health` (the same shape `apps/api`'s own
- * `health.ts` uses) and `/mcp`, an MCP Streamable HTTP endpoint run in
- * *stateful* mode — one `McpServer`/`StreamableHTTPServerTransport` pair
- * per session, tracked by the SDK's own `Mcp-Session-Id` header, the shape
- * the SDK's own full-featured example (`simpleStreamableHttp.ts`) uses.
- * Stateless mode (a fresh pair per request, the SDK's `simpleStatelessStreamableHttp.ts`)
- * looked appealing at first — nothing to track between requests — but
- * MCP-4's own confirmation depends on the client's capabilities negotiated
- * during `initialize` (`getClientCapabilities`, `requestElicitedConfirmation`
- * below) still being known by the time a later `tools/call` arrives: a
- * fresh server per request would have thrown that negotiation away between
- * the initialize call and every call after it, silently turning MCP-4's own
- * "fails closed if the client cannot elicit" into "fails closed always."
- * Every dependency is passed in, the same `buildApp`-is-a-function
+ * Builds an Express app: `/health` and `/mcp`, an MCP Streamable HTTP
+ * endpoint run in *stateful* mode — one `McpServer`/`StreamableHTTPServerTransport`
+ * pair per session, tracked by the SDK's own `Mcp-Session-Id` header, the
+ * shape the SDK's own full-featured example (`simpleStreamableHttp.ts`)
+ * uses. Stateless mode (a fresh pair per request, the SDK's
+ * `simpleStatelessStreamableHttp.ts`) looked appealing at first — nothing
+ * to track between requests — but MCP-4's own confirmation depends on the
+ * client's capabilities negotiated during `initialize` (`getClientCapabilities`,
+ * `requestElicitedConfirmation` below) still being known by the time a
+ * later `tools/call` arrives: a fresh server per request would have thrown
+ * that negotiation away between the initialize call and every call after
+ * it. Every dependency is passed in, the same `buildApp`-is-a-function
  * convention `apps/api/src/server.ts` already holds itself to, so a test
  * drives this with `supertest` and no port bound just to run a suite.
  *
@@ -36,6 +34,23 @@
  * the account that created it — a bearer token authenticating a *different*
  * account presented against an existing `Mcp-Session-Id` is refused, not
  * silently allowed to reuse another account's already-registered tools.
+ *
+ * A session's own lifecycle (this file's own rework, after a live-listener
+ * repro reproduced unbounded growth: ~170 KB retained per abandoned
+ * session, no bound at all on how many one account could open) is bounded
+ * three ways, all in this file: `transport.onclose` is wired so a session
+ * the SDK itself considers closed is removed from `sessions` the moment it
+ * happens, not only when the SDK's own `onsessionclosed` fires (that one
+ * only fires for a client-driven `DELETE`, never for this process closing a
+ * transport itself, e.g. from the idle sweep below — wiring `onclose`
+ * instead of duplicating a `sessions.delete` at every call site that closes
+ * a transport is what keeps those two ways of ending a session from
+ * drifting apart); `MAX_SESSIONS_PER_ACCOUNT` refuses a new session once one
+ * account already holds too many; and `sweepIdleSessions` — a pure
+ * function, tested directly with an injected clock rather than a real timer
+ * — closes whatever has not made a request in `SESSION_IDLE_TIMEOUT_MS`,
+ * run on an interval `buildApp` starts and `.unref()`s so it never itself
+ * keeps this process alive.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -43,7 +58,6 @@ import { randomUUID } from 'node:crypto'
 import type { Express, Request, Response } from 'express'
 import express from 'express'
 
-import type { ActionRegistry } from '@bloombot/actions'
 import type { Database } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
@@ -57,18 +71,33 @@ import { authenticateBearerToken, parseBearerToken } from './authenticate.js'
 import {
   callTool,
   ConfirmationRequiredError,
+  InvalidToolArgumentsError,
   UnknownMcpToolError,
 } from './call-tool.js'
 import { checkHealth } from './health.js'
-import { buildToolDefinitions, type McpToolDefinition } from './tool-surface.js'
+import type { McpToolDefinition } from './tool-surface.js'
 
 export interface ServerDependencies {
   db: Database
   logger: Logger
-  registry: ActionRegistry
+  /** Built once, before this process starts listening (`index.ts`) — `call-tool.ts`'s own `CallToolContext.toolDefinitions` doc comment on why this is precomputed rather than rebuilt per call or per session. */
+  toolDefinitions: readonly McpToolDefinition[]
 }
 
 const SERVER_INFO = { name: 'bloombot-mcp', version: '0.1.0' }
+
+/**
+ * How long an `elicitation/create` request waits for a human before giving
+ * up. The SDK's own default (`DEFAULT_REQUEST_TIMEOUT_MSEC`) is 60 seconds
+ * — reasonable for an ordinary request/response, too long for a single
+ * `tools/call` to sit open waiting on a person who may never answer at all
+ * (declining the confirmation is the safe fallback either way — MCP-4 fails
+ * closed on a timeout the same as an explicit decline — but a caller
+ * holding a connection open for a full minute is needless latency for no
+ * benefit). Thirty seconds is enough to read a short confirmation and
+ * decide, short enough that an abandoned call frees the connection quickly.
+ */
+const ELICITATION_TIMEOUT_MS = 30_000
 
 /**
  * MCP-4: asks the *client application* to confirm a destructive tool,
@@ -77,6 +106,11 @@ const SERVER_INFO = { name: 'bloombot-mcp', version: '0.1.0' }
  * the client to put in front of the actual person rather than answer on a
  * model's behalf (`docs/DECISIONS.md` D-36 has the full reasoning for why
  * this, and not a boolean tool argument, is what MCP-4 requires).
+ * `targetLabel` (`call-tool.ts`'s own `resolveTargetLabel`) is what makes
+ * the question mean something specific — "detach the old syllabus", not
+ * merely "run courseAttachments.detach" — a confirmation naming only the
+ * tool and a raw organization id could not be told apart from a
+ * confirmation for any other record the same tool might ever touch.
  *
  * Fails closed, not merely "skips the check", when the connected client
  * never declared form-elicitation support at all
@@ -89,26 +123,30 @@ const SERVER_INFO = { name: 'bloombot-mcp', version: '0.1.0' }
 async function requestElicitedConfirmation(
   mcpServer: McpServer,
   tool: McpToolDefinition,
-  organizationId: string
+  organizationId: string,
+  targetLabel: string
 ): Promise<boolean> {
   if (!mcpServer.server.getClientCapabilities()?.elicitation?.form) {
     return false
   }
 
-  const result = await mcpServer.server.elicitInput({
-    message: `Confirm "${tool.name}" in organization ${organizationId}: ${tool.description}`,
-    requestedSchema: {
-      type: 'object',
-      properties: {
-        confirm: {
-          type: 'boolean',
-          title: 'Confirm',
-          description: `Set to true only if you — the person using this assistant — want to proceed with ${tool.name}. The assistant cannot answer this for you.`,
+  const result = await mcpServer.server.elicitInput(
+    {
+      message: `Confirm ${tool.name}: ${targetLabel} (organization ${organizationId}). This cannot be undone by this assistant.`,
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          confirm: {
+            type: 'boolean',
+            title: 'Confirm',
+            description: `Set to true only if you — the person using this assistant — want to proceed. The assistant cannot answer this for you.`,
+          },
         },
+        required: ['confirm'],
       },
-      required: ['confirm'],
     },
-  })
+    { timeout: ELICITATION_TIMEOUT_MS }
+  )
   return result.action === 'accept' && result.content?.['confirm'] === true
 }
 
@@ -155,7 +193,7 @@ function registerTools(
   deps: ServerDependencies,
   accountId: string
 ): void {
-  for (const tool of buildToolDefinitions(deps.registry)) {
+  for (const tool of deps.toolDefinitions) {
     mcpServer.registerTool(
       tool.name,
       {
@@ -180,14 +218,19 @@ function registerTools(
       async (args: Record<string, unknown>): Promise<CallToolResult> => {
         try {
           const result = await callTool(tool.name, args, {
-            registry: deps.registry,
+            toolDefinitions: deps.toolDefinitions,
             db: deps.db,
             accountId,
-            requestConfirmation: (confirmingTool, organizationId) =>
+            requestConfirmation: (
+              confirmingTool,
+              organizationId,
+              targetLabel
+            ) =>
               requestElicitedConfirmation(
                 mcpServer,
                 confirmingTool,
-                organizationId
+                organizationId,
+                targetLabel
               ),
           })
           return {
@@ -208,7 +251,8 @@ function registerTools(
 function describeToolError(error: unknown): string {
   if (
     error instanceof UnknownMcpToolError ||
-    error instanceof ConfirmationRequiredError
+    error instanceof ConfirmationRequiredError ||
+    error instanceof InvalidToolArgumentsError
   ) {
     return error.message
   }
@@ -238,10 +282,58 @@ function buildMcpServer(
   return mcpServer
 }
 
-/** One live MCP session: the transport the SDK tracks by its own `Mcp-Session-Id`, and the account it was created for (checked again on every later request, this file's own module comment). */
-interface McpSession {
+/** One live MCP session: the transport the SDK tracks by its own `Mcp-Session-Id`, the account it was created for (checked again on every later request, this file's own module comment), and when it last actually did something (`sweepIdleSessions`'s own clock). */
+export interface McpSession {
   transport: StreamableHTTPServerTransport
   accountId: string
+  lastActivityAt: number
+}
+
+/**
+ * A ceiling on live sessions per account — the other half of the leak this
+ * file's own module comment describes: even with every session eventually
+ * reclaimed (`sweepIdleSessions`), nothing bounded how many one account
+ * could hold open *at once*, and a live listener measured a single account
+ * looping `initialize` retaining hundreds of megabytes well before any idle
+ * timeout would have fired. Generous for a real assistant, which holds one
+ * or a handful of concurrent sessions, not dozens.
+ */
+export const MAX_SESSIONS_PER_ACCOUNT = 20
+
+/** How long a session may sit with no request against it before `sweepIdleSessions` closes it — long enough that a real, slow-thinking human confirming a destructive tool is never caught by it (MCP-4's own `ELICITATION_TIMEOUT_MS` is a full order of magnitude shorter), short enough that an abandoned session does not outlive the session it was ever going to matter for. */
+export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000
+
+/** How often `buildApp`'s own interval runs `sweepIdleSessions` — frequent enough that "idle" has a bound worth the name, infrequent enough that it is not itself meaningful load. */
+export const SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000
+
+/**
+ * Closes and evicts every session that has not made a request since
+ * `now - idleTimeoutMs`. A pure function of its three arguments — no clock
+ * of its own, no timer — so a test drives it with a synthetic `now` and an
+ * in-memory map instead of waiting on a real interval. Returns the ids
+ * closed, for a caller (a test, or this file's own logging) that wants to
+ * know what happened without re-deriving it from the map's own before/after
+ * size.
+ *
+ * Deletes from `sessions` directly, synchronously, rather than only calling
+ * `transport.close()` and waiting for `onclose` to do it — `onclose` still
+ * fires and still deletes (harmlessly, the same id, a no-op the second
+ * time), but a caller of this function does not have to await a promise to
+ * know the map already reflects the sweep.
+ */
+export function sweepIdleSessions(
+  sessions: Map<string, McpSession>,
+  now: number,
+  idleTimeoutMs: number
+): string[] {
+  const closed: string[] = []
+  for (const [sessionId, session] of sessions) {
+    if (now - session.lastActivityAt < idleTimeoutMs) continue
+    sessions.delete(sessionId)
+    closed.push(sessionId)
+    void session.transport.close()
+  }
+  return closed
 }
 
 function jsonRpcError(res: Response, status: number, message: string): void {
@@ -252,21 +344,37 @@ function jsonRpcError(res: Response, status: number, message: string): void {
   })
 }
 
-export function buildApp(deps: ServerDependencies): Express {
+/**
+ * `sessions` is an optional, injectable parameter — MCP-3's own map,
+ * defaulting to a fresh, empty one so ordinary callers (`index.ts`, most
+ * of this app's own tests) never have to think about it. A test that needs
+ * to reach inside a live session after it exists (proving `transport.onclose`
+ * actually evicts the map entry when the transport itself closes, not only
+ * when a client sends `DELETE`) builds its own map and passes it in, then
+ * reads it directly rather than only observing HTTP responses.
+ */
+export function buildApp(
+  deps: ServerDependencies,
+  sessions: Map<string, McpSession> = new Map()
+): Express {
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json())
 
   app.get('/health', (_req, res) => {
-    const status = checkHealth(deps.db)
+    const status = checkHealth(deps.db, sessions.size)
     res.status(status.ready ? 200 : 503).json(status)
   })
 
-  // MCP-3 — this file's own module comment: one map entry per live
-  // session, each pinned to the account that created it. Scoped to one
-  // `buildApp` call (so a test gets a fresh, empty map every time it builds
-  // its own app) rather than module-level state.
-  const sessions = new Map<string, McpSession>()
+  // This file's own module comment — bounds how long an abandoned session
+  // survives even if nothing ever closes it explicitly. `.unref()` so this
+  // timer never itself keeps the process (or a test's own event loop)
+  // alive; a test exercises `sweepIdleSessions` directly instead of waiting
+  // on this interval.
+  const sweepInterval = setInterval(() => {
+    sweepIdleSessions(sessions, Date.now(), SESSION_IDLE_TIMEOUT_MS)
+  }, SESSION_SWEEP_INTERVAL_MS)
+  sweepInterval.unref()
 
   const mcpHandler = (req: Request, res: Response): void => {
     void handleMcpRequest(req, res, deps, sessions)
@@ -282,6 +390,18 @@ export function buildApp(deps: ServerDependencies): Express {
 function sessionIdHeader(req: Request): string | undefined {
   const header = req.headers['mcp-session-id']
   return typeof header === 'string' ? header : undefined
+}
+
+/** How many live sessions `accountId` currently holds — `MAX_SESSIONS_PER_ACCOUNT`'s own check. */
+function sessionCountForAccount(
+  sessions: Map<string, McpSession>,
+  accountId: string
+): number {
+  let count = 0
+  for (const session of sessions.values()) {
+    if (session.accountId === accountId) count++
+  }
+  return count
 }
 
 async function handleMcpRequest(
@@ -320,6 +440,7 @@ async function handleMcpRequest(
         jsonRpcError(res, 401, 'not_signed_in')
         return
       }
+      existing.lastActivityAt = Date.now()
       await existing.transport.handleRequest(req, res, req.body)
       return
     }
@@ -334,16 +455,42 @@ async function handleMcpRequest(
       return
     }
 
+    if (
+      sessionCountForAccount(sessions, accountId) >= MAX_SESSIONS_PER_ACCOUNT
+    ) {
+      // This file's own module comment — the ceiling half of the session
+      // lifecycle rework. `429`: this is a rate/quota refusal, not an
+      // authorization one (the account is real and signed in; it simply
+      // already holds as many live sessions as it is allowed).
+      jsonRpcError(res, 429, 'too_many_sessions')
+      return
+    }
+
     const mcpServer = buildMcpServer(deps, accountId)
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId) => {
-        sessions.set(sessionId, { transport, accountId })
+        sessions.set(sessionId, {
+          transport,
+          accountId,
+          lastActivityAt: Date.now(),
+        })
       },
       onsessionclosed: (sessionId) => {
         sessions.delete(sessionId)
       },
     })
+    // This file's own module comment — `onsessionclosed` above only fires
+    // for a client-driven `DELETE`; `onclose` fires whenever the transport
+    // itself considers the session over for *any* reason, including this
+    // process closing it itself (`sweepIdleSessions`). Wired here, before
+    // `connect`, using the transport's own `sessionId` getter rather than
+    // capturing the id in a second closure — by the time `onclose` can
+    // fire, `onsessioninitialized` above has already run and set it.
+    transport.onclose = () => {
+      const sessionId = transport.sessionId
+      if (sessionId) sessions.delete(sessionId)
+    }
     // The SDK's own `StreamableHTTPServerTransport` declares `implements
     // Transport`, but its `onclose`/`onerror`/`onmessage` setters make it
     // structurally incompatible with `Transport`'s plain optional

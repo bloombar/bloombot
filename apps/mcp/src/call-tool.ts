@@ -12,14 +12,19 @@
  *    (MCP-2). A protocol-level "no such tool", not a claim about whether a
  *    record exists.
  *  - `ActionRefusedError` (reused from `@bloombot/actions`, not
- *    reimplemented) — either the call is missing/malformed
- *    `organizationId`, or the caller's account holds no membership in the
+ *    reimplemented) — the caller's account holds no membership in the
  *    organization it named. MCP-3's tenancy boundary: a connection carries
  *    exactly the memberships the authenticating account holds and nothing
  *    else, so an organization id it does not belong to refuses exactly the
  *    way `dispatch.ts` refuses any other record the caller cannot see
  *    (TEN-5 — not an existence oracle for organizations the caller does not
- *    belong to either).
+ *    belong to either). A missing or malformed `organizationId` is *not*
+ *    this same refusal — `InvalidToolArgumentsError`, below, is what zod
+ *    (`organizationIdSchema.safeParse`) produces instead, before a
+ *    membership lookup ever runs. That is not an oracle either (nothing
+ *    about "malformed" leaks whether any organization exists), just a
+ *    different, more specific failure than the tenancy refusal an earlier
+ *    version of this comment described it as.
  *  - `ConfirmationRequiredError` — MCP-4: a destructive tool's caller did
  *    not have its confirmation granted. Distinguishable from the other two
  *    on purpose — declining a confirmation is not a tenancy oracle, so
@@ -36,18 +41,17 @@
  * hook (`packages/actions/src/types.ts`) is metered identically for an MCP
  * caller, because there is no second accounting path here to keep in sync
  * with it — see `docs/DECISIONS.md` D-36 for why this file deliberately
- * computes no cost of its own.
+ * computes no cost of its own. `accountId` — the account whose authority
+ * every call carries (MCP-1) — is threaded to `dispatch` on every call,
+ * never omitted; `tests/call-tool.test.ts`'s own attribution test proves
+ * this directly, not merely by matching output.
  */
 
-import {
-  dispatch,
-  ActionRefusedError,
-  type ActionRegistry,
-} from '@bloombot/actions'
+import { dispatch, ActionRefusedError } from '@bloombot/actions'
 import { memberships, type Database } from '@bloombot/db'
 import { z } from 'zod'
 
-import { buildToolDefinitions, type McpToolDefinition } from './tool-surface.js'
+import type { McpToolDefinition } from './tool-surface.js'
 
 /** Pulled out of a tool call's raw arguments before the rest is handed to `dispatch` — every action's own schema omits this field (`tool-surface.ts`'s own doc comment on why). `.passthrough()` so every other argument survives untouched for `dispatch`'s own validation to see. */
 const organizationIdSchema = z
@@ -60,6 +64,24 @@ export class UnknownMcpToolError extends Error {
   constructor(name: string) {
     super(`No MCP tool is registered as "${name}".`)
     this.name = 'UnknownMcpToolError'
+  }
+}
+
+/**
+ * A malformed or missing `organizationId` (this file's own module comment
+ * on why this is not `ActionRefusedError`). Surfaced the same way every
+ * other refusal here is — an `isError` tool result whose text is this
+ * error's own message (`server.ts#describeToolError`), not a distinct
+ * JSON-RPC protocol error; `-32602 Invalid params` is the ordinary code an
+ * MCP client would associate with a badly-formed call, but nothing in this
+ * file or `server.ts` actually raises the request to that layer — every
+ * tool call this server dispatches succeeds or fails as a `CallToolResult`.
+ */
+export class InvalidToolArgumentsError extends Error {
+  readonly code = 'invalid_arguments'
+  constructor() {
+    super('organizationId is required and must be a non-empty string.')
+    this.name = 'InvalidToolArgumentsError'
   }
 }
 
@@ -79,7 +101,17 @@ export class ConfirmationRequiredError extends Error {
 }
 
 export interface CallToolContext {
-  registry: ActionRegistry
+  /**
+   * Every tool this server exposes, already resolved
+   * (`tool-surface.ts#buildToolDefinitions`) — built once, at startup
+   * (`index.ts`), not recomputed on every call: resolving 20-odd actions'
+   * own JSON Schema on every single tool call was measured waste, and
+   * building it once is also what makes a stale allowlist entry (an action
+   * renamed or removed) fail loudly before this process ever starts
+   * accepting connections rather than on whichever call happens to hit it
+   * first.
+   */
+  toolDefinitions: readonly McpToolDefinition[]
   db: Database
   /** The account `authenticate.ts` proved the connection is — MCP-1's "an ordinary call by the account that authorized it." */
   accountId: string
@@ -88,17 +120,47 @@ export interface CallToolContext {
    * own tool-call arguments could carry — see `server.ts`'s own module
    * comment for why an argument the assistant fills in is not a
    * confirmation at all. Called only for a destructive tool, once, after
-   * the tenancy check and before `dispatch`; a rejected `Promise` here is
+   * the tenancy check and after resolving what the call is actually about
+   * to do (`targetLabel` — `tool-surface.ts`'s own `describeTarget`,
+   * resolved below), and before `dispatch`; a rejected `Promise` here is
    * treated as "not confirmed", the same as an explicit `false`.
    */
   requestConfirmation: (
     tool: McpToolDefinition,
-    organizationId: string
+    organizationId: string,
+    targetLabel: string
   ) => Promise<boolean>
 }
 
 export interface CallToolResult {
   output: unknown
+}
+
+/**
+ * Resolves what a destructive call is actually about to do, in words a
+ * human confirming it can act on (`tool-surface.ts`'s own `describeTarget`
+ * doc comment on why this exists at all). Calls the action's own
+ * `policy.resolve` directly — the same read `dispatch` itself is about to
+ * make a moment later — rather than a second, different lookup that could
+ * drift from what `execute` actually acts on. `undefined` when the input
+ * does not even validate, or the policy itself refuses (the record does
+ * not exist, or is not this organization's): in both cases `dispatch`
+ * below produces the real, canonical refusal, and asking a human to
+ * confirm deleting a record that does not exist (or is not theirs) is not
+ * a question worth asking at all.
+ */
+function resolveTargetLabel(
+  tool: McpToolDefinition,
+  actionArgs: unknown,
+  organizationId: string,
+  db: Database
+): string | undefined {
+  if (!tool.describeTarget) return undefined
+  const parsed = tool.action.inputSchema.safeParse(actionArgs)
+  if (!parsed.success) return undefined
+  const entity = tool.action.policy.resolve(parsed.data, { organizationId, db })
+  if (entity === undefined) return undefined
+  return tool.describeTarget(entity, parsed.data)
 }
 
 /**
@@ -108,25 +170,23 @@ export interface CallToolResult {
  * (MCP-4), then dispatch through the exact pipeline `apps/api` uses
  * (MCP-1) — the same validation, the same policy, the same metering hook
  * (MCP-5), attributed to `context.accountId` (FILE-4's own `accountId`
- * plumbing through `DispatchContext`).
+ * plumbing through `DispatchContext`). The dispatched output is handed
+ * through `tool.sanitizeOutput` when the tool declares one
+ * (`tool-surface.ts`'s own doc comment — `jobs.get`'s own `payload`) before
+ * this returns.
  */
 export async function callTool(
   toolName: string,
   rawArgs: unknown,
   context: CallToolContext
 ): Promise<CallToolResult> {
-  const tool = buildToolDefinitions(context.registry).find(
+  const tool = context.toolDefinitions.find(
     (definition) => definition.name === toolName
   )
   if (!tool) throw new UnknownMcpToolError(toolName)
 
   const parsed = organizationIdSchema.safeParse(rawArgs)
-  if (!parsed.success) {
-    // A missing or malformed `organizationId` refuses the same way an
-    // organization the caller cannot see does (below) — neither tells a
-    // caller anything about what does or does not exist.
-    throw new ActionRefusedError()
-  }
+  if (!parsed.success) throw new InvalidToolArgumentsError()
   const { organizationId, ...actionArgs } = parsed.data
 
   // MCP-3: the tenancy boundary, checked directly — a connection for an
@@ -140,13 +200,26 @@ export async function callTool(
   if (!membership) throw new ActionRefusedError()
 
   if (tool.destructive) {
-    // A `requestConfirmation` that throws or rejects (a client that drops
-    // the connection mid-elicitation, say) fails closed the same as an
-    // explicit decline — the destructive action still does not run.
-    const confirmed = await context
-      .requestConfirmation(tool, organizationId)
-      .catch(() => false)
-    if (!confirmed) throw new ConfirmationRequiredError()
+    const targetLabel = resolveTargetLabel(
+      tool,
+      actionArgs,
+      organizationId,
+      context.db
+    )
+    // `targetLabel` is `undefined` only when the input does not validate or
+    // the record cannot be resolved — `dispatch` below produces the real
+    // refusal for either; skip asking a human to confirm an action against
+    // something that does not exist or is not theirs (`resolveTargetLabel`'s
+    // own doc comment).
+    if (targetLabel !== undefined) {
+      // A `requestConfirmation` that throws or rejects (a client that drops
+      // the connection mid-elicitation, say) fails closed the same as an
+      // explicit decline — the destructive action still does not run.
+      const confirmed = await context
+        .requestConfirmation(tool, organizationId, targetLabel)
+        .catch(() => false)
+      if (!confirmed) throw new ConfirmationRequiredError()
+    }
   }
 
   const output = await dispatch(tool.action, actionArgs, {
@@ -154,5 +227,5 @@ export async function callTool(
     db: context.db,
     accountId: context.accountId,
   })
-  return { output }
+  return { output: tool.sanitizeOutput ? tool.sanitizeOutput(output) : output }
 }

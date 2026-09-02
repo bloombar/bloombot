@@ -18,8 +18,16 @@ import { closeDatabase, openDatabase, runMigrations } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
-import { buildApp, type ServerDependencies } from '../src/server.js'
 import {
+  buildApp,
+  MAX_SESSIONS_PER_ACCOUNT,
+  sweepIdleSessions,
+  type McpSession,
+  type ServerDependencies,
+} from '../src/server.js'
+import { buildToolDefinitions } from '../src/tool-surface.js'
+import {
+  closeMcpSession,
   initializeMcpSession,
   sendMcpRequest,
   type JsonRpcMessage,
@@ -43,13 +51,29 @@ function createFakeLogger() {
 }
 
 function buildTestApp(
-  overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] }
+  overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] },
+  sessions?: Map<string, McpSession>
 ) {
-  return buildApp({
+  const deps: ServerDependencies = {
     logger: createFakeLogger(),
-    registry: createPlatformRegistry(),
+    toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
     ...overrides,
-  })
+  }
+  return sessions ? buildApp(deps, sessions) : buildApp(deps)
+}
+
+/** A fake `StreamableHTTPServerTransport` — just enough surface for `sweepIdleSessions` to exercise (`.close()`), with no real SDK object or HTTP request involved at all. */
+function fakeTransport() {
+  let closed = false
+  return {
+    close: () => {
+      closed = true
+      return Promise.resolve()
+    },
+    get closed() {
+      return closed
+    },
+  }
 }
 
 function findMessage(
@@ -74,7 +98,22 @@ describe('the health endpoint', () => {
     const response = await request(app).get('/health')
 
     expect(response.status).toBe(200)
-    expect(response.body).toMatchObject({ ready: true, database: true })
+    expect(response.body).toMatchObject({
+      ready: true,
+      database: true,
+      sessions: 0,
+    })
+  })
+
+  it('reports how many MCP sessions are currently open — visibility this rework round added after a live listener found unbounded growth with no way to see it', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+
+    await initializeMcpSession(app, caller.token)
+    const response = await request(app).get('/health')
+
+    expect(response.body).toMatchObject({ sessions: 1 })
   })
 
   it('reports not-ready (503) when the database is unreachable', async () => {
@@ -296,5 +335,135 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
     }
     expect(callResult.isError).toBe(true)
     expect(callResult.content[0]?.text).toMatch(/was not confirmed/)
+  })
+})
+
+describe('session lifecycle — bounded growth (rework finding: a live listener measured unbounded retention with no cap and no reclaim)', () => {
+  it('closes the session and evicts it from the map when the client sends DELETE /mcp — the same session id then reads as unknown', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    expect((await request(app).get('/health')).body).toMatchObject({
+      sessions: 1,
+    })
+
+    const deleteStatus = await closeMcpSession(app, session, caller.token)
+    expect(deleteStatus).toBe(200)
+
+    // `onclose`/`onsessionclosed` (server.ts) both delete the map entry —
+    // this is the observable effect: a session id that used to work is now
+    // "session not found", and `/health` no longer counts it.
+    expect((await request(app).get('/health')).body).toMatchObject({
+      sessions: 0,
+    })
+    const reused = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    })
+    expect(reused.status).toBe(404)
+  })
+
+  it('evicts the map entry when the transport itself closes for a reason other than a client DELETE — the SDK-level onclose hook, not only onsessionclosed', async () => {
+    // `onsessionclosed` (server.ts) only fires for a client-driven DELETE —
+    // the test above already proves that path. This proves the other one:
+    // the transport's own `onclose` fires whenever *it* considers the
+    // session over (an abrupt disconnect this process cannot drive from an
+    // HTTP client in a test, or — the actual production caller —
+    // `sweepIdleSessions` closing an idle transport itself). Reaches the
+    // injected `sessions` map directly (`buildApp`'s own second, optional
+    // parameter) to call `.close()` on the real transport `server.ts`
+    // built, the same way `sweepIdleSessions` does, without going through
+    // `DELETE /mcp` at all.
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const sessions = new Map<string, McpSession>()
+    const app = buildTestApp({ db: testDb.db }, sessions)
+    await initializeMcpSession(app, caller.token)
+
+    expect(sessions.size).toBe(1)
+    const [session] = [...sessions.values()]
+    await session?.transport.close()
+
+    expect(sessions.size).toBe(0)
+  })
+
+  it('refuses a new session (429) once one account already holds MAX_SESSIONS_PER_ACCOUNT of them', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+
+    for (let i = 0; i < MAX_SESSIONS_PER_ACCOUNT; i++) {
+      await initializeMcpSession(app, caller.token)
+    }
+    expect((await request(app).get('/health')).body).toMatchObject({
+      sessions: MAX_SESSIONS_PER_ACCOUNT,
+    })
+
+    await expect(initializeMcpSession(app, caller.token)).rejects.toThrow()
+
+    // The ceiling is per-account, not global — a second account can still
+    // start its own first session.
+    const otherCaller = seedSignedInAccount(testDb.db)
+    await expect(
+      initializeMcpSession(app, otherCaller.token)
+    ).resolves.toMatchObject({ sessionId: expect.any(String) })
+  })
+})
+
+describe('sweepIdleSessions — a pure function, driven by an injected clock rather than a real timer', () => {
+  function buildFakeSession(
+    accountId: string,
+    lastActivityAt: number
+  ): McpSession {
+    return {
+      transport: fakeTransport() as unknown as McpSession['transport'],
+      accountId,
+      lastActivityAt,
+    }
+  }
+
+  it('closes and evicts a session idle past the timeout, and leaves a fresh one alone', () => {
+    const now = 1_000_000
+    const idleTimeoutMs = 60_000
+    const sessions = new Map<string, McpSession>([
+      ['idle', buildFakeSession('account-1', now - idleTimeoutMs - 1)],
+      ['fresh', buildFakeSession('account-1', now - 1)],
+      // Exactly at the boundary counts as idle — `now - lastActivityAt >= idleTimeoutMs`.
+      ['boundary', buildFakeSession('account-1', now - idleTimeoutMs)],
+    ])
+
+    const closed = sweepIdleSessions(sessions, now, idleTimeoutMs)
+
+    expect(closed.sort()).toEqual(['boundary', 'idle'])
+    expect([...sessions.keys()]).toEqual(['fresh'])
+    expect((sessions.get('fresh') as McpSession).lastActivityAt).toBe(now - 1)
+  })
+
+  it('calls close() on every transport it evicts', () => {
+    const now = 1_000_000
+    const idleTimeoutMs = 60_000
+    const transport = fakeTransport()
+    const sessions = new Map<string, McpSession>([
+      [
+        'idle',
+        {
+          transport: transport as unknown as McpSession['transport'],
+          accountId: 'account-1',
+          lastActivityAt: now - idleTimeoutMs - 1,
+        },
+      ],
+    ])
+
+    sweepIdleSessions(sessions, now, idleTimeoutMs)
+
+    expect(transport.closed).toBe(true)
+  })
+
+  it('is a no-op against an empty map', () => {
+    expect(sweepIdleSessions(new Map(), Date.now(), 60_000)).toEqual([])
   })
 })

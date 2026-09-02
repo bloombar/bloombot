@@ -11,20 +11,43 @@
  * test fails without the allowlist filter in `buildToolDefinitions` below —
  * the requirement is the test, not merely the array.
  *
- * `destructive: true` marks the one action in today's catalog that actually
- * deletes something irreversible (MCP-4: "a tool that deletes, exports, or
- * spends money"). `courseAttachments.detach` removes a knowledge-file both
- * from the model provider and from this platform's own record of it, and
- * there is no `courseAttachments.restore` — see that action's own module
- * comment. Nothing else registered today qualifies: `discordServers.remove`
- * "marks the binding inactive without deleting anything" (its own
- * description), `courseJoinLinks.revoke` disables a link rather than
- * deleting it, `enrolments.end` ends access without discarding the
- * enrolment row (ENRL-6's "ended, not deleted"), and `projects.archive` is
- * reversible by `projects.unarchive`. No action in this catalog exports
- * data or spends money yet (ADMIN-3 is not built; nothing here calls a
- * paid model) — MCP-4's other two triggers have nothing to mark until one
- * does.
+ * `destructive: true` marks a tool that deletes, exports, or spends money
+ * (MCP-4) and requires `describeTarget` — `buildToolDefinitions` throws at
+ * build time if a destructive entry omits one (this file's own module
+ * comment further down has why: a confirmation that only names the tool,
+ * not the record, is not a real confirmation). Two entries qualify today:
+ *
+ *   - `courseAttachments.detach` removes a knowledge-file both from the
+ *     model provider and from this platform's own record of it, and there
+ *     is no `courseAttachments.restore` — see that action's own module
+ *     comment.
+ *   - `courses.save` **replaces** a course's categories and channels on
+ *     every call (its own description: "replacing its categories and
+ *     channels") — `packages/actions/src/actions/courses.ts`'s
+ *     `updateCourse` deletes every existing category row and re-inserts
+ *     from `input.categories`, with no restore path. `saveInputSchema`
+ *     makes `categories` required, so a model that resupplies a partial or
+ *     stale list — or one that never read the course's current categories
+ *     at all — silently discards the rest. This was found live, against a
+ *     real SDK client, in this slice's own rework round: `courses.save`
+ *     shipped unmarked, with `destructiveHint: false`, and deleted every
+ *     category and channel with no elicitation raised at all. Marking it
+ *     destructive (rather than dropping it from the surface, the other
+ *     option this repository's own review considered) keeps the tool
+ *     useful — an instructor's assistant can still rename a course or
+ *     toggle it on/off — while requiring a human to actually see what is
+ *     about to be replaced before it happens (`describeTarget`, below).
+ *     `docs/DECISIONS.md` D-36 has the full record, including why a
+ *     partial-update input shape (the real fix) is future work, not this
+ *     slice's.
+ *
+ * Nothing else registered today qualifies: `discordServers.remove` "marks
+ * the binding inactive without deleting anything" (its own description),
+ * `courseJoinLinks.revoke` disables a link rather than deleting it, and
+ * `enrolments.end` ends access without discarding the enrolment row
+ * (ENRL-6's "ended, not deleted"). No action in this catalog exports data
+ * or spends money yet (ADMIN-3 is not built; nothing here calls a paid
+ * model) — MCP-4's other two triggers have nothing to mark until one does.
  *
  * Deliberately left off this slice's surface, for a future edit to add
  * explicitly rather than by default (`docs/DECISIONS.md` D-36):
@@ -38,17 +61,84 @@
  * authority within the organization — a privilege change deserving its own
  * confirmation design, not folded into MCP-4's "destructive" bucket as an
  * afterthought).
+ *
+ * `jobs.get` is on the surface, but its output is sanitized
+ * (`sanitizeOutput`, below): a job's own `payload` can carry whatever the
+ * action that enqueued it wrote — `roster.import`'s own job payload is
+ * `{ courseId, csvText }` (`packages/actions/src/actions/roster.ts`), a raw
+ * CSV of students' names and emails — and `jobs.get` (`repos/jobs.ts`)
+ * returns it unfiltered. `roster.import` itself is deliberately off this
+ * surface for exactly that reason (previous paragraph); leaving `jobs.get`
+ * unsanitized would have handed the same data to a model through one
+ * allowlisted read, defeating that exclusion entirely — found live, in this
+ * slice's own rework round, by reading a roster-import job's payload back
+ * through this tool. `jobs.list` is not on the surface either, so a job id
+ * is not otherwise guessable from this surface, but that was never the
+ * actual guard: this file's own reasoning has to hold regardless of what
+ * else is or is not exposed, not lean on an id being hard to find.
  */
 
 import type { ActionRegistry, AnyAction } from '@bloombot/actions'
 import { z } from 'zod'
 
 /** One entry in the explicit allowlist above. */
-interface ToolSurfaceEntry {
-  /** The dotted action name this tool dispatches — must be registered in `createPlatformRegistry`; `buildToolDefinitions` throws at startup if it is not (a renamed or removed action should fail loudly, not silently drop a tool a reviewer expects to see). */
+export interface ToolSurfaceEntry {
+  /** The dotted action name this tool dispatches — must be registered in `createPlatformRegistry`; `buildToolDefinitions` throws if it is not (a renamed or removed action should fail loudly, not silently drop a tool a reviewer expects to see). */
   actionName: string
-  /** MCP-4 — see this file's own module comment for which actions qualify. Defaults to `false`. */
+  /** MCP-4 — see this file's own module comment for which actions qualify. Defaults to `false`. Requires `describeTarget` when `true` (checked in `buildToolDefinitions`, below). */
   destructive?: boolean
+  /**
+   * Required whenever `destructive` is `true`. Resolves what a destructive
+   * call is actually about to do, in words a human confirming it can act
+   * on — a confirmation naming only the tool ("courseAttachments.detach")
+   * and a raw organization id is not a real confirmation, because "detach
+   * the old syllabus" and "detach the final exam key" would read
+   * identically. Handed the entity the action's own `policy.resolve`
+   * already resolved (never re-fetched separately — the same record
+   * `execute` itself will act on, read once) and the validated input, so a
+   * create path with no prior record (`courses.save` with no `id`) can
+   * still describe what is about to be created.
+   */
+  describeTarget?: (entity: unknown, input: unknown) => string
+  /**
+   * Strips whatever this tool's own output must not hand to a model —
+   * `jobs.get`'s own `payload` (this file's own module comment on why).
+   * Applied after `dispatch` succeeds, never before — a refusal or a
+   * validation failure never reaches this at all.
+   */
+  sanitizeOutput?: (output: unknown) => unknown
+}
+
+/** `jobs.get`'s own `JobStatus` shape, narrowed to just enough to drop `payload` — importing `@bloombot/actions`' own `JobStatus` type here would pull a type this file has no other reason to depend on for one field name. */
+function withoutJobPayload(output: unknown): unknown {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+    return output
+  }
+  const rest = { ...(output as Record<string, unknown>) }
+  delete rest['payload']
+  return rest
+}
+
+/** `courseAttachments.detach`'s own entity — `packages/actions/src/actions/course-attachments.ts`'s `Attachment`, narrowed to the one field this needs. */
+function describeAttachmentTarget(entity: unknown): string {
+  const filename = (entity as { filename?: unknown } | null)?.filename
+  return typeof filename === 'string'
+    ? `the attachment "${filename}"`
+    : 'an attachment'
+}
+
+/** `courses.save`'s own entity (`CourseSaveEntity`) — an existing course being replaced, or (no `id` in the input) a new one about to be created, in which case there is nothing to destroy yet but the confirmation still names what will exist. */
+function describeCourseSaveTarget(entity: unknown, input: unknown): string {
+  const existingTitle = (
+    entity as { existingCourse?: { title?: unknown } } | null
+  )?.existingCourse?.title
+  if (typeof existingTitle === 'string') {
+    return `the course "${existingTitle}" — every existing category and channel is replaced by what this call supplies`
+  }
+  const newTitle = (input as { title?: unknown } | null)?.title
+  return typeof newTitle === 'string'
+    ? `a new course titled "${newTitle}"`
+    : 'a new course'
 }
 
 export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
@@ -64,14 +154,18 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'enrolments.listForPerson' },
   { actionName: 'enrolments.checkAccess' },
   { actionName: 'costLedger.organizationUsage' },
-  { actionName: 'jobs.get' },
+  { actionName: 'jobs.get', sanitizeOutput: withoutJobPayload },
   // Ordinary writes — reversible, or end/disable access without discarding
   // the record itself (this file's own module comment above).
   { actionName: 'projects.create' },
   { actionName: 'projects.archive' },
   { actionName: 'projects.unarchive' },
   { actionName: 'projects.duplicate' },
-  { actionName: 'courses.save' },
+  {
+    actionName: 'courses.save',
+    destructive: true,
+    describeTarget: describeCourseSaveTarget,
+  },
   { actionName: 'courses.enable' },
   { actionName: 'courses.disable' },
   { actionName: 'courseInstructions.save' },
@@ -80,7 +174,11 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'courseJoinLinks.revoke' },
   { actionName: 'enrolments.end' },
   // Destructive — MCP-4.
-  { actionName: 'courseAttachments.detach', destructive: true },
+  {
+    actionName: 'courseAttachments.detach',
+    destructive: true,
+    describeTarget: describeAttachmentTarget,
+  },
 ]
 
 /**
@@ -107,6 +205,8 @@ export interface McpToolDefinition {
    */
   inputSchema: object
   destructive: boolean
+  describeTarget?: (entity: unknown, input: unknown) => string
+  sanitizeOutput?: (output: unknown) => unknown
   action: AnyAction
 }
 
@@ -137,20 +237,34 @@ function withOrganizationId(schema: object): object {
 }
 
 /**
- * Resolves `MCP_TOOL_SURFACE` against a real registry, building the tool
- * definitions `server.ts` registers with the SDK and `call-tool.ts`
- * dispatches through. Throws if the allowlist names an action that is not
- * actually registered — this file's own module comment on why that is a
- * loud failure rather than a silently dropped tool.
+ * Resolves `surface` (defaulting to the real `MCP_TOOL_SURFACE`) against a
+ * real registry, building the tool definitions `server.ts` registers with
+ * the SDK and `call-tool.ts` dispatches through. `surface` is a parameter,
+ * not always the module constant, so a test can build definitions around a
+ * fake action (a metered one, say — MCP-5's own coverage needs one this
+ * platform's real catalog does not have) without touching
+ * `MCP_TOOL_SURFACE` itself or `createPlatformRegistry`'s real action set.
+ *
+ * Throws if an entry names an action that is not actually registered, or
+ * is `destructive` with no `describeTarget` — both loud failures at the
+ * point this function is called (`index.ts`, once, before this process
+ * starts listening) rather than a silently dropped or silently
+ * under-described tool discovered later, mid-session.
  */
 export function buildToolDefinitions(
-  registry: ActionRegistry
+  registry: ActionRegistry,
+  surface: readonly ToolSurfaceEntry[] = MCP_TOOL_SURFACE
 ): McpToolDefinition[] {
-  return MCP_TOOL_SURFACE.map((entry): McpToolDefinition => {
+  return surface.map((entry): McpToolDefinition => {
     const action = registry.get(entry.actionName)
     if (!action) {
       throw new Error(
         `apps/mcp: "${entry.actionName}" is on the MCP tool surface but is not registered in the platform's action registry.`
+      )
+    }
+    if (entry.destructive && !entry.describeTarget) {
+      throw new Error(
+        `apps/mcp: "${entry.actionName}" is marked destructive but has no describeTarget — a destructive tool's confirmation must name what it is about to do (see this file's own module comment).`
       )
     }
     return {
@@ -158,6 +272,8 @@ export function buildToolDefinitions(
       description: action.description,
       inputSchema: withOrganizationId(z.toJSONSchema(action.inputSchema)),
       destructive: entry.destructive ?? false,
+      ...(entry.describeTarget ? { describeTarget: entry.describeTarget } : {}),
+      ...(entry.sanitizeOutput ? { sanitizeOutput: entry.sanitizeOutput } : {}),
       action,
     }
   })

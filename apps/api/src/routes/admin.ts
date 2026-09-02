@@ -61,6 +61,20 @@ export interface AdminRouterDependencies {
   apiHealthUrl: string
   /** Overridable so a test can supply a fake with no real network — `checkPlatformHealth`'s own option, threaded through. */
   fetchFn?: typeof fetch
+  /**
+   * ADMIN-5's own race with `apps/worker`'s export handler (see that
+   * file's own module comment on the full reasoning): an in-flight export
+   * job can still be inside `JSON.stringify`/`Buffer.from` — or, narrower
+   * still, between its own re-check and its own `attachmentStorage.write`
+   * call — at the instant this route's delete transaction runs, so the
+   * immediate best-effort sweep below can run before those bytes exist to
+   * remove. A second sweep runs after this delay, long enough that any
+   * write already past the worker's own re-check has certainly landed by
+   * the time it fires. Defaults to five seconds — generous against a
+   * worker handler's own bounded `handlerTimeoutMs`; a test overrides this
+   * to a few milliseconds rather than waiting five real seconds per case.
+   */
+  deletedTenantSweepDelayMs?: number
 }
 
 /** AUTH-4, re-checked on every request: `undefined` for no session or a disabled/unknown account, `false` for a real, signed-in, non-administrator account. Never cached, never derived from anything but this request's own session and the environment `isPlatformAdministrator` reads live. */
@@ -92,6 +106,42 @@ export interface AdminOrganizationSummary {
 export interface AdminOrganizationsResponse {
   organizations: AdminOrganizationSummary[]
   platformHealth: PlatformHealthReport
+}
+
+// ADMIN-5's own race — `AdminRouterDependencies.deletedTenantSweepDelayMs`'s
+// own doc comment has the full reasoning for the value.
+const DEFAULT_DELETED_TENANT_SWEEP_DELAY_MS = 5_000
+
+/**
+ * Removes `ids` from `attachmentStorage` under `organizationId`, one call
+ * per id, logging rather than throwing on an individual failure — the same
+ * "a byte this pass fails to remove is not a privacy leak reachable
+ * through this platform" reasoning the delete route's own comment gives,
+ * shared here since both the immediate and the delayed sweep run exactly
+ * this. Returns once every removal has settled (never rejects — each is
+ * caught individually) so the *immediate* pass can be awaited before the
+ * response is sent, proving to a caller that a byte already on disk at
+ * delete time is actually gone by the time `200` comes back, not merely
+ * scheduled to be; the *delayed* pass (below) still does not await this,
+ * since the response is long gone by the time it runs.
+ */
+async function sweepStorage(
+  deps: AdminRouterDependencies,
+  organizationId: string,
+  ids: string[]
+): Promise<void> {
+  await Promise.all(
+    ids.map((id) =>
+      deps.attachmentStorage
+        .remove(organizationId, id)
+        .catch((error: unknown) =>
+          deps.logger.warn(
+            { err: error, organizationId, id },
+            'apps/api: could not remove a deleted tenant’s stored bytes'
+          )
+        )
+    )
+  )
 }
 
 export function buildAdminRouter(deps: AdminRouterDependencies): Router {
@@ -175,7 +225,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
    */
   router.post<{ organizationId: string }>(
     '/organizations/:organizationId/delete',
-    (req, res) => {
+    (req, res, next) => {
       if (!req.session) {
         res.status(401).json({ error: 'not_signed_in' })
         return
@@ -245,29 +295,37 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         deps.db
       )
 
-      // Best-effort — the database rows are already gone, which is the
-      // authoritative "this tenant's data is deleted" statement; a byte
-      // this loop fails to remove is an orphan on disk, not a privacy leak
-      // reachable through this platform (nothing left references its id).
-      Promise.all(
-        [...attachmentIds, ...exportIds].map((id) =>
-          deps.attachmentStorage
-            .remove(organizationId, id)
-            .catch((error: unknown) =>
-              deps.logger.warn(
-                { err: error, organizationId, id },
-                'apps/api: could not remove a deleted tenant’s stored bytes'
-              )
-            )
-        )
-      ).catch(() => {
-        // `Promise.all` over promises that each already caught their own
-        // rejection cannot itself reject — nothing to do here; the branch
-        // exists only so a future change to the mapped promise cannot
-        // reintroduce an unhandled rejection unnoticed.
-      })
+      const ids = [...attachmentIds, ...exportIds]
 
-      res.status(200).json({ deleted: true, summary })
+      // Immediate best-effort, awaited — catches every byte that was
+      // already on disk when the delete ran (an already-`ready` export, an
+      // already-attached knowledge file), and does not respond until it
+      // has: a `200` from this route means those bytes are actually gone,
+      // not merely scheduled to be. The database rows are already gone,
+      // which is the authoritative "this tenant's data is deleted"
+      // statement; a byte this pass fails to remove (or has not been
+      // written yet — ADMIN-5's own race, below) is not yet a privacy leak
+      // reachable through this platform (nothing left references its id).
+      sweepStorage(deps, organizationId, ids)
+        .then(() => {
+          // ADMIN-5's own race (`AdminRouterDependencies.deletedTenantSweepDelayMs`'s
+          // own doc comment, and `apps/worker/src/handlers/transcripts.ts`'s):
+          // an export job already past its own re-check can still land
+          // bytes on disk *after* this immediate sweep already ran and
+          // found nothing there. A second sweep, delayed and deliberately
+          // not awaited (the response below has already gone out by the
+          // time it fires), catches that — idempotent either way, since
+          // `AttachmentStorage#remove` is a no-op on a directory that was
+          // never created or was already removed.
+          setTimeout(
+            () => void sweepStorage(deps, organizationId, ids),
+            deps.deletedTenantSweepDelayMs ??
+              DEFAULT_DELETED_TENANT_SWEEP_DELAY_MS
+          ).unref()
+
+          res.status(200).json({ deleted: true, summary })
+        })
+        .catch(next)
     }
   )
 

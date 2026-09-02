@@ -33,10 +33,12 @@ import {
   deleteTenant,
   fetchAdminOrganizations,
   fetchDeletionPreview,
+  fetchTenantDeletions,
 } from '../api/client.js'
 import type {
   AdminOrganizationsResponse,
   OrganizationDeletionPreview,
+  TenantDeletion,
 } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
@@ -75,6 +77,9 @@ export function Admin({ onBack }: AdminScreenProps) {
   const [data, setData] = useState<AdminOrganizationsResponse | undefined>(
     undefined
   )
+  const [deletions, setDeletions] = useState<TenantDeletion[] | undefined>(
+    undefined
+  )
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined)
   const { prompt } = useModal()
@@ -89,9 +94,23 @@ export function Admin({ onBack }: AdminScreenProps) {
     )
   }, [])
 
+  // ADMIN-5's own audit trail, read back — a rework finding: this screen's
+  // own module comment already claimed every read went through
+  // `fetchTenantDeletions`, but nothing here had ever actually called it.
+  const refreshDeletions = useCallback(() => {
+    fetchTenantDeletions().then(
+      (result) => setDeletions(result),
+      (caught: unknown) => {
+        if (caught instanceof ApiError) setError(caught)
+        else throw caught
+      }
+    )
+  }, [])
+
   useEffect(() => {
     refresh()
-  }, [refresh])
+    refreshDeletions()
+  }, [refresh, refreshDeletions])
 
   const handleDelete = async (organizationId: string, name: string) => {
     setError(undefined)
@@ -114,10 +133,15 @@ export function Admin({ onBack }: AdminScreenProps) {
         `${preview.people} student record(s), ${preview.conversations} conversation(s), ` +
         `${preview.messages} message(s), ${preview.enrolments} enrolment(s), ` +
         `${preview.courseAttachments} knowledge file(s) and its Discord server binding, if any. ` +
+        (preview.queuedJobs > 0
+          ? `${preview.queuedJobs} job(s) still queued or running for it will be deleted too — ` +
+            'an export in progress will not produce a file. '
+          : '') +
         'This cannot be undone. Type the organization’s name to confirm.',
       label: 'Organization name',
       placeholder: name,
       confirmLabel: 'Delete',
+      destructive: true,
       validate: (value) =>
         value === name ? undefined : 'Type the name exactly to confirm.',
     })
@@ -127,6 +151,7 @@ export function Admin({ onBack }: AdminScreenProps) {
     try {
       await deleteTenant(organizationId, typed)
       refresh()
+      refreshDeletions()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
@@ -210,6 +235,30 @@ export function Admin({ onBack }: AdminScreenProps) {
             </li>
           ))}
         </ul>
+      )}
+
+      {deletions && deletions.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold text-neutral-900">
+            Deletion history
+          </h2>
+          <ul
+            className="flex flex-col gap-2"
+            data-testid="admin-tenant-deletions"
+          >
+            {deletions.map((deletion) => (
+              <li
+                key={deletion.id}
+                className="rounded-md border border-neutral-200 p-3 text-xs text-neutral-600"
+              >
+                <span className="font-medium text-neutral-900">
+                  {deletion.organizationName}
+                </span>{' '}
+                — deleted {new Date(deletion.deletedAt).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

@@ -9,18 +9,23 @@
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import { Admin } from '../src/pages/Admin.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { fetchAdminOrganizations, fetchDeletionPreview, deleteTenant } =
-  vi.hoisted(() => ({
-    fetchAdminOrganizations: vi.fn(),
-    fetchDeletionPreview: vi.fn(),
-    deleteTenant: vi.fn(),
-  }))
+const {
+  fetchAdminOrganizations,
+  fetchDeletionPreview,
+  fetchTenantDeletions,
+  deleteTenant,
+} = vi.hoisted(() => ({
+  fetchAdminOrganizations: vi.fn(),
+  fetchDeletionPreview: vi.fn(),
+  fetchTenantDeletions: vi.fn(),
+  deleteTenant: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
@@ -30,12 +35,24 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     fetchAdminOrganizations,
     fetchDeletionPreview,
+    fetchTenantDeletions,
     deleteTenant,
   }
 })
 
 afterEach(() => {
   vi.resetAllMocks()
+})
+
+// Every test in this file exercises `fetchAdminOrganizations`; ADMIN-5's own
+// audit trail (`fetchTenantDeletions`) is a second, independent read the
+// same screen also fires on mount — defaulted to an empty list here so a
+// test that does not care about deletion history does not have to mock it
+// itself, the same "a test overrides only the one field its own scenario
+// needs" convention `build-test-app.ts`'s own module comment states for a
+// different helper.
+beforeEach(() => {
+  fetchTenantDeletions.mockResolvedValue([])
 })
 
 const PLATFORM_HEALTH = {
@@ -76,6 +93,30 @@ describe('Admin (ADMIN-4)', () => {
 
     expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
     expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
+  })
+
+  // Also-fix of the ADMIN-1..5 rework: this screen's own module comment
+  // claimed every read went through `fetchTenantDeletions`, but nothing
+  // ever called it — dead code masquerading as a documented one.
+  it('shows ADMIN-5’s own deletion history, once fetched', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchTenantDeletions.mockResolvedValue([
+      {
+        id: 'deletion-1',
+        organizationId: 'org-1',
+        organizationName: 'A Departed Tenant',
+        deletedByAccountId: 'account-1',
+        summary: '{}',
+        deletedAt: Date.now(),
+      },
+    ])
+
+    renderWithModal(<Admin onBack={vi.fn()} />)
+
+    expect(await screen.findByText('A Departed Tenant')).toBeInTheDocument()
   })
 
   it('a non-administrator sees the refusal in words, not a blank screen', async () => {

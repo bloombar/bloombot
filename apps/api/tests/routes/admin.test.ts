@@ -20,6 +20,7 @@ import request from 'supertest'
 import { createSession } from '@bloombot/auth'
 import {
   accounts,
+  createFilesystemAttachmentStorage,
   memberships,
   organizations,
   people,
@@ -28,8 +29,12 @@ import {
   projects as projectsRepo,
 } from '@bloombot/db'
 
+import {
+  buildTestApp,
+  TEST_ATTACHMENT_STORAGE_DIR,
+  TEST_PUBLIC_APP_URL,
+} from '../helpers/build-test-app.js'
 import { SESSION_COOKIE_NAME } from '../../src/middleware/session.js'
-import { buildTestApp, TEST_PUBLIC_APP_URL } from '../helpers/build-test-app.js'
 import { seedSignedInCaller } from '../helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
@@ -41,6 +46,21 @@ afterEach(() => {
   if (originalAdminEmails === undefined) delete process.env['ADMIN_EMAILS']
   else process.env['ADMIN_EMAILS'] = originalAdminEmails
 })
+
+/** Polls `read()` until it resolves `undefined` (a delayed sweep's own removal, running on its own timer outside this test's control) or a bound is hit. */
+async function pollUntilUndefined(
+  read: () => Promise<Buffer | undefined>,
+  timeoutMs = 2000
+): Promise<void> {
+  const startedAt = Date.now()
+  for (;;) {
+    if ((await read()) === undefined) return
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`pollUntilUndefined: still defined after ${timeoutMs}ms`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
 
 /** A signed-in account whose email is on the `ADMIN_EMAILS` allowlist (AUTH-4) — deliberately holding no membership anywhere, the same way a real platform administrator need not be an instructor on any one tenant. */
 function seedPlatformAdministrator(db: import('@bloombot/db').Database) {
@@ -298,6 +318,23 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
       { courseId, requestedByAccountId: instructor.id },
       testDb.db
     )
+    // The part this test's own name claims to prove: real bytes, actually
+    // on disk, under the same `AttachmentStorage` root the route itself
+    // builds (`TEST_ATTACHMENT_STORAGE_DIR`) — a second instance over the
+    // same directory, the same "stateless port" reasoning `server.ts`'s own
+    // module comment gives for building its own second instance too.
+    const attachmentStorage = createFilesystemAttachmentStorage(
+      TEST_ATTACHMENT_STORAGE_DIR
+    )
+    await attachmentStorage.write(
+      organizationId,
+      exportRow.id,
+      Buffer.from('{"transcript":[]}')
+    )
+    expect(
+      await attachmentStorage.read(organizationId, exportRow.id)
+    ).toBeDefined()
+
     const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
@@ -307,9 +344,88 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
       .send({ confirmName: 'A Real Tenant' })
 
     expect(response.status).toBe(200)
-    expect(exportRow.id).toBeTruthy()
     expect(
       memberships.getMembership(organizationId, instructor.id, testDb.db)
     ).toBeUndefined()
+    // The bytes seeded above are actually gone — not merely the database
+    // row that named them.
+    expect(
+      await attachmentStorage.read(organizationId, exportRow.id)
+    ).toBeUndefined()
+  })
+
+  // Must-fix 1 — ADMIN-5's own race with `apps/worker`'s export handler:
+  // an in-flight job can land bytes on disk *after* the tenant's own rows
+  // (and this route's own immediate best-effort sweep) are already gone.
+  // The delayed second sweep (`deletedTenantSweepDelayMs`) is what still
+  // catches it. Simulates the worker's own write landing moments after the
+  // delete responds, rather than racing a real worker process.
+  it('a byte written after the tenant is already deleted is still removed, by the delayed sweep', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    // Still `pending` — no bytes on disk yet, the same state a real export
+    // job that has not finished writing leaves it in.
+    const exportRow = transcriptExports.createPendingExport(
+      organizationId,
+      { courseId, requestedByAccountId: instructor.id },
+      testDb.db
+    )
+    const attachmentStorage = createFilesystemAttachmentStorage(
+      TEST_ATTACHMENT_STORAGE_DIR
+    )
+    const app = await buildTestApp(testDb.db, {
+      // A test overrides the five-second production default to a few
+      // milliseconds — this test is not waiting five real seconds to prove
+      // the sweep runs.
+      deletedTenantSweepDelayMs: 20,
+    })
+
+    const response = await request(app)
+      .post(`/admin/organizations/${organizationId}/delete`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ confirmName: 'A Real Tenant' })
+    expect(response.status).toBe(200)
+
+    // The organization's own rows are gone, but nothing wrote bytes yet —
+    // the immediate best-effort sweep found nothing to remove.
+    expect(
+      organizations.getOrganizationById(organizationId, testDb.db)
+    ).toBeUndefined()
+
+    // Simulates `apps/worker`'s own export handler landing its write in
+    // the narrow window after this route's own immediate sweep already ran
+    // — exactly the race `apps/worker/src/handlers/transcripts.ts`'s own
+    // module comment describes, and the reason a re-check alone (that
+    // file's own fix) is not sufficient on its own without this route's
+    // own second pass.
+    await attachmentStorage.write(
+      organizationId,
+      exportRow.id,
+      Buffer.from(
+        '{"transcript":["a departed tenant\u2019s own student speech"]}'
+      )
+    )
+    expect(
+      await attachmentStorage.read(organizationId, exportRow.id)
+    ).toBeDefined()
+
+    // The delayed sweep, configured above to run almost immediately,
+    // catches what the immediate one could not have — polled rather than
+    // asserted once, since it runs on its own `setTimeout`, outside this
+    // test's own control.
+    await pollUntilUndefined(() =>
+      attachmentStorage.read(organizationId, exportRow.id)
+    )
   })
 })

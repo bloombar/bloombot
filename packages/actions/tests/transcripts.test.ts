@@ -13,7 +13,7 @@ import {
   readTranscriptAction,
 } from '../src/actions/transcripts.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionRefusedError } from '../src/errors.js'
+import { ActionConflictError, ActionRefusedError } from '../src/errors.js'
 import { seedOrganizationWithCourse } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -165,18 +165,46 @@ describe('transcripts.export (ADMIN-3)', () => {
 
   // PPL-5 — this file's own module comment on `transcripts.ts`: a
   // student-filtered export is refused unless that student's own address
-  // has been verified. The common, Discord-only case.
-  it('refuses a student-filtered export for a student with no verified address (PPL-5)', async () => {
+  // has been verified. The common, Discord-only case. Must-fix 4 of the
+  // ADMIN-1..5 rework: `ActionConflictError`, not the generic
+  // `ActionRefusedError` — this instructor already sees this student by
+  // name (the same filter dropdown ADMIN-1's own read uses), so naming the
+  // real reason discloses nothing new to them (D-18's own reasoning for
+  // `ActionConflictError` at all).
+  it('refuses a student-filtered export for a student with no verified address, naming why (PPL-5)', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(
       testDb.db
     )
     const student = seedDiscordOnlyStudent(organizationId, testDb.db)
 
+    const attempt = dispatch(
+      exportTranscriptAction,
+      { courseId: course.id, personId: student.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    await expect(attempt).rejects.toThrow(ActionConflictError)
+    await expect(attempt).rejects.toMatchObject({
+      conflict: { message: expect.stringContaining('verified an address') },
+    })
+  })
+
+  // TEN-5 — unlike the case above, a `personId` that does not resolve at
+  // all (a foreign organization's person, or one that never existed) stays
+  // the generic, not-found-shaped refusal: naming *that* reason would be
+  // an existence oracle this instructor has no other way to probe.
+  it('refuses a personId belonging to another organization identically to any other not-found (TEN-5)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const { organizationId: otherOrg } = seedOrganizationWithCourse(testDb.db)
+    const foreignStudent = seedDiscordOnlyStudent(otherOrg, testDb.db)
+
     await expect(
       dispatch(
         exportTranscriptAction,
-        { courseId: course.id, personId: student.id },
+        { courseId: course.id, personId: foreignStudent.id },
         { organizationId, db: testDb.db, accountId: ownerId }
       )
     ).rejects.toThrow(ActionRefusedError)
@@ -198,14 +226,16 @@ describe('transcripts.export (ADMIN-3)', () => {
     expect(result.exportId).toBeTruthy()
   })
 
-  it('does not gate a whole-course export on any single student’s verified address', async () => {
+  it('does not refuse a whole-course export just because one of its students has no verified address', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(
       testDb.db
     )
     // A Discord-only student exists in the course, but the export names no
-    // single student — PPL-5's gate does not apply (this action's own
-    // module comment).
+    // single student — this *action's* own refusal does not apply (this
+    // file's own module comment). The exported *file* still omits that
+    // student's own entries — `apps/worker`'s own handler test proves that
+    // half, per entry, not this one.
     seedDiscordOnlyStudent(organizationId, testDb.db)
 
     const result = await dispatch(

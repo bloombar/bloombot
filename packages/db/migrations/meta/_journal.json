@@ -92,6 +92,13 @@
       "when": 1788331408113,
       "tag": "0012_high_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1788352182769,
+      "tag": "0013_loud_tigra",
+      "breakpoints": true
     }
   ]
 }

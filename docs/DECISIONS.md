@@ -4730,18 +4730,119 @@ the API path it posts to are never the same top-level segment" convention `/sign
 before this. `vite.config.ts`'s own `proxy` object gained a comment naming the convention explicitly, so the
 next screen that needs a bespoke (non-`dispatchAction`) API mount does not rediscover this the same way.
 
+### Rework — two reviewers, six must-fixes, all found by running the user's own path
+
+A second rework round, after both reviewers independently drove real paths through this slice rather than
+trusting its own tests — an instructor's browser session (proven fine), and a *Discord-surface* person's
+transcript through the real worker and the real download route (also proven fine, closing the "seeded the way
+the implementation resolves it" risk this project's own history warns about). Six findings did not hold up,
+each with its own regression test (patched, watched fail, restored):
+
+**Finding 1 — an in-flight export could write a deleted tenant's transcript to disk, permanently, with no row
+left to name or remove it.** `routes/admin.ts`'s own delete gathered ids, deleted every row (including
+`transcript_exports` and `jobs`), then called `AttachmentStorage#remove` on a directory that did not exist yet
+if the worker had not finished writing — a no-op. An export job already past that point, mid-`JSON.stringify`/
+`Buffer.from` over a large course, then wrote the file anyway; `markExportReady` updated zero rows (the row was
+gone) and returned `undefined`, silently. Closed on both sides, the same "close it at the write, and again after
+a drain" shape D-32's own FILE-1..3 handlers already use for the identical class of race: `apps/worker/src/handlers/transcripts.ts`
+now re-reads the export row, organization-scoped, immediately before `attachmentStorage.write` — gone means no
+bytes are written at all, reported `'abandoned'`, the same status `createAttachCourseAttachmentHandler`'s own
+identical race already reports. `routes/admin.ts`'s own immediate sweep is now *awaited* before the response
+(a `200` means those bytes are actually gone, not scheduled to be), and a *second*, delayed sweep
+(`deletedTenantSweepDelayMs`, five seconds in production) runs after the response to catch the residual sliver
+between the worker's own re-check and its write call landing — idempotent either way, since removing bytes that
+were never written, or were already removed, is a no-op. `apps/web/src/pages/Admin.tsx`'s own deletion
+confirmation now names `queuedJobs` too, when there are any, so an administrator sees that an in-flight export
+exists before confirming, not only after.
+
+**Finding 2 — the test named for on-disk destruction asserted nothing about the disk.** `apps/api/tests/routes/admin.test.ts`'s
+own "cleans up a stored transcript export's bytes" wrote no bytes and never called `AttachmentStorage#read`;
+deleting the entire cleanup block left it green. Rewritten to actually write bytes through a real
+`AttachmentStorage` (the same directory the route's own instance resolves to) and assert they are gone after —
+plus a second, dedicated test for finding 1's own delayed sweep, writing bytes *after* the tenant is already
+deleted and polling until the sweep removes them, and a worker-level test (`apps/worker/tests/handlers/transcripts.test.ts`)
+spying on `transcriptExports.getExport` to make the exact race in finding 1 land deterministically rather than
+relying on real concurrency.
+
+**Finding 3 — PPL-5's export gate held only at the request's own `personId`, and the file did not.** Every
+entry an export wrote carried its own `personId`/`personDisplayName`, including an *unfiltered* course export —
+so `jq '.transcript[] | select(.personId=="S")'` reconstructed exactly what a filtered request refuses, and for
+a one-student course the file simply *was* that student's history. The upfront refusal on a named, unverified
+student stays (a real, correct check for that shape); `apps/worker/src/handlers/transcripts.ts` now also filters
+every entry it writes, individually, against `hasVerifiedAddress` — an unverified person's own messages never
+reach *any* export file, filtered or not, and `omittedForUnverifiedAddress` says honestly when that happened
+rather than looking silently complete. The read screen (`transcripts.read`) is unchanged — this finding is
+about the artefact that leaves the system, not the on-screen, audited read D-48's own reasoning above already
+settled.
+
+**Finding 4 — the panel's own most common Export click read as "not found" on a student already on screen.**
+A Discord-only student, selected from the same filter dropdown ADMIN-1's own read already populates, produces
+exactly finding 3's own upfront refusal — and it arrived as `ActionRefusedError` (WEB-5's "not found, or you do
+not have access to it"), though the instructor was already looking at that student's transcript. `transcripts.export`
+now raises `ActionConflictError` for this one case, naming the real reason — safe to name, unlike a not-found
+(D-18's own reasoning: this caller already has full, audited visibility into this student, so the message
+discloses nothing new to *them*) — while a `personId` that does not resolve at all (a foreign organization's,
+TEN-5) stays the generic, indistinguishable refusal, since naming *that* reason would be a real oracle.
+
+**Finding 5 — ADMIN-1's own filters had no test proving they reached the server at all.** Replacing
+`currentFilters()`'s body with `return {}` — the student dropdown and both date pickers entirely decorative —
+left every existing test green; the panel's own filtering is genuinely server-side SQL, unguarded. One test now
+selects a student and a date range, presses "Apply filters", and asserts `readTranscript` was called with
+exactly `{ personId, startAt, endAt }`.
+
+**Finding 6 — `/admin` was not proxied in either deployment guide, so ADMIN-4/ADMIN-5 fail silently on a real
+deployment.** The first rework round (above) fixed this collision in `apps/web/vite.config.ts`'s own dev/preview
+proxy and named it as outstanding for production nginx — correctly flagged as another branch's file at the
+time, but that branch merged before this round, and the gap was real: an administrator's browser loads the SPA
+at `/platform-admin` fine, then every call to `/admin/organizations` gets `index.html` back as a `200`,
+`response.json()` throws, and the console reports a generic failure forever, with nothing pointing back to this
+cause. `docs/DEPLOY_DROPLET.md`'s own nginx block and `docs/DEPLOY_APP_PLATFORM.md`'s own routing list both
+name `/admin` now, alongside `/health`/`/auth`/`/organizations`.
+
+**Also fixed, smaller:** `apps/web/src/pages/Transcripts.tsx`'s own export list rendered a bare clock and a
+timestamp for every non-`ready` status, indistinguishable from `pending` even once a job had exhausted its
+retries and died — `ScaffoldButton.tsx`'s own explicit queued/running/failed labelling is the precedent this
+slice's brief already named and this screen had not followed; it now names `pending`/`ready`/`failed` plainly,
+with the failure reason shown for the last. `transcript-access.ts#listAccessLogForCourse` claimed "newest
+first" and sorted `asc` — the opposite — and, a second instance of the exact ordering-tie class D-48's own first
+rework already fixed for `transcript_exports.sequence`, had no tiebreaker of its own on a table ADMIN-2 exists
+to make trustworthy; both fixed, with `sequence` added the same way. That first fix's own test
+(`listExportsForCourse`, "most recent first") is now paired with an explicit, deterministic tie: two rows
+inserted directly through the schema with an identical injected `createdAt`, asserted on `sequence` alone,
+rather than relying on `Date.now()` happening not to collide within a run (measured at roughly one failure in
+twelve before this, on the ordering the test was supposed to prove) — the same device applied to
+`transcript-access.ts#listAccessLogForCourse`'s own identical fix, below.
+`transcript-access.ts#listAccessLogForCourse` itself claimed "newest first" in its own doc comment while
+actually ordering `asc` — the opposite — and had no tiebreaker of its own on the table ADMIN-2 exists to make
+trustworthy; both fixed the same way `transcript_exports.sequence` already was, with the same deterministic
+tie test. `transcript-access.ts#listPeopleWithTranscript` gained an explicit order (by display name, then
+`personId`) — the Student filter dropdown's own order was previously whatever SQLite happened to return,
+unstable across reloads; its own test seeds two people in the *opposite* order from their display names, since
+a fix that merely preserved insertion order would otherwise pass a naively-ordered seed by coincidence.
+`fetchTenantDeletions` (`apps/web/api/client.ts`) was dead code, called from nowhere despite `pages/Admin.tsx`'s
+own module comment claiming every read goes through it — wired to a real "Deletion history" section on that
+screen, rather than removed, since ADMIN-5's own text requires the deletion to be audited and the read,
+route and repository function already existed, tested, with nothing left to build but the one call. The TEN-6
+delete-guard in `packages/db/tests/conversations.test.ts` excluded the whole of `organizations.ts` rather than
+naming `deleteOrganizationData` specifically, which would silently admit a second, unaudited delete path added
+to that file later; narrowed to the one function, and proven to still catch a delete added elsewhere in that
+file (a regression check on the guard itself, not only on `deleteOrganizationData`). Both `transcript-exports.ts#createPendingExport`'s
+and `transcript-access.ts#readCourseTranscript`'s own `sequence` subqueries were missing their `organizationId`
+scope, in files whose own headers claim no exception — fixed on both, though unreachable in practice (a
+`courseId` is already organization-scoped by the caller's own policy resolve). `ModalProvider.tsx`'s own
+`PromptOptions` carried no `destructive` flag, so ADMIN-5's own typed-name confirmation rendered its submit
+button primary rather than danger, unlike `ConfirmOptions`' identical flag — one field and one line threaded
+through, the same styling `Modal.tsx`'s own `variant={destructive ? …}` already gives a confirm dialog.
+
 **Limits.** `previewOrganizationDeletion` is not exhaustive over every table `deleteOrganizationData` empties
 (`cost_ledger_entries`, `person_identities`, `person_link_challenges`, `discord_install_states` have no count
 in the preview) — deliberately: it is a confirmation a person reads and acts on, not a schema dump, and the
-categories it names are the ones a person recognizes losing. A course attachment's or a transcript export's own
-bytes on disk are removed best-effort, *after* the database transaction that is the authoritative "this tenant
-is deleted" — `routes/admin.ts` gathers their ids before the delete and calls `AttachmentStorage#remove` for
-each afterward, logging rather than failing the request on an individual removal error, since nothing left in
-the database references an id it could not clean up. `apps/worker`'s export handler produces JSON, not CSV —
-this slice's own judgment call, not a requirement: nothing in ADMIN-3's text names a format, and a hand-rolled
-CSV writer's own escaping rules are exactly the kind of complexity `roster.ts`'s own module comment already
-warns a slice away from adding without a reason this one does not have. Production nginx's own config (outside
-this slice — `docs/DEPLOY_APP_PLATFORM.md`/`docs/DEPLOY_DROPLET.md`, another agent's branch) will need `/admin`
-proxied to `apps/api` alongside `/auth`/`/organizations`/`/health`, the same way `vite.config.ts`'s own
-`preview.proxy` now is.
+categories it names are the ones a person recognizes losing. `apps/worker`'s export handler produces JSON, not
+CSV — this slice's own judgment call, not a requirement: nothing in ADMIN-3's text names a format, and a
+hand-rolled CSV writer's own escaping rules are exactly the kind of complexity `roster.ts`'s own module comment
+already warns a slice away from adding without a reason this one does not have. Finding 1's own delayed sweep is a mitigation,
+not a proof: a worker whose own write takes longer than `deletedTenantSweepDelayMs` to land after passing its
+own re-check would still leave an orphaned byte an operator would have to notice by other means (disk usage,
+an audit) — bounded by `handlerTimeoutMs` in practice (a handler this slow is already killed and retried), but
+not eliminated by construction the way the re-check itself closes the larger, originally-reported window.
 

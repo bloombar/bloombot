@@ -18,7 +18,7 @@
  * there is no exception in this file (TEN-2).
  */
 
-import { and, asc, eq, gte, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
@@ -146,6 +146,28 @@ export function readCourseTranscript(
     // (or vice versa) must not be possible, or the trail this function
     // exists to keep would be incomplete exactly when something already
     // went wrong.
+    //
+    // `sequence` (`schema.ts`'s own comment on the column) is computed
+    // here, as one more than the highest already recorded for this course
+    // — the same "read the previous max, write the next value, in one
+    // transaction" shape this file's own `appendMessage`-adjacent
+    // `messages.sequence` convention already uses, for the same reason:
+    // two accesses landing in the same millisecond must still get a real,
+    // distinguishable order.
+    const previousAccess = tx
+      .select({ sequence: transcriptAccessLog.sequence })
+      .from(transcriptAccessLog)
+      .where(
+        and(
+          eq(transcriptAccessLog.courseId, input.courseId),
+          eq(transcriptAccessLog.organizationId, organizationId)
+        )
+      )
+      .orderBy(desc(transcriptAccessLog.sequence))
+      .limit(1)
+      .get()
+    const accessSequence = (previousAccess?.sequence ?? -1) + 1
+
     tx.insert(transcriptAccessLog)
       .values({
         id: crypto.randomUUID(),
@@ -156,6 +178,7 @@ export function readCourseTranscript(
         kind: input.kind,
         startAt: input.startAt ?? null,
         endAt: input.endAt ?? null,
+        sequence: accessSequence,
         createdAt: Date.now(),
       })
       .run()
@@ -172,6 +195,12 @@ export function readCourseTranscript(
  * only ever lists who is *currently* enrolled): ADMIN-1's own student
  * filter has to offer every student the transcript actually covers, not
  * only the ones still admitted today.
+ *
+ * Ordered by display name, then by `personId` as a tiebreaker (two people
+ * can share a display name, or have none at all) — a rework finding: this
+ * had no `ORDER BY` at all, so the panel's own student dropdown
+ * (`pages/Transcripts.tsx`) rendered in whatever order SQLite happened to
+ * return rows in, which is not guaranteed stable across reloads.
  */
 export function listPeopleWithTranscript(
   organizationId: string,
@@ -197,6 +226,7 @@ export function listPeopleWithTranscript(
         eq(messages.courseId, courseId)
       )
     )
+    .orderBy(asc(people.displayName), asc(messages.personId))
     .all()
   return rows
 }
@@ -223,6 +253,6 @@ export function listAccessLogForCourse(
         eq(transcriptAccessLog.courseId, courseId)
       )
     )
-    .orderBy(asc(transcriptAccessLog.createdAt))
+    .orderBy(desc(transcriptAccessLog.sequence))
     .all()
 }

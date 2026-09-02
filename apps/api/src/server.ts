@@ -88,6 +88,8 @@ export interface ServerDependencies {
   apiHealthUrl: string
   /** Overridable so a test can fake the three processes' health responses with no real network — `checkPlatformHealth`'s own `fetchFn` option, threaded through `routes/admin.ts`. */
   adminHealthFetch?: typeof fetch
+  /** ADMIN-5's own race with `apps/worker`'s export handler — threaded through to `routes/admin.ts`'s own `AdminRouterDependencies.deletedTenantSweepDelayMs`, whose own doc comment has the full reasoning. Omitted, that router's own five-second default applies. */
+  deletedTenantSweepDelayMs?: number
   /** LINK-6/7 — `routes/person-link.ts`'s own in-memory record of an in-flight Discord connect attempt (D-44's own session-binding rework). Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
   pendingDiscordConnects?: Map<string, PendingDiscordConnect>
 }
@@ -208,6 +210,9 @@ export function buildApp(deps: ServerDependencies): Express {
       workerHealthUrl: deps.workerHealthUrl,
       apiHealthUrl: deps.apiHealthUrl,
       ...(deps.adminHealthFetch ? { fetchFn: deps.adminHealthFetch } : {}),
+      ...(deps.deletedTenantSweepDelayMs !== undefined
+        ? { deletedTenantSweepDelayMs: deps.deletedTenantSweepDelayMs }
+        : {}),
     })
   )
 

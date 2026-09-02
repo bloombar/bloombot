@@ -54,7 +54,12 @@ export function createPendingExport(
     const previous = tx
       .select({ sequence: transcriptExports.sequence })
       .from(transcriptExports)
-      .where(eq(transcriptExports.courseId, input.courseId))
+      .where(
+        and(
+          eq(transcriptExports.courseId, input.courseId),
+          eq(transcriptExports.organizationId, organizationId)
+        )
+      )
       .orderBy(desc(transcriptExports.sequence))
       .limit(1)
       .get()

@@ -1106,6 +1106,15 @@ export const transcriptAccessLog = sqliteTable(
     // says not just *that* a read happened but what it covered.
     startAt: integer('start_at'),
     endAt: integer('end_at'),
+    // A real tiebreaker for `listAccessLogForCourse`'s "newest first" order
+    // — the same reason `messages.sequence`/`transcript_exports.sequence`
+    // exist (those tables' own comments): `createdAt` is millisecond
+    // precision, and two reads (an instructor's screen and a concurrent
+    // export job, say) can land within the same millisecond. Assigned by
+    // `repos/transcript-access.ts#readCourseTranscript` inside the same
+    // transaction as the read and the insert it accompanies, one more than
+    // the highest already recorded for this course.
+    sequence: integer('sequence').notNull(),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [

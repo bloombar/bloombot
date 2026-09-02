@@ -116,6 +116,45 @@ describe('Transcripts (ADMIN-1)', () => {
     expect(studentSelect).toHaveTextContent('Alice')
   })
 
+  // Must-fix 5 of the ADMIN-1..5 rework — the filters are genuinely
+  // server-side SQL (right), but were entirely unguarded by a test:
+  // replacing this screen's own filter-gathering with `return {}` (every
+  // field decorative) left every other test in this file green. Student
+  // speech is the subject; this is the one test that actually presses
+  // "Apply filters" with a student and a date range chosen, and reads back
+  // what `readTranscript` was actually called with.
+  it('applies the student and date filters, calling readTranscript with exactly what was chosen', async () => {
+    await selectProjectAndCourse()
+    readTranscript.mockClear()
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Student'), {
+      target: { value: 'person-1' },
+    })
+    fireEvent.change(screen.getByLabelText('From date'), {
+      target: { value: '2026-01-05' },
+    })
+    fireEvent.change(screen.getByLabelText('To date'), {
+      target: { value: '2026-01-10' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }))
+
+    const expectedStartAt = Date.parse('2026-01-05T00:00:00')
+    const expectedEndAt = Date.parse('2026-01-10T23:59:59.999')
+    await waitFor(() =>
+      expect(readTranscript).toHaveBeenLastCalledWith('org-1', COURSE.id, {
+        personId: 'person-1',
+        startAt: expectedStartAt,
+        endAt: expectedEndAt,
+      })
+    )
+  })
+
   it('shows an empty state when nothing matches the filters', async () => {
     listProjects.mockResolvedValue([PROJECT])
     listCourses.mockResolvedValue([COURSE])
@@ -205,5 +244,128 @@ describe('Transcripts (ADMIN-1)', () => {
       'href',
       '/organizations/org-1/transcript-exports/export-1/download'
     )
+  })
+
+  // Also-fix of the ADMIN-1..5 rework: a bare clock and a timestamp read
+  // identically for every non-`ready` status — a stuck `pending` export
+  // was indistinguishable from one still legitimately queued.
+  it('labels a pending export "Queued…", not just a bare icon and a date', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+    listTranscriptExports.mockResolvedValue([
+      {
+        id: 'export-1',
+        courseId: COURSE.id,
+        personId: null,
+        status: 'pending',
+        filename: null,
+        contentType: null,
+        sizeBytes: null,
+        failureReason: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ])
+
+    render(<Transcripts organizationId="org-1" />)
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+
+    expect(await screen.findByText(/Queued…/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', { name: /download/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('labels a failed export "Failed" and shows its own reason', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+    listTranscriptExports.mockResolvedValue([
+      {
+        id: 'export-1',
+        courseId: COURSE.id,
+        personId: null,
+        status: 'failed',
+        filename: null,
+        contentType: null,
+        sizeBytes: null,
+        failureReason: 'gave up after 5 attempt(s): disk full',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ])
+
+    render(<Transcripts organizationId="org-1" />)
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+
+    expect(await screen.findByText(/^Failed —/)).toBeInTheDocument()
+    expect(
+      screen.getByText('gave up after 5 attempt(s): disk full')
+    ).toBeInTheDocument()
+  })
+
+  it('shows a "still queued" hint naming the worker once a pending export has waited past the threshold', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+    listTranscriptExports.mockResolvedValue([
+      {
+        id: 'export-1',
+        courseId: COURSE.id,
+        personId: null,
+        status: 'pending',
+        filename: null,
+        contentType: null,
+        sizeBytes: null,
+        failureReason: null,
+        // Old enough, relative to `Date.now()` at render time, that this
+        // screen's own `STILL_QUEUED_HINT_AFTER_MS` threshold has already
+        // passed — this test does not need fake timers or a real wait,
+        // since the threshold is compared against the export's own
+        // server-set `createdAt`, not client-side polling state.
+        createdAt: Date.now() - 60_000,
+        updatedAt: Date.now() - 60_000,
+      },
+    ])
+
+    render(<Transcripts organizationId="org-1" />)
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+
+    expect(await screen.findByText(/still queued/i)).toBeInTheDocument()
+    expect(screen.getByText('npm run worker:dev')).toBeInTheDocument()
   })
 })

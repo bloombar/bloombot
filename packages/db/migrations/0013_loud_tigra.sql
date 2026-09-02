@@ -1,0 +1,1 @@
+ALTER TABLE `transcript_access_log` ADD `sequence` integer NOT NULL;

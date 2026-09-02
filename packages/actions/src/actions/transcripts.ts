@@ -51,7 +51,7 @@ import {
 } from '@bloombot/db'
 import { z } from 'zod'
 
-import { ActionRefusedError } from '../errors.js'
+import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -186,16 +186,34 @@ export const exportTranscriptAction: Action<
 
     // PPL-5 — a student-filtered export is refused unless the platform has
     // itself verified that student's address (this file's own module
-    // comment has the full reasoning). `undefined` (the person does not
-    // exist, or belongs to another organization, TEN-5) refuses the same
-    // way `false` does — ACT-3's single, identical refusal either way.
+    // comment has the full reasoning). The two ways `hasVerifiedAddress`
+    // can fail to say `true` are deliberately *not* collapsed into one
+    // refusal here, unlike most of this platform's own checks: `undefined`
+    // (the person does not exist, or belongs to another organization) is
+    // TEN-5's own not-found-shaped `ActionRefusedError`, so a foreign id
+    // still discloses nothing — but `false` (a real student in *this*
+    // course, one the instructor already sees by name in the same filter
+    // dropdown and already reads on screen, ADMIN-1) names the actual
+    // reason (`ActionConflictError`, D-18's own "naming a collision is safe
+    // in a way naming a not-found is not" — this caller already has full,
+    // audited visibility into this student; the refusal tells them nothing
+    // they could not already see). Must-fix 4 of the ADMIN-1..5 rework: a
+    // plain `ActionRefusedError` here read as "not found" on a student the
+    // instructor was already looking at on screen — confusing, and
+    // actionably wrong, not merely uninformative.
     if (input.personId !== undefined) {
       const verified = people.hasVerifiedAddress(
         organizationId,
         input.personId,
         db
       )
-      if (verified !== true) throw new ActionRefusedError()
+      if (verified === undefined) throw new ActionRefusedError()
+      if (verified === false) {
+        throw new ActionConflictError({
+          message:
+            'This student has not verified an address yet, so their history cannot be exported individually.',
+        })
+      }
     }
 
     const exportRow = transcriptExports.createPendingExport(

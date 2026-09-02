@@ -9,6 +9,7 @@ import {
   organizations,
   people,
   projects,
+  schema,
   transcriptAccess,
 } from '@bloombot/db'
 
@@ -318,5 +319,116 @@ describe('transcriptAccess.listPeopleWithTranscript', () => {
     expect(listed.map((entry) => entry.personId).sort()).toEqual(
       [alice.id, bob.id].sort()
     )
+  })
+
+  // Also-fix of the ADMIN-1..5 rework: this function had no `ORDER BY` at
+  // all — the Student filter dropdown (`pages/Transcripts.tsx`) rendered in
+  // whatever order SQLite happened to return, unstable across reloads.
+  // `Zed` is created (and messages first) *before* `Amy` here, deliberately
+  // the opposite of insertion order from their own display names — a
+  // fix that merely happened to preserve insertion order (SQLite's own
+  // default, absent an `ORDER BY`) would not pass this the way the earlier
+  // Alice/Bob test above — seeded alphabetically already — could not have
+  // told apart from a missing `ORDER BY` at all.
+  it('orders by display name, not insertion order', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedCourseWithMessages(testDb)
+
+    const zed = people.createPerson(
+      organizationId,
+      { displayName: 'Zed' },
+      testDb.db
+    )
+    const amy = people.createPerson(
+      organizationId,
+      { displayName: 'Amy' },
+      testDb.db
+    )
+    for (const person of [zed, amy]) {
+      const conversation = conversations.getOrCreateConversation(
+        organizationId,
+        { courseId: course.id, personId: person.id, surface: 'web' },
+        testDb.db
+      )
+      if (!conversation) throw new Error('setup failed: conversation')
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        { direction: 'from_person', content: 'Hi' },
+        testDb.db
+      )
+    }
+
+    const listed = transcriptAccess.listPeopleWithTranscript(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    const order = listed
+      .map((entry) => entry.personDisplayName)
+      .filter((name): name is string => name === 'Zed' || name === 'Amy')
+    expect(order).toEqual(['Amy', 'Zed'])
+  })
+})
+
+describe('transcriptAccess.listAccessLogForCourse — ordering', () => {
+  // Also-fix of the ADMIN-1..5 rework: this function's own doc comment
+  // claimed "newest first" while actually ordering `asc` — the opposite —
+  // and, on the table ADMIN-2 exists to make trustworthy, had no
+  // tiebreaker of its own (the same ordering-tie class this slice's own
+  // `transcript_exports.sequence` fix already closed once). Fixed to
+  // `desc(sequence)`; this test constructs an identical-`createdAt` tie
+  // directly through the schema — the same deterministic device
+  // `transcript-exports.test.ts`'s own ordering test uses, for the same
+  // reason: two real, sequential reads usually do not collide on
+  // `createdAt`, which is exactly why a test that relies on them doing so
+  // would not reliably catch a real regression.
+  it('orders newest first by sequence, not createdAt alone, even when two entries share an identical createdAt', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } =
+      seedCourseWithMessages(testDb)
+    const tiedCreatedAt = 1_700_000_000_000
+
+    testDb.db
+      .insert(schema.transcriptAccessLog)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        personId: null,
+        kind: 'read',
+        startAt: null,
+        endAt: null,
+        sequence: 0,
+        createdAt: tiedCreatedAt,
+      })
+      .run()
+    const secondId = randomUUID()
+    testDb.db
+      .insert(schema.transcriptAccessLog)
+      .values({
+        id: secondId,
+        organizationId,
+        courseId: course.id,
+        actorAccountId: instructor.id,
+        personId: null,
+        kind: 'export',
+        startAt: null,
+        endAt: null,
+        sequence: 1,
+        createdAt: tiedCreatedAt,
+      })
+      .run()
+
+    const log = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(log.map((entry) => entry.sequence)).toEqual([1, 0])
+    expect(log[0]?.id).toBe(secondId)
   })
 })

@@ -61,6 +61,38 @@ function dayEnd(value: string): number | undefined {
 /** Every export this course has requested is still `pending` a moment after being requested — polled, not pushed, the same "poll a job's own status" convention `pages/CourseEditor.tsx`'s own scaffold job polling already uses. */
 const EXPORTS_POLL_MS = 2000
 
+/** The same threshold, and the same reasoning, `components/ScaffoldButton.tsx`'s own `DEFAULT_STILL_QUEUED_HINT_AFTER_MS` already uses — long enough that an ordinary claim delay never trips it, short enough that a genuinely stuck export (no background worker running) does not read as a silent hang for minutes. Compared against `exportRow.createdAt` directly (a server timestamp already on the row) rather than client-side polling state, so it reads correctly even on the very first render after a page reload, before this screen has polled even once. */
+const STILL_QUEUED_HINT_AFTER_MS = 8_000
+
+function exportStatusIcon(status: TranscriptExport['status']) {
+  switch (status) {
+    case 'ready':
+      return (
+        <SuccessIcon aria-hidden="true" className="size-4 text-success-600" />
+      )
+    case 'failed':
+      return (
+        <FailureIcon aria-hidden="true" className="size-4 text-danger-600" />
+      )
+    case 'pending':
+      return (
+        <PendingIcon aria-hidden="true" className="size-4 text-neutral-400" />
+      )
+  }
+}
+
+/** Also-fix of the ADMIN-1..5 rework: a bare timestamp with no label read identically for `pending` and for `ready` — `components/ScaffoldButton.tsx`'s own explicit per-status labelling is the precedent this slice's brief already named. */
+function exportStatusLabel(status: TranscriptExport['status']): string {
+  switch (status) {
+    case 'ready':
+      return 'Ready'
+    case 'failed':
+      return 'Failed'
+    case 'pending':
+      return 'Queued…'
+  }
+}
+
 export function Transcripts({ organizationId }: TranscriptsScreenProps) {
   const [projects, setProjects] = useState<Project[] | undefined>(undefined)
   const [projectId, setProjectId] = useState('')
@@ -347,49 +379,53 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
                 className="flex flex-col gap-2"
                 data-testid="transcript-exports"
               >
-                {exports.map((exportRow) => (
-                  <li
-                    key={exportRow.id}
-                    className="flex items-center justify-between rounded-md border border-neutral-200 p-3 text-sm"
-                  >
-                    <span className="flex items-center gap-2 text-neutral-700">
-                      {exportRow.status === 'ready' && (
-                        <SuccessIcon
-                          aria-hidden="true"
-                          className="size-4 text-success-600"
-                        />
-                      )}
-                      {exportRow.status === 'failed' && (
-                        <FailureIcon
-                          aria-hidden="true"
-                          className="size-4 text-danger-600"
-                        />
-                      )}
-                      {exportRow.status === 'pending' && (
-                        <PendingIcon
-                          aria-hidden="true"
-                          className="size-4 text-neutral-400"
-                        />
-                      )}
-                      {new Date(exportRow.createdAt).toLocaleString()}
-                      {exportRow.status === 'failed' &&
-                        exportRow.failureReason &&
-                        ` — ${exportRow.failureReason}`}
-                    </span>
-                    {exportRow.status === 'ready' && (
-                      <a
-                        href={transcriptExportDownloadUrl(
-                          organizationId,
-                          exportRow.id
+                {exports.map((exportRow) => {
+                  const stillQueued =
+                    exportRow.status === 'pending' &&
+                    Date.now() - exportRow.createdAt >
+                      STILL_QUEUED_HINT_AFTER_MS
+                  return (
+                    <li
+                      key={exportRow.id}
+                      className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3 text-sm"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-neutral-700">
+                          {exportStatusIcon(exportRow.status)}
+                          {exportStatusLabel(exportRow.status)} —{' '}
+                          {new Date(exportRow.createdAt).toLocaleString()}
+                        </span>
+                        {exportRow.status === 'ready' && (
+                          <a
+                            href={transcriptExportDownloadUrl(
+                              organizationId,
+                              exportRow.id
+                            )}
+                            className="flex items-center gap-1 text-brand-700 underline-offset-2 hover:underline"
+                          >
+                            <DownloadIcon
+                              aria-hidden="true"
+                              className="size-4"
+                            />
+                            Download
+                          </a>
                         )}
-                        className="flex items-center gap-1 text-brand-700 underline-offset-2 hover:underline"
-                      >
-                        <DownloadIcon aria-hidden="true" className="size-4" />
-                        Download
-                      </a>
-                    )}
-                  </li>
-                ))}
+                      </div>
+                      {exportRow.status === 'failed' &&
+                        exportRow.failureReason && (
+                          <p className="text-sm text-danger-700">
+                            {exportRow.failureReason}
+                          </p>
+                        )}
+                      {stillQueued && (
+                        <p role="status" className="text-sm text-warning-600">
+                          Still queued — make sure the background worker (
+                          <code>npm run worker:dev</code>) is running.
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           )}

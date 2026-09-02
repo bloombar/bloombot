@@ -43,13 +43,7 @@
  * never look like a detach silently did nothing.
  */
 
-import {
-  type ChangeEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -67,7 +61,7 @@ import {
 } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
-import { FormField } from './FormField.js'
+import { FileDropZone } from './FileDropZone.js'
 import { useModal } from './modal/ModalProvider.js'
 
 export interface CourseAttachmentsProps {
@@ -118,6 +112,17 @@ function statusLabel(status: CourseAttachmentSummary['status']): string {
 }
 
 /**
+ * The largest file this screen will send.
+ *
+ * The server's own ceiling is `ACTION_JSON_BODY_LIMIT_BYTES` (28 MB), which is
+ * a *base64* budget — encoding inflates by about a third, so 20 MB of file is
+ * roughly 27 MB on the wire and the two numbers agree rather than one being a
+ * rounder version of the other. Refusing here means an instructor learns the
+ * limit before waiting for an upload the server was always going to reject.
+ */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/**
  * A browser `File`'s bytes, base64-encoded — what `courseAttachments.attach`'s
  * own `contentBase64` field wants. `FileReader#readAsDataURL` does the
  * encoding natively rather than this app looping over bytes itself
@@ -166,7 +171,6 @@ export function CourseAttachments({
     undefined
   )
   const [stillQueuedIds, setStillQueuedIds] = useState<Set<string>>(new Set())
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const { confirm } = useModal()
 
   // First-observed-active time per attachment id ("active" = pending, or a
@@ -255,9 +259,11 @@ export function CourseAttachments({
     refresh,
   ])
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  // The drop zone owns the picker and its reset, so choosing a file is just
+  // state here — clearing the last upload's error is the only extra step.
+  const chooseFile = (file: File): void => {
     setUploadError(undefined)
-    setSelectedFile(event.target.files?.[0])
+    setSelectedFile(file)
   }
 
   const handleUpload = async () => {
@@ -277,7 +283,6 @@ export function CourseAttachments({
         contentBase64,
       })
       setSelectedFile(undefined)
-      if (fileInputRef.current) fileInputRef.current.value = ''
       await refresh()
     } catch (caught) {
       if (caught instanceof ApiError) setUploadError(caught)
@@ -377,18 +382,15 @@ export function CourseAttachments({
 
       {detachError && <ErrorMessage error={detachError} />}
 
-      <div className="flex flex-wrap items-end gap-2">
-        <FormField
+      <div className="flex flex-col gap-2">
+        <FileDropZone
           label="Course file"
           help="Up to 20 MB — notes, syllabus or schedule."
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            aria-label="Course file"
-            onChange={handleFileChange}
-          />
-        </FormField>
+          maxBytes={MAX_ATTACHMENT_BYTES}
+          selectedFile={selectedFile}
+          disabled={uploading}
+          onFileChosen={chooseFile}
+        />
         <Button
           variant="secondary"
           icon={<AttachIcon aria-hidden="true" className="size-4" />}

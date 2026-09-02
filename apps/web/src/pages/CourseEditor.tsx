@@ -323,16 +323,15 @@ export function CourseEditor({
         // Every optional field below is sent explicitly — `null` when the
         // input is empty, the value otherwise — per this module's own
         // comment on why this form never relies on "omitted." `promptId`
-        // is the one deliberate exception (MDL-8): this form has no
-        // control that can change it any more, so it is never sent at all
+        // and `vectorStoreId` are the two deliberate exceptions (MDL-8,
+        // WEB-18): this form has no control that can change either any
+        // more, so neither is ever sent at all
         // — `courses.save`'s own "omitted preserves what is stored" rule
         // is exactly what keeps a course that already has one answered
         // through it, unchanged, save after save.
         instructions:
           form.instructions.trim() === '' ? null : form.instructions,
         model: form.model.trim() === '' ? null : form.model.trim(),
-        vectorStoreId:
-          form.vectorStoreId.trim() === '' ? null : form.vectorStoreId.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
         categories,
       }
@@ -852,19 +851,20 @@ export function CourseEditor({
           </FormField>
         )}
 
-        <FormField label="Vector store id">
-          <input
-            aria-label="Vector store id"
-            value={form.vectorStoreId}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                vectorStoreId: event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
+        {/*
+          WEB-18: an instructor never sees a vector store id. The store is the
+          platform's own bookkeeping — `courseAttachments.attach` creates one
+          on the first upload and adopts a hand-typed one if the course already
+          has it — and offering a text box for it is the vendor-dashboard
+          workflow FILE-1 exists to replace. Leaving it beside a knowledge-files
+          list would give an instructor two contradictory ways to say what a
+          course is grounded in.
+
+          Deprecated on the same terms as the prompt id: a course that already
+          has a value keeps working and keeps being answered through it, the
+          value is never cleared behind anybody's back, and no new course can
+          acquire one because the field it was typed into is gone.
+        */}
 
         <FormField
           label="Max requests per day"

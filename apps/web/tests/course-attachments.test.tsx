@@ -54,6 +54,18 @@ afterEach(() => {
   vi.resetAllMocks()
 })
 
+/**
+ * Choose a file the way a person does — dropping it on the zone. The label
+ * names the zone (a real button, so the keyboard can reach it), not the
+ * hidden picker behind it, so `fireEvent.change` on the label's target no
+ * longer selects anything.
+ */
+function chooseFile(chosen: File): void {
+  fireEvent.drop(screen.getByRole('button', { name: /Course file/ }), {
+    dataTransfer: { files: [chosen], types: ['Files'] },
+  })
+}
+
 describe('CourseAttachments (WEB-18)', () => {
   it('shows the empty state when a course has no files attached', async () => {
     listCourseAttachments.mockResolvedValue([])
@@ -135,8 +147,7 @@ describe('CourseAttachments (WEB-18)', () => {
     const file = new File(['%PDF-1.4 fixture'], 'syllabus.pdf', {
       type: 'application/pdf',
     })
-    const input = screen.getByLabelText('Course file')
-    fireEvent.change(input, { target: { files: [file] } })
+    chooseFile(file)
     fireEvent.click(screen.getByRole('button', { name: 'Attach file' }))
 
     await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(1))
@@ -174,9 +185,7 @@ describe('CourseAttachments (WEB-18)', () => {
     const file = new File(['x'.repeat(10)], 'huge.pdf', {
       type: 'application/pdf',
     })
-    fireEvent.change(screen.getByLabelText('Course file'), {
-      target: { files: [file] },
-    })
+    chooseFile(file)
     fireEvent.click(screen.getByRole('button', { name: 'Attach file' }))
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()

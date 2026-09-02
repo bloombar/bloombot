@@ -343,6 +343,39 @@ describe('CourseEditor (WEB-8)', () => {
  * a course that has none, or one not yet saved.
  */
 describe('CourseEditor stored-prompt notice (MDL-8)', () => {
+  // WEB-18: the vector store is the platform's own bookkeeping, and offering
+  // a text box for it beside a knowledge-files list would give an instructor
+  // two contradictory ways to say what a course is grounded in.
+  it('offers no vector store id field, and a save preserves the one a course already had', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.queryByLabelText('Vector store id')).toBeNull()
+
+    // The deprecation must not blank an inherited value on the next
+    // unrelated save — a course answered through a hand-typed store keeps
+    // being answered through it.
+    fireEvent.click(screen.getByRole('button', { name: /Save course/ }))
+    await waitFor(() => expect(saveCourse).toHaveBeenCalled())
+    // Never sent, rather than sent back: `courses.save`'s own "omitted
+    // preserves what is stored" rule is what keeps an inherited store
+    // attached, the same way the prompt id is preserved.
+    expect(saveCourse.mock.calls[0]?.[1] ?? {}).not.toHaveProperty(
+      'vectorStoreId'
+    )
+  })
+
   it('a course with a stored prompt id shows the notice and the id, read-only', async () => {
     getCourse.mockResolvedValue(COURSE)
 

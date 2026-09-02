@@ -8,6 +8,7 @@
     { "path": "./packages/schemas" },
     { "path": "./packages/db" },
     { "path": "./packages/auth" },
+    { "path": "./packages/mail" },
     { "path": "./packages/legacy-import" },
     { "path": "./packages/core" },
     { "path": "./packages/openai" },

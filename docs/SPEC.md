@@ -738,6 +738,15 @@ Administrators are identified by an email allowlist in the environment, read on 
 check rather than captured at startup, so adding or removing one takes effect without a
 deployment. It is never a self-granted role or a database flag.
 
+#### AUTH-5 A sign-in link actually reaches the person
+
+The platform sends mail in production through a real transport, configured by environment
+like every other credential. This is what makes AUTH-1 usable at all: a sign-in link is the
+primary way anybody reaches the panel, so a deployment that cannot send one is a deployment
+nobody can log into. The development stand-in that writes to a file stays refused in
+production, and a process that is configured to send mail and cannot must fail where an
+operator sees it rather than accepting a sign-in it will silently drop.
+
 ### 15. Tenancy & Server Registration
 
 #### TEN-1 The tenant is an organization
@@ -1316,6 +1325,15 @@ A person connects an assistant from the panel, and the token reaches the assista
 the tool result or a direct message — never a channel, a page, or a log. It is single-use
 and short-lived, and the account it will attach to is fixed when it is issued, so a token
 that leaks anyway attaches nothing to whoever found it.
+
+#### LINK-10 A connected person can reach the course they connected to, in the browser
+
+Connecting proves who somebody is; it does not make them a member of the institution running
+the course. The panel's organization switcher is built from memberships, so a student who has
+connected — and who Discord now answers — still opens the web app and sees only their own
+personal organization, with no way to reach the course their enrolment lives in. The browser has
+to know about the organizations a person is connected into, not only the ones their account
+administers, or LINK-6's payoff never arrives on the web surface at all.
 
 #### LINK-9 Nobody who could already ask is locked out by connecting
 

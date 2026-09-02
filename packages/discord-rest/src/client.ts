@@ -54,7 +54,10 @@
 
 import { CONFIG } from '@bloombot/config'
 
-import { allowMemberOverwrite } from './channel-overwrites.js'
+import {
+  allowBotOverwrite,
+  allowMemberOverwrite,
+} from './channel-overwrites.js'
 import type { DiscordPermissionOverwrite } from './channel-overwrites.js'
 import {
   getJson,
@@ -73,15 +76,57 @@ export interface DiscordOAuthToken {
   expiresIn: number
 }
 
+/**
+ * A short, human-readable cause for the statuses an operator actually meets,
+ * appended to `DiscordRequestError`'s message.
+ *
+ * Deliberately built from the status alone and never from Discord's response
+ * body: the body can carry an OAuth authorization code, which is why this
+ * class keeps it non-enumerable in the first place. A bare "failed with
+ * status 403" told an operator nothing about what to change; this says what
+ * to look at without repeating anything Discord echoed back.
+ */
+function explainDiscordStatus(status: number): string {
+  switch (status) {
+    case 401:
+      return ' — the bot token was rejected. Check BOT_TOKEN, and that the token was not reset in the developer portal.'
+    case 403:
+      return ' — Discord refused this on permissions. Either the bot is missing a permission the action needs (scaffolding needs Manage Channels and Manage Roles), or a channel or category overwrite denies the bot itself, or the role it is trying to manage sits above the bot in the guild role order.'
+    case 404:
+      return ' — Discord has no such guild, channel, role or member. It may have been deleted, or the bot may not be in that server.'
+    case 429:
+      return ' — rate limited. This one clears on its own and is retried.'
+    default:
+      return ''
+  }
+}
+
 /** Thrown when Discord answers a call with a non-2xx status — callers decide how to treat it (TEN-4's callback refuses the whole install the same way it refuses an unknown state); this file adds no interpretation of its own. */
 export class DiscordRequestError extends Error {
   readonly status: number
   readonly body: unknown
 
+  /**
+   * Whether retrying could ever succeed.
+   *
+   * A `403` means a permission the bot does not have; a `404` means something
+   * that is not there; a `400` means a request Discord will reject the same
+   * way every time. Retrying those is not resilience, it is four more
+   * identical failures and a log nobody can read — which is exactly what a
+   * scaffold run did in the field when a category locked the bot out.
+   *
+   * `429` is the exception: rate limiting is the one 4xx that genuinely
+   * clears on its own. Everything 5xx stays retryable.
+   */
+  readonly permanent: boolean
+
   constructor(status: number, body: unknown) {
-    super(`Discord request failed with status ${status}`)
+    super(
+      `Discord request failed with status ${status}${explainDiscordStatus(status)}`
+    )
     this.name = 'DiscordRequestError'
     this.status = status
+    this.permanent = status >= 400 && status < 500 && status !== 429
     // `body` (an OAuth `error`/`error_description` pair, typically) is
     // deliberately not interpolated into `message` — the caller that wants
     // it can read `.body`, but a log line built from `.message` alone must
@@ -198,6 +243,33 @@ export interface DiscordRestClient {
   ): Promise<DiscordChannel[]>
 
   /** Every role in a guild (SRV-2) — resolves a course's `adminsRole`/`studentsRole` names to ids. A name that resolves to nothing is the caller's to report (SRV-2's "skipped rather than treated as fatal"), not this method's — it simply omits what it does not find, the same as the real endpoint. */
+  /**
+   * The bot's own user id, from `/users/@me`.
+   *
+   * Scaffolding needs it to grant itself an overwrite on a category it is
+   * about to close to `@everyone` — see `allowBotOverwrite`. Asked of Discord
+   * rather than read from configuration: a bot user's id equals its
+   * application id today, but an operator who mistypes `BOT_APP_ID` would
+   * otherwise get a category the bot silently cannot write in.
+   */
+  /**
+   * Grant the bot itself view/send/manage on one channel or category.
+   *
+   * Repair, not routine setup: a category created before `allowBotOverwrite`
+   * existed denies `@everyone` and names the bot nowhere, so the bot cannot
+   * create channels inside a category it made itself. Adopting that category
+   * on a later run has to fix it or fail the same way forever.
+   *
+   * Writes only the bot's own entry — `PUT /channels/{id}/permissions/{id}`
+   * replaces one target's overwrite and leaves every other untouched, so a
+   * course's own admins/students grants and its `@everyone` denial survive.
+   */
+  grantBotChannelAccess(
+    botToken: string,
+    channelId: string,
+    botUserId: string
+  ): Promise<void>
+  getBotUserId(botToken: string): Promise<string>
   listGuildRoles(botToken: string, guildId: string): Promise<DiscordRole[]>
 
   /** Every member of a guild (ROST-10/ROST-11) — `apps/worker`'s roster-import handler matches a roster row's self-reported `Discord` handle against this list (username or display name, case-insensitively), the same lookup `discord_manager.py`'s own `get_user_id` performs. A handle matching nobody here is the caller's to report (ROST-12), not this method's. */
@@ -573,6 +645,24 @@ export function createDiscordRestClient(
       return parseChannelList(response.body)
     },
 
+    async getBotUserId(botToken): Promise<string> {
+      const response = await getJson(
+        `${apiBase}/users/@me`,
+        `Bot ${botToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      const id = (response.body as { id?: unknown } | null)?.id
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new Error(
+          'Discord returned no id for the bot user — /users/@me answered without one'
+        )
+      }
+      return id
+    },
+
     async listGuildRoles(botToken, guildId): Promise<DiscordRole[]> {
       const response = await getJson(
         `${apiBase}/guilds/${guildId}/roles`,
@@ -675,6 +765,23 @@ export function createDiscordRestClient(
         throw new DiscordRequestError(response.status, response.body)
       }
       return parseChannel(response.body)
+    },
+
+    async grantBotChannelAccess(botToken, channelId, botUserId): Promise<void> {
+      const overwrite = allowBotOverwrite(botUserId)
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${botUserId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
     },
 
     async grantChannelMemberAccess(

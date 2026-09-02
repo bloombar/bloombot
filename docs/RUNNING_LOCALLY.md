@@ -189,4 +189,5 @@ side — an import that can only ever run against a snapshot can be rehearsed as
 | sign-in email "sent" (a `204`) but no link anywhere | `MAIL_FILE` is not set, or was added after the process started — it is read at startup. The fallback logs only the recipient and subject, never the link |
 | bot connects but never answers | the **Message Content Intent** is off in the developer portal; Discord then withholds message text entirely |
 | the bot answers nothing in a category you configured | the course is disabled, its project is archived, or the category name does not match exactly |
+| scaffolding creates the category then fails every channel with `403` | the bot was invited with too few permissions. `BOT_PERMISSIONS` must be `268504080` (View Channels, Send Messages, Read Message History, Manage Channels, Manage Roles) — and Discord fixes a bot's permissions **at invite time**, so changing `.env` is not enough: re-invite through **Discord → Install to Discord** |
 | `npm ci` fails on a lockfile mismatch | run `npm install` and commit the lockfile — a new workspace package was added without it |

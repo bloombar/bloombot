@@ -124,7 +124,13 @@ Connecting is part of this phase, not a follow-up: LINK-1 declines anybody the p
 cannot attribute to a connected account, so the gate and the way through it have to ship
 together. A build that has the gate and no connect surface answers nobody.
 
-**In scope:** PPL-4/5, WEB-10..17, LINK-1..9, ENRL-1..6
+**In scope:** PPL-4/5, WEB-10..17, LINK-1..10, ENRL-1..6
+
+LINK-10 was found by reviewing LINK-6..9 rather than planned: connecting creates a *person*, and
+the panel's switcher is built from *memberships*, so the browser half of the payoff does not
+land until the two are reconciled. It is scoped separately because it is a read-surface change —
+a new "organizations I am connected into" concept — rather than anything to do with proving an
+identity.
 
 ## Phase 13 — MCP server & agent access
 
@@ -136,4 +142,9 @@ together. A build that has the gate and no connect surface answers nobody.
 
 ## Phase 15 — Production hardening
 
-**In scope:** OPS-8..14
+**In scope:** OPS-8..14, AUTH-5
+
+AUTH-5 lands here rather than with the rest of authentication because it was found here:
+production hardening is what surfaced that `apps/api` cannot start under `NODE_ENV=production`
+at all, since the only mail transport is a development stand-in that is refused there. A
+deployment nobody can sign in to is not a deployment.

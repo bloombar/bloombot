@@ -132,5 +132,13 @@ export function createFakeDiscordRestClient(
     grantChannelMemberAccess(): Promise<void> {
       return Promise.resolve()
     },
+
+    getBotUserId(): Promise<string> {
+      return Promise.resolve('fake-bot-user-id')
+    },
+
+    grantBotChannelAccess(): Promise<void> {
+      return Promise.resolve()
+    },
   }
 }

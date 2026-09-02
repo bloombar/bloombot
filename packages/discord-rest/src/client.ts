@@ -54,7 +54,10 @@
 
 import { CONFIG } from '@bloombot/config'
 
-import { allowMemberOverwrite } from './channel-overwrites.js'
+import {
+  allowBotOverwrite,
+  allowMemberOverwrite,
+} from './channel-overwrites.js'
 import type { DiscordPermissionOverwrite } from './channel-overwrites.js'
 import {
   getJson,
@@ -233,6 +236,23 @@ export interface DiscordRestClient {
    * application id today, but an operator who mistypes `BOT_APP_ID` would
    * otherwise get a category the bot silently cannot write in.
    */
+  /**
+   * Grant the bot itself view/send/manage on one channel or category.
+   *
+   * Repair, not routine setup: a category created before `allowBotOverwrite`
+   * existed denies `@everyone` and names the bot nowhere, so the bot cannot
+   * create channels inside a category it made itself. Adopting that category
+   * on a later run has to fix it or fail the same way forever.
+   *
+   * Writes only the bot's own entry — `PUT /channels/{id}/permissions/{id}`
+   * replaces one target's overwrite and leaves every other untouched, so a
+   * course's own admins/students grants and its `@everyone` denial survive.
+   */
+  grantBotChannelAccess(
+    botToken: string,
+    channelId: string,
+    botUserId: string
+  ): Promise<void>
   getBotUserId(botToken: string): Promise<string>
   listGuildRoles(botToken: string, guildId: string): Promise<DiscordRole[]>
 
@@ -706,6 +726,23 @@ export function createDiscordRestClient(
         throw new DiscordRequestError(response.status, response.body)
       }
       return parseChannel(response.body)
+    },
+
+    async grantBotChannelAccess(botToken, channelId, botUserId): Promise<void> {
+      const overwrite = allowBotOverwrite(botUserId)
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${botUserId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
     },
 
     async grantChannelMemberAccess(

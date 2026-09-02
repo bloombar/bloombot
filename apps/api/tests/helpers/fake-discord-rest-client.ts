@@ -118,5 +118,9 @@ export function createFakeDiscordRestClient(
     getBotUserId(): Promise<string> {
       return Promise.resolve('fake-bot-user-id')
     },
+
+    grantBotChannelAccess(): Promise<void> {
+      return Promise.resolve()
+    },
   }
 }

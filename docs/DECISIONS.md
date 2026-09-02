@@ -4941,6 +4941,88 @@ under the export's own id.
 
 ---
 
+### Rework — a second reviewer, challenged on the coordinator's own instruction, found the label wrong and the cost bigger than stated
+
+A fourth round. The coordinator asked the reviewer to challenge the third round's own de-identification call
+specifically, not merely re-check it — the reviewer agreed the reversal (identity fields out, content kept)
+was right in shape, and found two things wrong with what shipped: the file's own claim, and the coordinator's
+own stated cost. Both are corrected here; a third, unrelated finding closed a test flake whose real cause a
+prior guess (`docs/DECISIONS.md`, this file, third round, above) had missed.
+
+**Finding 1 — `deidentified: true` was not true.** Withholding `personId`/`personDisplayName` de-identifies a
+transcript only if nothing *else* in it identifies the student — and this platform's own `packages/openai/
+src/conversations.ts` opens every upstream conversation with "My name is ${displayName} (user id
+${personRef})", read from `answer.ts`, and stores the model's own reply verbatim, name and all: "Hi Sarah —
+the midterm is on 12 October" is designed behaviour, not an unlucky sample, and a real run against a
+Discord-only course named two real students in four lines. `deidentified` is a term of art an instructor
+relies on to decide whether a file may leave the tenant — a TA outside it, an IRB submission, a research
+corpus — and claiming a property the file does not have is worse than making no claim at all. Renamed to
+`identityFieldsOmitted: true`, which says only what is actually true, and a `notice` string next to it in the
+file (plus a line on-screen, next to the Export button, `Transcripts.tsx` — the same "said where a reader
+will see it, not left inside a field nobody but a script reads" correction this rework already drew from
+`omittedForUnverifiedAddress`'s own mistake) states plainly that the message text itself is not filtered and
+may still name someone. `apps/worker/src/handlers/transcripts.ts`'s own module comment carries the reasoning
+in full.
+
+**Finding 2 — the cost the coordinator recorded in the round above was smaller than the real one, and the
+coordinator's own correction is recorded here with the objection, not only the conclusion.** The round above
+framed stripping identity as "an instructor can no longer follow one student's own thread through an
+unfiltered export." The reviewer's own point, which the coordinator accepted as the stronger one: every
+reason an instructor actually exports — participation credit, a student stuck for three weeks, an integrity
+question, a wellbeing escalation — is per-student work, and none of it survives a file that names nobody, for
+exactly the Discord-only course this feature exists to serve. What survives an unfiltered export is
+corpus-level use only, and that is not the export's primary use.
+
+The fix: every entry now carries `participant: "P1"`, `"P2"`, ... — a pseudonym assigned fresh on every
+export, ordered by a hash salted with `randomBytes(16)` minted new on every call and never stored
+(`assignPseudonyms`, `apps/worker/src/handlers/transcripts.ts`) — stable across every entry *within* one
+export (so "does this keep coming from the same person" survives), but not correlated *across* two exports of
+the same course (a caller cannot line up one export's own `P1..Pn` against another's, a roster, or Discord to
+find the same student in both). `personId`/`personDisplayName` stay omitted; no name, no id, no display name,
+anywhere in an unfiltered export.
+
+The objection, recorded rather than only the conclusion it lost to: this partially reinstates the very shape
+round three's own finding 1 raised against round two — `jq 'select(.participant=="P1")'` still returns one
+person's whole history inside this one file, unnamed. The coordinator's own judgement, on the record: this
+does not cross what PPL-5 gates, because PPL-5 gates disclosure of a *named* person's history, and a
+per-export pseudonym names nobody — `P1` does not resolve against a second export of the same course, a
+roster, or Discord, the way `personId` would. A future reader who finds that distinction too thin should treat
+this paragraph as the place to reopen it, with the evidence (the two findings above, and D-35's own "a person
+connected only through Discord read `true`" precedent for how narrowly this platform has drawn "identified"
+elsewhere) already assembled. A student-filtered export is unchanged by any of this: it names exactly the one
+person it was asked for, deliberately, and stays gated on `hasVerifiedAddress`.
+
+**Finding 3 — the delayed-sweep test's own flake had a different cause than the guess recorded above, and the
+fix is in the test, not the route.** The round-three section above blamed a race between the test's own
+2-second poll and a 5-second production default, shortened in-test to `deletedTenantSweepDelayMs: 20`. The
+reviewer traced it further and found the real cause: `routes/admin.ts`'s own delayed `setTimeout` is scheduled
+*inside* `sweepStorage(...).then(...)`, before the response is sent — so the timer is already running, on the
+real clock, while the test's own code between `await request(app)...` resolving and its own `attachmentStorage.write`
+call runs. Parameterised proof reproduced the exact boundary: a simulated write landing immediately after the
+response removed cleanly; one landing 200ms after did not, ever, since the sweep is one-shot. Raising the poll
+or the delay only widens the same race; it does not close it — measured, before this fix, at roughly one
+failure in five even against a generous two-second poll, reproduced by hand for this round's own record.
+
+Fixed by making the ordering the test needs true by construction: `ServerDependencies` (`apps/api/src/
+server.ts`) gained an optional `attachmentStorage` override — a test-only seam, never set by `src/index.ts` —
+so `apps/api/tests/routes/admin.test.ts` can wrap the one call that matters (`remove`) rather than writing
+bytes itself on its own schedule. The wrapped `remove` performs the simulated worker write as a side effect
+*after* removing (a no-op, nothing is there yet), the first time it is called for the export's own id — which
+happens *during* the immediate sweep's own `Promise.all`, before that promise settles, before `.then()` ever
+schedules the delayed sweep's own timer. No wall-clock assumption is left for the test to lose; run twenty
+times after this fix, clean every time (measured for this round's own record).
+
+**Also.** Drizzle advances its own migration watermark from the journal's `when` value, not from a migration's
+own filename — a database that already applied `0013_loud_tigra` (the file this rework's own third round
+deleted and replaced with `0013_opposite_selene`) re-runs the replacement under its new tag and dies on
+`duplicate column name: sequence`, reproduced by the reviewer. No code change follows from this: neither
+`0013_loud_tigra` nor its own replacement had reached the integration branch before the third round's own fix
+landed, so only a local development database built directly from this branch, mid-rework, can be in that
+state — recorded here so the next person editing an unmerged migration edits it in place, under its original
+tag, rather than deleting and regenerating it the way this rework's own third round did.
+
+---
+
 ## D-49 — `packages/db`/`packages/core`: CONV-4 — a message is never silently lost, the retry versus `BEGIN IMMEDIATE`, and what surfacing the failure costs
 
 **Problem.** A reviewer chased `e2e/course-configuration.spec.ts`'s own ~1-in-8 flake to its cause rather

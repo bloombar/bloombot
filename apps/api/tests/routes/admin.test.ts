@@ -354,13 +354,36 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
     ).toBeUndefined()
   })
 
-  // Must-fix 1 — ADMIN-5's own race with `apps/worker`'s export handler:
-  // an in-flight job can land bytes on disk *after* the tenant's own rows
-  // (and this route's own immediate best-effort sweep) are already gone.
-  // The delayed second sweep (`deletedTenantSweepDelayMs`) is what still
-  // catches it. Simulates the worker's own write landing moments after the
-  // delete responds, rather than racing a real worker process.
-  it('a byte written after the tenant is already deleted is still removed, by the delayed sweep', async () => {
+  // Must-fix 1, this rework's own fourth round — ADMIN-5's own race with
+  // `apps/worker`'s export handler: an in-flight job can land bytes on
+  // disk *after* the tenant's own rows (and this route's own immediate
+  // best-effort sweep) are already gone. The delayed second sweep
+  // (`deletedTenantSweepDelayMs`) is what still catches it.
+  //
+  // A prior version of this test wrote the simulated bytes itself, after
+  // `await request(app)...` resolved, and polled for their removal —
+  // which reads as "the write happens after the response, and the delayed
+  // sweep catches it later", but is not what actually races: `routes/
+  // admin.ts`'s own delayed `setTimeout` is scheduled *inside*
+  // `sweepStorage(...).then(...)`, before the response is ever sent, so
+  // the timer was already running, on its own real clock, throughout the
+  // time this test spent on its own assertions and a `Buffer.from` call
+  // before writing — a genuine race between wall-clock time this test
+  // does not control and the fixed `deletedTenantSweepDelayMs` below.
+  // Widening the poll or the delay only widens that race; it does not
+  // close it, which is exactly why this failed at roughly one run in five
+  // even against a generous two-second poll (verified by hand, patching
+  // the fix out below).
+  //
+  // Fixed to make the *ordering* the test relies on true by construction
+  // rather than by timing: `attachmentStorage`'s own `remove` is wrapped
+  // so that its first call for this export's own id performs the
+  // simulated worker write as a side effect *after* removing (a no-op —
+  // nothing is there yet) — landing the bytes on disk during the
+  // *immediate* sweep's own `Promise.all`, before that promise settles,
+  // before `.then()` ever schedules the delayed sweep's own timer. No
+  // wall-clock assumption is left for this test to lose.
+  it('a byte the immediate sweep passes over, written the moment it does, is still removed by the delayed sweep', async () => {
     testDb = createTestDatabase()
     const admin = seedPlatformAdministrator(testDb.db)
     const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
@@ -380,10 +403,36 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
       { courseId, requestedByAccountId: instructor.id },
       testDb.db
     )
-    const attachmentStorage = createFilesystemAttachmentStorage(
+    const realAttachmentStorage = createFilesystemAttachmentStorage(
       TEST_ATTACHMENT_STORAGE_DIR
     )
+    // Simulates `apps/worker`'s own export handler landing its write in
+    // the narrow window the immediate sweep's own pass over this exact id
+    // leaves open — exactly the race `apps/worker/src/handlers/
+    // transcripts.ts`'s own module comment describes, and the reason a
+    // re-check alone (that file's own fix) is not sufficient on its own
+    // without this route's own second pass. Guarded to fire once: the
+    // *delayed* sweep also calls `remove` for this same id, and must not
+    // find the bytes rewritten out from under its own real removal.
+    let simulatedWorkerWriteDone = false
+    const attachmentStorage = {
+      ...realAttachmentStorage,
+      remove: async (org: string, id: string) => {
+        await realAttachmentStorage.remove(org, id)
+        if (id === exportRow.id && !simulatedWorkerWriteDone) {
+          simulatedWorkerWriteDone = true
+          await realAttachmentStorage.write(
+            org,
+            id,
+            Buffer.from(
+              '{"transcript":["a departed tenant\u2019s own student speech"]}'
+            )
+          )
+        }
+      },
+    }
     const app = await buildTestApp(testDb.db, {
+      attachmentStorage,
       // A test overrides the five-second production default to a few
       // milliseconds — this test is not waiting five real seconds to prove
       // the sweep runs.
@@ -397,35 +446,20 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
       .send({ confirmName: 'A Real Tenant' })
     expect(response.status).toBe(200)
 
-    // The organization's own rows are gone, but nothing wrote bytes yet —
-    // the immediate best-effort sweep found nothing to remove.
+    // The organization's own rows are gone; the immediate sweep already
+    // ran (its own `remove` call landed the simulated write above, as a
+    // side effect, before this response was ever sent).
     expect(
       organizations.getOrganizationById(organizationId, testDb.db)
     ).toBeUndefined()
 
-    // Simulates `apps/worker`'s own export handler landing its write in
-    // the narrow window after this route's own immediate sweep already ran
-    // — exactly the race `apps/worker/src/handlers/transcripts.ts`'s own
-    // module comment describes, and the reason a re-check alone (that
-    // file's own fix) is not sufficient on its own without this route's
-    // own second pass.
-    await attachmentStorage.write(
-      organizationId,
-      exportRow.id,
-      Buffer.from(
-        '{"transcript":["a departed tenant\u2019s own student speech"]}'
-      )
-    )
-    expect(
-      await attachmentStorage.read(organizationId, exportRow.id)
-    ).toBeDefined()
-
     // The delayed sweep, configured above to run almost immediately,
     // catches what the immediate one could not have — polled rather than
-    // asserted once, since it runs on its own `setTimeout`, outside this
-    // test's own control.
+    // asserted once, since it still runs on its own `setTimeout`, outside
+    // this test's own control (only *when the bytes were written*, not
+    // *when they are removed*, is deterministic here).
     await pollUntilUndefined(() =>
-      attachmentStorage.read(organizationId, exportRow.id)
+      realAttachmentStorage.read(organizationId, exportRow.id)
     )
   })
 })

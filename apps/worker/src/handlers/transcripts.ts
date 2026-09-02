@@ -24,17 +24,31 @@
  * names it can be reached without" reasoning, `courseAttachments.attach`'s
  * own handler already uses.
  *
- * **PPL-5, applied by withholding identity, not content.** An unfiltered,
- * whole-course export carries every entry's own `direction`/`content`/
- * `createdAt` but never `personId`/`personDisplayName` — see this
- * handler's own comment at the point that happens for the full reasoning
- * (a rework finding, and the coordinator's own call: an earlier draft
- * filtered *entries* by `hasVerifiedAddress`, which silently emptied the
- * export for the ordinary, Discord-only course this platform is actually
- * built for). A *student-filtered* export still carries the one student's
- * own identity it was asked for — that disclosure is the export's whole
- * point — gated on `hasVerifiedAddress` in `transcripts.export`'s own
- * action, unchanged.
+ * **PPL-5, applied by withholding identity fields, not content — and not
+ * called "de-identified".** An unfiltered, whole-course export carries
+ * every entry's own `direction`/`content`/`createdAt` but never
+ * `personId`/`personDisplayName`; each entry's own student is instead
+ * named only by a `participant` pseudonym ("P1", "P2", ...) assigned
+ * fresh, randomly ordered, on every export of the same course, so a
+ * caller cannot correlate one export's own `P1` with another's, a roster,
+ * or Discord. See this handler's own comment at the point that happens
+ * for the full reasoning (a rework finding, and the coordinator's own
+ * call, twice over: an earlier draft filtered *entries* by
+ * `hasVerifiedAddress`, which silently emptied the export for the
+ * ordinary, Discord-only course this platform is actually built for; the
+ * draft after that called the result "de-identified", which a second
+ * reviewer correctly rejected — this platform's own opening line for a
+ * conversation (`packages/openai/src/conversations.ts`) deliberately
+ * seeds it with the student's own name, "My name is ${displayName}...",
+ * and a reply routinely echoes it back, so stripping two fields off an
+ * entry whose own *text* still says "Hi Sarah —" does not de-identify
+ * anything). `identityFieldsOmitted: true` in the file below claims only
+ * what is actually true — those two fields are gone — and a `notice`
+ * string next to it says plainly that the text itself may still name
+ * someone; `docs/DECISIONS.md` D-48 records the full trade this costs). A
+ * *student-filtered* export still carries the one student's own identity
+ * it was asked for — that disclosure is the export's whole point — gated
+ * on `hasVerifiedAddress` in `transcripts.export`'s own action, unchanged.
  *
  * **ADMIN-5's own race, closed the same way `courseAttachments.attach`
  * already closes it for FILE-1.** Producing the file — `JSON.stringify`
@@ -73,6 +87,7 @@
  * promise depends on.
  */
 
+import { createHash, randomBytes } from 'node:crypto'
 import {
   costLedger,
   transcriptAccess,
@@ -116,6 +131,37 @@ function permanentFailure(message: string): Error {
   const error = new Error(message) as Error & { permanent: true }
   error.permanent = true
   return error
+}
+
+/**
+ * Assigns every distinct student appearing in `entries` a "P1"/"P2"/...
+ * label — stable across every entry in *this* call, so a reader can still
+ * tell two entries came from the same person, but ordered by a hash
+ * salted with `randomBytes`, freshly minted on every call and never
+ * stored anywhere: the same student's own label does not repeat, or even
+ * keep the same ordinal, the next time this function runs for the same
+ * course (this file's own module comment, and `docs/DECISIONS.md` D-48,
+ * have the reasoning this trade rests on, and the objection to it).
+ */
+function assignPseudonyms(
+  entries: readonly { personId: string }[]
+): Map<string, string> {
+  const salt = randomBytes(16).toString('hex')
+  const orderKey = (personId: string) =>
+    createHash('sha256').update(salt).update(personId).digest('hex')
+
+  const distinctPersonIds = [...new Set(entries.map((entry) => entry.personId))]
+  distinctPersonIds.sort((a, b) => {
+    const keyA = orderKey(a)
+    const keyB = orderKey(b)
+    if (keyA < keyB) return -1
+    if (keyA > keyB) return 1
+    return 0
+  })
+
+  return new Map(
+    distinctPersonIds.map((personId, index) => [personId, `P${index + 1}`])
+  )
 }
 
 export function createTranscriptExportHandler(
@@ -178,40 +224,89 @@ export function createTranscriptExportHandler(
     )
 
     // PPL-5, applied at the level the disclosure actually happens at — a
-    // rework finding, and the coordinator's own call: the per-entry
-    // `hasVerifiedAddress` filter this used to run (round two's own first
-    // draft) made an *ordinary* course's export come back empty, silently
-    // — `omittedForUnverifiedAddress` said so, but only inside the JSON
-    // nobody but a script reads, while the panel showed a green tick and a
-    // Download link over a file with nothing in it. That defeats ADMIN-3's
-    // own text ("an instructor... collects the file when it is ready") for
-    // the ordinary case this platform is actually built for: a class that
-    // only ever meets students through Discord, where `hasVerifiedAddress`
-    // is false for everyone.
+    // rework finding, and the coordinator's own call, twice over: the
+    // per-entry `hasVerifiedAddress` filter this used to run (round two's
+    // own first draft) made an *ordinary* course's export come back
+    // empty, silently — `omittedForUnverifiedAddress` said so, but only
+    // inside the JSON nobody but a script reads, while the panel showed a
+    // green tick and a Download link over a file with nothing in it. That
+    // defeats ADMIN-3's own text ("an instructor... collects the file
+    // when it is ready") for the ordinary case this platform is actually
+    // built for: a class that only ever meets students through Discord,
+    // where `hasVerifiedAddress` is false for everyone.
     //
     // What round two's own finding actually named was narrower than "an
     // unverified person's content must never leave in a file" — it was
     // that an unfiltered export could still *reconstruct one named
     // person's history* (`jq 'select(.personId=="S")'`), which is PPL-5's
     // own "a person's history", read literally: the *identity* is what
-    // makes a transcript a *person's*. So identity, not content, is what
-    // an unfiltered export withholds: every entry below carries its own
-    // `direction`/`content`/`createdAt` regardless of who sent it, but
-    // `personId`/`personDisplayName` are included only when this export
-    // names one student (`exportRow.personId` — already refused upstream,
-    // in `transcripts.export`'s own action, unless that student's own
-    // address is verified) — there is no line in an *unfiltered* file any
-    // caller, `jq` included, can attribute to a named student, because the
-    // name is not there to select on. A student-filtered export still
-    // names exactly the one person it was asked for, deliberately: that
-    // disclosure is the export's whole point, and it is already gated.
-    const deidentify = exportRow.personId === null
-    const transcriptEntries = deidentify
-      ? transcript.entries.map(({ direction, content, createdAt }) => ({
-          direction,
-          content,
-          createdAt,
-        }))
+    // makes a transcript a *person's*. Round three's own first draft
+    // withheld `personId`/`personDisplayName` on that reasoning and
+    // called the result "de-identified" — which a second reviewer
+    // correctly rejected: this platform's own opening line for a
+    // conversation (`packages/openai/src/conversations.ts`) deliberately
+    // seeds it with the student's own name ("My name is
+    // ${displayName}..."), and a model's own reply routinely echoes it
+    // back ("Hi Sarah — the midterm is on..."), verbatim, in the stored
+    // message text this export reads back. Two fields being gone from an
+    // entry whose own `content` still names the student is not
+    // de-identification; it is a false assurance, worse than none.
+    //
+    // So this export withholds identity *fields* (unchanged from round
+    // three's first draft — `personId`/`personDisplayName` never appear
+    // in an unfiltered export's own entries) but claims only that, under
+    // the accurate name `identityFieldsOmitted`, and says so again, in
+    // plain language, in the `notice` string below — the same "said
+    // where a reader will see it, not left inside a field nobody but a
+    // script reads" correction this file's own module comment already
+    // draws from `omittedForUnverifiedAddress`'s own mistake. Content is
+    // not filtered, deliberately — the coordinator's own repeated
+    // instruction across every round of this rework — so what an
+    // unfiltered export actually gives up is narrower than "follows one
+    // student's own thread": every one of the reasons an instructor
+    // exports at all (participation, a student stuck for weeks, an
+    // integrity question, a wellbeing escalation) is per-student work,
+    // and none of it survives an unfiltered export naming nobody —
+    // `docs/DECISIONS.md` D-48 records this trade, and the objection to
+    // it, in full.
+    //
+    // What an unfiltered export *does* still support is corpus-level use
+    // — reading every message a course produced without knowing whose it
+    // was — and for that, a bare "no name at all" is worse than it needs
+    // to be: two entries from the same student, unmarked, read as two
+    // strangers, though it is often exactly "does this keep coming from
+    // the same person" a corpus read wants to know. `assignPseudonyms`
+    // (below) answers that without naming anyone: every entry carries a
+    // `participant` label ("P1", "P2", ...) stable across every entry in
+    // *this* export, but assigned in an order randomised fresh on every
+    // export — the coordinator's own explicit call, with the coordinator's
+    // own objection recorded alongside it in D-48: a stable, unnamed
+    // label still lets `jq 'select(.participant=="P1")'` return one
+    // person's whole history inside this one file, the shape round one's
+    // own finding first raised, PPL-5 gates a *named* person's history,
+    // and "P1" resolves to nobody outside this file — not a roster, not a
+    // second export of the same course, not Discord. A student-filtered
+    // export is unchanged: it still names exactly the one person it was
+    // asked for, deliberately — that disclosure is the export's whole
+    // point, and it is already gated on `hasVerifiedAddress`.
+    const identityFieldsOmitted = exportRow.personId === null
+    const pseudonymByPersonId = identityFieldsOmitted
+      ? assignPseudonyms(transcript.entries)
+      : undefined
+    const transcriptEntries = pseudonymByPersonId
+      ? transcript.entries.map(
+          ({ personId, direction, content, createdAt }) => {
+            const participant = pseudonymByPersonId.get(personId)
+            // Invariant, not a real branch: `pseudonymByPersonId` is built
+            // from these exact entries' own `personId`s, immediately above.
+            if (!participant) {
+              throw new Error(
+                `transcripts.export: no pseudonym assigned for person "${personId}"`
+              )
+            }
+            return { participant, direction, content, createdAt }
+          }
+        )
       : transcript.entries
 
     const fileContent = JSON.stringify(
@@ -224,13 +319,20 @@ export function createTranscriptExportHandler(
           endAt: exportRow.endAt,
         },
         usage: courseUsage ?? null,
-        // De-identified for a whole-course export (this handler's own
-        // comment just above) — `deidentified: true` says so plainly in
-        // the file itself, the same "an instructor should be told, not
-        // left to notice a missing field" reasoning the removed
-        // `omittedForUnverifiedAddress` field used to serve for a
-        // different, wrong reason.
-        deidentified: deidentify,
+        // What is actually true, named accurately (this handler's own
+        // comment just above) — not "de-identified", which the message
+        // text below can defeat on its own.
+        identityFieldsOmitted,
+        ...(identityFieldsOmitted
+          ? {
+              notice:
+                'Student ids and display names are omitted and replaced ' +
+                'below with a pseudonym ("participant") unique to this ' +
+                'export — it will not match any other export of this ' +
+                'course. The message text itself is not filtered, and ' +
+                'may still name a student.',
+            }
+          : {}),
         transcript: transcriptEntries,
       },
       null,

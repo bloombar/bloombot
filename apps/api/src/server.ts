@@ -29,7 +29,11 @@ import express, { type Express } from 'express'
 import { createPlatformRegistry, type ActionRegistry } from '@bloombot/actions'
 import type { EmailSender, GoogleIdTokenVerifier } from '@bloombot/auth'
 import type { ModelClient, PricingTable } from '@bloombot/core'
-import { createFilesystemAttachmentStorage, type Database } from '@bloombot/db'
+import {
+  createFilesystemAttachmentStorage,
+  type AttachmentStorage,
+  type Database,
+} from '@bloombot/db'
 import type { DiscordRestClient } from '@bloombot/discord-rest'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
@@ -64,6 +68,8 @@ export interface ServerDependencies {
   registry?: ActionRegistry
   /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. `src/index.ts` always supplies `CONFIG.ATTACHMENT_STORAGE_DIR` explicitly, the same as every other `CONFIG` value it reads once and passes down — omitting this is only ever a test's own choice, and falls through to `createPlatformRegistry`'s own `'./tmp/attachments'` default (never `data/`, a rework finding — see `docs/DECISIONS.md` D-32). */
   attachmentStorageDir?: string
+  /** ADMIN-5 rework, round four — a test-only seam: the same port `attachmentStorageDir` above builds an instance of, but handed in already-constructed, so a test can wrap one call (typically `remove`) with an observable or a deterministic side effect without reaching inside this file's own closure. Ordinary callers (`src/index.ts`) never set this; `attachmentStorageDir` (or its own `'./tmp/attachments'` fallback) governs every real deployment. */
+  attachmentStorage?: AttachmentStorage
   /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
   discordRestClient: DiscordRestClient
   /** Discord's "client id"/"application id" — `BOT_APP_ID` in env.example. */
@@ -109,10 +115,14 @@ export function buildApp(deps: ServerDependencies): Express {
   // functionally identical, and this file has no way to reach inside
   // `registry`'s own closure to reuse the one it built. Never `data/` — the
   // same `'./tmp/attachments'` fallback `createPlatformRegistry` itself
-  // uses (D-32).
-  const attachmentStorage = createFilesystemAttachmentStorage(
-    deps.attachmentStorageDir ?? './tmp/attachments'
-  )
+  // uses (D-32). `deps.attachmentStorage`, when a test supplies one
+  // directly (`ServerDependencies`'s own doc comment), is used verbatim
+  // instead of building a fresh instance here.
+  const attachmentStorage =
+    deps.attachmentStorage ??
+    createFilesystemAttachmentStorage(
+      deps.attachmentStorageDir ?? './tmp/attachments'
+    )
 
   const app = express()
   // Not itself a SPEC requirement, but the header discloses this is an

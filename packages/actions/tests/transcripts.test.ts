@@ -234,8 +234,9 @@ describe('transcripts.export (ADMIN-3)', () => {
     // A Discord-only student exists in the course, but the export names no
     // single student — this *action's* own refusal does not apply (this
     // file's own module comment). The exported *file* still carries that
-    // student's own messages, de-identified rather than omitted —
-    // `apps/worker`'s own handler test proves that half, not this one.
+    // student's own messages, under a per-export pseudonym rather than
+    // omitted — `apps/worker`'s own handler test proves that half, not
+    // this one.
     seedDiscordOnlyStudent(organizationId, testDb.db)
 
     const result = await dispatch(

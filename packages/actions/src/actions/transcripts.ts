@@ -47,14 +47,18 @@
  * entirely, silently emptying an ordinary Discord-only course's export.
  * The disclosure PPL-5 actually names is a *person's* history, and it is
  * the identity that makes a transcript one — so `apps/worker/src/handlers/transcripts.ts`
- * strips `personId`/`personDisplayName` from every entry in an unfiltered
+ * omits `personId`/`personDisplayName` from every entry in an unfiltered
  * export instead of dropping content by verification: every message an
  * instructor could already see on screen (ADMIN-1, unrestricted) still
- * reaches the file, with nothing left in it to attribute a line to a named
- * student. See that handler's own module comment for the reasoning in
- * full, and `docs/DECISIONS.md` D-48 for what this trades away — an
- * unfiltered export can no longer be used to follow one student's own
- * thread.
+ * reaches the file. A second rework finding rejected calling that file
+ * "de-identified" — this platform's own conversation text routinely names
+ * a student anyway (`packages/openai/src/conversations.ts`'s own opening
+ * line, and a reply that echoes it back) — so the file claims only
+ * `identityFieldsOmitted`, plainly, and each entry carries a `participant`
+ * pseudonym, salted fresh per export, rather than nothing at all. See that
+ * handler's own module comment for the reasoning in full, and
+ * `docs/DECISIONS.md` D-48 for what this still trades away and the
+ * objection recorded against it.
  */
 
 import {

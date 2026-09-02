@@ -335,6 +335,26 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
             </Button>
           </div>
 
+          {!personId && (
+            // ADMIN-1..5 rework, must-fix 1 — an export with no student
+            // filter carries every entry in this course, and
+            // `apps/worker/src/handlers/transcripts.ts`'s own
+            // `identityFieldsOmitted` flag (D-48) only removes `personId`/
+            // `personDisplayName` and replaces them with a pseudonym
+            // stable within that one file; it says nothing about the
+            // *message text itself*, which this platform's own opening
+            // line for a conversation (`packages/openai/src/conversations.ts`)
+            // deliberately seeds with a student's own name, and a reply
+            // may echo. Said here, next to the button, rather than left
+            // for an instructor to notice only inside the JSON.
+            <p className="text-xs text-neutral-600">
+              This export carries every student in the course. Student ids and
+              names are replaced with a pseudonym unique to this file (unstable
+              across two exports of the same course) — but the conversation text
+              itself is not filtered, and may still name a student.
+            </p>
+          )}
+
           {entries === undefined ? (
             <p role="status" className="text-sm text-neutral-500">
               Loading…

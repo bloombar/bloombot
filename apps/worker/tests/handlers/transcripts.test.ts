@@ -471,7 +471,16 @@ describe('transcripts.export handler (ADMIN-3)', () => {
   // everyone): an unfiltered course export must still carry every
   // student's own messages, with nothing left to attribute a line to a
   // named person.
-  it('carries every message in an unfiltered export, but strips personId and personDisplayName from all of them', async () => {
+  //
+  // Must-fix 1 of this rework's own fourth round — a second reviewer
+  // rejected calling this "de-identified": this platform's own opening
+  // line for a conversation names the student, and a reply routinely
+  // echoes it back into the stored message text this export reads, so
+  // withholding two fields is not de-identification. The field is
+  // `identityFieldsOmitted` now, naming only what is actually true, and
+  // each entry carries a `participant` pseudonym instead of its own
+  // `personId`/`personDisplayName`.
+  it('carries every message in an unfiltered export, but replaces personId and personDisplayName with a pseudonym', async () => {
     const storage = await setUp()
     const { organizationId, course, instructor } = seedCourseWithTranscript(
       testDb.db
@@ -533,25 +542,236 @@ describe('transcripts.export handler (ADMIN-3)', () => {
     const bytes = await storage.read(organizationId, exportRow.id)
     if (!bytes) throw new Error('setup failed: no bytes written')
     const parsed = JSON.parse(bytes.toString('utf8')) as {
-      deidentified: boolean
+      identityFieldsOmitted: boolean
+      notice: string
       transcript: Record<string, unknown>[]
     }
 
     // Both messages survive — the ordinary case must not come back empty.
-    expect(parsed.deidentified).toBe(true)
+    expect(parsed.identityFieldsOmitted).toBe(true)
     expect(parsed.transcript).toHaveLength(2)
     const contents = parsed.transcript.map((entry) => entry['content']).sort()
     expect(contents).toEqual(
       ['When is office hours?', 'Where is the syllabus posted?'].sort()
     )
+    // Said in the file itself, in plain language — not only claimed by a
+    // boolean nobody but a script reads (the mistake `omittedForUnverifiedAddress`
+    // made, this handler's own module comment).
+    expect(parsed.notice).toMatch(/message text itself is not filtered/i)
     // Nothing in *any* entry names who sent it — a `jq
     // 'select(.personId=="…")'` over this file has no field to select on,
-    // for the verified student or the unverified one alike.
+    // for the verified student or the unverified one alike — each carries
+    // a `participant` pseudonym instead.
     for (const entry of parsed.transcript) {
       expect(entry).not.toHaveProperty('personId')
       expect(entry).not.toHaveProperty('personDisplayName')
+      expect(entry['participant']).toMatch(/^P\d+$/)
     }
     expect(secondStudent.id).toBeTruthy()
+  })
+
+  // Must-fix 2 of this rework's own fourth round — a per-export pseudonym
+  // is only useful if it is *stable*: every entry from the same student,
+  // anywhere in this one export, must carry the same `participant` label,
+  // and two different students in the same export must carry different
+  // ones — otherwise "does this keep coming from the same person", the
+  // one thing a pseudonym is supposed to preserve for corpus-level use
+  // (this handler's own module comment), is lost along with the name.
+  it('assigns the same participant pseudonym to every entry from one student, and a different one to another, within a single export', async () => {
+    const storage = await setUp()
+    const { organizationId, course, instructor, student } =
+      seedCourseWithTranscript(testDb.db)
+
+    // The seeded student asks a second question, so this one student has
+    // two entries in the export to compare against each other.
+    const conversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: student.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      conversation.id,
+      { direction: 'from_person', content: 'And where is it held?' },
+      testDb.db
+    )
+
+    const secondStudent = people.createPerson(
+      organizationId,
+      { displayName: 'Second Student' },
+      testDb.db
+    )
+    const secondConversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId: course.id, personId: secondStudent.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!secondConversation) throw new Error('setup failed: conversation')
+    conversations.appendMessage(
+      organizationId,
+      secondConversation.id,
+      { direction: 'from_person', content: 'Where is the syllabus posted?' },
+      testDb.db
+    )
+
+    const exportRow = transcriptExports.createPendingExport(
+      organizationId,
+      { courseId: course.id, requestedByAccountId: instructor.id },
+      testDb.db
+    )
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: TRANSCRIPT_EXPORT_JOB_KIND,
+        payload: { exportId: exportRow.id },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      TRANSCRIPT_EXPORT_JOB_KIND,
+      createTranscriptExportHandler({ attachmentStorage: storage })
+    )
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 30_000,
+      handlerTimeoutMs: 5_000,
+      retryPolicy,
+    })
+    expect(result.outcome).toBe('succeeded')
+
+    const bytes = await storage.read(organizationId, exportRow.id)
+    if (!bytes) throw new Error('setup failed: no bytes written')
+    const parsed = JSON.parse(bytes.toString('utf8')) as {
+      transcript: { participant: string; content: string }[]
+    }
+    expect(parsed.transcript).toHaveLength(3)
+
+    const participantByContent = new Map(
+      parsed.transcript.map((entry) => [entry.content, entry.participant])
+    )
+    const firstStudentQuestion = participantByContent.get(
+      'When is office hours?'
+    )
+    const firstStudentFollowUp = participantByContent.get(
+      'And where is it held?'
+    )
+    const secondStudentQuestion = participantByContent.get(
+      'Where is the syllabus posted?'
+    )
+    // Stable — the same student's two entries carry the same pseudonym.
+    expect(firstStudentQuestion).toBeTruthy()
+    expect(firstStudentFollowUp).toBe(firstStudentQuestion)
+    // Distinct — a different student's entry does not collide with it.
+    expect(secondStudentQuestion).toBeTruthy()
+    expect(secondStudentQuestion).not.toBe(firstStudentQuestion)
+  })
+
+  // Must-fix 2 of this rework's own fourth round, the other half: the
+  // coordinator's own explicit call is that a pseudonym is salted so it
+  // does *not* correlate across two exports of the same course — a caller
+  // with two exports of the same course cannot line their own `P1..Pn`
+  // labels up against each other to find the same student in both. Eight
+  // distinct students makes a coincidental match astronomically unlikely
+  // (1-in-8! ≈ 1-in-40,320) without pinning this test to `assignPseudonyms`'s
+  // own internals (`randomBytes`) the way a mock would.
+  it('does not repeat one student’s own participant pseudonym across two exports of the same course', async () => {
+    const storage = await setUp()
+    const { organizationId, course, instructor } = seedCourseWithTranscript(
+      testDb.db
+    )
+
+    const studentContents: [string, string][] = []
+    for (let i = 0; i < 8; i++) {
+      const student = people.createPerson(
+        organizationId,
+        { displayName: `Student ${i}` },
+        testDb.db
+      )
+      const conversation = conversations.getOrCreateConversation(
+        organizationId,
+        { courseId: course.id, personId: student.id, surface: 'discord' },
+        testDb.db
+      )
+      if (!conversation) throw new Error('setup failed: conversation')
+      const content = `Question from student ${i}`
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        { direction: 'from_person', content },
+        testDb.db
+      )
+      studentContents.push([student.id, content])
+    }
+
+    async function runExportAndGetParticipantByContent(): Promise<
+      Map<string, string>
+    > {
+      const exportRow = transcriptExports.createPendingExport(
+        organizationId,
+        { courseId: course.id, requestedByAccountId: instructor.id },
+        testDb.db
+      )
+      jobs.enqueueJob(
+        organizationId,
+        {
+          kind: TRANSCRIPT_EXPORT_JOB_KIND,
+          payload: { exportId: exportRow.id },
+          maxAttempts: 3,
+        },
+        testDb.db
+      )
+      const handlers = new HandlerRegistry()
+      handlers.register(
+        TRANSCRIPT_EXPORT_JOB_KIND,
+        createTranscriptExportHandler({ attachmentStorage: storage })
+      )
+      const result = await runNextJob({
+        db: testDb.db,
+        logger: createFakeLogger(),
+        handlers,
+        owner: 'worker-1',
+        leaseMs: 30_000,
+        handlerTimeoutMs: 5_000,
+        retryPolicy,
+      })
+      expect(result.outcome).toBe('succeeded')
+      const bytes = await storage.read(organizationId, exportRow.id)
+      if (!bytes) throw new Error('setup failed: no bytes written')
+      const parsed = JSON.parse(bytes.toString('utf8')) as {
+        transcript: { participant: string; content: string }[]
+      }
+      return new Map(
+        parsed.transcript.map((entry) => [entry.content, entry.participant])
+      )
+    }
+
+    const first = await runExportAndGetParticipantByContent()
+    const second = await runExportAndGetParticipantByContent()
+
+    // Every student's own content is present, and mapped to *some*
+    // pseudonym, in both exports — this is not a test that the second
+    // export came back empty.
+    for (const [, content] of studentContents) {
+      expect(first.get(content)).toMatch(/^P\d+$/)
+      expect(second.get(content)).toMatch(/^P\d+$/)
+    }
+    // The mapping itself differs between the two exports — a caller
+    // cannot take one export's own `P1..Pn` and resolve it against the
+    // other.
+    const firstAssignment = studentContents.map(([, content]) =>
+      first.get(content)
+    )
+    const secondAssignment = studentContents.map(([, content]) =>
+      second.get(content)
+    )
+    expect(firstAssignment).not.toEqual(secondAssignment)
   })
 
   // The other half of the same trade: a *student-filtered* export still
@@ -603,11 +823,15 @@ describe('transcripts.export handler (ADMIN-3)', () => {
     const bytes = await storage.read(organizationId, exportRow.id)
     if (!bytes) throw new Error('setup failed: no bytes written')
     const parsed = JSON.parse(bytes.toString('utf8')) as {
-      deidentified: boolean
+      identityFieldsOmitted: boolean
+      notice?: string
       transcript: { personId: string; content: string }[]
     }
 
-    expect(parsed.deidentified).toBe(false)
+    expect(parsed.identityFieldsOmitted).toBe(false)
+    // No notice — a student-filtered export names its one student by
+    // construction, so there is no "may still name someone" caveat to add.
+    expect(parsed.notice).toBeUndefined()
     expect(parsed.transcript).toHaveLength(1)
     expect(parsed.transcript[0]?.personId).toBe(student.id)
     expect(parsed.transcript[0]?.content).toBe('When is office hours?')

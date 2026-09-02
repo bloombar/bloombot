@@ -116,6 +116,31 @@ describe('Transcripts (ADMIN-1)', () => {
     expect(studentSelect).toHaveTextContent('Alice')
   })
 
+  // ADMIN-1..5 rework's fourth round, must-fix 1's other half — the file
+  // itself says `identityFieldsOmitted`/`notice` now (`apps/worker/src/
+  // handlers/transcripts.ts`'s own test coverage), but this screen is
+  // where an instructor decides to click Export at all, and nothing there
+  // said the same thing before this fix; `return {}` for `currentFilters`
+  // (must-fix 5 above) would not have caught its absence either, since it
+  // is unconditional text, not a filter.
+  it('warns, next to Export, that an unfiltered export carries every student under a pseudonym and unfiltered message text', async () => {
+    await selectProjectAndCourse()
+
+    expect(
+      await screen.findByText(/replaced with a pseudonym/i)
+    ).toBeInTheDocument()
+
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.change(await screen.findByLabelText('Student'), {
+      target: { value: 'person-1' },
+    })
+
+    // A student-filtered export names its one student by construction —
+    // the warning is specific to the unfiltered case, and disappears once
+    // a student is chosen.
+    expect(screen.queryByText(/replaced with a pseudonym/i)).toBeNull()
+  })
+
   // Must-fix 5 of the ADMIN-1..5 rework — the filters are genuinely
   // server-side SQL (right), but were entirely unguarded by a test:
   // replacing this screen's own filter-gathering with `return {}` (every

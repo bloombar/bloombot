@@ -162,6 +162,41 @@ export function consumeDiscordPersonLink(
 }
 
 /**
+ * Peek at a Discord person-link state's own PKCE verifier — LINK-6/7's own
+ * missing link: `apps/api`'s connect route has to run the token exchange
+ * itself (`code`/`codeVerifier` → an access token, `LINK-7`'s own module
+ * comment) *before* it can call `previewDiscordPersonLink` with a real
+ * snowflake, but `consumeDiscordPersonLink` — the only other place a
+ * `codeVerifier` was ever readable — spends the state doing it, which would
+ * make preview and confirm race for who gets to consume it, and preview
+ * always wins, leaving confirm with nothing left to redeem. This is the
+ * read-only twin `consumeDiscordPersonLink` needed all along: the same
+ * `peekChallenge` lookup `previewDiscordPersonLink` itself already uses,
+ * returning the one extra field a preview never otherwise exposes (the
+ * verifier is not part of `PersonLinkPreview` — it is not something a page
+ * displays, only something a server needs to finish an exchange). Refuses
+ * for the identical reasons every other peek/consume in this file does — an
+ * unknown, expired, wrong-surface, or already-used state.
+ */
+export function peekDiscordPersonLinkCodeVerifier(
+  state: string,
+  db: Executor
+): ConsumedDiscordPersonLink | undefined {
+  const peeked = personLinkChallenges.peekChallenge(
+    hashSecret(state),
+    'discord',
+    Date.now(),
+    db
+  )
+  if (!peeked) return undefined
+  return {
+    organizationId: peeked.organizationId,
+    personId: peeked.personId as string,
+    codeVerifier: peeked.codeVerifier as string,
+  }
+}
+
+/**
  * Peek at a Discord person-link state without redeeming it — LINK-3's own
  * "the page names the account being connected and waits to be told to
  * proceed": once Discord's OAuth has already returned `code` (and this
@@ -171,10 +206,26 @@ export function consumeDiscordPersonLink(
  * which person, which identity, whether it merges someone in — before
  * asking the person to confirm. `undefined` for the same reasons
  * `consumeDiscordPersonLink` refuses.
+ *
+ * Rework — `callerPersonId` is the same fix `completeDiscordPersonLink`
+ * already applies at redemption, applied here too: before this, nothing
+ * checked that whoever calls *preview* is the same caller `state` was
+ * issued to, which let a holder of a valid state (their own, legitimately
+ * begun attempt) call this repeatedly with a classmate's already-known
+ * snowflake and learn, from the `outcome`, that classmate's own internal
+ * person id and whether they had ever proven an identity to this platform
+ * at all — an oracle `state`'s own single-use design never intended to
+ * expose, since preview spends nothing and so was never gated behind
+ * anything. Checked the identical way `completeDiscordPersonLink` checks it
+ * (a mismatch reads exactly like a state that never existed, LINK-3's own
+ * "no oracle" guarantee) — and, unlike a redemption, a preview mismatch
+ * costs the state nothing: nothing here is single-use, so there is no
+ * "spent either way" rule to apply.
  */
 export function previewDiscordPersonLink(
   state: string,
   discordExternalId: string,
+  callerPersonId: string,
   db: Executor
 ): PersonLinkPreview | undefined {
   const peeked = personLinkChallenges.peekChallenge(
@@ -184,6 +235,7 @@ export function previewDiscordPersonLink(
     db
   )
   if (!peeked) return undefined
+  if (peeked.personId !== callerPersonId) return undefined
   const identity: PersonIdentityInput = {
     surface: 'discord',
     externalId: discordExternalId,
@@ -340,6 +392,46 @@ export function consumeMcpPersonLinkToken(
   }
 }
 
+/** What `peekMcpPersonLink` reports — enough to check *which organization* a token belongs to, without needing (or creating) a survivor at all. */
+export interface PeekedMcpPersonLink {
+  organizationId: string
+  identity: PersonIdentityInput
+}
+
+/**
+ * Peek at an MCP token's own organization and identity, with no survivor
+ * involved at all — the rework this app's own connect route needed:
+ * `previewMcpPersonLink`/`completeMcpPersonLink` both require a
+ * `callerPersonId` up front, which `apps/api`'s route used to obtain by
+ * *creating* one (`ensureWebPersonForAccount`) before ever checking whether
+ * the token was worth anything — a caller-supplied `organizationId` alone
+ * was enough to plant a connected person in an organization the caller had
+ * proven nothing about (D-44's own account of the rework this closes). This
+ * function lets a caller check "is this token even real, and for which
+ * organization" first — a plain read, the same `peekChallenge` lookup every
+ * other peek in this file already uses — and only create anything once that
+ * question is answered and matches what the caller expected.
+ */
+export function peekMcpPersonLink(
+  token: string,
+  db: Executor
+): PeekedMcpPersonLink | undefined {
+  const peeked = personLinkChallenges.peekChallenge(
+    hashSecret(token),
+    'mcp',
+    Date.now(),
+    db
+  )
+  if (!peeked) return undefined
+  return {
+    organizationId: peeked.organizationId,
+    identity: {
+      surface: 'mcp',
+      externalId: peeked.identityExternalId as string,
+    },
+  }
+}
+
 /**
  * Peek at an MCP person-link token without redeeming it — the same
  * non-committing preview `previewDiscordPersonLink` gives, for a caller
@@ -460,13 +552,35 @@ export type PersonLinkPreviewOutcome =
  * Shared by `previewDiscordPersonLink`/`previewMcpPersonLink`: resolves what
  * `connectOrMerge` *would* do for `(organizationId, survivorPersonId, identity)`
  * without writing anything — a plain read against `people.ts#resolveIdentity`.
+ *
+ * Rework — checks the survivor's own `mergedIntoPersonId` first, and refuses
+ * (the same `undefined` every other preview refusal here uses) when it is
+ * set. Before this, a survivor merged away *after* their own connect attempt
+ * began (D-35 rework, finding 2's own race — a faster, different proof
+ * merging them into someone else while their challenge is still live) still
+ * previewed as `{ kind: 'attach' }`: `resolveIdentity` alone has no way to
+ * know the *survivor* side of the pair is stale, only whether the *identity*
+ * side is already claimed. `connectOrMerge`'s real `connectIdentity` call
+ * refuses outright the moment `personId` names a merged-away person
+ * (`people.ts`'s own doc comment) — so the preview this function built
+ * promised an outcome `completeDiscordPersonLink`/`completeMcpPersonLink`
+ * would then refuse to deliver, exactly the gap LINK-6 exists to close ("the
+ * page can describe the outcome without spending the proof" only holds if
+ * the description is honest). A Discord survivor is ordinarily kept current
+ * by `repointOutstandingChallenges` (`person-link-challenges.ts`, run inside
+ * `mergePeople`'s own transaction) — this check is what still holds for the
+ * MCP half, which carries no survivor at issue time to repoint at all, and
+ * as a second, structural guard against the same race on the Discord half.
  */
 function previewOutcome(
   organizationId: string,
   survivorPersonId: string,
   identity: PersonIdentityInput,
   db: Executor
-): PersonLinkPreview {
+): PersonLinkPreview | undefined {
+  const survivor = people.getPerson(organizationId, survivorPersonId, db)
+  if (!survivor || survivor.mergedIntoPersonId !== null) return undefined
+
   const existingOwner = people.resolveIdentity(organizationId, identity, db)
   const outcome: PersonLinkPreviewOutcome = !existingOwner
     ? { kind: 'attach' }

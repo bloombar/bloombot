@@ -17,6 +17,11 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 // TEN-2's two documented exceptions, and why each is safe:
 //  - accounts.ts#getAccountByEmail: an account exists before any organization
 //    does, so sign-in has to find it by email alone.
+//  - accounts.ts#getAccountById: the same class, one level up (LINK-6) —
+//    `GET /auth/me` already knows exactly which account a valid,
+//    already-authenticated session proved, before any organization is in
+//    play, so scoping this lookup to one would ask the caller to supply
+//    something the session itself does not carry.
 //  - accounts.ts#disableAccount: `disabled_at` lives on `accounts`, not
 //    `memberships` — disabling is account-wide, not scoped to one
 //    organization (AUTH-1..4 rework, finding 3).
@@ -77,7 +82,7 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    caller already knows the organization; nothing about a merge needs to
 //    find a challenge by secret alone).
 const ALLOWLIST: Record<string, string[]> = {
-  'accounts.ts': ['getAccountByEmail', 'disableAccount'],
+  'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
   'course-join-links.ts': ['redeemJoinLink'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],

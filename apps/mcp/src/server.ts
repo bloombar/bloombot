@@ -60,7 +60,8 @@ import { randomUUID } from 'node:crypto'
 import type { Express, Request, Response } from 'express'
 import express from 'express'
 
-import type { Database } from '@bloombot/db'
+import { issueMcpPersonLinkToken } from '@bloombot/auth'
+import { organizations, type Database } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
 
@@ -351,6 +352,133 @@ function describeToolError(error: unknown): string {
   return 'This request could not be completed.'
 }
 
+/**
+ * LINK-8: a single tool, registered directly rather than through
+ * `tool-surface.ts`'s own allowlist — this mints a person-link token, not a
+ * call through `dispatch()`, so it shares none of `registerTools`'s own
+ * shape (no `organizationId`-merged action schema, no membership check, no
+ * destructive-confirmation path: issuing a token binds nothing yet, only a
+ * later `POST .../person-link/mcp/confirm` on the panel spends it).
+ *
+ * The identity this tool connects is fixed to `accountId` — the account
+ * `authenticateBearerToken` already proved this whole connection is (MCP-3:
+ * "a connection carries exactly one account's authority and nothing more")
+ * — never a caller-supplied external id: LINK-8's own "the account it will
+ * attach to is fixed when it is issued" holds by construction, because
+ * there is no argument here an assistant's own generated tool-call text
+ * could use to name a different one. `organizationId` is the one input this
+ * tool does take: which organization's own person the resulting token
+ * should be redeemable against, the same "not derivable from the session
+ * alone" reasoning `tool-surface.ts`'s own tools already have for the
+ * identical field.
+ *
+ * The token reaches the assistant *only* through this call's own result
+ * (LINK-3's "delivered where only that caller can read it" — the same
+ * guarantee an MCP tool result already gives the account-bearing catalog
+ * above): nothing here posts it to a channel, a page, or a log — `deps.db`
+ * is the only thing this function touches besides its own return value.
+ *
+ * **D-44 rework — deliberately no membership check, but the organization
+ * must exist.** A first version minted a token for whatever `organizationId`
+ * a model supplied, with no check at all: a foreign but real organization
+ * got a valid, redeemable token (the same "no proof required" defect
+ * `routes/person-link.ts`'s own module comment describes for the HTTP
+ * surface), and a *nonexistent* one threw a raw `better-sqlite3` error —
+ * `FOREIGN KEY constraint failed` — straight into the tool result, an
+ * internal implementation detail handed to an untrusted client, and a
+ * second, cruder tenant-existence oracle than the clean one below. The fix
+ * is not `memberships.getMembership` (`call-tool.ts`'s own tenancy check
+ * for the dispatch catalog): MCP-3's "exactly one account's authority and
+ * nothing more" describes what a *dispatched action* may see, not who may
+ * attempt to connect — a student's assistant legitimately requests a token
+ * for the student's own institution, an organization the student (and
+ * therefore this tool, acting with their authority) has no *membership* in
+ * by design, the identical reasoning `routes/person-link.ts`'s own module
+ * comment gives for why its HTTP siblings do not gate on membership either.
+ * What both surfaces gate on instead is proof, applied at the point that
+ * actually matters: minting a token here creates nothing in `people` at
+ * all (only a `person_link_challenges` row, swept by its own TTL) — the
+ * write `routes/person-link.ts`'s own rework was about deferring happens
+ * only once a *human* redeems this token against a matching organization
+ * on the panel. Checking existence first (and catching whatever the insert
+ * still throws) closes the raw-error leak without adding an oracle worse
+ * than the one already accepted for the HTTP surface (an organization id
+ * is not a secret, unlike the token this tool actually mints — the same
+ * "an id is not a claim" reasoning `routes/person-link.ts`'s own module
+ * comment gives for its HTTP siblings, `docs/DECISIONS.md` D-44).
+ */
+function registerPersonLinkTool(
+  mcpServer: McpServer,
+  deps: ServerDependencies,
+  accountId: string
+): void {
+  mcpServer.registerTool(
+    'bloombot_connectAssistant',
+    {
+      description:
+        'Connect this assistant to your Bloombot account in a given organization. ' +
+        'Returns a single-use, short-lived token — hand it to the person you are ' +
+        'assisting so they can paste it into the Bloombot panel (Connect an ' +
+        'assistant) to finish connecting. Never post this token anywhere else.',
+      inputSchema: {
+        organizationId: z
+          .string()
+          .min(1)
+          .describe(
+            'The organization this token should connect an assistant identity within.'
+          ),
+      },
+    },
+    async (args: { organizationId: string }): Promise<CallToolResult> => {
+      if (!organizations.getOrganizationById(args.organizationId, deps.db)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: 'This organization does not exist or you do not have access to it.',
+            },
+          ],
+        }
+      }
+      let issued
+      try {
+        issued = issueMcpPersonLinkToken(
+          args.organizationId,
+          accountId,
+          deps.db
+        )
+      } catch (error) {
+        // Defense in depth against the same raw-driver-error leak this
+        // rework closes above — `getOrganizationById` already makes this
+        // unreachable in practice, but a thrown, unrecognised error must
+        // never reach a client as-is regardless of why.
+        deps.logger.error(
+          { err: error, organizationId: args.organizationId },
+          'apps/mcp: bloombot_connectAssistant failed to issue a token'
+        )
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
+        }
+      }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              token: issued.token,
+              expiresAt: issued.expiresAt,
+            }),
+          },
+        ],
+      }
+    }
+  )
+}
+
 function buildMcpServer(
   deps: ServerDependencies,
   accountId: string
@@ -359,6 +487,7 @@ function buildMcpServer(
     capabilities: { tools: {} },
   })
   registerTools(mcpServer, deps, accountId)
+  registerPersonLinkTool(mcpServer, deps, accountId)
   return mcpServer
 }
 

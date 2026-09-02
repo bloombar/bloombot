@@ -29,11 +29,14 @@ import type {
   ChatMessageEntry,
   Course,
   CourseSummary,
+  DiscordPersonLinkPreviewResponse,
   DuplicateProjectResult,
   InstallBeginResponse,
   InstallCallbackResponse,
   JobStatus,
+  McpPersonLinkPreviewResponse,
   MeResponse,
+  PersonLinkBeginResponse,
   Project,
   SignedInResponse,
 } from './types.js'
@@ -161,6 +164,60 @@ export function completeDiscordInstall(
   return request<InstallCallbackResponse>(
     `/organizations/${organizationId}/discord-servers/install/callback`,
     { method: 'POST', body: input }
+  )
+}
+
+/** LINK-7: begin connecting Discord (signing in with Discord) for `organizationId` — returns the authorization URL to send the browser to. */
+export function beginDiscordPersonLink(
+  organizationId: string
+): Promise<PersonLinkBeginResponse> {
+  return request<PersonLinkBeginResponse>(
+    `/organizations/${organizationId}/person-link/discord/begin`,
+    { method: 'POST', body: {} }
+  )
+}
+
+/** LINK-6/7: spend the OAuth `code` (once) and preview what confirming would do — `state` is not redeemed by this call. */
+export function previewDiscordPersonLink(
+  organizationId: string,
+  input: { code: string; state: string }
+): Promise<DiscordPersonLinkPreviewResponse> {
+  return request<DiscordPersonLinkPreviewResponse>(
+    `/organizations/${organizationId}/person-link/discord/preview`,
+    { method: 'POST', body: input }
+  )
+}
+
+/** LINK-7: redeem `state` — attaches or merges (LINK-4) the identity `previewDiscordPersonLink` already proved. */
+export function confirmDiscordPersonLink(
+  organizationId: string,
+  state: string
+): Promise<{ connected: true }> {
+  return request<{ connected: true }>(
+    `/organizations/${organizationId}/person-link/discord/confirm`,
+    { method: 'POST', body: { state } }
+  )
+}
+
+/** LINK-6/8: preview what redeeming an assistant's own token would do — non-consuming. */
+export function previewMcpPersonLink(
+  organizationId: string,
+  token: string
+): Promise<McpPersonLinkPreviewResponse> {
+  return request<McpPersonLinkPreviewResponse>(
+    `/organizations/${organizationId}/person-link/mcp/preview`,
+    { method: 'POST', body: { token } }
+  )
+}
+
+/** LINK-8: redeem an assistant's own token — attaches or merges (LINK-4) its identity onto this account's own person in `organizationId`. */
+export function confirmMcpPersonLink(
+  organizationId: string,
+  token: string
+): Promise<{ connected: true }> {
+  return request<{ connected: true }>(
+    `/organizations/${organizationId}/person-link/mcp/confirm`,
+    { method: 'POST', body: { token } }
   )
 }
 

@@ -184,6 +184,19 @@ export interface DiscordRole {
 }
 
 /**
+ * The authenticated user's own identity (LINK-7) — `GET /users/@me`,
+ * `Authorization: Bearer <accessToken>`. Narrowed to the two fields
+ * `packages/auth`'s `person-link.ts` needs: `id` is the real snowflake
+ * Discord's OAuth just proved (the value `completeDiscordPersonLink` binds
+ * an identity to), `username` is only ever shown back to the person
+ * connecting, never persisted.
+ */
+export interface DiscordIdentifiedUser {
+  id: string
+  username: string
+}
+
+/**
  * A guild member, as `listGuildMembers` returns it (ROST-10/ROST-11) —
  * `id` is the member's real snowflake (Discord's `user.id`), `username` is
  * their account name (`user.username`), and `displayName` is the name a
@@ -216,6 +229,9 @@ export interface DiscordRestClient {
 
   /** The authenticated user's own guilds — `Authorization: Bearer <accessToken>`. Each entry's `owner`/`permissions` is what TEN-4's admin check reads (`permissions.ts#administersGuild`). */
   getUserGuilds(userAccessToken: string): Promise<DiscordGuildSummary[]>
+
+  /** The authenticated user's own identity (LINK-7) — `GET /users/@me`. Used by the person-link connect flow to learn the real snowflake Discord's own OAuth just proved; never used by the install flow, which only ever needs the guild list above. */
+  getCurrentUser(userAccessToken: string): Promise<DiscordIdentifiedUser>
 
   /** The bot's own guilds — `Authorization: Bot <botToken>`. Used to confirm the bot is actually a member of the guild an install is being claimed for, not merely that the installing user administers it. */
   getBotGuilds(botToken: string): Promise<DiscordGuildSummary[]>
@@ -394,6 +410,17 @@ function parseOAuthToken(body: unknown): DiscordOAuthToken {
     scope: typeof payload.scope === 'string' ? payload.scope : '',
     expiresIn: typeof payload.expires_in === 'number' ? payload.expires_in : 0,
   }
+}
+
+/** Parse a `GET /users/@me` success body (LINK-7) — tolerant of every field this package does not read (avatar, discriminator, …). */
+function parseIdentifiedUser(body: unknown): DiscordIdentifiedUser {
+  const payload = body as { id?: unknown; username?: unknown }
+  if (typeof payload.id !== 'string' || typeof payload.username !== 'string') {
+    throw new Error(
+      'Discord /users/@me returned a 2xx response with no usable user'
+    )
+  }
+  return { id: payload.id, username: payload.username }
 }
 
 /** Parse a guild-list success body — an array of guild summaries, tolerant of fields this package does not read. */
@@ -593,6 +620,18 @@ export function createDiscordRestClient(
 
     getUserGuilds: (userAccessToken) => getGuilds(`Bearer ${userAccessToken}`),
     getBotGuilds: (botToken) => getGuilds(`Bot ${botToken}`),
+
+    async getCurrentUser(userAccessToken): Promise<DiscordIdentifiedUser> {
+      const response = await getJson(
+        `${apiBase}/users/@me`,
+        `Bearer ${userAccessToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseIdentifiedUser(response.body)
+    },
 
     async listGuildChannels(botToken, guildId): Promise<DiscordChannel[]> {
       const response = await getJson(

@@ -411,6 +411,55 @@ describe('handleMention — LINK-1/LINK-2: an unconnected identity is invited to
     expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
   })
 
+  // LINK-6/7 — the connect flow (`apps/web`'s `pages/Connect.tsx`) needs to
+  // know which organization's own person to look for before Discord's own
+  // OAuth ever starts (`beginDiscordPersonLink`'s "bound at issue"); without
+  // the organization id in the address, a signed-in caller's connect
+  // attempt would have no way to find it. Not a secret (this file's own
+  // `connectInvitationText` doc comment) — an ordinary path segment, not a
+  // query string, so the "no token/state/secret" check just above still
+  // holds for it.
+  it('the invitation names the organization the message came from, so the connect screen knows which one to connect', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test',
+    })
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain(
+      `https://app.bloombot.test/connect/${organizationId}`
+    )
+  })
+
+  // Rework finding 9 — `CONFIG.PUBLIC_APP_URL`'s own `z.url()` accepts a
+  // trailing slash, and it used to be harmless (the bare URL travelled
+  // verbatim). Appending a path made it not harmless: unstripped, this
+  // produces `https://app.bloombot.test//connect/<org>` — a double slash
+  // `apps/web`'s own route regex does not match, so a student following it
+  // lands on the shell or sign-in with no connect screen and no error.
+  it('strips a trailing slash from connectUrl before appending the connect path — no double slash', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test/',
+    })
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain(
+      `https://app.bloombot.test/connect/${organizationId}`
+    )
+    expect(reply.sent[0]).not.toContain('//connect/')
+  })
+
   it('answers normally once the person is connected', async () => {
     testDb = createTestDatabase()
     const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {

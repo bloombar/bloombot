@@ -6,6 +6,7 @@ export {
   type CreateDiscordRestClientOptions,
   type DiscordChannel,
   type DiscordGuildMember,
+  type DiscordIdentifiedUser,
   type DiscordOAuthToken,
   type DiscordRestClient,
   type DiscordRole,

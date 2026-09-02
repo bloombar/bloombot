@@ -206,12 +206,26 @@ export function Chat({ organizationId }: ChatProps) {
   // unconnected identity on any other surface (`routes/chat.ts`'s own
   // module comment), an expected state for an account nobody has connected
   // yet, not a failure. Shown as a plain notice, not `ErrorMessage`.
+  //
+  // LINK-6/7 — now a real link, not just advice to find an instructor:
+  // `pages/Connect.tsx` is exactly the screen this account needs, for this
+  // same organization, and reaching it from here needs no invitation at all
+  // (the account is already signed in) — a full-page navigation
+  // (`window.location.assign`, not client-side state) since this app has no
+  // router (`App.tsx`'s own module comment).
   if (coursesError?.body.error === 'chat_not_connected') {
     return (
-      <p className="text-sm text-neutral-600">
-        Your account is not connected to a course here yet. Ask your instructor
-        for help connecting it.
-      </p>
+      <div className="flex flex-col items-start gap-3">
+        <p className="text-sm text-neutral-600">
+          Your account is not connected to a course here yet.
+        </p>
+        <Button
+          variant="primary"
+          onClick={() => window.location.assign(`/connect/${organizationId}`)}
+        >
+          Connect your account
+        </Button>
+      </div>
     )
   }
 

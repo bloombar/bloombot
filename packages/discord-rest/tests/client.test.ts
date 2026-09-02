@@ -186,6 +186,41 @@ describe('getUserGuilds / getBotGuilds', () => {
   })
 })
 
+describe('getCurrentUser (LINK-7)', () => {
+  it("sends the caller's token as a Bearer header and returns the fake's own user identity", async () => {
+    server.setCurrentUser({ id: '12345', username: 'a-student' })
+
+    const user = await client.getCurrentUser('a-user-access-token')
+
+    expect(user).toEqual({ id: '12345', username: 'a-student' })
+    expect(server.requests[0]?.path).toBe('/users/@me')
+    expect(server.requests[0]?.headers.authorization).toBe(
+      'Bearer a-user-access-token'
+    )
+  })
+
+  it('throws DiscordRequestError for a non-2xx response', async () => {
+    server.respondToCurrentUser({
+      status: 401,
+      body: { message: '401: Unauthorized' },
+    })
+
+    await expect(
+      client.getCurrentUser('an-expired-token')
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 401 }) as Partial<DiscordRequestError>
+    )
+  })
+
+  it('throws when a 2xx response has no usable id/username', async () => {
+    server.setCurrentUser({ avatar: null })
+
+    await expect(client.getCurrentUser('a-user-access-token')).rejects.toThrow(
+      /no usable user/
+    )
+  })
+})
+
 describe('DiscordRequestError (finding 5 of the TEN-4..6 rework)', () => {
   it("carries body for a caller that reads it directly, but keeps it out of JSON.stringify — the shape a log serializer that walks own enumerable properties (pino's default err serializer) sees", async () => {
     server.respondToToken({

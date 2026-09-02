@@ -52,6 +52,7 @@ vi.mock('../src/api/client.js', async () => {
 
 const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-1',
+  email: 'instructor@example.edu',
   memberships: [
     { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
     {

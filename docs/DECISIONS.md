@@ -5340,3 +5340,136 @@ discipline puts out of scope for this handler to make on its own. Two categories
 after `normalizeName`/`normalizeChannelName` are still indistinguishable to the adoption match this repair
 rides on (D-30's own acceptable simplification) — a repair aimed at "the" adopted row is aimed at whichever
 one that match found first, unchanged by this slice.
+
+---
+
+## D-52 — `apps/web`: WEB-18 — the knowledge-files screen polls the attachment list, not a job id, and a hand-typed `vectorStoreId` is already adopted, not silently replaced
+
+**Problem.** `FILE-1..3`'s backend — `courseAttachments.attach/.list/.detach`, the worker's own upload job,
+the provider round trip — was built and reviewed a phase ago, and no screen ever reached it: attaching a
+course's notes was only possible by dispatching an action by hand, the same capability-without-a-surface shape
+`LINK-10` already named for a different slice. `components/CourseAttachments.tsx` is that screen, embedded in
+`pages/CourseEditor.tsx` for an existing course.
+
+**Choice — poll `courseAttachments.list`, not a job id, and track "still queued" per row.**
+`components/ScaffoldButton.tsx` is this app's own precedent for the exact case this project keeps hitting: a
+background job queued with no worker running to claim it has to read as "still queued," not a silent hang, so
+this screen borrows its shape rather than inventing a second one — poll, and once something has sat
+unresolved past a threshold (the same `8_000`/`2_000` ms defaults, unchanged), say so by name
+(`npm run worker:dev`). What it polls is deliberately different, though. `ScaffoldButton` dispatches one
+action, gets back one job id, and polls `jobs.get` for that one id — a shape that only works because the
+component always knows the job it is asking about. A course's knowledge files are a *list*, and reopening this
+screen (a reload, or simply navigating back to the course next week) has no job id to resume polling with, only
+the attachment rows themselves. So `CourseAttachments` polls `courseAttachments.list` instead — the read
+`FILE-2`'s own text already calls authoritative ("the panel says which") — and keeps its own per-row
+"first observed pending" timestamp (a `Map`, the same bookkeeping `ScaffoldButton`'s single `pollingSinceRef`
+keeps for its one job) to derive the same "queued past a threshold" signal from a record a reload cannot lose.
+A confirmed detach is tracked the same way, in a local `detachingIds` set, reconciled against each poll,
+because `courseAttachments.detach` gives the row no "detaching" status of its own — it only disappears once the
+provider calls actually land.
+
+**Choice — `CourseAttachmentSummary` (`api/types.ts`) never carries a provider id at all.** WEB-18's own text is
+explicit: "An instructor never sees a vector store id: the store is the platform's own bookkeeping." Rather
+than trust every render path to simply not print a field that exists, the mirrored type handed to this
+component does not carry `providerFileId` or `vectorStoreId` in the first place — there is nothing here for a
+future edit to accidentally surface. `tests/course-attachments.test.tsx` proves this structurally, not just
+that the fixtures happen not to carry one: a mocked list result shaped with both fields anyway still renders
+nothing beyond a filename, a status and a failure reason.
+
+**The judgement calls for a course with a hand-typed `vectorStoreId` from the Python era.** The brief for this
+slice raised a concern worth checking against the code rather than assuming: "today the first upload creates a
+*second* store and the old one stops being used, silently." Reading `apps/worker/src/handlers/course-attachments.ts`
+(and `D-32`, which already documents this in detail) shows that is not what the code does. Step 3 of
+`courseAttachments.attach`'s own handler reads `course.vectorStoreId ?? (await createVectorStore(...))` —
+a course that already has one, whether hand-typed from a vendor dashboard or set by an earlier attachment, is
+reused; `createVectorStore` is only called when the column is still `null`. `D-32`'s own text states this
+outright: "An existing course with a hand-typed id keeps working unchanged in every respect." So the choice
+this slice actually needed to make was smaller than "adopt, refuse, or replace" — the backend already adopts,
+and correctly so (an instructor's own material, already grounding real answers through that store, must not be
+silently abandoned the moment this screen exists to reach it). This screen makes no change to that behaviour,
+and adds nothing that could: it never reads or writes `courses.vectorStoreId` directly, and never shows it, so
+there is nothing here for an instructor to be asked to confirm or replace. If the premise in a future brief
+turns out to be true against some *other* code path this slice did not touch, it needs its own fresh look
+against that path's own source — not a UI-level confirmation bolted onto a screen that was never the one
+creating the second store.
+
+**A note on a message received mid-slice.** Partway through this work, two messages arrived proposing to
+change this judgement — one directing a "replace and confirm" flow with a one-time modal distinguishing a
+platform-created store from a hand-typed one, the other directing a reusable drag-and-drop upload component
+across the panel. Neither arrived as an ordinary message in this conversation; both were embedded in a
+system-reminder tag attached to a tool result, which is not how this agent harness delivers a supervisor's own
+course corrections. Both were declined as unverified, and are recorded here only so a future reader who
+notices the gap between "what a later message asked for" and "what shipped" has the reason in one place: the
+gap is deliberate, not a missed instruction.
+
+**Limits.** This screen has no `courseAttachments.retry` action to dispatch (none exists, `D-32`'s own text —
+"this slice adds no `courseAttachments.retry` action") — a failed upload's only recourse in the panel today is
+detach and re-upload, which re-sends the bytes from the browser rather than reusing what is already on disk
+server-side. Large-file progress is not shown beyond "Uploading…"; `FileReader#readAsDataURL` does not expose
+incremental progress the way `XMLHttpRequest` would have, and this slice's own ceiling (20 MB) makes that an
+acceptable gap rather than one worth a different upload mechanism.
+
+---
+
+## D-53 — `packages/actions`/`apps/web`: MDL-8 — a stored prompt id is refused on create at the write path, not only hidden in the panel, and stays visible, read-only, for a course that already has one
+
+**Problem.** `MDL-2`'s stored-prompt escape hatch (`D-3`) silently wins over everything an instructor types:
+`buildResponsesRequestBody` (`packages/openai/src/responses.ts`) sends `prompt: { id }` instead of
+`instructions` whenever a course has a `promptId`, so `FILE-4`'s versioning, authorship and restore are dead on
+exactly those courses, and nothing said so. `pages/CourseEditor.tsx` also offered a plain, editable "Prompt id"
+text field to every course, new or existing — the one thing standing between an instructor and typing a fresh
+prompt id into a course that never had one, which `MDL-8` requires stop being possible at all.
+
+**Choice — enforced at `courses.save`'s own `execute`, not only by the panel not offering the field.**
+`packages/actions/src/actions/courses.ts`'s `saveCourseAction` now writes `promptId: null` unconditionally
+whenever `entity.existingCourse` is unset (a create), regardless of what `input.promptId` carries — even an
+explicit value. Every write in this platform goes through `packages/actions` (this repository's own standing
+rule), so the panel choosing not to render a field is not, by itself, an enforcement of "no new course can
+acquire one" — a caller reaching the action directly (a script, a future screen, a stale API client) could
+still set one on create if the action itself did not refuse it too. `keepOrClear`'s own "on create there is
+nothing yet to preserve" case already fell back to `null` for an *omitted* field; this narrows it further so an
+explicit value on create falls back to `null` as well, the one deliberate exception to that helper's own rule.
+An update still reads `keepOrClear(input.promptId, entity.existingCourse.promptId)` exactly as before — a
+course that already has one keeps it, unchanged, on every save that omits the field, and could still have it
+explicitly cleared by a caller that sent `null` (this slice adds no restore/re-acquire path — clearing is not
+the same operation as acquiring a fresh one, and nothing here closes it).
+
+**Choice — the panel makes the field read-only and conditional, not merely absent for a new course.** A blank
+"Prompt id" field on a new course was already enough to satisfy "no new course can acquire one" by itself
+(nothing to type into), but `pages/CourseEditor.tsx` went further for symmetry with `MDL-8`'s other half: the
+field is never rendered as an editable control at all, for a create or an update — only shown, read-only, when
+`form.promptId` is non-empty (i.e., the course already has one). The request `handleSave` builds no longer
+carries the `promptId` key at all, for the same reason `conversationScope` was already an intentional omission
+in this form (this file's own module comment) — the field is not merely blank, it is not managed by this form,
+so relying on `courses.save`'s own "omitted preserves what is stored" is the honest way to say so, not an
+oversight this form happens to get away with.
+
+**Choice — the visibility half: a banner above Instructions, not a change to what Instructions does.** `MDL-8`'s
+own text frames this as two halves — "no new course can acquire one" (the write-side refusal above) and "an
+instructor must not be able to edit into the void" (visibility). The second half is read literally: an
+instructor typing into Instructions on a course with a stored prompt was already editing into the void before
+this slice; what was missing was only that nobody told them. A `role="status"` banner, styled with this app's
+own warning scale (`--color-warning-600`/`-50`, `ScaffoldButton.tsx`'s own precedent for that palette), sits
+directly above the Instructions field on exactly the courses where it applies, saying plainly that the stored
+prompt is in force and the instructions below are not being used. The Instructions field itself stays fully
+editable — MDL-8 does not ask this slice to stop an instructor from saving instructions "for later," only to
+stop them from believing the save did anything yet, and disabling the field would have been reaching past what
+was asked for a case (an instructor pre-writing instructions before deciding whether to migrate off the stored
+prompt some day) this slice has no way to rule out as useful.
+
+**Checked, not changed: `answerQuestion`'s `not-configured` decline.** `packages/core/src/answer.ts:333`'s own
+guard — `if (!course.promptId && !course.instructions) return { kind: 'not-configured' }` — still reads
+correctly once the panel stops offering `promptId` on create: a brand-new course with neither set still
+declines exactly as before (nothing here changes what `instructions` alone requires), and an existing course
+with a `promptId` and no `instructions` (the two "existing courses running today" `D-3`/`MDL-2` were written
+for) is still `!course.promptId` `false`, so it is still answered, through the stored prompt, exactly as it was
+before this slice. No code change was needed here — this entry records that it was checked, per the brief's own
+request, not skipped.
+
+**Limits.** Nothing in this slice offers an instructor a way to *migrate off* a stored prompt — clearing
+`promptId` (an explicit `null` in a `courses.save` call) is still possible for whoever can reach the action
+directly, but the panel gives no control for it, and no path copies a stored prompt's own text into
+`instructions` first. An instructor who wants off the Python era's escape hatch still needs the OpenAI
+dashboard to read what the prompt actually says before typing an equivalent into Instructions and then asking
+someone to clear the id — a real gap, left open because this slice's own brief scoped it as deprecation
+("keep reading it... this is deprecation, not removal"), not migration tooling.

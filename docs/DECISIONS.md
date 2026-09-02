@@ -3037,3 +3037,142 @@ identity on the same surface. True per-message accuracy needs the calling surfac
 external id through rather than this function re-deriving one from `surface` alone, which would touch
 `answer.ts`'s own input shape and every surface adapter's — left out of this rework's own scope, and said here
 plainly rather than silently left half-fixed.
+
+---
+
+## D-36 — `apps/mcp`: the third surface — an assistant reaches the platform as an ordinary account, a destructive tool asks a human directly, and the tool surface is a curated subset of the catalog
+
+**Problem.** MCP-1..5 ask for a third surface — an MCP server exposing `packages/actions`' catalog to an AI
+assistant — with four properties the brief names directly and one it leaves to this slice to work out
+mechanically: the same dispatch pipeline the API uses (MCP-1), an explicit tool allowlist rather than the
+whole catalog (MCP-2), a connection that carries exactly one account's authority and nothing more (MCP-3), a
+destructive tool that asks for a confirmation the assistant itself cannot forge (MCP-4), and metering that
+draws on the same ledger, attributed to the authorizing account (MCP-5).
+
+**Choice — reuse AUTH-3's session tokens as the MCP credential, not a new credential type.** A connection
+authenticates by presenting an existing session token (`@bloombot/auth#validateSession`) as
+`Authorization: Bearer <token>` — the same opaque, hashed-at-rest token a cookie already carries for
+`apps/api`. `apps/mcp/src/authenticate.ts` does nothing else: no service credential, no organization-scoped
+API key, no separate account type for "an assistant." MCP-3's "no service identity that transcends tenancy"
+is true by construction here — there is exactly one kind of principal this surface can authenticate as, an
+`accounts` row, the same principal the web panel already authenticates. Minting a token specifically to hand
+to an assistant (a "connect an assistant" screen in the panel) is `apps/web`'s own future work, out of this
+slice's scope, the same way `packages/auth/src/person-link.ts`'s own module comment already draws that line
+for the MCP half of account *linking* — this slice's brief is explicit that a token mechanism already existing
+is not the same as a UI to hand one out.
+
+**Choice — a tool call's `organizationId` is checked live, against the database, on every call — never cached
+on the session.** `apps/mcp/src/call-tool.ts#callTool` calls `memberships.getMembership` fresh for every
+single tool call, the same "read the database, not a snapshot of it" discipline every policy in this platform
+already holds itself to, rather than resolving a caller's memberships once at connect time and consulting an
+in-memory list thereafter. A membership revoked mid-session stops granting access on the very next tool call,
+not merely the next reconnect — and the refusal is `ActionRefusedError`, byte-identical to every other refusal
+`dispatch.ts` produces (TEN-5): a connection probing organization ids cannot tell "you have no membership here"
+from "this organization does not exist" from "this record does not exist," the same guarantee ACT-3 already
+gives the API.
+
+**Choice — the transport is stateful (one `McpServer`/`StreamableHTTPServerTransport` pair per session,
+tracked by the SDK's own `Mcp-Session-Id`), not stateless.** A fresh server per HTTP request looked simpler at
+first — nothing to track between requests, the shape the SDK's own `simpleStatelessStreamableHttp.ts` example
+uses — but MCP-4's own confirmation depends on the client's capabilities negotiated during `initialize`
+(`Server#getClientCapabilities`) still being known by the time a later `tools/call` arrives. A fresh server per
+request throws that negotiation away the moment the `initialize` response is sent, so every later destructive
+call would see no capabilities at all and fail closed *unconditionally* — not the "fails closed when the
+client genuinely cannot elicit" MCP-4 asks for, but "fails closed no matter what the client can do." Stateful
+mode costs a session map (`apps/mcp/src/server.ts`'s own `sessions`, scoped per `buildApp` call) and the
+bookkeeping that goes with it (`onsessioninitialized`/`onsessionclosed`), but it is what makes MCP-4's own gate
+meaningful rather than a permanent refusal. Every request against an existing session — not only the one that
+creates it — re-validates the bearer token (a token that has since expired or been revoked stops working
+immediately, not merely at the next reconnect) and checks it still names the *same* account the session was
+created for (`server.ts`'s own `existing.accountId !== accountId` check) — a session is a connection's own
+state, not a bearer credential a second account's token can walk into.
+
+**Choice — MCP-4's confirmation is MCP's own `elicitation/create`, aimed at the client application, not a
+boolean tool argument.** The mechanical question the brief asks directly: what makes a confirmation something
+"the assistant cannot supply on the person's behalf"? A boolean argument in the tool call itself does not,
+however it is named or documented — every argument in a tool call is text the model itself generates, so a
+model that decides to proceed can simply set `confirm: true` itself, and a model that already read a
+"confirmation token" out of an earlier tool result can just as easily echo it back in a later call; neither
+requires a human in the loop at all. `elicitation/create` is a distinct request *from the server to the
+client*, not a value inside the tool call/result exchange the model drives — the MCP specification's own
+elicitation capability exists precisely so a server can ask the *client application* to put a question in
+front of the person using it, and the client's own job (not this server's, and not enforceable by this server)
+is to actually show it to a human rather than auto-answer it. `apps/mcp/src/server.ts#requestElicitedConfirmation`
+sends exactly this — a `mode: 'form'` request with one required boolean field, worded to say the assistant
+cannot answer it — before `call-tool.ts` will dispatch `courseAttachments.detach`, the one destructive action
+in today's catalog (`tool-surface.ts`'s own module comment has why it is the only one).
+
+**What this does not, and cannot, guarantee.** MCP is a protocol, not an enforcement boundary this server
+controls end to end — nothing stops a non-compliant client from auto-answering `elicitation/create` itself,
+the same way nothing stops a browser extension from auto-clicking a confirm button in a web UI. What this
+design does guarantee is that the *assistant* — the model generating tool-call arguments from the
+conversation — has no channel to supply this answer: it is not an argument the model wrote, and it is not a
+value the model could have read out of an earlier response and replayed, because `elicitInput`'s own request
+is answered by the client's transport layer, not by anything that becomes part of the model's own context
+unless the client chooses to show it there. A client that wants to defeat this has to be built to do so
+deliberately; an assistant cannot stumble into it by writing a plausible-looking argument.
+
+**Choice — fails closed, not merely "skips the check," when the client cannot elicit at all.**
+`requestElicitedConfirmation` checks `getClientCapabilities()?.elicitation?.form` — the exact capability the
+SDK's own `elicitInput` requires for the default form mode — before ever sending the request; a client that
+never declared it gets `false` back, and `call-tool.ts` treats that identically to an explicit decline
+(`ConfirmationRequiredError`). The alternative — silently running the destructive tool anyway when the client
+has no way to ask a human — would make MCP-4 optional for exactly the clients least equipped to honor it.
+Same fate for a `requestConfirmation` that throws or rejects outright (a connection that drops mid-elicitation):
+caught and treated as "not confirmed," never as an unhandled failure that could be mistaken for success.
+
+**Choice — the tool surface (MCP-2) is an explicit array of action names (`apps/mcp/src/tool-surface.ts`'s own
+`MCP_TOOL_SURFACE`), checked against a real registry at startup, not derived from `ActionRegistry#list()`.**
+`buildToolDefinitions` throws if the array names an action the registry does not have (a typo, a renamed
+action) — loud, because a silently shrunken tool list is a worse failure than a crash a reviewer notices
+immediately. It silently *omits* an action the registry has that the array does not name — the direction
+MCP-2 actually cares about: a new action registered into `createPlatformRegistry` by some other slice must not
+become agent-callable by default, and it does not, because nothing added its name to this array.
+`tests/tool-surface.test.ts`'s own leak-probe test is the proof this is true mechanically, not merely by
+convention: it registers a fresh action nothing has ever heard of into the real platform registry and asserts
+it never appears in `buildToolDefinitions`'s output — a test that fails immediately if that function is ever
+rewritten to derive the surface from the registry instead of the array (proven directly for this slice: swap
+`MCP_TOOL_SURFACE.map` for `registry.list().map` and four tests in that file fail).
+
+Today's array covers the read-only half of the catalog in full, plus the ordinary writes that are either
+reversible (`projects.archive`/`.unarchive`) or end/disable access without discarding the record itself
+(`courseJoinLinks.revoke`, `enrolments.end`) — deliberately smaller than "everything that would work." Left
+off, for a future slice to add explicitly rather than by default: `courseAttachments.attach` (an arbitrary
+base64 file upload — a large,
+unusual argument shape to hand a model with no size conversation this slice has had),
+`discordServers.remove`/`.scaffold` (operational actions against a live Discord server), `roster.import` (a
+bulk write of students' own names and emails), and `memberships.grant` (grants account-level authority within
+the organization — a privilege change that deserves its own confirmation design, not folded into MCP-4's
+"destructive" bucket as an afterthought since it neither deletes, exports, nor spends money by that
+requirement's own three named triggers).
+
+**Choice — MCP-5 is satisfied structurally, by routing every call through the same `dispatch()`, not by any
+new accounting code in this slice.** `apps/mcp/src/call-tool.ts#callTool`'s only call that actually does
+anything is `dispatch(tool.action, actionArgs, { organizationId, db, accountId })` — the same function, the
+same pipeline, `apps/api/src/routes/actions.ts` already calls. No action registered in today's catalog carries
+a real `meter` hook (`packages/actions/src/types.ts`'s own `Meter` type — every action in `packages/actions/src/actions`
+either omits it or the pipeline's own no-op default runs), so there is nothing for this slice to attribute a
+cost to yet; the guarantee this slice adds is structural, not a new number anywhere: any action that later
+gains a real meter is metered identically for an MCP caller, because `call-tool.ts` has no second write path
+that could fall out of sync with it the way `packages/core/src/pricing.ts`'s own `costMicros: 0` fallback once
+did for an unmetered model call (that file's own comment: "`0` there used to read as 'this call was free'").
+This slice deliberately computes no cost of its own and writes no ledger row of its own — there is no model
+call anywhere in this catalog's actions to attribute one to.
+
+**Limits.** The full accept path of MCP-4's confirmation — a real client that declares elicitation support,
+receives the `elicitation/create` request, and answers `{ confirm: true }` — is proven at the `call-tool.ts`
+unit level with an injected `requestConfirmation` fake (`tests/call-tool.test.ts`), and the capability
+fail-closed path is proven over a real HTTP session (`tests/server.test.ts`), but the full bidirectional round
+trip (a client mid-tool-call responding to a server-initiated request over the same open Streamable HTTP
+stream) is not exercised end to end in this test suite — doing so over `supertest` would mean driving the SSE
+response as it streams rather than waiting for it to finish, which `supertest`'s own buffered response model
+does not support without a lower-level HTTP client this slice did not build. `scripts/dev.mjs`, which this
+slice's brief asks to extend with an `mcp` process entry, does not exist on this branch's own lineage (it
+lands on `feat/PLAT-1-multi-surface-platform`, three commits ahead of this slice's base,
+`feat/LINK-1-account-linking`) — `mcp:dev` is added to the root `package.json` alongside `api:dev`/`bot:dev`
+instead, and whichever slice next rebases onto that integration branch is the one that can add the `apps/mcp`
+entry `scripts/dev.mjs` itself asks for, with its own test. The web panel's "connect an assistant" screen —
+the UI that actually hands an account a token to paste into an MCP client's configuration — is not built here
+either; this slice's own brief is explicit that it is out of scope, the same "provides the token mechanism,
+not the flow that hands it out" shape `packages/auth/src/person-link.ts`'s own module comment already draws
+for LINK-3's MCP half.

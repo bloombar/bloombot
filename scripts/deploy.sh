@@ -219,7 +219,18 @@ reload_everything() {
     echo "ERROR: failed to reload: ${failed[*]}" >&2
     return 1
   fi
-  pm2 save
+  # Deliberately not `if ! reload_everything; then ...` material: every
+  # process above reloaded fine, so a `pm2 save` failure (a full disk
+  # writing `~/.pm2/dump.pm2`, say) is not a reload failure and must not
+  # be treated as one — cheap-fix finding: this used to be the bare, last
+  # statement in this function, so its own exit status silently became
+  # `reload_everything`'s own return value, and a caller reading a `pm2
+  # save` failure as "processes failed to reload" would roll back a
+  # completely healthy deploy and then fail the rollback too, for a reason
+  # that had nothing to do with either. `pm2 save` failing only means the
+  # process list will not survive a reboot (`pm2 resurrect`) until it
+  # succeeds — worth a loud warning, not a rollback.
+  pm2 save || echo "WARNING: pm2 save failed — the process list will not survive a reboot until this succeeds" >&2
 }
 
 # Restores the checkout (and, if they were reinstalled, the dependencies and
@@ -364,7 +375,11 @@ git reset --hard "$TARGET_SHA"
 
 if [ "$DEPS_CHANGED" = true ]; then
   log "python dependency files changed"
-  install_deps
+  if ! install_deps; then
+    restore_previous_checkout
+    fail "python dependency install failed at ${TARGET_SHA:0:8}. Nothing was
+restarted and the checkout was put back."
+  fi
 else
   log "python dependency files unchanged; skipping install"
 fi
@@ -393,7 +408,11 @@ fi
 
 if [ "$NODE_DEPS_CHANGED" = true ]; then
   log "node dependency files changed"
-  npm ci
+  if ! npm ci; then
+    restore_previous_checkout
+    fail "npm ci failed at ${TARGET_SHA:0:8}. Nothing was restarted and the
+checkout was put back."
+  fi
 else
   log "node dependency files unchanged; skipping npm ci"
 fi

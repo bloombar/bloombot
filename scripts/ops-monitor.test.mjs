@@ -264,6 +264,95 @@ test('planNotifications: a sustained provider outage, windowed tick by tick, pag
   )
 })
 
+// Rework finding — the first windowing fix advanced the baseline to the
+// current snapshot on *every* tick, evaluated or not, so a process making
+// fewer than MODEL_ERROR_MIN_CALLS calls per poll never accumulated enough
+// in a single window to ever be evaluated: `windowCalls` was always below
+// the threshold, and the un-evaluated remainder was silently discarded each
+// tick. A quiet course server (as few as one or two model calls per poll)
+// having a *total* outage was never noticed at all. This reproduces that
+// exact shape and proves the fix accumulates across ticks instead.
+test('planNotifications: a low-traffic total outage still pages eventually — the window accumulates across ticks rather than resetting every poll', () => {
+  let previousHealthy = new Map()
+  let previousModel = new Map()
+  const allNotifications = []
+
+  const tick = (calls, errors) => {
+    const { notifications, nextHealthy, nextModel } = planNotifications(
+      previousHealthy,
+      previousModel,
+      [
+        {
+          name: 'bot',
+          ok: true,
+          reachable: true,
+          status: 200,
+          body: {
+            gatewayConnected: true,
+            model: { calls, errors, errorRate: errors / calls },
+          },
+        },
+      ]
+    )
+    previousHealthy = nextHealthy
+    previousModel = nextModel
+    allNotifications.push(...notifications)
+  }
+
+  // Two calls per poll, every one of them an error from the moment the
+  // outage starts (poll 2 onward) — never five calls within any single
+  // 30s poll, so the bug this test guards against would never fire at all.
+  tick(2, 0) // poll 1: baseline seeded, 2 calls, healthy
+  tick(4, 2) // poll 2: 2 new calls, both errors — window so far: 2 calls (< 5), held
+  tick(6, 4) // poll 3: 2 more — window: 4 calls since poll 1's baseline (< 5), held
+  tick(8, 6) // poll 4: 2 more — window: 6 calls since poll 1's baseline (>= 5), all errors
+
+  assert.deepEqual(
+    allNotifications.map((n) => n.healthy),
+    [false]
+  )
+})
+
+// The mirror of the case above, confirming a genuinely quiet, healthy
+// server does not page just because it takes several polls to accumulate
+// enough calls to be evaluated at all.
+test('planNotifications: a low-traffic, healthy server never pages while it accumulates', () => {
+  let previousHealthy = new Map()
+  let previousModel = new Map()
+  const allNotifications = []
+
+  const tick = (calls, errors) => {
+    const { notifications, nextHealthy, nextModel } = planNotifications(
+      previousHealthy,
+      previousModel,
+      [
+        {
+          name: 'bot',
+          ok: true,
+          reachable: true,
+          status: 200,
+          body: {
+            gatewayConnected: true,
+            model: { calls, errors, errorRate: errors / calls },
+          },
+        },
+      ]
+    )
+    previousHealthy = nextHealthy
+    previousModel = nextModel
+    allNotifications.push(...notifications)
+  }
+
+  tick(1, 0)
+  tick(2, 0)
+  tick(3, 0)
+  tick(4, 0)
+  tick(5, 0)
+  tick(6, 0)
+
+  assert.deepEqual(allNotifications, [])
+})
+
 test('formatNotification: an outage names the reason', () => {
   assert.equal(
     formatNotification({

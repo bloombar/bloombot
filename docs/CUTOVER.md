@@ -74,15 +74,54 @@ npm run build
 npm run dev
 ```
 
-Invite the **same bot application** the Python bot already uses into a **disposable test
-server** — never a course server a student is enrolled in. A bot token is not tied to one
-server; inviting it somewhere else needs no new credential and touches nothing in production.
-**Bind that disposable test server to the rehearsal organization** through the platform's own
-panel (Discord → Install to Discord), then recreate one course's categories/channels there (by
-hand, or by scaffolding it through the panel) so a mention has somewhere to land. **Never bind
-a real course server — one a student is actually enrolled in — to the rehearsal organization.**
-That binding is what §1.3's own safety argument below depends on; see the warning at the end of
-this section for exactly why.
+**Before you can bind anything: the imported organization has no members, and nothing in
+the panel can add its first one.** `npm run legacy:import` creates the organization, its
+project and its courses, but writes no `memberships` row at all — and the one action that
+grants a membership, `memberships.grant`, refuses on purpose unless the target *already* holds
+one in that organization (ENRL-5's own "granted only by an existing owner", enforced by
+requiring an existing membership to grant against — `packages/actions/src/actions/memberships.ts`'s
+own module comment). Nobody can ever be the first. This is a real gap between MIG-2 (the
+import) and ENRL-5/TEN-1 (who is allowed to act on an organization), found while writing this
+runbook, not a design choice — see `docs/DECISIONS.md`'s own entry on it for what the actual
+fix looks like and why this document does not build it here. Until that lands, bootstrap the
+founding owner by hand, once per imported organization, with the same repository function the
+platform's own code already trusts rather than a hand-written `INSERT`:
+
+1. Sign in at the panel as whoever should administer this organization (an instructor, or
+   yourself) — an ordinary sign-in, the same as any other. It creates *their own* personal
+   organization too, which is fine and unrelated; only their **account** matters here.
+2. From the checkout (so `@bloombot/db`'s own module resolution finds it):
+
+   ```bash
+   cat > tmp/bootstrap-membership.mjs <<'EOF'
+   import { loadDotEnv } from '@bloombot/config'
+   import { openDatabase, closeDatabase, accounts, memberships } from '@bloombot/db'
+
+   loadDotEnv()
+   const [, , email, organizationId] = process.argv
+   const db = openDatabase()
+   const account = accounts.getAccountByEmail(email, db)
+   if (!account) throw new Error(`no account for ${email} — sign in once first`)
+   memberships.createMembership(organizationId, account.id, 'owner', db)
+   console.log(`${email} is now owner of ${organizationId}`)
+   closeDatabase(db)
+   EOF
+   node tmp/bootstrap-membership.mjs instructor@example.edu <organization-id-from-1.2s-report>
+   rm tmp/bootstrap-membership.mjs
+   ```
+
+   The organization id is in 1.2's own printed report (`organization: created (...)`).
+3. Refresh the panel — the organization switcher now offers the imported organization.
+
+Now, signed in as that owner: invite the **same bot application** the Python bot already uses
+into a **disposable test server** — never a course server a student is enrolled in. A bot
+token is not tied to one server; inviting it somewhere else needs no new credential and
+touches nothing in production. **Bind that disposable test server to the rehearsal
+organization** through the platform's own panel (Discord → Install to Discord), then recreate
+one course's categories/channels there (by hand, or by scaffolding it through the panel) so a
+mention has somewhere to land. **Never bind a real course server — one a student is actually
+enrolled in — to the rehearsal organization.** That binding is what §1.3's own safety argument
+below depends on; see the warning at the end of this section for exactly why.
 
 Send a real message in the test server. Confirm:
 
@@ -137,24 +176,25 @@ before it could be the thing discovered at 9pm; see `scripts/deploy.sh`'s own
 
 ## Phase 2 — Cutover (OPS-10, OPS-11)
 
-> ### Before you start: does `apps/api` have a real email transport yet?
+> ### Hard precondition: AUTH-5 must have landed before you start
 >
+> This phase requires `apps/api` to actually come up — §2.6 below binds the real course
+> server to the imported organization, and that bind happens through the panel's own
+> Install-to-Discord flow, which is `apps/api`. Until a real `EmailSender` is configured,
 > `apps/api/src/logging-email-sender.ts#buildEmailSender` refuses to start this process at all
-> in `NODE_ENV=production` until a real `EmailSender` is configured — `packages/auth/src/email.ts`
-> ships only a port and a test fake (see `docs/DEPLOY_DROPLET.md`'s own lead callout). That gap
-> is tracked as **AUTH-5** and, as of this writing, is being built on the integration branch in
-> parallel with this document — check whether it has landed (`git log` for AUTH-5, or simply try
-> starting `api` against a `.env` with `NODE_ENV=production` and see whether it stays up) before
-> running §2.2 below.
+> in `NODE_ENV=production` — `packages/auth/src/email.ts` ships only a port and a test fake
+> (see `docs/DEPLOY_DROPLET.md`'s own lead callout). That gap is tracked as **AUTH-5**, built
+> and in review as of this writing — confirm it has actually merged and this droplet has
+> deployed it (`api` stays up against `NODE_ENV=production`, not merely that the PR exists)
+> before running §2.2.
 >
-> **If AUTH-5 has not landed yet:** §2.5 will start `bot`, `worker` and `mcp` successfully — none
-> of them depend on email — but `api` will crash-loop, so the panel and the web chat surface are
-> unreachable through the platform. §2.2 has already stopped the Python bot and §2.3 has already
-> reset the Discord token in the developer portal by that point, both irreversibly, so **do not
-> reach §2.2 without first deciding this is acceptable** (Discord answers still work; the panel
-> and any Google/email sign-in do not, until AUTH-5 lands and this cutover's own `api` is
-> restarted). §3's rollback still works regardless — it does not depend on `api` ever having come
-> up — but it is a worse position to roll back from than never having started.
+> **Do not begin this phase without it.** §2.2 stops the Python bot and §2.3 resets the
+> Discord token, both irreversibly, before `api` is ever needed — reaching that point only to
+> discover `api` cannot start leaves every course server silent (§2.6's own bind step is the
+> only thing that makes a real course server answer at all, and it needs `api`) with the old
+> system already gone and the credential already rotated. §3's rollback still works regardless
+> of where this phase stopped, but confirming this precondition first is what keeps you from
+> ever needing it for this specific reason.
 
 Do this once the rehearsal above has been run at least once successfully, including 1.4.
 Pick a low-traffic window — there is a real, if short, gap between stopping the Python bot
@@ -197,7 +237,7 @@ not two separate rotations:
    immediately — which is fine, because the Python bot that read it was just stopped in
    §2.2, and the platform has not started yet.
 2. **OpenAI dashboard → API keys → create a new key.** Do not revoke the old one yet — see
-   §2.6.
+   §2.7.
 3. Write both new values into the **one** `.env` file both systems share.
 
 **What rotation does *not* need to touch: `BOT_PERMISSIONS`, or a re-invite.** A bot's
@@ -237,28 +277,57 @@ pm2 save
 
 (`scripts/deploy.sh` does this same sequence, plus the migration step, automatically on every
 future deploy once this one has run by hand — this manual sequence is only for the very first
-cutover.) If AUTH-5 (see this Phase's own callout above) has not landed, `pm2 status` will show
-`api` crash-looping (`restart_time` climbing) while `bot`/`worker`/`mcp`/`ops-monitor` come up
-normally — expected, not a sign the other four are broken too.
+cutover.) Confirm `pm2 status` shows all five `online`, `api` included — this phase's own
+precondition means it should be, and if it is not, stop here rather than continuing into §2.6,
+which needs it.
 
-### 2.6 Verify, then finish the rotation
+### 2.6 Bind the real course server — without this, nothing answers
+
+**This is the step a cutover has no equivalent of if skipped: the platform will start, `bot`
+will connect to the gateway, and every message in every real course channel will still be
+silently dropped**, because the import (§2.4) writes courses and people, never a Discord
+server binding — `packages/legacy-import` has no reference to `discordServers` at all — and
+`packages/discord/src/handle-mention.ts` resolves that binding (SURF-3) before any course or
+category matching runs. This is the exact same gate §1.3's own rehearsal relies on to stay
+safe; here, it is the thing standing between the cutover and a working platform, and there is
+no rehearsal-style "disposable test server" to substitute — it has to be the real one.
+
+1. **Bootstrap the founding owner of the imported organization**, the same one-time procedure
+   §1.3 describes and explains in full (there is no panel action for this yet — see that
+   section, and `docs/DECISIONS.md`'s own entry, for why). Use the *real* organization id from
+   §2.4's own printed report this time, not the rehearsal's:
+
+   ```bash
+   node tmp/bootstrap-membership.mjs instructor@example.edu <organization-id-from-2.4s-report>
+   rm tmp/bootstrap-membership.mjs
+   ```
+
+   (Re-create `tmp/bootstrap-membership.mjs` from §1.3's own heredoc if it was already removed
+   after the rehearsal — it is a scratch file, not something this checkout keeps around.)
+2. Signed in as that owner: **Discord → Install to Discord**, pick the real course server (the
+   one named in `bot_config.yml`), approve. The platform verifies you administer that server by
+   asking Discord itself, not by trusting the request.
+3. Confirm the binding actually landed before moving on — the panel's own Discord servers view
+   for this organization should list it as bound, not merely "install succeeded" on screen.
+
+### 2.7 Verify, then finish the rotation
 
 ```bash
-curl -s 127.0.0.1:3000/health   # api — will not answer at all if AUTH-5 has not landed; see §2.5
+curl -s 127.0.0.1:3000/health   # api
 curl -s 127.0.0.1:3001/health   # bot — gatewayConnected: true
 curl -s 127.0.0.1:3002/health   # worker
 curl -s 127.0.0.1:3003/health   # mcp
 ```
 
-Send a real message in a real course channel and confirm the platform answers it — this exercises
-`bot`, not `api`, so it is a real check of the cutover even while `api` is down. Only once `api`
-itself has actually come up (`curl` above returns `{"ready":true,"database":true}`, not a
-connection refusal) — not merely started — go back to the OpenAI dashboard and revoke the *old*
-key from §2.3. Revoking it earlier, before confirming the new one is actually wired up anywhere
-that reads it, would turn a rotation into a self-inflicted outage; if `api` cannot come up at
-all yet, hold off revoking the old key until it can.
+Send a real message in the now-bound real course channel and confirm the platform answers it —
+this is the first point in this phase that message can actually be answered at all, now that
+§2.6 has bound the server it arrives in. Only once `api` itself has actually come up (`curl`
+above returns `{"ready":true,"database":true}`, not a connection refusal) — not merely started
+— go back to the OpenAI dashboard and revoke the *old* key from §2.3. Revoking it earlier,
+before confirming the new one is actually wired up anywhere that reads it, would turn a
+rotation into a self-inflicted outage.
 
-### 2.7 Arm alerting (OPS-12)
+### 2.8 Arm alerting (OPS-12)
 
 `ops-monitor` was already started in §2.5 — confirm `OPS_ALERT_WEBHOOK_URL` is set in `.env`
 before this cutover, not after the first incident. See §5 below for what it does and what
@@ -290,10 +359,14 @@ actually needed for real, treat it as a signal to re-run §1.4 again once things
 the same way this slice's own rehearsal of `scripts/deploy.sh`'s rollback (§1.4) found and
 fixed a real bug in it before it could be discovered live.
 
-**What this does not undo:** the import in §2.4. Rolling the *processes* back to the Python
-bot does not remove the people, courses and messages the import wrote into the platform's own
-tables — MIG-4's own idempotency means running the import again later, once the real cutover
-is retried, still costs nothing (everything from §2.4 is matched, not duplicated).
+**What this does not undo:** the import in §2.4, or the bind in §2.6. Rolling the
+*processes* back to the Python bot does not remove the people, courses and messages the
+import wrote into the platform's own tables — MIG-4's own idempotency means running the
+import again later, once the real cutover is retried, still costs nothing (everything from
+§2.4 is matched, not duplicated). The Discord server binding from §2.6 is left in place too,
+harmlessly (the Python bot does not read it, and nothing routes through it while the platform
+is stopped) — which is a small point in the retry's own favor: §2.6 does not need to be
+repeated the next time this cutover is attempted, only confirmed still there.
 
 ---
 
@@ -330,6 +403,6 @@ already watching before it restarted; it pages immediately, though, if a process
 down the moment it starts polling.
 
 If `OPS_ALERT_WEBHOOK_URL` is unset, the same transition is still written to
-`logs/ops-monitor.log` (pm2 redirects this process's own stdout/stderr there, OPS-2) —
+`logs/pm2-ops-monitor-out.log`/`logs/pm2-ops-monitor-error.log` (pm2 redirects this process's own stdout/stderr there, OPS-2, `ecosystem.config.cjs`) —
 degraded, not silent, but nobody is paged unless something is also watching that file. Set
-the webhook before the cutover in §2.7, not after the first incident makes the gap obvious.
+the webhook before the cutover in §2.8, not after the first incident makes the gap obvious.

@@ -3882,7 +3882,7 @@ explicitly said to prefer against. A single POST with both `content` (Discord's 
 `text` (Slack's) in the same JSON body is understood by either without branching on which was configured, and
 needs no vendor SDK — an operator creates one incoming webhook in whichever chat tool they already use and
 sets `OPS_ALERT_WEBHOOK_URL`. When it is unset, the same transition is still written to stdout/stderr, which
-pm2 already redirects to `logs/ops-monitor.log` (OPS-2) — degraded, not silent, the same shape
+pm2 already redirects to `logs/pm2-ops-monitor-out.log`/`logs/pm2-ops-monitor-error.log` (OPS-2) — degraded, not silent, the same shape
 `logging-email-sender.ts` itself takes for its own equivalent gap.
 
 **Deliberately dependency-free from `@bloombot/config`.** `scripts/health-check.mjs` and
@@ -4140,3 +4140,64 @@ each would have caused an operator following the document at 9pm:
 claims (App Platform's storage and deploy-strategy behavior) remain unverified against a live
 account, as this entry's own original "Limits" paragraph already disclosed, and still call for
 the same verify-before-relying discipline that paragraph asks for.
+
+---
+
+## D-44 — `docs/CUTOVER.md`: a legacy-imported organization has no members, and nothing in the panel can add its first one
+
+**Problem, found while driving Phase 2 of the cutover runbook end to end.** The must-fix-1
+finding from this rework round's own review (a missing bind step left every real course
+server silently unanswered) led to writing that step — which, on inspection, cannot actually
+be performed: the Discord install route (`apps/api/src/routes/discord-servers.ts`) resolves
+"the caller's organization... from their own membership, never the request body" (its own
+module comment), so binding a server requires the caller to already be a member of the target
+organization. `packages/legacy-import` creates the organization, its project, its courses, its
+people and their messages, but writes no `memberships` row at all — there is nothing in
+`bot_config.yml` an instructor's platform account could be derived from. The one action that
+grants a membership, `memberships.grant` (`packages/actions/src/actions/memberships.ts`),
+refuses on purpose unless the target *already* holds a membership in that organization —
+ENRL-5's own "granted only by an existing owner" is enforced by requiring an existing member
+to grant to, a deliberate choice that closed a real security hole (its own "Rework finding 1":
+an earlier version let *any* signed-in caller grant themselves a role in *any* organization by
+guessing its id) at the cost of removing "invite a first member" from the action layer
+entirely. The result: a legacy-imported organization has no path to its first member through
+anything the panel exposes, and MIG-2 never anticipated this — it describes what the import
+produces, not who can act on it afterward.
+
+**Choice — bootstrap the founding owner with the same repository function the platform's own
+code already trusts, run once by hand, rather than a hand-written `INSERT`.**
+`packages/db/src/repos/memberships.ts#createMembership(organizationId, accountId, role, db)`
+is exactly "add an existing account to an organization with a role" — its own doc comment
+says so — and is already what a second membership goes through internally; it is simply not
+reachable from outside the codebase for a *first* one. `docs/CUTOVER.md`'s own §1.3 (rehearsal)
+and §2.6 (the real cutover) both now instruct the operator to run a small script,
+`tmp/bootstrap-membership.mjs`, that imports `accounts`/`memberships` from `@bloombot/db`
+(the same package `apps/api`'s own routes import), resolves the instructor's account by email
+(`accounts.getAccountByEmail`, the same documented TEN-2 exception `sign-in.ts` itself uses),
+and calls `createMembership` with role `'owner'` — reusing the real, tested insert shape
+rather than risking a hand-rolled SQL statement getting a nullable column or an enum value
+wrong. The instructor still has to sign in once first, ordinarily, so the account exists to
+grant the membership to.
+
+**Why not build the missing action instead, in this slice.** This is a docs/production-
+hardening slice, not a feature slice — inventing a new action (`memberships.inviteFirst`, or
+teaching `legacy-import` to create a founding membership from some field `bot_config.yml`
+does not reliably carry, like an instructor's email) is real design work with its own
+authorization questions (who is allowed to become the founding owner of an *imported*
+organization — the person who ran the import, on the droplet, is not the same thing as "an
+account, resolved by email, that AUTH-2's Google verifier or a sign-in link has actually
+proven") that this slice's own brief did not scope and should not improvise. The workaround
+above is deliberately narrow — a droplet-local script, run once per cutover, never committed,
+importing only what `apps/api`'s own routes already import — not a precedent for routinely
+bypassing the action layer.
+
+**Limits.** This is a real gap this document is working around, not one it closes — the
+correct fix is a scoped action (or an extension to `legacy-import` itself) that lets an
+imported organization's first member be established through the ordinary authorization
+path, not a script an operator has to remember exists. Flagging it here, rather than only in
+the runbook, is so it is discoverable as a follow-up requirement rather than rediscovered the
+next time someone runs a legacy import.
+
+**Numbering note.** Taken as the next number after D-43 in this branch's own history; a
+commit on the (unmerged, in-review) AUTH-5 branch also references "D-44" for its own entry —
+flagged to the supervisor to resolve at merge, per this project's own numbering convention.

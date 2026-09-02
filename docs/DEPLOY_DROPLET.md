@@ -457,7 +457,13 @@ row pointing at them, is only half a recovery.
 [docs/CUTOVER.md](CUTOVER.md) holds itself to:
 
 ```bash
-pm2 stop api bot worker mcp ops-monitor   # stop everything that holds data.db open
+# Stop everything that holds data.db open — including the Python bot, if it
+# is still running during the migration window (docs/CUTOVER.md): §3.1's
+# own SQL_LITE_DB_PATH == DATABASE_PATH (D-9) means bloombot has the exact
+# same file open through peewee, and restoring over it while that process
+# still holds a handle is exactly what the WAL warning above this section
+# exists to prevent — omitting it here would be the same mistake.
+pm2 stop bloombot api bot worker mcp ops-monitor
 rm -f data/data.db-wal data/data.db-shm   # stale WAL/shared-memory sidecars from the old file —
                                            # leaving them would let SQLite try to replay them
                                            # against the restored file's own, unrelated history
@@ -465,6 +471,8 @@ cp "$BACKUP" data/data.db
 rm -rf data/attachments && tar -xzf "/tmp/attachments-backup-$(date +%F).tar.gz" -C data
 node packages/db/dist/run-migrate.js --i-know   # the restored file may predate a later migration
 pm2 start api bot worker mcp ops-monitor
+# Restart bloombot too, only if it was stopped above (i.e. this droplet is
+# still mid-migration) — a fully cut-over droplet has no such process left.
 ```
 
 ### 8.2 Log rotation

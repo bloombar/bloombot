@@ -69,11 +69,10 @@ const MODEL_ERROR_RATE_THRESHOLD = 0.5
  * `reason` is only meaningful when `healthy` is `false`, and is what ends
  * up in the notification text.
  *
- * `previousModel` is the `{calls, errors}` this same process's own
- * `model` body carried on the *previous* poll (`undefined` on the first
- * observation) — this function reads the *delta* since then, not the
- * lifetime total, and returns the raw totals to store as next tick's
- * `previousModel`.
+ * `previousModel` is the `{calls, errors}` baseline this same process's own
+ * `model` body is windowed against (`undefined` on the first observation)
+ * — this function reads the delta since that baseline, not the lifetime
+ * total, and returns the baseline the *next* tick should use.
  *
  * Rework finding — `createCountingModelClient` (`packages/core`) counts
  * since the process started and never resets, so `model.errorRate` in the
@@ -87,8 +86,23 @@ const MODEL_ERROR_RATE_THRESHOLD = 0.5
  * bad the other way: the first 5 calls right after a deploy resets the
  * counters can trip the threshold on ordinary noise, and "recovered" would
  * not fire again for hours while the lifetime average slowly dilutes back
- * down. Windowing against the previous poll's own snapshot instead makes
- * this a real "in roughly the last `OPS_ALERT_POLL_INTERVAL_MS`" measurement.
+ * down. Windowing against a baseline instead makes this a real "since
+ * roughly the last time this had enough calls to say anything" measurement.
+ *
+ * Second rework finding — the first version of this window advanced the
+ * baseline to the current snapshot on *every* tick, evaluated or not. A
+ * course server making four model calls per 30s poll — a busy classroom,
+ * not a quiet one — never accumulates five calls *within one poll*, so
+ * `windowCalls` was `4 < MODEL_ERROR_MIN_CALLS` on every single tick and the
+ * un-evaluated remainder was discarded each time: a sustained, total outage
+ * on that server was never noticed at all, a regression against even the
+ * lifetime-average behaviour it replaced (which at least fired eventually).
+ * The baseline now only advances once a window actually accumulates enough
+ * calls to be evaluated — held unchanged, tick over tick, while it does
+ * not — so a quiet server's window simply spans more polls rather than
+ * silently losing what it already saw. Once a window is evaluated, the
+ * baseline resets to that moment, so this still never grows back into a
+ * lifetime average.
  */
 export function evaluate(result, previousModel) {
   if (!result.ok) {
@@ -108,33 +122,51 @@ export function evaluate(result, previousModel) {
   ) {
     return { healthy: true, reason: undefined, model: previousModel }
   }
-  const nextModel = { calls: model.calls, errors: model.errors }
-  let windowCalls = 0
-  let windowErrors = 0
-  if (previousModel && model.calls >= previousModel.calls) {
-    // The ordinary case: this process kept running since the last poll,
-    // so the window is the delta since then.
+  if (!previousModel) {
+    // First observation for this process — nothing to window against yet.
+    // Seed the baseline here rather than at `{calls: 0, errors: 0}`, so the
+    // very first real window starts from this moment, not from whatever
+    // the lifetime total already was when the monitor itself started.
+    return {
+      healthy: true,
+      reason: undefined,
+      model: { calls: model.calls, errors: model.errors },
+    }
+  }
+
+  let windowCalls
+  let windowErrors
+  if (model.calls >= previousModel.calls) {
+    // The ordinary case: this process kept running since the baseline was
+    // set, so the window is the delta since then.
     windowCalls = model.calls - previousModel.calls
     windowErrors = model.errors - previousModel.errors
-  } else if (previousModel) {
-    // The counters went backwards — the process restarted between polls
-    // and `createCountingModelClient`'s own counters reset with it (its
-    // own module comment: "since it was built"), not a real negative call
-    // count. Evaluate the raw post-restart totals instead of a
-    // nonsensical negative rate; the tick after this one gets a clean
-    // delta again.
+  } else {
+    // The counters went backwards — the process restarted since the
+    // baseline was set, and `createCountingModelClient`'s own counters
+    // reset with it (its own module comment: "since it was built"), not a
+    // real negative call count. The window becomes the raw post-restart
+    // totals instead of a nonsensical negative rate; holding the (now
+    // stale) baseline below still accumulates correctly on later ticks,
+    // the same as the "not enough calls yet" case.
     windowCalls = model.calls
     windowErrors = model.errors
   }
-  // else: no previous snapshot at all (this process's first observation)
-  // — nothing to window against yet, so windowCalls/windowErrors stay 0
-  // and this tick cannot page on the model limb, the same "assume healthy
-  // until proven otherwise" choice `planNotifications` already makes for
-  // the health-status limb.
-  if (
-    windowCalls >= MODEL_ERROR_MIN_CALLS &&
-    windowErrors / windowCalls >= MODEL_ERROR_RATE_THRESHOLD
-  ) {
+
+  if (windowCalls < MODEL_ERROR_MIN_CALLS) {
+    // Not enough calls in the window yet to mean anything — hold the
+    // baseline exactly as it was, so the next tick's window keeps
+    // accumulating from the same starting point instead of discarding
+    // what this tick already saw.
+    return { healthy: true, reason: undefined, model: previousModel }
+  }
+
+  // Enough accumulated to decide. Reset the baseline to right now — the
+  // next window starts fresh from this point, whether or not this one
+  // paged, which is what keeps this a windowed measurement rather than a
+  // lifetime average that merely resets less often.
+  const nextModel = { calls: model.calls, errors: model.errors }
+  if (windowErrors / windowCalls >= MODEL_ERROR_RATE_THRESHOLD) {
     return {
       healthy: false,
       reason: `model provider error rate ${Math.round((windowErrors / windowCalls) * 100)}% over the last ${windowCalls} calls`,

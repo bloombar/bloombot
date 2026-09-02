@@ -2363,6 +2363,21 @@
   phase: 12
   status: In review
   review: false
+- id: LINK-10
+  title: A connected person can reach the course they connected to, in the browser
+  full: Connecting proves who somebody is; it does not make them a member of the
+    institution running the course. The panel's organization switcher is built
+    from memberships, so a student who has connected — and who Discord now
+    answers — still opens the web app and sees only their own personal
+    organization, with no way to reach the course their enrolment lives in. The
+    browser has to know about the organizations a person is connected into, not
+    only the ones their account administers, or LINK-6's payoff never arrives on
+    the web surface at all.
+  section: §28 Account Linking Across Surfaces
+  family: LINK
+  phase: 12
+  status: Backlog
+  review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address
   full: A person gains an identity on a second surface by proving control of the

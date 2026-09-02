@@ -44,7 +44,7 @@ does what it says.
 | variable | reuse? |
 | --- | --- |
 | `BOT_TOKEN` | **yes** — the same bot, the same token |
-| `OPENAI_API_KEY` | **yes** |
+| `OPENAI_API_KEY` | **yes** — needed for the bot and the web chat to actually answer anything; leaving it unset does not stop the API or the panel from starting (WEB-10's own chat surface apologizes to every question instead) |
 | `BOT_APP_ID` | **yes** if present; otherwise the application id from the Discord developer portal |
 | `BOT_PERMISSIONS` | **yes** if present |
 | `SQL_LITE_DB_PATH` | leave as is — the Python bot still reads it |

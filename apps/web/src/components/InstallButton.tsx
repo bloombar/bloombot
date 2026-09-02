@@ -24,7 +24,10 @@ import { useState } from 'react'
 
 import { beginDiscordInstall } from '../api/client.js'
 import { ApiError } from '../api/client.js'
+import { DeleteIcon } from '../icons.js'
+import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
+import { useModal } from './modal/ModalProvider.js'
 
 export const PENDING_INSTALL_ORG_KEY = 'bloombot:pendingInstallOrganizationId'
 
@@ -44,14 +47,37 @@ export function InstallButton({
 }: InstallButtonProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
+  const { confirm } = useModal()
+
+  // WEB-15: removing the bot from a Discord server is a destructive action
+  // — it stops every course in this organization routing through that
+  // server — so it confirms before running, through the one modal
+  // primitive this panel shares (`components/modal/ModalProvider.js`).
+  const handleRemoveClick = async () => {
+    const confirmed = await confirm({
+      title: 'Remove this Discord server?',
+      description:
+        'Every course in this organization stops routing through it until it is installed again.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (confirmed) onRemove()
+  }
 
   if (installedServerId) {
     return (
-      <div className="install-button" data-testid="install-button">
-        <p>Installed — server {installedServerId}</p>
-        <button type="button" onClick={onRemove} disabled={removing}>
+      <div className="flex items-center gap-3" data-testid="install-button">
+        <p className="text-sm text-neutral-700">
+          Installed — server <code>{installedServerId}</code>
+        </p>
+        <Button
+          variant="destructive"
+          icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+          onClick={() => void handleRemoveClick()}
+          disabled={removing}
+        >
           {removing ? 'Removing…' : 'Remove'}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -71,14 +97,18 @@ export function InstallButton({
   }
 
   return (
-    <div className="install-button" data-testid="install-button">
-      <button
-        type="button"
+    <div
+      className="flex flex-col items-start gap-3"
+      data-testid="install-button"
+    >
+      {/* WEB-15: the one primary action this screen offers. */}
+      <Button
+        variant="primary"
         onClick={() => void handleClick()}
         disabled={starting}
       >
         {starting ? 'Starting…' : 'Install to Discord'}
-      </button>
+      </Button>
       {error && <ErrorMessage error={error} />}
     </div>
   )

@@ -11,7 +11,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { disableCourse, enableCourse, listCourses } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary, Project } from '../api/types.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { useModal } from '../components/modal/ModalProvider.js'
+import { AddIcon, DisableIcon, EnableIcon } from '../icons.js'
 
 export interface CoursesScreenProps {
   organizationId: string
@@ -31,6 +34,7 @@ export function Courses({
   const [busyCourseId, setBusyCourseId] = useState<string | undefined>(
     undefined
   )
+  const { confirm } = useModal()
 
   // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
   // below (on mount, and whenever `project.id` changes) and directly after
@@ -61,6 +65,21 @@ export function Courses({
   }, [refresh])
 
   const handleToggle = async (course: CourseSummary) => {
+    // WEB-15: disabling a live course is destructive (students stop being
+    // answered) and confirms first, through the one modal this panel
+    // shares (`components/modal/`) — the same treatment
+    // `pages/CourseEditor.tsx`'s own toggle gives it. Enabling is not
+    // destructive and runs immediately.
+    if (course.enabled) {
+      const confirmed = await confirm({
+        title: `Disable ${course.title}?`,
+        description:
+          'Students stop being answered here until it is enabled again.',
+        confirmLabel: 'Disable',
+        destructive: true,
+      })
+      if (!confirmed) return
+    }
     setError(undefined)
     setBusyCourseId(course.id)
     try {
@@ -79,42 +98,82 @@ export function Courses({
   }
 
   return (
-    <section aria-label="Courses" data-testid="courses-screen">
-      <button type="button" onClick={onBack}>
+    <section
+      aria-label="Courses"
+      data-testid="courses-screen"
+      className="flex flex-col gap-6"
+    >
+      <Button variant="ghost" onClick={onBack}>
         ← Projects
-      </button>
-      <h2>{project.name}</h2>
-
-      <button type="button" onClick={() => onOpenCourse(undefined)}>
-        New course
-      </button>
+      </Button>
+      <div className="flex items-center justify-between">
+        <h1 className="text-page-title font-semibold text-neutral-900">
+          {project.name}
+        </h1>
+        {/* WEB-15: the one primary action on this screen. */}
+        <Button
+          variant="primary"
+          icon={<AddIcon aria-hidden="true" className="size-4" />}
+          onClick={() => onOpenCourse(undefined)}
+        >
+          New course
+        </Button>
+      </div>
 
       {error && <ErrorMessage error={error} />}
 
       {courses === undefined ? (
-        <p>Loading…</p>
+        <p role="status" className="text-sm text-neutral-500">
+          Loading…
+        </p>
       ) : courses.length === 0 ? (
-        <p>No courses in this project yet.</p>
+        <p className="text-sm text-neutral-500">
+          No courses in this project yet.
+        </p>
       ) : (
-        <ul>
+        // WEB-13: a card per course, stacked — never a wide table row a
+        // phone would have to scroll horizontally to read.
+        <ul className="flex flex-col gap-3">
           {courses.map((course) => (
-            <li key={course.id} data-testid={`course-${course.id}`}>
-              <button type="button" onClick={() => onOpenCourse(course.id)}>
-                {course.title}
-              </button>
-              {' — routes on roles '}
-              <code>{course.adminsRole}</code>
-              {' / '}
-              <code>{course.studentsRole}</code>
-              {' — '}
-              {course.enabled ? 'enabled' : 'disabled'}
-              <button
-                type="button"
+            <li
+              key={course.id}
+              data-testid={`course-${course.id}`}
+              className="flex flex-col gap-2 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => onOpenCourse(course.id)}
+                  className="text-left text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                >
+                  {course.title}
+                </button>
+                <p className="text-xs text-neutral-500">
+                  routes on roles{' '}
+                  <code className="rounded bg-neutral-100 px-1">
+                    {course.adminsRole}
+                  </code>{' '}
+                  /{' '}
+                  <code className="rounded bg-neutral-100 px-1">
+                    {course.studentsRole}
+                  </code>{' '}
+                  — {course.enabled ? 'enabled' : 'disabled'}
+                </p>
+              </div>
+              <Button
+                variant={course.enabled ? 'destructive' : 'secondary'}
+                icon={
+                  course.enabled ? (
+                    <DisableIcon aria-hidden="true" className="size-4" />
+                  ) : (
+                    <EnableIcon aria-hidden="true" className="size-4" />
+                  )
+                }
                 onClick={() => void handleToggle(course)}
                 disabled={busyCourseId === course.id}
               >
                 {course.enabled ? 'Disable' : 'Enable'}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>

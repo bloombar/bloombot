@@ -1,25 +1,92 @@
-/* Minimal styling — this is a shell, not a design system (see this slice's brief). */
+/*
+ * WEB-11: Tailwind is the one styling system for this panel — no parallel
+ * stylesheet, no component library, no hand-rolled utility classes
+ * competing with it. This file is Tailwind's own entry point (imported
+ * once, from `main.tsx`) plus the design tokens every page draws from.
+ *
+ * Tokens live here, as a Tailwind v4 `@theme` block, rather than scattered
+ * as literal hex codes and pixel values across components — the palette,
+ * spacing and type scale are each named once, so a later refinement (the
+ * brief's own "we can review and refine later") is one edit to this file,
+ * not a sweep across every page that used a color or a size directly. See
+ * `docs/DECISIONS.md` for the specific choices and the reasoning behind
+ * them.
+ */
 
-body {
-  font-family: system-ui, sans-serif;
-  margin: 2rem auto;
-  max-width: 40rem;
-  color: #1a1a1a;
+@import 'tailwindcss';
+
+@theme {
+  /* --- Color: one brand scale (indigo-leaning blue, calm and legible on
+     light backgrounds — an administrative tool used daily, not a marketing
+     surface), plus semantic accents for status and destructive actions.
+     WEB-15's "a destructive action looks different from a primary one" and
+     WEB-17's AA contrast both read off these same few names. */
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  /* Neutral scale — panel chrome (header, footer, borders, muted text). */
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-300: #cbd5e1;
+  --color-neutral-400: #94a3b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
+
+  /* Semantic accents: success/warning/danger each get one shade used for
+     text and one for a subtle background, so a status reads consistently
+     wherever it appears (job status, form errors, the duplicate-project
+     notice). WEB-15's destructive actions and WEB-16's error text share the
+     danger scale on purpose — a form's own error is the same kind of signal
+     as a "this will delete something" warning. */
+  --color-success-600: #16a34a;
+  --color-success-50: #f0fdf4;
+  --color-warning-600: #b45309;
+  --color-warning-50: #fffbeb;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-danger-50: #fef2f2;
+
+  /* --- Type scale: named sizes rather than ad hoc `text-[15px]`-style
+     values, so headings and body copy stay consistent across pages that
+     were previously styled one at a time. Tailwind's own default scale
+     already covers most of this; naming the handful this panel actually
+     uses keeps every page reaching for the same six rather than picking
+     whatever "looked right" at the time. */
+  --font-size-page-title: 1.5rem;
+  --font-size-page-title--line-height: 2rem;
+  --font-size-section-title: 1.125rem;
+  --font-size-section-title--line-height: 1.5rem;
+
+  /* --- Spacing: the shell's own fixed header/footer heights, named once so
+     `AppShell`'s header/footer and its main content's padding never drift
+     out of sync with each other (a fixed header taller than the content
+     area's own top padding hides the first few pixels of every page). */
+  --spacing-header: 3.5rem;
+  --spacing-footer: 3rem;
 }
 
-.error-message {
-  border: 1px solid #c0392b;
-  color: #c0392b;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  margin-top: 1rem;
-}
-
-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid #ddd;
-  padding-bottom: 1rem;
-  margin-bottom: 1rem;
+/*
+ * WEB-17: a visible focus ring on every interactive control, using the
+ * brand color rather than the browser default outline that a hand-rolled
+ * `outline: none` reset (present in plenty of real-world CSS, absent here
+ * on purpose) would otherwise remove. Applied once, globally, so no
+ * individual component has to remember it — the alternative (a `:focus`
+ * rule per button, per input, per link) is exactly the kind of drift this
+ * file's own module comment already argues against.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-brand-600);
+  outline-offset: 2px;
 }

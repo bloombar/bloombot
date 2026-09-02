@@ -3037,3 +3037,192 @@ identity on the same surface. True per-message accuracy needs the calling surfac
 external id through rather than this function re-deriving one from `surface` alone, which would touch
 `answer.ts`'s own input shape and every surface adapter's — left out of this rework's own scope, and said here
 plainly rather than silently left half-fixed.
+
+---
+
+## D-36 — `apps/web`/`apps/api`: the design system's tokens, the chat sanitizer's allowlist, and how WEB-10 resolves a web person without LINK-1
+
+**Problem.** WEB-11..17 ask for one styling system, one icon set, a responsive shell and a set of conventions
+(primary/secondary/destructive, form errors, keyboard/AA) — none of it existed; the panel was unstyled HTML.
+WEB-10 asks for a web chat surface that renders Markdown safely, through the same `@bloombot/core#answerQuestion`
+pipeline the Discord surface calls. Both landed in the same slice (`spec/web-chat-shell`) because they are the
+same screen work, per that slice's own brief.
+
+**Choice — Tailwind v4, tokens in `style.css`'s own `@theme`, not a `tailwind.config.js`.** `@tailwindcss/vite`
+(the v4-native integration) reads `apps/web/src/style.css`'s `@theme` block directly — a brand scale, a
+neutral scale, `success`/`warning`/`danger` semantic accents, two named type sizes, and two named spacing
+values (`--spacing-header`/`--spacing-footer`, so `AppShell.tsx`'s fixed header/footer and its main content's
+padding can never drift out of sync with each other). Named once, here, rather than as literal hex codes and
+pixel values scattered across every component — the brief's own "we can review and refine later" is one edit
+to this file, not a sweep. No separate stylesheet exists anywhere else in `apps/web` (WEB-11's own "not
+several").
+
+**Choice — Lucide icons named by intent, not by Lucide's own component name.** `icons.ts` re-exports `Pencil`
+as `EditIcon`, `Trash2` as `DeleteIcon`, and so on for every recurring intent WEB-12 names — edit, delete,
+add, remove-from-list, disable, enable, duplicate, archive/restore. A call site imports `EditIcon` and reads
+"edit"; changing *which* Lucide icon means "edit" later is one line here, not a search-and-replace. Every
+icon-only control supplies its own `aria-label` at the call site (this file only names which icon a screen
+reader would otherwise say nothing about).
+
+**Choice — the chat sanitizer is an explicit allowlist, and why that is the load-bearing property, not merely
+a preference.** `apps/web/src/markdown-schema.ts`'s `CHAT_MARKDOWN_SCHEMA` extends `hast-util-sanitize`'s own
+`defaultSchema` but replaces `tagNames`/`attributes`/`protocols` with an explicit, narrow list — exactly what
+WEB-10's own headings/emphasis/lists/links/fenced-code, plus GFM's tables/strikethrough (already in the
+pipeline via `remark-gfm`). A denylist has to anticipate every dangerous thing a model or a student might
+type — the next `on*` attribute, the next dangerous protocol, an element nobody thought to ban yet; an
+allowlist only has to name the handful of things Markdown legitimately produces, and everything else (a raw
+`<script>`, an `onerror`, a `javascript:` URL, an `<iframe>`) is refused by construction. Two layers, not one:
+`react-markdown`'s own default pipeline never turns raw HTML in the Markdown source into real DOM at all (no
+`rehype-raw`, `allowDangerousHtml` never set) — a literal `<script>` written into a message is parsed as an
+HTML node and dropped outright; `rehype-sanitize` against this schema is the second layer, holding the line on
+what Markdown *syntax itself* can legitimately produce (a `[text](url)` link is real Markdown, not raw HTML,
+and needs its `href`'s protocol checked). Verified directly (see `docs/DECISIONS.md`'s own habit of recording
+what a rework actually proved, and `apps/web/tests/chat-message.test.tsx`'s own hostile-input cases): a raw
+`<script>`, an `<img onerror>`, a Markdown link to `javascript:`, a raw-HTML `<a href="javascript:">`, a
+Markdown image (images are excluded from the schema entirely — an `<img src>` is a live fetch to whatever URL
+the model names, even protocol-restricted, which still lets a message load a tracking pixel or probe a
+private address the moment it renders) and a `<style>` block are all neutralized; ordinary Markdown (headings,
+bold, links, fenced code, GFM tables) renders as real elements.
+
+**Choice — WEB-10's backend resolves the caller's own `'web'`-surface identity, not LINK-1's `connectedAt`.**
+At the time this slice ran, `packages/db/src/repos/people.ts` and `packages/core/src/answer.ts` were both
+being changed by a separate, open, unmerged PR (`feat/LINK-1-account-linking`, LINK-1..5/PPL-4/5 — a person
+proven to hold more than one surface identity, merged into one so allowance and transcript follow them
+everywhere, gated behind a new `person.connectedAt`/`'not-connected'` refusal). Editing either file here would
+have collided with that PR's own changes to the same lines. `apps/api/src/routes/chat.ts` instead resolves the
+caller through `people.resolvePersonByIdentity(organizationId, { surface: 'web', externalId: account.id }, db)`
+— the exact same "create on demand" function every other surface's first contact already uses (PPL-3;
+`packages/discord`'s own `handle-mention.ts` resolves a person identically, from the arriving Discord user
+id), and calls the *current*, unmodified `answerQuestion` — no `connectedAt` gate exists on this branch yet.
+This is not a workaround standing in for LINK-1's own job: `connectIdentity`/`mergePeople` (that PR's own
+functions) are about *merging two already-distinct people proven to be the same human* — a different, larger
+problem than "give a first-time web caller a person of their own," which PPL-3 already solves for every other
+surface. Once LINK-1 merges, `routes/chat.ts` will need its own small follow-up (reading `person.connectedAt`,
+handling `'not-connected'` the way SURF-6's other refusals are handled per-surface) — a few-line addition, not
+a rewrite, tracked here rather than guessed at inline.
+
+**What reaching an enrolled course via the web needs, that this slice does not add.** ENRL-2's own text — "the
+web surface lets a person pick the course they are asking, from the courses they are enrolled in" — assumes
+an enrolment already exists; ENRL-3's three admission paths (a Discord role, a roster row, a redeemed join
+link) are how one gets there. A join link's redemption is not wired to any HTTP route yet
+(`repos/course-join-links.ts`'s own `redeemCourseJoinLink`, D-31's "Limits": "the next slice that adds a
+`POST /join` route ... is the one that has to bind `callerAssertedPersonId` to a real, already-authenticated
+identity"). That route is a "connect screen" in the sense this slice's own brief excludes ("Do not start ...
+the panel's connect screens") — binding a web account to a course is a distinct, separately-scoped feature,
+not a Markdown-rendering concern. `e2e/chat.spec.ts` proves the chat surface itself works by seeding the one
+fact that route will eventually produce (`enrolments.enrolViaRoster`, called directly, the same device
+`e2e/course-configuration.spec.ts` already uses for its own Discord server binding) — today, a real student
+reaches this screen only via a Discord role or a roster row, both pre-existing paths unrelated to this slice.
+
+**Choice — `apps/api`'s own `OPENAI_API_KEY` is optional, unlike `apps/bot`'s.** `apps/bot`'s `main()` calls
+`requireEnv('OPENAI_API_KEY')` and refuses to start without it — reasonable there, since a bot process with no
+model client has no reason to hold a Discord gateway connection open at all. `apps/api` is different:
+`docs/RUNNING_LOCALLY.md` already promises "the API and the panel still come up" for a checkout missing
+Discord credentials (`BOT_TOKEN` unset skips only the bot/worker), and this slice's own `routes/chat.ts`
+addition must not quietly grow a second, undocumented way to fail that promise. `answerQuestion` already has a
+defined, ordinary outcome for a model call that throws — `failed-with-apology` — so `apps/api/src/index.ts`'s
+`createUnconfiguredModelClient` builds a `ModelClient` whose `ask()` always rejects (logging a warning once, at
+startup) when `OPENAI_API_KEY` is unset, rather than refusing to boot: the panel, sign-in and every other
+screen stay usable, and chat itself degrades to an apology exactly the way a real, configured key's own
+transient provider failure already would. `apps/api/tests/routes/chat.test.ts`'s own "a model that rejects ...
+apologizes rather than 500ing" proves the mechanism this relies on: `middleware/errors.ts` never sees the
+rejection, because `routes/chat.ts` awaits `answerQuestion` itself, which already turned it into an ordinary
+result.
+
+## D-37 — `apps/web`: one modal primitive for alert/confirm/prompt, and the focus-restoration bug only a real browser caught
+
+**Problem.** WEB-15 requires every destructive action to confirm before it runs; WEB-16's unsaved-changes
+guard needs the identical confirmation shape. Built per screen, this is either `window.confirm` (no styling,
+no destructive/primary distinction, fails WEB-15 outright) or a bespoke dialog component copied per screen —
+exactly the "second copy of the modal markup" duplication that makes a later refinement a sweep instead of an
+edit, the same reasoning `style.css`'s own `@theme` block already gives for design tokens (D-36).
+
+**Choice — one `<Modal>` component, three modes, reached through `useModal()`.** `components/modal/Modal.tsx`
+renders alert/confirm/prompt from one markup, chosen by a `kind` prop; `components/modal/ModalProvider.tsx`
+mounts exactly one `<Modal>` for the whole app (`main.tsx`) and exposes `alert()`/`confirm()`/`prompt()` as
+promises — a caller writes `const ok = await confirm({...})` rather than wiring `open`/`onConfirm`/`onCancel`
+state into every screen. `InstallButton.tsx`'s own former `ConfirmDialog.tsx` (this slice's own earlier,
+bespoke dialog, written before the coordinator's explicit "standardize modals" instruction arrived
+mid-slice) was deleted and rewired onto this primitive rather than kept alongside it.
+
+**Choice — built on the native `<dialog>` element, not a hand-rolled overlay.** `showModal()` already traps
+focus, makes the rest of the page inert to interaction and assistive technology, and (when closed via its own
+`close()`) restores focus to whatever triggered it — WEB-17's own three requirements, for free, without this
+component reimplementing any of them and risking a subtly wrong trap. `Modal.tsx` still chooses *which*
+control gets initial focus deliberately (a prompt focuses its own field; a destructive confirm focuses Cancel,
+never the destructive button — the coordinator's own explicit instruction, since a stray `Enter` the instant
+the dialog opens must never run the destructive action).
+
+**Rework finding — unmounting the dialog on close skipped the browser's own focus-restoration algorithm
+entirely, and only `e2e/keyboard.spec.ts` (a real browser) caught it.** `ModalProvider` originally rendered
+`{current && <Modal open .../>}` — clearing `current` on Cancel/Confirm/`Escape` *unmounted* the `<dialog>`
+element outright rather than calling its native `close()` first. Focus restoration is `close()`'s own job;
+ripping the element out of the DOM without ever calling it means the browser has no dialog left to restore
+focus *from*, and focus simply falls back to `<body>`. `apps/web/tests/setup.ts`'s own jsdom polyfill (jsdom
+does not implement `showModal`/`close` at all) only simulates the `open` attribute toggling — it cannot
+reproduce native focus-restoration, so every one of this component's own unit tests (`tests/modal.test.tsx`)
+stayed green through this bug. The fix: `ModalProvider` now keeps a `renderedRequest` — the *last* request's
+own content, set once and never cleared — and renders `<Modal>` unconditionally once any request has ever
+been shown, toggling only its `open` prop (`current !== undefined`). `Modal.tsx`'s own effect is the *only*
+place that ever calls the native `close()` now (its own `<dialog onClose>` handler, which used to double as a
+second, redundant path to the same `onCancel` callback, was removed — a native `close` event now fires at
+most once per settle, from this one call site, rather than twice). This is exactly the case WEB-17's own text
+warns about: "a keyboard test that clicks is not a keyboard test" — a `fireEvent.click` in jsdom cannot
+distinguish "the dialog closed" from "the dialog closed *and restored focus correctly*"; only a real browser,
+driven by real keys, can.
+
+**What a caller supplies.** `alert({ title, description?, confirmLabel? })` resolves once acknowledged.
+`confirm({ title, description?, confirmLabel?, cancelLabel?, destructive? })` resolves `true`/`false`, never
+rejects — a caller never needs a `.catch` just to handle "backed out." `prompt({ title, label, placeholder?,
+initialValue?, validate? })` resolves the typed value or `undefined`; `validate` returns an error string to
+keep the dialog open with that message shown, or `undefined` to let it close. A second call while one is
+already open queues behind it (`queueRef`) rather than clobbering the first caller's own pending promise.
+
+## D-38 — `apps/web`: unsaved-changes guard — what "dirty" means, cross-component navigation, and why `beforeunload` is the one case `Modal.tsx` cannot cover
+
+**Problem.** The coordinator's own instruction, mid-slice: forms must confirm before an unsaved edit is lost
+— Cancel on the form, in-app navigation started elsewhere (the hamburger menu, a nav link, the home icon,
+browser Back), and leaving the page entirely — reusing the modal primitive (D-37), not a second
+implementation, and never firing on a form nobody touched.
+
+**Choice — "dirty" is a value comparison against a baseline, not a keystroke count.** `hooks/useFormDirty.ts`
+takes `baseline`/`current` and compares them (`JSON.stringify`, since every caller builds both from the same
+object shape via the same code path, so key order never differs between them — a plain-object form's state is
+exactly what that comparison assumes). A value typed and then reverted compares equal again; nothing here
+remembers that a keystroke ever happened. `pages/CourseEditor.tsx` keeps a `baseline` state alongside `form`,
+updated in the same three places `form` is ever set *from* a real record rather than an edit (a fresh blank
+form, a load, a save) — never on a field-by-field change — so a successful save clears the dirty state the
+same way it already resets `form` itself.
+
+**Choice — a `NavigationGuardProvider`, so a navigation started outside the dirty form can still ask it
+first.** `hooks/navigation-guard.tsx` is a small context: a dirty form calls `registerGuard(fn)` (and
+`registerGuard(null)` once clean or unmounted); anything that navigates within the shell calls
+`guardedNavigate(action)`, which runs `action` immediately if nothing is registered, or after the registered
+guard resolves `true`. `pages/Shell.tsx` wraps every navigation callback it hands to `AppShell`/
+`OrganizationSwitcher` (the nav row, the home control, and the organization switcher — cheap to include and
+in the same spirit as the coordinator's own explicit list, even though not named verbatim there) in
+`guardedNavigate`, without needing to know anything about whatever nested page might currently be a dirty
+form — `pages/CourseEditor.tsx` is the one example today, reachable through `ProjectsPanel`/`Courses`, several
+components below `Shell.tsx` itself. `useUnsavedChangesGuard(isDirty)` is what a form actually calls: it
+registers/unregisters with the guard above, and exposes `confirmDiscard()` — the exact same check and the
+exact same dialog wording — for the form's *own* Cancel control to call directly, so "a navigation that starts
+outside the form" and "the form's own exit" are one confirmation, reachable two ways, not two dialogs with
+possibly-different wording.
+
+**Why `beforeunload` is the one case this app's own `Modal.tsx` cannot cover, and is registered only while
+dirty.** The moment `beforeunload` fires, the page is already tearing down — no React state update, no dialog
+render, no `await` can happen before the browser proceeds, so the shared modal primitive (D-37) is
+structurally unable to render anything for this case. The only lever a `beforeunload` handler has is
+`event.preventDefault()`, which asks the *browser's own* native prompt to appear instead — worded by the
+browser, not this app, and not stylable to match WEB-11's design system. `useUnsavedChangesGuard` registers
+this handler only inside an effect gated on `isDirty`, and the cleanup removes it the instant the form becomes
+clean again — leaving it registered unconditionally would fire the browser's own prompt when leaving an
+untouched form, training a person to click through it without reading it (WEB-16's own "a clean form leaves
+with no prompt").
+
+**Limits.** Switching organizations via `OrganizationSwitcher` is guarded the same way nav/home are, but this
+slice did not add a guard around the browser's own back/forward navigation as a *distinct* case: `apps/web`
+has no client-side router (`App.tsx`'s own module comment — three screens, `window.location.pathname` read
+directly, no history entries pushed for in-panel navigation), so pressing Back from inside the panel is
+already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
+than a separate in-app case to intercept.

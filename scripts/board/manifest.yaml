@@ -2627,7 +2627,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-9
   title: Cutover is rehearsed against a copy before it is real
@@ -2637,7 +2637,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-10
   title: The old system is retired deliberately, and can be returned to
@@ -2648,7 +2648,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-11
   title: Secrets are rotated at cutover
@@ -2658,7 +2658,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-12
   title: A student-facing failure pages somebody
@@ -2668,7 +2668,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-13
   title: A server administrator can set the platform up from documentation alone

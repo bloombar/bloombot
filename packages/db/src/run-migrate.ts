@@ -12,7 +12,7 @@
 
 import { pathToFileURL } from 'node:url'
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, loadDotEnv } from '@bloombot/config'
 import { createLogger } from '@bloombot/logger'
 
 import { closeDatabase, openDatabase } from './client.js'
@@ -42,6 +42,15 @@ export function assertMigratablePath(path: string, argv: string[]): void {
 }
 
 function main(): void {
+  // OPS-8 (found while wiring this into the deploy script) — every other
+  // entry point (`apps/*/src/index.ts`, CFG-5) loads `.env` before touching
+  // `CONFIG`; this one did not, so `npm run db:migrate` only ever saw
+  // `DATABASE_PATH`/`NODE_ENV` when they happened to already be exported in
+  // the shell, and threw `EnvValidationError` on an otherwise-correctly
+  // configured checkout whose credentials live only in `.env`. Same fix,
+  // same place in `main()`, as every other entry point already applies it.
+  loadDotEnv()
+
   const log = createLogger('db-migrate')
   const path = CONFIG.DATABASE_PATH
 

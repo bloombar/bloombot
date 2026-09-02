@@ -2391,7 +2391,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In progress
+  status: Done
   review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address

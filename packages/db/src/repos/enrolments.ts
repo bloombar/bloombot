@@ -347,12 +347,29 @@ export function enrolViaRoster(
  * `courseId` does not resolve in `organizationId` and when `roleNames` does
  * not include the course's `studentsRole` — nobody is admitted either way.
  *
- * `reviveEnded: true` — holding the role is an ongoing, re-checked fact
- * about this person each time this function runs (unlike a roster row,
- * which is only ever re-asserted verbatim from a file nobody necessarily
- * revisited), so a prior ended enrolment does not block a fresh one here
- * either. See `docs/DECISIONS.md` D-34's "what the linking slice should
- * change in routing" for this function's own intended future caller.
+ * `reviveEnded: false` (D-35 rework, finding 5 — reversed from `true`) — a
+ * prior ended enrolment blocks a fresh one here, the same choice
+ * `enrolViaRoster` already makes and for the closely related reason: ENRL-6
+ * says ending an enrolment "stops the person asking that course", and
+ * `@bloombot/discord`'s `handleMention` (LINK-5/D-34) now calls this on
+ * *every* matched message a role holder sends, not on a one-off admission
+ * decision an instructor would separately notice. `reviveEnded: true` was
+ * written (D-34) on the reasoning that holding the role is "an ongoing,
+ * re-checked fact... so a prior ended enrolment does not block a fresh one
+ * here either" — sound in isolation, but inert until this platform actually
+ * called this function anywhere, which it did not until D-34's own
+ * successor slice (LINK-1..5) wired it into the live Discord message path.
+ * Once it was live, `true` meant an instructor's `enrolments.end` (ENRL-6)
+ * was silently undone by that same student's next `@bloombot`, with no
+ * record — indistinguishable from ENRL-6 never having run at all. `false`
+ * closes that: a person who has never held any enrolment for this course is
+ * still admitted freely (there is no "prior ended row" to block — `admit`'s
+ * own `reviveEnded` only matters once one exists), and a person an
+ * instructor has explicitly ended stays ended until an instructor
+ * re-admits them through one of the other two `enrolVia*` functions
+ * (`reviveEnded: true` there is unchanged, and correct: redeeming a link or
+ * a roster row *is* a deliberate re-admission decision the way an ambient
+ * Discord role never was — see each function's own comment).
  */
 export function enrolViaDiscordRole(
   organizationId: string,
@@ -367,7 +384,7 @@ export function enrolViaDiscordRole(
     input.courseId,
     input.personId,
     'discord_role',
-    true,
+    false,
     db
   )
 }

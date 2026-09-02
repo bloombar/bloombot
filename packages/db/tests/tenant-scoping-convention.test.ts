@@ -68,10 +68,14 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - person-link-challenges.ts: LINK-3, the same class as
 //    `discord-install-states.ts` one level up — a callback (Discord's own
 //    OAuth) or a token redemption (MCP) carries only the secret value, not
-//    an organization id, so `createChallenge`/`consumeChallenge` are keyed
-//    on that secret's hash instead; `deleteExpiredChallenges` is the same
-//    sweep-on-write device `deleteExpiredInstallStates` already is,
-//    deliberately not scoped to one organization either.
+//    an organization id, so `createChallenge`/`consumeChallenge`/`peekChallenge`
+//    are keyed on that secret's hash instead; `deleteExpiredChallenges` is
+//    the same sweep-on-write device `deleteExpiredInstallStates` already
+//    is, deliberately not scoped to one organization either.
+//    `repointOutstandingChallenges` is not listed here — it *is*
+//    organization-scoped, first parameter and all (`mergePeople`'s own
+//    caller already knows the organization; nothing about a merge needs to
+//    find a challenge by secret alone).
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
@@ -87,6 +91,7 @@ const ALLOWLIST: Record<string, string[]> = {
   'person-link-challenges.ts': [
     'createChallenge',
     'consumeChallenge',
+    'peekChallenge',
     'deleteExpiredChallenges',
   ],
   'sign-in-tokens.ts': [

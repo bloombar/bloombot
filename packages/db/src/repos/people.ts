@@ -18,7 +18,7 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, TransactingExecutor } from '../client.js'
 import {
   conversations,
   enrolments,
@@ -28,6 +28,7 @@ import {
   usageCounters,
   type Surface,
 } from '../schema.js'
+import * as personLinkChallenges from './person-link-challenges.js'
 
 export type Person = typeof people.$inferSelect
 export type PersonIdentity = typeof personIdentities.$inferSelect
@@ -148,12 +149,30 @@ export function listPeople(organizationId: string, db: Database): Person[] {
  * that reported the message knowing the raw snowflake is not a reason to
  * make `answer.ts` ask its caller for something `person_identities` already
  * holds.
+ *
+ * D-35 rework, finding 8 — `mergePeople` makes more than one identity on the
+ * same surface for one person routine (a survivor absorbing a loser who had
+ * their own Discord identity, say), which this function's own uniqueness
+ * assumption never accounted for: unordered, `.get()` returns whichever row
+ * the query planner happens to return first, silently, which could name a
+ * *different* snowflake than the one that actually sent whatever message
+ * `answer.ts` is seeding an opening item for. Ordered by `createdAt` (the
+ * oldest — the identity this person had before any merge, the one they have
+ * presumably been talking from longest) so the choice is at least
+ * deterministic. This does not fix the underlying imprecision — the model's
+ * opening item can still name the "wrong" (but real, same-human) snowflake
+ * for a message that arrived on the survivor's *other* identity on this
+ * surface — only true per-message accuracy would, and that needs the
+ * calling surface to pass its own already-known external id through rather
+ * than this function re-deriving one from `surface` alone; out of this
+ * rework's own scope (`@bloombot/core`'s `answer.ts` and every surface
+ * adapter's own input shape would have to change to carry it).
  */
 export function getPersonIdentity(
   organizationId: string,
   personId: string,
   surface: Surface,
-  db: Database
+  db: Executor
 ): PersonIdentity | undefined {
   return db
     .select()
@@ -165,6 +184,8 @@ export function getPersonIdentity(
         eq(personIdentities.surface, surface)
       )
     )
+    .orderBy(personIdentities.createdAt)
+    .limit(1)
     .get()
 }
 
@@ -402,14 +423,43 @@ export function overwriteRosterFields(
  *
  * Three outcomes:
  *  - the identity has never been seen: a new `person_identities` row is
- *    created for `personId`, and returned.
+ *    created for `personId`, `connectedAt` is set (see below), and the new
+ *    identity row is returned.
  *  - the identity already belongs to `personId`: idempotent — the existing
- *    row is returned unchanged, nothing is written twice.
+ *    row is returned unchanged, nothing is written twice, but `connectedAt`
+ *    is still set if it was not already (re-proving an identity you already
+ *    hold is still a proof, LINK-3's own point, even when nothing about
+ *    `person_identities` itself changes).
  *  - the identity already belongs to a *different* person: refused
  *    (`undefined`) — that is `mergePeople`'s case, not this function's; a
  *    caller that finds this should call `mergePeople` instead of retrying
  *    here (see `@bloombot/auth`'s `person-link.ts#completeDiscordPersonLink`/
  *    `#completeMcpPersonLink`, which do exactly that).
+ *
+ * D-35 rework, finding 1 — before this, `connectIdentity` wrote the identity
+ * and nothing else: `connectedAt` (LINK-1's own gate, `people.connectedAt`)
+ * is set only by `mergePeople`, so a proof that attached a *never-before-seen*
+ * identity — every MCP connect, and any Discord connect for a student who
+ * had not yet messaged the bot — completed successfully and left the person
+ * exactly as unconnected as before, declined by the LINK-1 gate on their
+ * very next message with no way out (clicking through again is idempotent,
+ * so the loop never terminated). Set here, with the same `coalesce` (never
+ * moved backward once set) `mergePeople` already uses.
+ *
+ * D-35 rework, finding 2 — refuses when `personId` has itself already been
+ * merged into someone else (`mergedIntoPersonId` is not `null`), the same
+ * guard `mergePeople` already gives its own survivor: a merged-away person
+ * is a tombstone, not a valid target to attach anything new to. Without
+ * this, a proof completing against a person concurrently merged away by a
+ * *different*, faster proof would attach a real identity to a tombstone
+ * nothing can ever reach again — see `mergePeople`'s own comment for the
+ * other half of this race (re-pointing an outstanding challenge).
+ *
+ * Runs as one transaction (D-35 rework, finding 7): the identity write and
+ * the `connectedAt` write commit or fail together, and `db` accepts
+ * `TransactingExecutor` so `@bloombot/auth`'s `person-link.ts` can call this
+ * from inside the same transaction that consumed the proof's own secret —
+ * a redeemed secret whose attach then fails must not stay spent.
  *
  * `undefined` also when `personId` does not exist or does not belong to
  * `organizationId` (TEN-2), the same refusal shape every other write in this
@@ -419,44 +469,77 @@ export function connectIdentity(
   organizationId: string,
   personId: string,
   identity: PersonIdentityInput,
-  db: Database
+  db: TransactingExecutor
 ): PersonIdentity | undefined {
-  if (!getPerson(organizationId, personId, db)) return undefined
+  const person = getPerson(organizationId, personId, db)
+  if (!person) return undefined
+  if (person.mergedIntoPersonId !== null) return undefined
 
   const existingOwner = resolveIdentity(organizationId, identity, db)
   if (existingOwner && existingOwner.id !== personId) return undefined
 
-  if (existingOwner) {
-    // Idempotent — already this person's own identity.
-    return getPersonIdentity(organizationId, personId, identity.surface, db)
-  }
+  return db.transaction((tx) => {
+    const now = Date.now()
 
-  try {
-    return db
-      .insert(personIdentities)
-      .values({
-        id: crypto.randomUUID(),
-        organizationId,
-        personId,
-        surface: identity.surface,
-        externalId: identity.externalId,
-        createdAt: Date.now(),
-      })
-      .returning()
-      .get()
-  } catch (error) {
-    // A concurrent caller attached (or created a person under) the same
-    // identity first — the same "caught, winner looked up instead of a raw
-    // driver error escaping" shape `resolvePersonByIdentity` already uses.
-    if (isUniqueConstraintError(error)) {
-      const winner = resolveIdentity(organizationId, identity, db)
-      if (winner && winner.id === personId) {
-        return getPersonIdentity(organizationId, personId, identity.surface, db)
-      }
-      return undefined
+    if (existingOwner) {
+      // Idempotent on the identity row — already this person's own — but
+      // `connectedAt` still needs setting the first time this is reached
+      // (finding 1).
+      markConnected(personId, now, tx)
+      return getPersonIdentity(organizationId, personId, identity.surface, tx)
     }
-    throw error
-  }
+
+    let inserted: PersonIdentity
+    try {
+      inserted = tx
+        .insert(personIdentities)
+        .values({
+          id: crypto.randomUUID(),
+          organizationId,
+          personId,
+          surface: identity.surface,
+          externalId: identity.externalId,
+          createdAt: now,
+        })
+        .returning()
+        .get()
+    } catch (error) {
+      // A concurrent caller attached (or created a person under) the same
+      // identity first — the same "caught, winner looked up instead of a
+      // raw driver error escaping" shape `resolvePersonByIdentity` already
+      // uses.
+      if (isUniqueConstraintError(error)) {
+        const winner = resolveIdentity(organizationId, identity, tx)
+        if (winner && winner.id === personId) {
+          markConnected(personId, now, tx)
+          return getPersonIdentity(
+            organizationId,
+            personId,
+            identity.surface,
+            tx
+          )
+        }
+        return undefined
+      }
+      throw error
+    }
+
+    markConnected(personId, now, tx)
+    return inserted
+  })
+}
+
+/**
+ * Shared by `connectIdentity` and `mergePeople`: set `people.connectedAt` to
+ * `now` unless it is already set, never moving it backward once it has been
+ * (LINK-1's own gate reads this once and never needs to know it changed
+ * again later).
+ */
+function markConnected(personId: string, now: number, db: Executor): void {
+  db.update(people)
+    .set({ connectedAt: sql`coalesce(${people.connectedAt}, ${now})` })
+    .where(eq(people.id, personId))
+    .run()
 }
 
 /** What `mergePeople` reports. */
@@ -553,6 +636,18 @@ function mergeMessagesByCreatedAt(
  *    `docs/DECISIONS.md` D-35 for why: they are a historical attribution of
  *    what was actually spent and by which id at the time, not a live balance
  *    a merge needs to keep correct the way usage counters are.
+ *  - **Outstanding Discord connect challenges naming the loser as their own
+ *    survivor are re-pointed to the survivor** (D-35 rework, finding 2,
+ *    `person-link-challenges.ts#repointOutstandingChallenges`) — a person
+ *    can be mid-way through their own connect attempt (Discord's own OAuth
+ *    consent screen, say) at the exact moment a *different*, faster proof
+ *    merges them into someone else; without this, their still-live
+ *    challenge would redeem successfully and then attach a genuinely proven
+ *    identity to a tombstone (`mergedIntoPersonId` already set) that this
+ *    function itself now refuses as a survivor — a legitimate connect
+ *    attempt permanently declined with no recovery path. `mcp` challenges
+ *    are never bound to a survivor at issue time at all (this table's own
+ *    module comment, `schema.ts`), so there is nothing to re-point for them.
  *
  * Idempotent (LINK-4's own word): calling this again with the same pair
  * after a successful merge does nothing further and reports
@@ -563,12 +658,20 @@ function mergeMessagesByCreatedAt(
  * the survivor has itself already been merged into someone else (a merged-away
  * person is never a valid target); or the loser has already been merged into
  * a *different* survivor (a conflicting merge, not a replay of this one).
+ *
+ * `db` accepts `TransactingExecutor`, not just `Database` (D-35 rework,
+ * finding 7) — so `@bloombot/auth`'s `person-link.ts` can call this from
+ * inside the same transaction that consumed the proof's own secret; called
+ * with a top-level connection this opens a real transaction exactly as
+ * before, called with another transaction's own `tx` it opens a savepoint
+ * instead, the same device `accounts.ts#createAccount` already documents
+ * for itself.
  */
 export function mergePeople(
   organizationId: string,
   survivorPersonId: string,
   loserPersonId: string,
-  db: Database
+  db: TransactingExecutor
 ): MergeResult | undefined {
   if (survivorPersonId === loserPersonId) return undefined
 
@@ -761,35 +864,59 @@ export function mergePeople(
         .run()
     }
 
+    // D-35 rework, finding 2 — an outstanding Discord challenge still
+    // naming the loser as its own survivor is re-pointed to the survivor,
+    // before the loser is tombstoned below (see this function's own doc
+    // comment for the race this closes).
+    personLinkChallenges.repointOutstandingChallenges(
+      organizationId,
+      loserPersonId,
+      survivorPersonId,
+      tx
+    )
+
     // Record the merge (LINK-4's own "idempotent, and recorded"), and mark
-    // the survivor connected (LINK-1) — `coalesce` so a survivor already
-    // connected from an earlier merge keeps that earlier timestamp, never
-    // moved forward by a later one.
+    // the survivor connected (LINK-1) — `markConnected`'s own `coalesce` so
+    // a survivor already connected from an earlier merge keeps that earlier
+    // timestamp, never moved forward by a later one.
     const now = Date.now()
     tx.update(people)
       .set({ mergedIntoPersonId: survivorPersonId, mergedAt: now })
       .where(eq(people.id, loserPersonId))
       .run()
-    const updatedSurvivor = tx
-      .update(people)
-      .set({ connectedAt: sql`coalesce(${people.connectedAt}, ${now})` })
-      .where(eq(people.id, survivorPersonId))
-      .returning()
-      .get()
+    markConnected(survivorPersonId, now, tx)
+    const updatedSurvivor = getPerson(organizationId, survivorPersonId, tx)
+    if (!updatedSurvivor) {
+      throw new Error(
+        `mergePeople: survivor ${survivorPersonId} vanished mid-transaction`
+      )
+    }
 
     return { survivor: updatedSurvivor, alreadyMerged: false }
   })
 }
 
 /**
- * PPL-5: does `personId` have a *verified* address — the gate "reading a
+ * PPL-5: does `personId` have a *verified address* — the gate "reading a
  * transcript back, exporting one, or carrying a conversation onto a second
  * surface" needs, deliberately distinct from whether they can be answered at
- * all (PPL-5's own "the two controls are separate on purpose"). `true` once
- * `mergePeople` has connected at least one proven identity onto this person
- * (`connectedAt` is not `null`) — the same fact LINK-1's own invitation gate
- * reads (`@bloombot/core`'s `answer.ts`), reused here rather than
- * reinvented, since "proven" is exactly what PPL-5 asks for.
+ * all (PPL-5's own "the two controls are separate on purpose: one proves
+ * which account is speaking, the other decides what may be shown").
+ *
+ * D-35 rework, finding 4 — this used to read `person.connectedAt !== null`,
+ * bit-for-bit the fact LINK-1's own answering gate already reads, which is
+ * not an address at all: Discord's OAuth proves a snowflake, and an MCP
+ * token proves possession of a private channel, and neither is an email —
+ * a person whose only proof is a Discord snowflake, `email: null`, read
+ * `true`, so the first transcript-export caller this function was written
+ * for would have disclosed a student's transcript to someone who proved
+ * only a snowflake. The only place this platform actually verifies an
+ * *email* is AUTH-1's redeemed sign-in link or AUTH-2's Google-asserted
+ * `emailVerified` — both `accounts`, not `people` — so a person's `web`
+ * identity (PPL-2's own "a web account id") is the proxy for exactly that:
+ * it can only exist for a person who has connected a real,
+ * already-email-verified account (`accounts` rows are never created any
+ * other way). This checks for that identity directly, not `connectedAt`.
  *
  * No action in this platform calls this yet — the reads PPL-5 names (a
  * transcript export, carrying a conversation to a second surface) belong to
@@ -806,7 +933,6 @@ export function hasVerifiedAddress(
   personId: string,
   db: Database
 ): boolean | undefined {
-  const person = getPerson(organizationId, personId, db)
-  if (!person) return undefined
-  return person.connectedAt !== null
+  if (!getPerson(organizationId, personId, db)) return undefined
+  return getPersonIdentity(organizationId, personId, 'web', db) !== undefined
 }

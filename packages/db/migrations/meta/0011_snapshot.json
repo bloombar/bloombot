@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a9febd94-ad44-4fee-984d-64f6b9d20705",
+  "id": "7e4aaa5e-785a-444d-9f31-98610a1a78a3",
   "prevId": "674be630-b8f1-47e1-bd27-7a3b22ce945d",
   "tables": {
     "accounts": {
@@ -2008,7 +2008,7 @@
           "name": "person_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "surface": {
@@ -2016,6 +2016,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "identity_external_id": {
+          "name": "identity_external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "secret_hash": {
@@ -2104,6 +2111,10 @@
         "person_link_challenges_surface_check": {
           "name": "person_link_challenges_surface_check",
           "value": "\"person_link_challenges\".\"surface\" in ('discord', 'mcp')"
+        },
+        "person_link_challenges_binding_shape_check": {
+          "name": "person_link_challenges_binding_shape_check",
+          "value": "(\"person_link_challenges\".\"surface\" = 'discord' and \"person_link_challenges\".\"person_id\" is not null and \"person_link_challenges\".\"identity_external_id\" is null)\n        or (\"person_link_challenges\".\"surface\" = 'mcp' and \"person_link_challenges\".\"person_id\" is null and \"person_link_challenges\".\"identity_external_id\" is not null)"
         }
       }
     },

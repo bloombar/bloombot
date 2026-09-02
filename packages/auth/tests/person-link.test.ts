@@ -4,6 +4,12 @@
  * and an MCP identity proven by possessing a single-use, expiring token.
  * Each test below fails without the code it names; see the report for how
  * each was confirmed.
+ *
+ * D-35 rework — this file also carries the two account-takeover
+ * regressions the rework's finding 3 named: state fixation on the Discord
+ * half, and caller-asserted identity on the MCP half. Both are written as
+ * "the attack no longer succeeds" tests, not merely "the signature
+ * changed".
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -15,7 +21,7 @@ import {
   schema,
 } from '@bloombot/db'
 import type { Database } from '@bloombot/db'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   beginDiscordPersonLink,
@@ -25,6 +31,8 @@ import {
   consumeMcpPersonLinkToken,
   DEFAULT_PERSON_LINK_TTL_MS,
   issueMcpPersonLinkToken,
+  previewDiscordPersonLink,
+  previewMcpPersonLink,
 } from '../src/person-link.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -90,10 +98,10 @@ describe('beginDiscordPersonLink / consumeDiscordPersonLink', () => {
     personLinkChallenges.createChallenge(
       {
         organizationId,
-        personId,
         surface: 'discord',
-        secretHash: 'expired-hash-1',
+        personId,
         codeVerifier: 'verifier-1',
+        secretHash: 'expired-hash-1',
         expiresAt: now - 1,
       },
       testDb.db
@@ -101,8 +109,8 @@ describe('beginDiscordPersonLink / consumeDiscordPersonLink', () => {
     personLinkChallenges.createChallenge(
       {
         organizationId,
-        personId,
         surface: 'mcp',
+        identityExternalId: 'mcp-client-1',
         secretHash: 'expired-hash-2',
         expiresAt: now - 1,
       },
@@ -166,6 +174,79 @@ describe('beginDiscordPersonLink / consumeDiscordPersonLink', () => {
 
     expect(consumeDiscordPersonLink(begun.state, testDb.db)).toBeUndefined()
   })
+
+  // D-35 rework, finding 6 — a token/state presented to the *wrong*
+  // surface's own redemption path must not be burned before being
+  // rejected. `consumeMcpPersonLinkToken` shares the same underlying
+  // `consumeChallenge`, so exercising it here against a *Discord* state
+  // proves the surface filter, not just that mismatched values fail.
+  it('a state issued for Discord is refused (not burned) by the MCP redemption path', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+
+    const wrongSurface = consumeMcpPersonLinkToken(begun.state, testDb.db)
+    expect(wrongSurface).toBeUndefined()
+
+    // Still live for its own, correct surface — the mismatched attempt did
+    // not consume it.
+    const rightSurface = consumeDiscordPersonLink(begun.state, testDb.db)
+    expect(rightSurface).toBeDefined()
+  })
+})
+
+describe('previewDiscordPersonLink (LINK-3: "the page names the account being connected and waits to be told to proceed")', () => {
+  it('reports an attach outcome for a never-before-seen identity, and does not consume the state', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+
+    const preview = previewDiscordPersonLink(
+      begun.state,
+      'snowflake-1',
+      testDb.db
+    )
+
+    expect(preview).toEqual({
+      organizationId,
+      survivorPersonId: personId,
+      identity: { surface: 'discord', externalId: 'snowflake-1' },
+      outcome: { kind: 'attach' },
+    })
+    // Not spent — the real completion afterward still succeeds.
+    expect(
+      completeDiscordPersonLink(begun.state, 'snowflake-1', personId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('reports a merge outcome, naming the person who would be absorbed, when the identity already belongs to someone else', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId: survivorId } = seedOrgAndPerson(testDb.db)
+    const priorOwner = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'snowflake-1' },
+      testDb.db
+    )
+    const begun = beginDiscordPersonLink(organizationId, survivorId, testDb.db)
+
+    const preview = previewDiscordPersonLink(
+      begun.state,
+      'snowflake-1',
+      testDb.db
+    )
+
+    expect(preview?.outcome).toEqual({
+      kind: 'merge',
+      existingPersonId: priorOwner.id,
+    })
+  })
+
+  it('refuses for a state that does not redeem', () => {
+    testDb = createTestDatabase()
+    expect(
+      previewDiscordPersonLink('made-up-state', 'snowflake-1', testDb.db)
+    ).toBeUndefined()
+  })
 })
 
 describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
@@ -177,6 +258,7 @@ describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
     const result = completeDiscordPersonLink(
       begun.state,
       'snowflake-1',
+      personId,
       testDb.db
     )
 
@@ -198,6 +280,22 @@ describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
     ).toBeUndefined()
   })
 
+  // D-35 rework, finding 1 — completing a connect for an identity nobody
+  // has ever seen before must set `connectedAt`, or the person is declined
+  // by LINK-1's own gate on their very next message despite having just
+  // proven themselves.
+  it('sets connectedAt on a successful attach', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+
+    completeDiscordPersonLink(begun.state, 'snowflake-1', personId, testDb.db)
+
+    expect(
+      people.getPerson(organizationId, personId, testDb.db)?.connectedAt
+    ).not.toBeNull()
+  })
+
   it('merges the existing owner of an already-seen snowflake into the survivor (LINK-4)', () => {
     testDb = createTestDatabase()
     const { organizationId, personId: survivorId } = seedOrgAndPerson(testDb.db)
@@ -211,6 +309,7 @@ describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
     const result = completeDiscordPersonLink(
       begun.state,
       'snowflake-1',
+      survivorId,
       testDb.db
     )
 
@@ -225,31 +324,179 @@ describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
 
   it('refuses without a redeemed state', () => {
     testDb = createTestDatabase()
+    const { personId } = seedOrgAndPerson(testDb.db)
     expect(
-      completeDiscordPersonLink('made-up-state', 'snowflake-1', testDb.db)
+      completeDiscordPersonLink(
+        'made-up-state',
+        'snowflake-1',
+        personId,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // D-35 rework, finding 3 — the state-fixation takeover, reproduced and
+  // shown fixed. Before this fix, nothing tied the caller *redeeming* a
+  // state to the caller who *began* it: an attacker could begin their own
+  // attempt (survivor = attacker), hand the resulting authorization URL to
+  // a victim, and — the moment the victim approved it on Discord's own
+  // consent screen, proving the *victim's real* snowflake — absorb the
+  // victim into the attacker's own person. The fix is `callerPersonId`:
+  // whoever actually completes this must already be authenticated as the
+  // same person the attempt began for.
+  it('refuses to complete for a caller who is not the person the attempt began for — the state-fixation takeover', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId: attackerId } = seedOrgAndPerson(testDb.db)
+    const victim = people.createPerson(organizationId, {}, testDb.db)
+    // The attacker begins their own attempt and would, pre-fix, hand this
+    // very `state` to the victim as an "authorization link".
+    const begun = beginDiscordPersonLink(organizationId, attackerId, testDb.db)
+
+    // The victim's own browser completes the OAuth consent (proving the
+    // victim's real snowflake) and calls back into this module — but as
+    // the *victim*, not the attacker: `callerPersonId` is the victim's own,
+    // established by the victim's own already-authenticated session, never
+    // read out of `state` itself.
+    const result = completeDiscordPersonLink(
+      begun.state,
+      'victims-real-snowflake',
+      victim.id,
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    // The takeover did not happen: the victim's snowflake was never
+    // attached to the attacker, and the victim's own record is untouched.
+    expect(
+      people.resolveIdentity(
+        organizationId,
+        { surface: 'discord', externalId: 'victims-real-snowflake' },
+        testDb.db
+      )
+    ).toBeUndefined()
+    const rereadVictim = people.getPerson(organizationId, victim.id, testDb.db)
+    expect(rereadVictim?.mergedIntoPersonId).toBeNull()
+    expect(rereadVictim?.connectedAt).toBeNull()
+    const rereadAttacker = people.getPerson(
+      organizationId,
+      attackerId,
+      testDb.db
+    )
+    expect(rereadAttacker?.connectedAt).toBeNull()
+  })
+
+  it('still consumes the state on a caller mismatch — no retry, the same "spent either way" rule every single-use secret in this package follows', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId: attackerId } = seedOrgAndPerson(testDb.db)
+    const victim = people.createPerson(organizationId, {}, testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, attackerId, testDb.db)
+
+    completeDiscordPersonLink(
+      begun.state,
+      'victims-real-snowflake',
+      victim.id,
+      testDb.db
+    )
+
+    // Not even the legitimate attacker can now use it.
+    expect(
+      completeDiscordPersonLink(
+        begun.state,
+        'victims-real-snowflake',
+        attackerId,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // D-35 rework, finding 7 — redeem-then-attach/merge is one transaction: a
+  // failure partway through the attach/merge half must not leave the state
+  // consumed with nothing actually connected. Forced the same way
+  // `sign-in.test.ts`'s own "a failure creating the account rolls back the
+  // organization it already created" forces TEN-1's atomicity: a real
+  // primary-key collision, not a monkey-patched transaction — `connectIdentity`'s
+  // own `person_identities` insert is the only `crypto.randomUUID()` call
+  // in this whole redeem-then-attach sequence, made to collide with an
+  // already-committed, unrelated row.
+  it('rolls back the consumed state when the attach half fails partway through', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+    const otherPerson = people.createPerson(organizationId, {}, testDb.db)
+    const collidingIdentity = people.connectIdentity(
+      organizationId,
+      otherPerson.id,
+      { surface: 'web', externalId: 'unrelated-account' },
+      testDb.db
+    )
+    if (!collidingIdentity) throw new Error('setup failed')
+
+    const randomUUIDSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce(
+        collidingIdentity.id as `${string}-${string}-${string}-${string}-${string}`
+      )
+
+    expect(() =>
+      completeDiscordPersonLink(begun.state, 'snowflake-1', personId, testDb.db)
+    ).toThrow()
+    randomUUIDSpy.mockRestore()
+
+    // The whole transaction rolled back, including the outer consume — the
+    // state is still live, not spent on a connection that never happened.
+    const stillLive = previewDiscordPersonLink(
+      begun.state,
+      'snowflake-1',
+      testDb.db
+    )
+    expect(stillLive?.outcome).toEqual({ kind: 'attach' })
+    expect(
+      people.resolveIdentity(
+        organizationId,
+        { surface: 'discord', externalId: 'snowflake-1' },
+        testDb.db
+      )
     ).toBeUndefined()
   })
 })
 
 describe('issueMcpPersonLinkToken / consumeMcpPersonLinkToken (LINK-3)', () => {
+  it('is bound to the identity at issue, not a survivor (D-35 rework, finding 3)', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+
+    issueMcpPersonLinkToken(organizationId, 'mcp-client-1', testDb.db)
+
+    const row = testDb.db.select().from(schema.personLinkChallenges).get()
+    expect(row?.identityExternalId).toBe('mcp-client-1')
+    expect(row?.personId).toBeNull()
+  })
+
   it('is single-use — a replayed token is refused', () => {
     testDb = createTestDatabase()
-    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
-    const issued = issueMcpPersonLinkToken(organizationId, personId, testDb.db)
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
 
     const first = consumeMcpPersonLinkToken(issued.token, testDb.db)
     const second = consumeMcpPersonLinkToken(issued.token, testDb.db)
 
-    expect(first).toEqual({ organizationId, personId })
+    expect(first).toEqual({
+      organizationId,
+      identity: { surface: 'mcp', externalId: 'mcp-client-1' },
+    })
     expect(second).toBeUndefined()
   })
 
   it('is expiring — refused past its own TTL', () => {
     testDb = createTestDatabase()
-    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const { organizationId } = seedOrgAndPerson(testDb.db)
     const issued = issueMcpPersonLinkToken(
       organizationId,
-      personId,
+      'mcp-client-1',
       testDb.db,
       -1
     )
@@ -259,12 +506,16 @@ describe('issueMcpPersonLinkToken / consumeMcpPersonLinkToken (LINK-3)', () => {
 
   it('is refused after either being used once or expiring — no oracle telling the two apart', () => {
     testDb = createTestDatabase()
-    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
-    const used = issueMcpPersonLinkToken(organizationId, personId, testDb.db)
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+    const used = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
     consumeMcpPersonLinkToken(used.token, testDb.db)
     const expired = issueMcpPersonLinkToken(
       organizationId,
-      personId,
+      'mcp-client-2',
       testDb.db,
       -1
     )
@@ -276,8 +527,8 @@ describe('issueMcpPersonLinkToken / consumeMcpPersonLinkToken (LINK-3)', () => {
 
   it('never carries a Discord-shaped codeVerifier — an MCP token is a bearer secret, nothing more', () => {
     testDb = createTestDatabase()
-    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
-    issueMcpPersonLinkToken(organizationId, personId, testDb.db)
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+    issueMcpPersonLinkToken(organizationId, 'mcp-client-1', testDb.db)
 
     const row = testDb.db.select().from(schema.personLinkChallenges).get()
     expect(row?.surface).toBe('mcp')
@@ -285,17 +536,41 @@ describe('issueMcpPersonLinkToken / consumeMcpPersonLinkToken (LINK-3)', () => {
   })
 })
 
-describe('completeMcpPersonLink (LINK-3, LINK-4)', () => {
-  it('attaches a never-before-seen MCP identity directly to the survivor', () => {
+describe('previewMcpPersonLink', () => {
+  it('reports an attach outcome for a never-before-seen identity, and does not consume the token', () => {
     testDb = createTestDatabase()
     const { organizationId, personId } = seedOrgAndPerson(testDb.db)
-    const issued = issueMcpPersonLinkToken(organizationId, personId, testDb.db)
-
-    const result = completeMcpPersonLink(
-      issued.token,
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
       'mcp-client-1',
       testDb.db
     )
+
+    const preview = previewMcpPersonLink(issued.token, personId, testDb.db)
+
+    expect(preview).toEqual({
+      organizationId,
+      survivorPersonId: personId,
+      identity: { surface: 'mcp', externalId: 'mcp-client-1' },
+      outcome: { kind: 'attach' },
+    })
+    expect(
+      completeMcpPersonLink(issued.token, personId, testDb.db)
+    ).toBeDefined()
+  })
+})
+
+describe('completeMcpPersonLink (LINK-3, LINK-4)', () => {
+  it('attaches a never-before-seen MCP identity directly to the caller-supplied survivor', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+
+    const result = completeMcpPersonLink(issued.token, personId, testDb.db)
 
     expect(result?.id).toBe(personId)
     expect(
@@ -307,14 +582,125 @@ describe('completeMcpPersonLink (LINK-3, LINK-4)', () => {
     ).toBe(personId)
   })
 
+  it('sets connectedAt on a successful attach (finding 1)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+
+    completeMcpPersonLink(issued.token, personId, testDb.db)
+
+    expect(
+      people.getPerson(organizationId, personId, testDb.db)?.connectedAt
+    ).not.toBeNull()
+  })
+
   it('refuses a token that was already redeemed', () => {
     testDb = createTestDatabase()
     const { organizationId, personId } = seedOrgAndPerson(testDb.db)
-    const issued = issueMcpPersonLinkToken(organizationId, personId, testDb.db)
-    completeMcpPersonLink(issued.token, 'mcp-client-1', testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+    completeMcpPersonLink(issued.token, personId, testDb.db)
 
     expect(
-      completeMcpPersonLink(issued.token, 'mcp-client-1', testDb.db)
+      completeMcpPersonLink(issued.token, personId, testDb.db)
     ).toBeUndefined()
+  })
+
+  // D-35 rework, finding 3 — the caller-asserted-identity takeover,
+  // reproduced against this exact scenario and shown fixed:
+  //
+  //   victim   = resolvePersonByIdentity(org, {mcp, 'victim-mcp-id'})
+  //   attacker = createPerson(org, {})
+  //   issued   = issueMcpPersonLinkToken(org, attacker.id, db) // old signature
+  //   completeMcpPersonLink(issued.token, 'victim-mcp-id', db)
+  //   → attacker absorbed victim
+  //
+  // The fix removes the seam the attack used: `issueMcpPersonLinkToken` no
+  // longer takes a survivor at all (there is nothing to bind a victim's
+  // identity to at issue), and `completeMcpPersonLink` no longer takes an
+  // identity to assert — only the survivor, and only the token's own bound
+  // identity is ever attached. An attacker's own legitimately-issued token
+  // can only ever connect the attacker's own identity, to whichever
+  // survivor *they* claim to be — never a victim's.
+  it('cannot be used to absorb an unrelated victim — the identity attached is always the token’s own, never caller-asserted', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgAndPerson(testDb.db)
+    const victim = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'mcp', externalId: 'victim-mcp-id' },
+      testDb.db
+    )
+    const attackerSurvivor = people.createPerson(organizationId, {}, testDb.db)
+    // The attacker can only ever issue a token for an identity they
+    // themselves possess — here, their own, unrelated MCP id. There is no
+    // parameter anywhere in this flow that lets them name the victim's.
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'attacker-own-mcp-id',
+      testDb.db
+    )
+
+    completeMcpPersonLink(issued.token, attackerSurvivor.id, testDb.db)
+
+    // The attacker's own identity attached to their own survivor — fine.
+    expect(
+      people.resolveIdentity(
+        organizationId,
+        { surface: 'mcp', externalId: 'attacker-own-mcp-id' },
+        testDb.db
+      )?.id
+    ).toBe(attackerSurvivor.id)
+    // The victim is completely untouched: not merged, not connected, their
+    // own identity still resolves to themselves.
+    const rereadVictim = people.getPerson(organizationId, victim.id, testDb.db)
+    expect(rereadVictim?.mergedIntoPersonId).toBeNull()
+    expect(rereadVictim?.connectedAt).toBeNull()
+    expect(
+      people.resolveIdentity(
+        organizationId,
+        { surface: 'mcp', externalId: 'victim-mcp-id' },
+        testDb.db
+      )?.id
+    ).toBe(victim.id)
+  })
+
+  // D-35 rework, finding 7.
+  it('rolls back the consumed token when the attach half fails partway through', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+    const otherPerson = people.createPerson(organizationId, {}, testDb.db)
+    const collidingIdentity = people.connectIdentity(
+      organizationId,
+      otherPerson.id,
+      { surface: 'web', externalId: 'unrelated-account' },
+      testDb.db
+    )
+    if (!collidingIdentity) throw new Error('setup failed')
+
+    const randomUUIDSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValueOnce(
+        collidingIdentity.id as `${string}-${string}-${string}-${string}-${string}`
+      )
+
+    expect(() =>
+      completeMcpPersonLink(issued.token, personId, testDb.db)
+    ).toThrow()
+    randomUUIDSpy.mockRestore()
+
+    const stillLive = previewMcpPersonLink(issued.token, personId, testDb.db)
+    expect(stillLive?.outcome).toEqual({ kind: 'attach' })
   })
 })

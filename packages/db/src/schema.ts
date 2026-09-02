@@ -975,20 +975,48 @@ export const courseJoinLinks = sqliteTable('course_join_links', {
 // generating a secret (and, for Discord, a PKCE verifier — the same
 // OAuth+PKCE shape `discordInstallStates` already uses for TEN-4, mirrored
 // here rather than shared: that table's `accountId` anchors an
-// *administrator* proving they run a server, this table's `personId`
-// anchors "the account being connected" (D-28), a person, not an account),
-// to the caller consuming it exactly once. `surface` distinguishes the two
-// proof shapes LINK-3 names — `discord` (Discord's own OAuth, `codeVerifier`
-// set) and `mcp` (a bearer token with nothing else to verify against,
-// `codeVerifier` null) — one table rather than two, since both are
-// otherwise the same "single-use, expiring, hashed" secret shape
-// `sign_in_tokens` already is. `secretHash` only, never the plaintext value
-// — the same "returned once, stored only as a hash" reasoning `sign_in_tokens`/
-// `discord_install_states` already give themselves. Structurally does not
-// bind anything by itself (LINK-3's "an identity is never bound on a visit
-// alone"): nothing in this table's own shape can attach an identity to a
-// person — only `repos/people.ts#connectIdentity`/`mergePeople`, called
-// after `consumeChallenge` here succeeds, does that.
+// *administrator* proving they run a server; this table anchors a person on
+// one side of the proof, never an account) to the caller consuming it
+// exactly once. `surface` distinguishes the two proof shapes LINK-3 names —
+// `discord` (Discord's own OAuth, `codeVerifier` set) and `mcp` (a bearer
+// token with nothing else to verify against, `codeVerifier` null) — one
+// table rather than two, since both are otherwise the same "single-use,
+// expiring, hashed" secret shape `sign_in_tokens` already is.
+//
+// D-35 rework, finding 3 — which side is bound at issue time is *not* the
+// same for both surfaces, because what each surface actually proves is not
+// the same thing. Discord's OAuth genuinely proves a snowflake once the
+// callback runs, so at issue time only the survivor (`personId`, "the
+// account being connected", D-28) is known — the identity is unknown until
+// the proof itself comes back, and `completeDiscordPersonLink` additionally
+// has to check whoever calls it *back* is the same caller who began it
+// (this table alone cannot enforce that; see `@bloombot/auth`'s own doc
+// comment on the finding). MCP has no sign-in of its own — LINK-3's "a
+// single-use, expiring token delivered where only that caller can read it"
+// is itself the proof of the *identity*, delivered to the unconnected MCP
+// caller at issue time, before any survivor is known — so for `mcp` it is
+// `identityExternalId` that is set at issue, and the survivor is supplied
+// only at redemption, by the signed-in account completing it. Getting this
+// backwards (binding the survivor at issue and trusting a caller-supplied
+// identity at redemption, this table's own shape before the rework) is an
+// account-takeover: whoever redeems the token gets to *assert* whatever
+// identity they like, merging its real owner into a survivor of the
+// redeemer's choosing. The `CHECK` below makes the two shapes structural,
+// not merely a convention two functions have to remember: a `discord` row
+// always has `personId` and never `identityExternalId`; an `mcp` row is the
+// exact opposite.
+//
+// `secretHash` only, never the plaintext value — the same "returned once,
+// stored only as a hash" reasoning `sign_in_tokens`/`discord_install_states`
+// already give themselves. Structurally does not *bind* anything by itself
+// (LINK-3's "an identity is never bound on a visit alone"): nothing in this
+// table's own shape can attach an identity to a person — only
+// `repos/people.ts#connectIdentity`/`mergePeople`, called after
+// `consumeChallenge` here succeeds, does that; `peekChallenge` (same repo)
+// is the read-only counterpart that lets a caller show what a challenge
+// *would* connect without spending it, for the "the page names the account
+// being connected and waits to be told to proceed" half of LINK-3 the
+// connect screens (a later slice) will need.
 export const LINK_PROOF_SURFACES = ['discord', 'mcp'] as const
 export type LinkProofSurface = (typeof LINK_PROOF_SURFACES)[number]
 
@@ -999,13 +1027,17 @@ export const personLinkChallenges = sqliteTable(
     organizationId: text('organization_id')
       .notNull()
       .references(() => organizations.id),
-    // The survivor: whichever person "the account being connected" already
-    // is (D-28) when the attempt began — never the identity being proved,
-    // which is only known once the proof itself comes back.
-    personId: text('person_id')
-      .notNull()
-      .references(() => people.id),
+    // The survivor — set at issue for `discord`, null until redemption for
+    // `mcp` (see this table's own module comment).
+    personId: text('person_id').references(() => people.id),
     surface: text('surface', { enum: LINK_PROOF_SURFACES }).notNull(),
+    // The identity being connected — null at issue for `discord` (unknown
+    // until the OAuth callback), set at issue for `mcp` (this table's own
+    // module comment). `surface` itself already says which surface this
+    // external id belongs to; there is no separate `identitySurface`
+    // column for the same reason `person_identities` needs no such thing
+    // when it already has one row per (surface, external id).
+    identityExternalId: text('identity_external_id'),
     secretHash: text('secret_hash').notNull().unique(),
     // Only set for `surface: 'discord'` — see `discordInstallStates.codeVerifier`'s
     // own comment (D-21) for why this is plain text rather than hashed.
@@ -1019,6 +1051,14 @@ export const personLinkChallenges = sqliteTable(
     check(
       'person_link_challenges_surface_check',
       sql`${table.surface} in ('discord', 'mcp')`
+    ),
+    // Structural enforcement of this table's own module comment: a
+    // `discord` row is issue-time-survivor-bound, an `mcp` row is
+    // issue-time-identity-bound — never both, never neither.
+    check(
+      'person_link_challenges_binding_shape_check',
+      sql`(${table.surface} = 'discord' and ${table.personId} is not null and ${table.identityExternalId} is null)
+        or (${table.surface} = 'mcp' and ${table.personId} is null and ${table.identityExternalId} is not null)`
     ),
   ]
 )

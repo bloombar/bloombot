@@ -13,12 +13,16 @@
  * this now also ensures (`enrolments.enrolViaDiscordRole`) that a role
  * holder has an explicit `enrolments` row for it before answering — turning
  * "holds the role, so route it" into "holds the role, so admit them once,
- * then route through the stored enrolment" (D-34's own words). This does
- * not change *whether* a message is answered — `routeMessage`'s own
- * category-or-role match is still the only thing that decides that, exactly
- * as before — it only makes a role holder's enrolment auditable from their
- * first message rather than left implicit forever. See this file's own
- * report for what that means for Discord in practice.
+ * then route through the stored enrolment" (D-34's own words). `routeMessage`'s
+ * own category-or-role match is still the only thing that decides which
+ * course a message belongs to — unchanged. What *is* now gated (D-35
+ * rework, finding 5): a person who holds a course's own `studentsRole` but
+ * whose enrolment an instructor explicitly ended (ENRL-6) is refused, not
+ * silently re-admitted and answered — `enrolViaDiscordRole` no longer
+ * revives an ended row (`enrolments.ts`'s own doc comment), and this file
+ * is what turns "not (re-)admitted" into an actual refusal reaching the
+ * student rather than an enrolment row quietly staying out of step with
+ * whether the message was answered anyway. See `docs/DECISIONS.md` D-35.
  */
 
 import {
@@ -109,6 +113,7 @@ export type HandleMentionResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'invited-to-connect' }
+  | { kind: 'enrolment-ended' }
   | { kind: 'declined-over-limit' }
   | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
@@ -149,6 +154,11 @@ function overSpendingCapRefusalText(courseTitle: string): string {
  */
 function connectInvitationText(connectUrl: string): string {
   return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectUrl}, then ask again.`
+}
+
+/** ENRL-6/D-35 rework finding 5 — the same "reaches the student, not a silent drop or a silent revival" treatment every other refusal in this file already gets: an instructor's own `enrolments.end` sticks, and the student is told plainly rather than left guessing why holding the role no longer answers them. */
+function enrolmentEndedRefusalText(courseTitle: string): string {
+  return `You are no longer enrolled in ${courseTitle}. See ${courseTitle} admins for help.`
 }
 
 /**
@@ -355,23 +365,52 @@ export async function handleMention(
   // no-op when the author does not hold `courseId`'s own `studentsRole`
   // (`repos/enrolments.ts`'s own doc comment), or when they already hold an
   // active enrolment for it, so this is safe to call on every matched
-  // message rather than only the first. Best-effort: this never gates
-  // *whether* `answerQuestion` runs below — `routeMessage`'s own
-  // category-or-role match already decided that — so a write failure here
-  // is logged and never blocks the reply, the same "a broken write degrades
-  // to a log line, not a lost answer" discipline `@bloombot/core`'s own
-  // `answer.ts` holds every non-essential write to.
+  // message rather than only the first.
+  //
+  // D-35 rework, finding 5 — ENRL-6's "ended ... stops the person asking
+  // that course" now actually gates the answer, not merely the audit row:
+  // `holdsStudentsRole` is checked independently of *why* this message
+  // routed (category or role — CORE-2/`routeMessage`'s own decision is
+  // unchanged either way, this never overrides it) — a person who holds the
+  // course's own `studentsRole` is exactly who `enrolViaDiscordRole` would
+  // freely (re-)admit, so `enrolViaDiscordRole` returning nothing for them
+  // can only mean `reviveEnded: false` blocked a prior *ended* row
+  // (`enrolments.ts`'s own doc comment): the only other refusal that
+  // function has — not holding the role at all — is already ruled out by
+  // `holdsStudentsRole` being true, and a foreign/missing course cannot
+  // happen here (`routing.course` already resolved it). An instructor who
+  // holds no student role of their own (only `adminsRole`, ENRL-5's "a
+  // Discord role confers none of them") is untouched by this either way.
+  const holdsStudentsRole = input.authorRoleNames.includes(
+    routing.course.studentsRole
+  )
+  let enrolmentEnded = false
   try {
-    enrolments.enrolViaDiscordRole(
+    const enrolment = enrolments.enrolViaDiscordRole(
       organizationId,
       { courseId, personId: person.id, roleNames: input.authorRoleNames },
       db
     )
+    if (holdsStudentsRole && !enrolment) {
+      enrolmentEnded = true
+    }
   } catch (error) {
     logger.error(
       { err: error, organizationId, courseId, personId: person.id },
       'handleMention: failed to record a Discord-role enrolment'
     )
+  }
+
+  if (enrolmentEnded) {
+    // ENRL-6 — no model call, no allowance spent: the same "costs nothing"
+    // shape `not-connected` below already takes, and this refusal reaches
+    // the student rather than answering around it (SURF-6).
+    await sendReply(reply, enrolmentEndedRefusalText(courseTitle))
+    logger.info(
+      { organizationId, courseId, personId: person.id },
+      'handleMention: declined, this enrolment was ended and holding the role does not revive it'
+    )
+    return { kind: 'enrolment-ended' }
   }
 
   // BOT-6 — the raw mention token is rewritten to a readable name before

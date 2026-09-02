@@ -16,6 +16,7 @@ import {
   enrolments,
   organizations,
   people,
+  personLinkChallenges,
   projects,
   usage,
   type Database,
@@ -106,6 +107,29 @@ describe('people.ts#connectIdentity (LINK-3)', () => {
     ).toBe(person.id)
   })
 
+  // D-35 rework, finding 1 — before this fix, attaching a never-before-seen
+  // identity (the *only* thing an MCP connect ever does, and a Discord
+  // connect for anyone who has not yet messaged the bot) left `connectedAt`
+  // null: the proof succeeded, but the person was still declined by LINK-1's
+  // own gate on their very next message, with clicking through again being
+  // idempotent (so the loop never terminated).
+  it('sets connectedAt when attaching a never-before-seen identity — the case a bare MCP connect always is', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    expect(person.connectedAt).toBeNull()
+
+    people.connectIdentity(
+      organizationId,
+      person.id,
+      { surface: 'mcp', externalId: 'mcp-client-1' },
+      testDb.db
+    )
+
+    const reread = people.getPerson(organizationId, person.id, testDb.db)
+    expect(reread?.connectedAt).not.toBeNull()
+  })
+
   it('is idempotent when the identity already belongs to this same person', () => {
     testDb = createTestDatabase()
     const { organizationId } = seedOrgWithCourse(testDb.db)
@@ -124,6 +148,61 @@ describe('people.ts#connectIdentity (LINK-3)', () => {
 
     expect(second?.personId).toBe(person.id)
     expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+    // Re-proving an identity you already hold is still a proof (LINK-3's
+    // own point) — connectedAt is set even on the idempotent branch.
+    expect(
+      people.getPerson(organizationId, person.id, testDb.db)?.connectedAt
+    ).not.toBeNull()
+  })
+
+  it('never moves connectedAt backward once set — a second, later connect keeps the first timestamp', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    people.connectIdentity(
+      organizationId,
+      person.id,
+      { surface: 'mcp', externalId: 'mcp-client-1' },
+      testDb.db
+    )
+    const firstConnectedAt = people.getPerson(
+      organizationId,
+      person.id,
+      testDb.db
+    )?.connectedAt
+
+    people.connectIdentity(
+      organizationId,
+      person.id,
+      { surface: 'web', externalId: 'account-1' },
+      testDb.db
+    )
+
+    expect(
+      people.getPerson(organizationId, person.id, testDb.db)?.connectedAt
+    ).toBe(firstConnectedAt)
+  })
+
+  // D-35 rework, finding 2 — a person already merged away is a tombstone,
+  // the same guard `mergePeople` already gives its own survivor. Without
+  // this, a proof completing against a person concurrently merged away by a
+  // *different*, faster proof would attach a real identity to a record
+  // nothing can ever reach again.
+  it('refuses when personId has itself already been merged into someone else', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const mergedAway = people.createPerson(organizationId, {}, testDb.db)
+    people.mergePeople(organizationId, survivor.id, mergedAway.id, testDb.db)
+
+    expect(
+      people.connectIdentity(
+        organizationId,
+        mergedAway.id,
+        { surface: 'mcp', externalId: 'mcp-client-1' },
+        testDb.db
+      )
+    ).toBeUndefined()
   })
 
   it('refuses when the identity already belongs to a different person — LINK-4 is the caller for that case, not this function', () => {
@@ -527,6 +606,73 @@ describe('people.ts#mergePeople (LINK-4)', () => {
     ).toBeUndefined()
   })
 
+  // D-35 rework, finding 2 — the concrete race the finding names: L begins
+  // a Discord connect attempt (a still-live, unredeemed challenge naming L
+  // as its own survivor); before L returns to redeem it, a *different*,
+  // faster proof merges L into S. Without repointing, L's still-live
+  // challenge would later redeem successfully and then attach a genuinely
+  // proven identity to a tombstone `mergePeople` now refuses as a survivor
+  // — a legitimate connect attempt permanently declined with no recovery
+  // path.
+  it("re-points the loser's outstanding Discord challenge to the survivor, so an in-flight connect attempt still completes", () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const challenge = personLinkChallenges.createChallenge(
+      {
+        organizationId,
+        surface: 'discord',
+        personId: loser.id,
+        codeVerifier: 'verifier-1',
+        secretHash: 'some-hash',
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      },
+      testDb.db
+    )
+
+    people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+
+    // Read back through the repo's own read path (`peekChallenge`, the same
+    // lookup a real redemption uses), not a raw column poke — proves the
+    // row a real redemption would actually see now resolves the survivor.
+    const stillLive = personLinkChallenges.peekChallenge(
+      'some-hash',
+      'discord',
+      Date.now(),
+      testDb.db
+    )
+    expect(stillLive?.id).toBe(challenge.id)
+    expect(stillLive?.personId).toBe(survivor.id)
+  })
+
+  it('does not touch an mcp challenge on merge — it was never bound to a survivor at issue time', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    personLinkChallenges.createChallenge(
+      {
+        organizationId,
+        surface: 'mcp',
+        identityExternalId: 'mcp-client-1',
+        secretHash: 'mcp-hash',
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      },
+      testDb.db
+    )
+
+    people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+
+    const stillThere = personLinkChallenges.peekChallenge(
+      'mcp-hash',
+      'mcp',
+      Date.now(),
+      testDb.db
+    )
+    expect(stillThere).toBeDefined()
+  })
+
   it('refuses to merge a person into itself', () => {
     testDb = createTestDatabase()
     const { organizationId } = seedOrgWithCourse(testDb.db)
@@ -594,7 +740,7 @@ describe('PPL-4: an address match alone never links anything', () => {
   })
 })
 
-describe('people.ts#hasVerifiedAddress (PPL-5)', () => {
+describe('people.ts#hasVerifiedAddress (PPL-5, D-35 rework finding 4)', () => {
   it('is false for a person nobody has connected yet', () => {
     testDb = createTestDatabase()
     const { organizationId } = seedOrgWithCourse(testDb.db)
@@ -605,12 +751,59 @@ describe('people.ts#hasVerifiedAddress (PPL-5)', () => {
     ).toBe(false)
   })
 
-  it('is true once mergePeople has connected a proven identity onto this person', () => {
+  // The finding's own reproduction case: `connectedAt` alone (LINK-1's
+  // gate) is not an address. A person connected *only* through a Discord
+  // snowflake — no `web` identity, `email` still `null` — must not read as
+  // verified, or the first transcript-export caller built against this
+  // function would disclose a transcript to someone who proved nothing
+  // more than a snowflake.
+  it('is false for a person connected only through Discord — connectedAt alone is not an address', () => {
     testDb = createTestDatabase()
     const { organizationId } = seedOrgWithCourse(testDb.db)
-    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const survivor = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'snowflake-1' },
+      testDb.db
+    )
     const other = people.createPerson(organizationId, {}, testDb.db)
-    people.mergePeople(organizationId, survivor.id, other.id, testDb.db)
+    const merged = people.mergePeople(
+      organizationId,
+      survivor.id,
+      other.id,
+      testDb.db
+    )
+    expect(merged?.survivor.connectedAt).not.toBeNull()
+    expect(merged?.survivor.email).toBeNull()
+
+    expect(
+      people.hasVerifiedAddress(organizationId, survivor.id, testDb.db)
+    ).toBe(false)
+  })
+
+  // Likewise for MCP: a token proves possession of a private channel, not
+  // an email.
+  it('is false for a person connected only through MCP', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'mcp', externalId: 'mcp-client-1' },
+      testDb.db
+    )
+
+    expect(
+      people.hasVerifiedAddress(organizationId, survivor.id, testDb.db)
+    ).toBe(false)
+  })
+
+  it('is true once the person has a web identity — the only proxy this platform has for a verified email', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'web', externalId: 'account-1' },
+      testDb.db
+    )
 
     expect(
       people.hasVerifiedAddress(organizationId, survivor.id, testDb.db)

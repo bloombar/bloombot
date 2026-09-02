@@ -61,13 +61,17 @@ export {
 export {
   beginDiscordPersonLink,
   consumeDiscordPersonLink,
+  previewDiscordPersonLink,
   completeDiscordPersonLink,
   issueMcpPersonLinkToken,
   consumeMcpPersonLinkToken,
+  previewMcpPersonLink,
   completeMcpPersonLink,
   DEFAULT_PERSON_LINK_TTL_MS,
   type BeginDiscordPersonLink,
   type ConsumedDiscordPersonLink,
   type IssuedMcpPersonLinkToken,
   type ConsumedMcpPersonLinkToken,
+  type PersonLinkPreview,
+  type PersonLinkPreviewOutcome,
 } from './person-link.js'

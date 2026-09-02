@@ -1,8 +1,9 @@
 CREATE TABLE `person_link_challenges` (
 	`id` text PRIMARY KEY NOT NULL,
 	`organization_id` text NOT NULL,
-	`person_id` text NOT NULL,
+	`person_id` text,
 	`surface` text NOT NULL,
+	`identity_external_id` text,
 	`secret_hash` text NOT NULL,
 	`code_verifier` text,
 	`expires_at` integer NOT NULL,
@@ -10,7 +11,9 @@ CREATE TABLE `person_link_challenges` (
 	`created_at` integer NOT NULL,
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,
 	FOREIGN KEY (`person_id`) REFERENCES `people`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT "person_link_challenges_surface_check" CHECK("person_link_challenges"."surface" in ('discord', 'mcp'))
+	CONSTRAINT "person_link_challenges_surface_check" CHECK("person_link_challenges"."surface" in ('discord', 'mcp')),
+	CONSTRAINT "person_link_challenges_binding_shape_check" CHECK(("person_link_challenges"."surface" = 'discord' and "person_link_challenges"."person_id" is not null and "person_link_challenges"."identity_external_id" is null)
+        or ("person_link_challenges"."surface" = 'mcp' and "person_link_challenges"."person_id" is null and "person_link_challenges"."identity_external_id" is not null))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `person_link_challenges_secret_hash_unique` ON `person_link_challenges` (`secret_hash`);--> statement-breakpoint

@@ -2494,7 +2494,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: MCP-2
   title: The tool surface is chosen, not derived
@@ -2504,7 +2504,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: MCP-3
   title: An agent acts as an account, with that account's authority
@@ -2515,7 +2515,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: MCP-4
   title: A destructive tool asks first
@@ -2525,7 +2525,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: MCP-5
   title: Agent usage is metered and attributed like any other
@@ -2535,7 +2535,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: ADMIN-1
   title: An instructor can read their course's transcripts

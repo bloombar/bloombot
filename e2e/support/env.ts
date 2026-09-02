@@ -30,3 +30,10 @@ export const E2E_MAIL_PATH = join(TMP_ROOT, 'mail.jsonl')
 // its own path explicitly rather than let `start-api.ts`'s `buildApp` call
 // fall through to it.
 export const E2E_ATTACHMENT_STORAGE_DIR = join(TMP_ROOT, 'attachments')
+
+// ADMIN-4/AUTH-4 — the one address `playwright.config.ts` puts on
+// `ADMIN_EMAILS` for `e2e/support/start-api.ts`'s own process, and the
+// address `e2e/admin-console.spec.ts` signs in as to reach the
+// platform-administrator console the same way a real administrator would:
+// through the ordinary emailed-link flow, never a database flag.
+export const E2E_ADMIN_EMAIL = 'e2e-admin@bloombot.test'

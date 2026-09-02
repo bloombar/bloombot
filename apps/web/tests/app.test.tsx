@@ -22,17 +22,29 @@ import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 // 'projects' (`docs/DECISIONS.md` D-25), so the shell this file renders now
 // mounts `ProjectsPanel` on first render, not only when a test opts into the
 // Projects tab.
-const { fetchMe, completeDiscordInstall, listProjects } = vi.hoisted(() => ({
+const {
+  fetchMe,
+  completeDiscordInstall,
+  listProjects,
+  fetchAdminOrganizations,
+} = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
   listProjects: vi.fn(),
+  fetchAdminOrganizations: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, fetchMe, completeDiscordInstall, listProjects }
+  return {
+    ...actual,
+    fetchMe,
+    completeDiscordInstall,
+    listProjects,
+    fetchAdminOrganizations,
+  }
 })
 
 afterEach(() => {
@@ -107,5 +119,31 @@ describe('App (WEB-1..4)', () => {
 
     await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
     expect(fetchMe).toHaveBeenCalledTimes(2)
+  })
+
+  // ADMIN-4 — reached at `/platform-admin`, outside `Shell`'s own organization-scoped
+  // tabs (`pages/Admin.tsx`'s own module comment has why).
+  it('a signed-in account visiting /platform-admin sees the platform-administrator console, not the ordinary shell', async () => {
+    window.history.replaceState(null, '', '/platform-admin')
+    fetchMe.mockResolvedValue({
+      account: { id: 'account-1', memberships: [] },
+    })
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: {
+        bot: { reachable: true },
+        worker: { reachable: true },
+        api: { reachable: true },
+      },
+    })
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Platform administration' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('combobox', { name: 'Organization' })
+    ).not.toBeInTheDocument()
   })
 })

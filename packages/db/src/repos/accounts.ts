@@ -50,6 +50,27 @@ export function getAccountByEmail(
 }
 
 /**
+ * Look up an account by id alone, with no organization to check it against.
+ *
+ * TEN-2 exception, the same class as `getAccountByEmail`: AUTH-4's
+ * platform-administrator check reads an account's own `email` against the
+ * `ADMIN_EMAILS` allowlist, and a platform administrator is not — by
+ * ADMIN-4's own text — necessarily a member of the organization it is
+ * about to act on (an admin console read spans every organization, and
+ * ADMIN-5's tenant deletion targets one an administrator may hold no
+ * membership in at all). `getAccountInOrganization` cannot serve that
+ * caller: it deliberately returns nothing for an account with no
+ * membership in the organization named, which is exactly the account this
+ * function has to find.
+ */
+export function getAccountById(
+  accountId: string,
+  db: Database
+): Account | undefined {
+  return db.select().from(accounts).where(eq(accounts.id, accountId)).get()
+}
+
+/**
  * Create a new account and its first membership, atomically.
  *
  * `organizationId` is the organization the account joins immediately — a

@@ -104,6 +104,13 @@ async function main(): Promise<void> {
   // file's module comment already gives.
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // ADMIN-4/COST-5 — the three processes' own loopback health endpoints,
+  // read once here alongside every other `CONFIG` value this process
+  // reads at startup (`docs/DECISIONS.md` D-33's own accounting of who has
+  // to know these three ports — this router's own phase).
+  const botHealthUrl = `http://127.0.0.1:${CONFIG.BOT_HEALTH_PORT}/health`
+  const workerHealthUrl = `http://127.0.0.1:${CONFIG.WORKER_HEALTH_PORT}/health`
+  const apiHealthUrl = `http://127.0.0.1:${port}/health`
 
   // TEN-4 — the same fail-loudly-at-startup discipline `apps/bot`'s own
   // `BOT_TOKEN`/`OPENAI_API_KEY` checks hold themselves to, applied to the
@@ -191,6 +198,9 @@ async function main(): Promise<void> {
     model,
     admission,
     pricing,
+    botHealthUrl,
+    workerHealthUrl,
+    apiHealthUrl,
   })
 
   const server = createServer(app)

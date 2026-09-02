@@ -53,6 +53,20 @@ describe('describeApiError (WEB-5)', () => {
     expect(headline).toBe('A course named "Intro" already exists.')
   })
 
+  // ADMIN-4/ADMIN-5 — new codes this slice's admin console reaches, named
+  // plainly rather than falling through to the generic `default` case.
+  it('not_platform_administrator names the reason (ADMIN-4)', () => {
+    const error = new ApiError(403, { error: 'not_platform_administrator' })
+    const { headline } = describeApiError(error)
+    expect(headline).toMatch(/platform-administrator/i)
+  })
+
+  it('confirmation_name_mismatch says nothing was deleted (ADMIN-5)', () => {
+    const error = new ApiError(409, { error: 'confirmation_name_mismatch' })
+    const { headline } = describeApiError(error)
+    expect(headline).toMatch(/did not match/i)
+  })
+
   it('an unexpected failure (internal_error) discloses nothing beyond a generic message', () => {
     const error = new ApiError(500, { error: 'internal_error' })
     const { headline, details } = describeApiError(error)

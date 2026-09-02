@@ -82,6 +82,9 @@ describe('runMigrations', () => {
       'projects',
       'sessions',
       'sign_in_tokens',
+      'tenant_deletions',
+      'transcript_access_log',
+      'transcript_exports',
       'usage_counters',
     ])
     expect(schema.organizations).toEqual([

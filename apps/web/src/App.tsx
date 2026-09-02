@@ -21,6 +21,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
+import { Admin } from './pages/Admin.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -125,6 +126,22 @@ export function App() {
   }
 
   if (session.kind === 'signed-in') {
+    // ADMIN-4 — reached at `/platform-admin`, deliberately outside `Shell`'s
+    // own organization-scoped nav (`Admin.tsx`'s own module comment has
+    // why) and deliberately *not* `/admin`: `apps/api`'s own
+    // `routes/admin.ts` is mounted at `/admin` (`vite.config.ts`'s own
+    // proxy list), and a page path and a proxied API path can never share
+    // one top-level segment — the same reason `/sign-in/:token` (a page)
+    // and `/auth/redeem` (the API it posts to) already do not. Any
+    // signed-in account may navigate here; `routes/admin.ts` is what
+    // actually enforces AUTH-4 on every request this screen makes, so a
+    // non-administrator who types the URL sees the same
+    // `not_platform_administrator` refusal `ErrorMessage` already knows
+    // how to say in words, not a client-side guess at who is allowed to
+    // even try.
+    if (path === '/platform-admin') {
+      return <Admin onBack={returnToShell} />
+    }
     return (
       <Shell
         account={session.account}

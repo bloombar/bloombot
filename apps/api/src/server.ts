@@ -29,7 +29,7 @@ import express, { type Express } from 'express'
 import { createPlatformRegistry, type ActionRegistry } from '@bloombot/actions'
 import type { EmailSender, GoogleIdTokenVerifier } from '@bloombot/auth'
 import type { ModelClient, PricingTable } from '@bloombot/core'
-import type { Database } from '@bloombot/db'
+import { createFilesystemAttachmentStorage, type Database } from '@bloombot/db'
 import type { DiscordRestClient } from '@bloombot/discord-rest'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
@@ -42,9 +42,11 @@ import {
   ACTION_JSON_BODY_LIMIT_BYTES,
   buildActionsRouter,
 } from './routes/actions.js'
+import { buildAdminRouter } from './routes/admin.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
+import { buildTranscriptExportsRouter } from './routes/transcript-exports.js'
 
 export interface ServerDependencies {
   db: Database
@@ -76,6 +78,12 @@ export interface ServerDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, threaded through the same way — omitted, `answerQuestion` prices every call at its own zero-rate default and logs a warning each time (see that file's own `NO_PRICING_CONFIGURED` comment). */
   pricing?: PricingTable
+  /** ADMIN-4/COST-5 — where `routes/admin.ts` reaches each process's own loopback health endpoint. `CONFIG.BOT_HEALTH_PORT`/`WORKER_HEALTH_PORT`/`API_PORT` on `127.0.0.1` in production (`src/index.ts`, mirroring `docs/DECISIONS.md` D-33's own accounting of who has to know these three ports). Required, the same way `discordOauthBase` is — a test supplies its own fixed (unreachable, or faked via `adminHealthFetch`) URLs rather than this file inventing a default port nothing configured. */
+  botHealthUrl: string
+  workerHealthUrl: string
+  apiHealthUrl: string
+  /** Overridable so a test can fake the three processes' health responses with no real network — `checkPlatformHealth`'s own `fetchFn` option, threaded through `routes/admin.ts`. */
+  adminHealthFetch?: typeof fetch
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -86,6 +94,17 @@ export function buildApp(deps: ServerDependencies): Express {
         ? { attachmentStorageDir: deps.attachmentStorageDir }
         : {}),
     })
+  // ADMIN-3/ADMIN-5 — a second `AttachmentStorage` instance over the same
+  // directory `createPlatformRegistry` above already builds one against:
+  // the port is stateless (a plain filesystem path, `attachment-storage.ts`'s
+  // own doc comment), so two instances pointed at the same root are
+  // functionally identical, and this file has no way to reach inside
+  // `registry`'s own closure to reuse the one it built. Never `data/` — the
+  // same `'./tmp/attachments'` fallback `createPlatformRegistry` itself
+  // uses (D-32).
+  const attachmentStorage = createFilesystemAttachmentStorage(
+    deps.attachmentStorageDir ?? './tmp/attachments'
+  )
 
   const app = express()
   // Not itself a SPEC requirement, but the header discloses this is an
@@ -147,6 +166,25 @@ export function buildApp(deps: ServerDependencies): Express {
       ...(deps.discordPermissions
         ? { discordPermissions: deps.discordPermissions }
         : {}),
+    })
+  )
+  app.use(
+    '/organizations/:organizationId/transcript-exports',
+    buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
+  )
+  // ADMIN-4/ADMIN-5 — mounted at `/admin`, not under
+  // `/organizations/:organizationId/...` (`routes/admin.ts`'s own module
+  // comment has why).
+  app.use(
+    '/admin',
+    buildAdminRouter({
+      db: deps.db,
+      logger: deps.logger,
+      attachmentStorage,
+      botHealthUrl: deps.botHealthUrl,
+      workerHealthUrl: deps.workerHealthUrl,
+      apiHealthUrl: deps.apiHealthUrl,
+      ...(deps.adminHealthFetch ? { fetchFn: deps.adminHealthFetch } : {}),
     })
   )
 

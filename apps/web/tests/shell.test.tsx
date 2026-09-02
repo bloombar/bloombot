@@ -284,4 +284,18 @@ describe('Shell (WEB-3, WEB-4)', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByLabelText('New project name')).toBeInTheDocument()
   })
+
+  // ADMIN-1..3: a fourth tab, the same shape Discord/Projects/Chat already
+  // take — switching to it renders `pages/Transcripts.tsx`, not the
+  // Projects panel it defaulted to on mount.
+  it('switches to the Transcripts tab', async () => {
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Transcripts' }))
+
+    expect(
+      await screen.findByRole('heading', { name: 'Transcripts' })
+    ).toBeInTheDocument()
+  })
 })

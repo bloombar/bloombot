@@ -3728,3 +3728,105 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
+---
+
+## D-46 — `packages/db`/`packages/actions`/`apps/worker`/`apps/api`/`apps/web`: reading a transcript is audited where the read happens, PPL-5 applied to a read versus an export, and the deliberate operation that deletes a tenant
+
+**Problem.** ADMIN-1..5 is the last phase: an instructor reads a course's transcript in the panel, filtered by
+student and by date; every read is written to an audit trail; export runs as a job and produces a file; a
+platform administrator sees organizations, usage and health — and no route into a tenant's transcripts; and
+deleting a tenant's data is a separate, explicit, confirmed, audited operation from TEN-6's "removal preserves
+data". None of the five is free of a question the SPEC states as a conclusion ("the recording should live
+where the read happens", "no route into a tenant's transcripts") without settling how — the same shape D-33's
+own opening paragraph already describes for COST-1..6.
+
+**Choice — the audit write lives inside the one function that actually reads a transcript back, not inside
+either of its callers.** `@bloombot/db`'s `repos/transcript-access.ts#readCourseTranscript` is the single
+function that queries `messages` for a transcript read or export; it writes the `transcript_access_log` row in
+the same `db.transaction(...)` as the `SELECT`, before returning. `@bloombot/actions`' `transcripts.read`
+(ADMIN-1, the panel's own screen) and `apps/worker`'s `handlers/transcripts.ts` job handler (ADMIN-3, the
+export) both call this one function to get the messages they show or write to a file — neither queries
+`messages` itself, and neither could disclose a transcript's contents without the read being recorded. This is
+what ADMIN-2's own text asks for literally: "the recording should live where the read happens, not in the one
+screen that happens to call it today" — a *third* caller added later (an MCP tool reading a transcript back,
+say) is audited for free, not by remembering to add a call to a separate "log it" step. The alternative
+considered and rejected — logging from inside each of the two actions' own `execute` — would have left a
+future third caller with nothing enforcing it wrote one at all, exactly the gap the requirement's own wording
+warns against.
+
+**Choice — PPL-5 gates `transcripts.export` when it names one student, and does not gate `transcripts.read` at
+all.** `people.ts#hasVerifiedAddress` (PPL-5, built ahead of its own caller in the LINK-1..5 slice, D-35) checks
+whether the *person the disclosure is about* has proven an institutional email, not merely a Discord snowflake
+or an MCP token — D-35's own rework finding 4 is explicit that "a person connected only through Discord ...
+read `true`" was the defect that function exists to close. Two readings of "who this gate protects" were
+weighed:
+
+- Gating an *instructor's* ordinary, audited, on-screen read (ADMIN-1) on whether the *student* has ever linked
+  a web account would make CONV-2's own retention guarantee hollow for the ordinary case — a course that only
+  ever meets students through Discord, where no student ever holds a `web` identity at all — turning "a record
+  an instructor may be required to retain" into one they can never actually look at. The instructor's own
+  identity is already proven by their signed-in account (AUTH-1/AUTH-2, a verified email by construction), and
+  their authority to read this course's transcript comes from their membership role (ENRL-5) — a completely
+  different, already-adequate axis than PPL-5's own "which account is speaking, versus what may be shown". Not
+  gating the read is what keeps ADMIN-1 usable for the deployment shape this platform is actually built for.
+- Export is different in kind: it produces a portable file, addressed to one named student when `personId` is
+  given, that leaves the panel's own access-controlled screen and audit boundary entirely — literally "exporting
+  a person's history", PPL-5's own words. `transcripts.export`'s policy refuses (ACT-3-shaped, before a
+  `transcript_exports` row is even created) unless `hasVerifiedAddress` is `true` for a student-filtered export;
+  an unfiltered, whole-course export (transcripts and usage together, ADMIN-3's own text) names no single
+  person's history to gate on and is not refused this way.
+
+**Choice — `deleteOrganizationData` is a plain function in `organizations.ts`, not `dispatch.ts`, reached only
+through `apps/api`'s own `/admin` router.** The same class of exception D-33 already gives
+`listOrganizationTotals`/`checkPlatformHealth`: a platform administrator's own read (or, here, write) is not
+"acting within" one organization the way `DispatchContext.organizationId` assumes every dispatched action is —
+an administrator need hold no membership in the tenant being deleted at all (ADMIN-4's own "not a master key"
+means membership is not what authorizes this, `AUTH-4`'s allowlist, re-checked on every request, is). Every
+organization-scoped table is emptied in one transaction, children before the parents they reference
+(`foreign_keys = ON` on every connection, `client.ts`) — `people.mergedIntoPersonId` is nulled out first,
+breaking the self-reference before any `people` row is deleted, the one ordering surprise a naive per-table
+loop would miss. `accounts`/`sessions`/`sign_in_tokens` are untouched: an account is not scoped to one
+organization (TEN-1), so deleting a tenant removes only `memberships`, the join. `tests/conversations.ts`'s own
+TEN-6 guard ("no repo source deletes a message or a conversation, anywhere in this package") now names
+`organizations.ts` as its one explicit, recorded exception — the same "an exception only if its reason is
+recorded in the same test" discipline ACT-5 already holds itself to.
+
+**Choice — the confirmation is enforced server-side, and reads the same preview an administrator saw.**
+`routes/admin.ts`'s own delete route re-checks `confirmName === organization.name` itself, before touching
+anything — never trusted to the panel's own modal alone. This project's own history has the failure mode this
+guards against by name (a destructive confirmation that only *looks* enforced), so the route's own test
+(`apps/api/tests/routes/admin.test.ts`) proves a mismatched name refuses with `409` and deletes nothing, not
+merely that the panel disables a button.
+
+### Rework — a real browser caught a path collision no unit test could
+
+Playwright's own `e2e/admin-console.spec.ts` (this slice's own extension of the e2e suite, per its brief) failed
+on `GET /admin`'s deep link the first time it ran, though every unit and integration test — including
+`apps/api/tests/routes/admin.test.ts` and `apps/web`'s own component tests for `pages/Admin.tsx` — was green.
+The panel's own client-side page path and `apps/api`'s own `routes/admin.ts` mount were both `/admin`: a
+browser navigation to that path needs `index.html` served back (a page, handled client-side by `App.tsx`), but
+`fetch('/admin/organizations')` from inside that same page needs the request proxied to `apps/api` instead
+(`vite.config.ts`'s own `preview.proxy`, mirroring nginx's job in production, PLAT-4) — one path, two
+irreconcilable meanings, invisible to any test that mocks `api/client.ts` (every unit test in this slice does)
+rather than actually resolving the URL through a real dev/preview server. Fixed by renaming the *panel's* own
+page path to `/platform-admin`, leaving `apps/api`'s own `/admin` mount untouched — the same "a page path and
+the API path it posts to are never the same top-level segment" convention `/sign-in/:token` (a page) and
+`/auth/redeem` (the API route it posts to) already established, just not yet written down as a rule anywhere
+before this. `vite.config.ts`'s own `proxy` object gained a comment naming the convention explicitly, so the
+next screen that needs a bespoke (non-`dispatchAction`) API mount does not rediscover this the same way.
+
+**Limits.** `previewOrganizationDeletion` is not exhaustive over every table `deleteOrganizationData` empties
+(`cost_ledger_entries`, `person_identities`, `person_link_challenges`, `discord_install_states` have no count
+in the preview) — deliberately: it is a confirmation a person reads and acts on, not a schema dump, and the
+categories it names are the ones a person recognizes losing. A course attachment's or a transcript export's own
+bytes on disk are removed best-effort, *after* the database transaction that is the authoritative "this tenant
+is deleted" — `routes/admin.ts` gathers their ids before the delete and calls `AttachmentStorage#remove` for
+each afterward, logging rather than failing the request on an individual removal error, since nothing left in
+the database references an id it could not clean up. `apps/worker`'s export handler produces JSON, not CSV —
+this slice's own judgment call, not a requirement: nothing in ADMIN-3's text names a format, and a hand-rolled
+CSV writer's own escaping rules are exactly the kind of complexity `roster.ts`'s own module comment already
+warns a slice away from adding without a reason this one does not have. Production nginx's own config (outside
+this slice — `docs/DEPLOY_APP_PLATFORM.md`/`docs/DEPLOY_DROPLET.md`, another agent's branch) will need `/admin`
+proxied to `apps/api` alongside `/auth`/`/organizations`/`/health`, the same way `vite.config.ts`'s own
+`preview.proxy` now is.
+

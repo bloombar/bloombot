@@ -564,9 +564,20 @@ describe('conversations repo', () => {
   // actual source of every repo file instead, and looks for the thing TEN-6
   // actually forbids: a `.delete(...)` call or a raw `DELETE FROM` against
   // `messages` or `conversations`, wherever it might appear.
-  it('no repo source deletes a message or a conversation, anywhere in this package (TEN-6)', () => {
+  //
+  // `organizations.ts` is the one named, explicit exception — the same
+  // "an exception only if its reason is recorded in the same test" ACT-5
+  // already holds itself to. TEN-6's own text draws the line this test
+  // enforces everywhere else: removing a bot preserves data; ADMIN-5 is
+  // "the separate, deliberate operation that removes it" TEN-6's own text
+  // names — `organizations.ts#deleteOrganizationData`, reached only through
+  // the platform-administrator console's own explicit-confirm-audited flow
+  // (`apps/api`'s admin router), never through an ordinary write path.
+  it('no repo source deletes a message or a conversation, anywhere in this package, except ADMIN-5’s own deliberate tenant deletion (TEN-6)', () => {
     const reposDir = fileURLToPath(new URL('../src/repos', import.meta.url))
-    const files = readdirSync(reposDir).filter((name) => name.endsWith('.ts'))
+    const files = readdirSync(reposDir).filter(
+      (name) => name.endsWith('.ts') && name !== 'organizations.ts'
+    )
     expect(files.length).toBeGreaterThan(0)
 
     const deletePatterns = [

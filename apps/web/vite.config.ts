@@ -31,6 +31,13 @@ const proxy = {
   '/health': apiOrigin,
   '/auth': apiOrigin,
   '/organizations': apiOrigin,
+  // ADMIN-4/ADMIN-5 — `apps/api`'s own `routes/admin.ts` mount. Deliberately
+  // a different top-level segment from the browser's own `/platform-admin`
+  // page path (`App.tsx`): the two must never share one, the same way
+  // `/sign-in/:token` (a page) and `/auth/redeem` (the API it posts to)
+  // already do not — a path this proxy forwards and a path this app's own
+  // client-side router renders cannot be the same one.
+  '/admin': apiOrigin,
 }
 
 export default defineConfig({

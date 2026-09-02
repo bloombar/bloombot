@@ -2560,7 +2560,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-2
   title: Reading a transcript is itself recorded
@@ -2570,7 +2570,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-3
   title: Export produces a file, as a job
@@ -2580,7 +2580,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-4
   title: A platform administrator sees tenants, not conversations
@@ -2591,7 +2591,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: In progress
+  status: In review
   review: false
 - id: ADMIN-5
   title: Deleting a tenant's data is explicit, confirmed and audited
@@ -2601,7 +2601,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: In progress
+  status: In review
   review: false
 - id: AUTH-5
   title: A sign-in link actually reaches the person
@@ -2627,7 +2627,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-9
   title: Cutover is rehearsed against a copy before it is real
@@ -2637,7 +2637,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-10
   title: The old system is retired deliberately, and can be returned to
@@ -2648,7 +2648,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-11
   title: Secrets are rotated at cutover
@@ -2658,7 +2658,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-12
   title: A student-facing failure pages somebody
@@ -2668,7 +2668,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-13
   title: A server administrator can set the platform up from documentation alone

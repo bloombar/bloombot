@@ -38,6 +38,7 @@ export {
   requestSignInLink,
   redeemSignInLink,
   signInWithGoogle,
+  ensureWebPersonForAccount,
   type RequestSignInLinkDeps,
   type SignInResult,
 } from './sign-in.js'
@@ -61,10 +62,12 @@ export {
 export {
   beginDiscordPersonLink,
   consumeDiscordPersonLink,
+  peekDiscordPersonLinkCodeVerifier,
   previewDiscordPersonLink,
   completeDiscordPersonLink,
   issueMcpPersonLinkToken,
   consumeMcpPersonLinkToken,
+  peekMcpPersonLink,
   previewMcpPersonLink,
   completeMcpPersonLink,
   DEFAULT_PERSON_LINK_TTL_MS,
@@ -72,6 +75,7 @@ export {
   type ConsumedDiscordPersonLink,
   type IssuedMcpPersonLinkToken,
   type ConsumedMcpPersonLinkToken,
+  type PeekedMcpPersonLink,
   type PersonLinkPreview,
   type PersonLinkPreviewOutcome,
 } from './person-link.js'

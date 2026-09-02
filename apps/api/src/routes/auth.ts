@@ -20,7 +20,12 @@ import {
   type EmailSender,
   type GoogleIdTokenVerifier,
 } from '@bloombot/auth'
-import { memberships, organizations, type Database } from '@bloombot/db'
+import {
+  accounts,
+  memberships,
+  organizations,
+  type Database,
+} from '@bloombot/db'
 
 import { clearSessionCookie, setSessionCookie } from '../middleware/session.js'
 
@@ -149,9 +154,25 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * TEN-2's own convention keeps a repo function scoped to one table's
    * concern rather than reaching across into `organizations` for every
    * caller whether or not it wants a name.
+   *
+   * `email` (LINK-6): `pages/Connect.tsx` needs to name *the account signed
+   * in*, not merely which organizations it belongs to — `accounts.getAccountById`
+   * is the one new read this adds, the same unscoped-by-design shape
+   * `getAccountByEmail` already is (this file's own module comment), safe
+   * here specifically because a valid session already proved this exact
+   * account, not a value this route accepts from the caller.
    */
   router.get('/me', (req, res) => {
     if (!req.session) {
+      res.status(200).json({ account: null })
+      return
+    }
+    // Unreachable in practice — a session's own foreign key guarantees its
+    // account exists — but a session outlives neither, the same
+    // "guarded rather than assumed" discipline the organization lookup a
+    // few lines below already holds itself to.
+    const account = accounts.getAccountById(req.session.accountId, deps.db)
+    if (!account) {
       res.status(200).json({ account: null })
       return
     }
@@ -162,6 +183,7 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
     res.status(200).json({
       account: {
         id: req.session.accountId,
+        email: account.email,
         memberships: accountMemberships.map((membership) => {
           const organization = organizations.getOrganizationById(
             membership.organizationId,

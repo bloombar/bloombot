@@ -178,6 +178,98 @@ function healWebPersonForReturningAccount(
 }
 
 /**
+ * LINK-6/7 — resolve (or create) the account's own connected web person in
+ * `organizationId`, on demand, the moment a connect flow (Discord OAuth,
+ * LINK-7; an MCP token, LINK-8) needs a survivor to bind onto in an
+ * organization that is not necessarily the account's own personal one.
+ * `createConnectedWebPerson` above only ever runs for the account's *own*
+ * personal organization, at sign-in time (that function's own doc comment:
+ * "the only organization this function's own caller has just created") —
+ * but the Discord or MCP identity a connect flow is proving typically lives
+ * in a *different* organization's own person: an institution's, admitted by
+ * a roster import or a Discord role, long before this account ever signed
+ * in. `apps/api`'s own connect routes call this to get a survivor for
+ * exactly that organization, then hand it to `beginDiscordPersonLink`/
+ * `issueMcpPersonLinkToken`/`completeMcpPersonLink` — `person-link.ts`'s own
+ * `connectOrMerge` does the rest: attaching the identity fresh if nobody
+ * held it yet, or merging in whoever already did (LINK-4), which is how a
+ * roster-admitted person's own conversation, enrolment and usage end up on
+ * this account's person rather than stranded on a person this account has
+ * no other way to reach.
+ *
+ * Read-then-create, not a raw insert: an existing person for this
+ * `(organizationId, accountId)` pair is returned unchanged (the ordinary,
+ * idempotent case — a caller connecting a second identity, or simply
+ * re-visiting the connect screen, already has one). Creating one runs the
+ * identical `createPerson` + `connectIdentity` sequence
+ * `createConnectedWebPerson` already uses, inside its own transaction, so a
+ * concurrent caller creating the same pair first is caught the same way
+ * `resolvePersonByIdentity`'s own race already is — the loser's insert
+ * fails the identity's own unique constraint, and the winner is looked up
+ * and returned instead of a raw driver error escaping.
+ *
+ * Does *not* check that `organizationId` actually exists — the same
+ * "assumes a valid id, insert fails loudly on a foreign key otherwise"
+ * shape `createPerson` itself already has. `apps/api`'s own route is where
+ * TEN-5's "a foreign and a nonexistent id refuse identically" is enforced
+ * (checked explicitly, before this ever runs — see `routes/person-link.ts`),
+ * the same split `routes/chat.ts`'s own WEB-10 fix already draws between
+ * this package (assumes a valid id) and the HTTP layer (checks one).
+ */
+export function ensureWebPersonForAccount(
+  organizationId: string,
+  accountId: string,
+  db: Database
+): peopleRepo.Person {
+  const identity = { surface: 'web' as const, externalId: accountId }
+  const existing = peopleRepo.resolveIdentity(organizationId, identity, db)
+  if (existing) return existing
+
+  try {
+    return db.transaction((tx) => {
+      const again = peopleRepo.resolveIdentity(organizationId, identity, tx)
+      if (again) return again
+
+      const person = peopleRepo.createPerson(organizationId, {}, tx)
+      const connected = peopleRepo.connectIdentity(
+        organizationId,
+        person.id,
+        identity,
+        tx
+      )
+      if (!connected) {
+        throw new Error(
+          `ensureWebPersonForAccount: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
+        )
+      }
+      // `person` (above) predates `connectIdentity`'s own write —
+      // `connectedAt` on it is still `null`, since `createPerson` sets it
+      // and `connectIdentity` is what changes it a moment later. Re-read so
+      // the caller — `apps/api`'s own connect routes, which check
+      // `connectedAt` to decide what a preview screen says — sees the row
+      // as it actually stands, not as it stood a statement ago.
+      return peopleRepo.getPerson(organizationId, person.id, tx) ?? person
+    })
+  } catch (error) {
+    // The same race `resolvePersonByIdentity` (`@bloombot/db`'s `people.ts`)
+    // already handles for its own identical read-then-insert shape: a
+    // concurrent caller winning the same `(organizationId, accountId)` pair
+    // first fails this transaction's own insert against
+    // `person_identities_org_surface_external_unique`, not the
+    // `accounts.email` constraint `isUniqueEmailViolation` below checks for
+    // — this function never touches `accounts` at all.
+    if (
+      error instanceof BetterSqlite3.SqliteError &&
+      error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    ) {
+      const winner = peopleRepo.resolveIdentity(organizationId, identity, db)
+      if (winner) return winner
+    }
+    throw error
+  }
+}
+
+/**
  * Find the account for `email`, or create one with a fresh personal
  * organization, an `owner` membership and a connected web person, atomically
  * (TEN-1, and `createConnectedWebPerson`'s own doc comment for the person).

@@ -3728,6 +3728,779 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
+---
+
+## D-40 — `ecosystem.config.cjs`/`scripts/deploy.sh`: the migration runs once, outside the four processes' own race, and a deploy's rollback covers every process it reloaded
+
+**Problem.** `apps/api`/`apps/bot`/`apps/worker`/`apps/mcp` each call `runMigrations(db)` in their own
+`main()` — correct for one process, and a race for four started together: `packages/db/src/migrate.ts`'s own
+idempotency (a `__drizzle_migrations` row per file, in the same transaction as the schema change it records)
+protects against corruption, but nothing before this slice guaranteed the migration had already been applied
+*before* any of the four even tried, so the first production deploy to actually start more than one of them
+together would have been the first time that race was live. `scripts/deploy.sh` (OPS-7) also only ever knew
+about one process (`bloombot`, the Python bot) — extending it to the four Node processes needed both a
+migration step and a reload/health-check/rollback loop none of them had.
+
+**Choice — `scripts/deploy.sh` runs `packages/db`'s own `run-migrate.js --i-know` once, after the build and
+before any Node process is reloaded.** Not a new migration mechanism: the existing `db:migrate` CLI
+(`packages/db/src/run-migrate.ts`), already guarded against an accidental `data/` write by
+`assertMigratablePath`, and already idempotent. `--i-know` is not a bypass of that guard for this call — it
+is the deliberate, intended use the guard's own module comment describes ("a migration sometimes has to run
+against the live file"). Once this step has run, every process's own `runMigrations(db)` at its own startup
+becomes the fast no-op idempotency already promised — a safety net for a process started outside this script
+(`npm run dev`, a manual `pm2 start` of one app), not the thing doing the real work in production anymore.
+
+**Found while wiring this in — `packages/db/src/run-migrate.ts` and `packages/legacy-import/src/cli.ts` never
+called `loadDotEnv()`.** Every other entry point (`apps/*/src/index.ts`) loads `.env` before touching
+`CONFIG`, per CFG-5; these two CLIs read `CONFIG.DATABASE_PATH` directly, so `npm run db:migrate` and
+`npm run legacy:import` only ever saw a credential-bearing environment when it happened to already be
+exported in the shell — never from `.env`, the one place this project's own convention says configuration is
+supposed to live. Fixed the same way every other entry point already does it: `loadDotEnv()`, first line of
+`main()`. No test pins this beyond the manual, end-to-end walk this slice's own report describes (running the
+real built CLI against a `tmp/` fixture, first without the fix reproducing the gap, then with it) — `main()`
+is intentionally unexported, the same as every other process's own thin entry point, and this repository has
+no existing pattern for spawning a CLI under test; inventing one for a single `loadDotEnv()` call was judged
+not worth the weight it would add.
+
+**Choice — `scripts/deploy.sh` reloads every pm2 app by name individually, and rolls every one of them back
+together on any failure.** `NODE_APPS` (`api`, `bot`, `worker`, `mcp`, `ops-monitor`) is reloaded one at a
+time (`pm2 reload <name>`, or `pm2 start ecosystem.config.cjs --only <name>` the first time — never a bare
+`pm2 start ecosystem.config.cjs`, which would start every app in the file including one a fresh droplet is
+not yet ready for) so a bad build of one does not bounce the other three. Health is checked two ways after
+the shared `HEALTH_WAIT`: `check_pm2_health` (generalized from the Python-only check this script already
+had) proves a process is still running and pm2 has not had to restart it again; `scripts/health-check.mjs`
+proves the four with an HTTP surface are actually *working* (COST-5's own running-versus-working
+distinction) — a process pm2 sees as `online` but whose database or gateway is unreachable fails this even
+though the pm2-level check saw nothing wrong. Any failure, from either check, rolls back every process this
+deploy touched, not only the one that failed — a deploy is one unit here, the same commit for every process,
+so a partial rollback would leave some processes on the new commit and some on the old with no record of
+which was which.
+
+**Rehearsal finding — a rollback that itself fails used to die silently.** `restore_previous_checkout`'s own
+rebuild (`npm run build` against the restored, previous commit) used to run as a plain statement under
+`set -e`; if it failed, the whole script died with whatever the failing command itself printed and nothing
+saying a rollback — not an ordinary deploy — had just failed to complete. This is the exact case OPS-10's own
+text warns about ("the rollback path is the part most likely to be written and never tested"), and it was
+found by testing it: a throwaway git repository under `tmp/`-equivalent scratch space, a stand-in `pm2` that
+tracks a small JSON process list, and a stand-in `npm`/`node` for the build and the migration step, driven
+through a build failure, a migration failure, and an unhealthy-after-reload rollback. The unhealthy-after-
+reload case is what surfaced it: rollback's own rebuild was made to fail too, and the script exited non-zero
+with no message beyond the failing build's own output — indistinguishable, from the log alone, from an
+ordinary deploy failure that never touched a running process, when in fact any process already reloaded onto
+the broken commit was still running it. Fixed by checking each step of `restore_previous_checkout` explicitly
+and failing with a message that says plainly this is not recoverable by re-running the script — see
+`docs/CUTOVER.md`'s own §4 for what an operator does next. This harness was not kept as a checked-in test
+(no existing pattern in this repository for spawning `scripts/deploy.sh` under test, and building a
+permanent `pm2`/git mock was judged a bigger investment than this slice's budget); `scripts/deploy.sh` is
+still verified the way OPS-7 already established — `shellcheck`, `bash -n`, and this rehearsal — not by an
+automated regression test of its own control flow.
+
+**Limits.** A migration that fails partway through is not itself rolled back — `runMigrations` applies
+whatever it reaches before the failure, and there is no automatic way to undo a partially-applied migration
+(the same limit `npm run db:migrate` already has run by hand). `scripts/deploy.sh` says this plainly rather
+than claiming a recovery it cannot actually perform; `docs/CUTOVER.md` tells an operator what to check by
+hand if it happens.
+
+**Second rehearsal finding, found writing `docs/DEPLOY_DROPLET.md` — the static panel was never rebuilt at
+all.** PLAT-4's fourth process is a static build nginx serves directly (`apps/web/dist`), not one of the pm2
+apps `reload_everything` loops over — and the root `npm run build` does not produce it; only the workspace-
+scoped `npm run build --workspace apps/web` does (`package.json`'s own `pree2e` script already needs both,
+separately, for the same reason). `scripts/deploy.sh` built only the root workspace, so every deploy would
+correctly reload `api`/`bot`/`worker`/`mcp`/`ops-monitor` onto the new commit while nginx went on serving
+whichever panel build happened to already be sitting in `apps/web/dist` — silently mismatched against the
+API underneath it, and never rebuilt by any rollback either. Fixed by adding the same explicit,
+failure-checked build call in both the forward path and `restore_previous_checkout`, verified the same way as
+the rest of this entry: the throwaway harness, re-run through both the happy path and the unhealthy-after-
+reload rollback, confirming "building the control panel" (and, on rollback, "rebuilding the control panel for
+the previous commit") now appears in the log exactly once per path, in the right order.
+
+**Rework round — `reload_everything`/`start_or_reload` still died silently under `set -e`, a third instance
+of the same bug class this entry already fixed twice.** Both ran `pm2 reload`/`pm2 start` as bare statements;
+a review reproduced it by making one `pm2 reload` fail mid-loop, and the entire operator-visible output was
+one pm2 error line — no health check, no rollback, some processes already on the new commit and others not,
+`pm2 save` never reached. Fixed the same way the earlier findings in this entry were: `start_or_reload` now
+checks pm2's own exit status explicitly and returns non-zero rather than letting the failure propagate
+unguarded; `reload_everything` tries every app even after an earlier one fails, collecting failures instead
+of stopping at the first (skipping `pm2 save` if any failed); both call sites (the forward path and the
+already-rolled-back-once branch) check `reload_everything`'s own return value and escalate to a CRITICAL
+message — the same class this entry's own `restore_previous_checkout` findings already established — if the
+*rollback's* reload also fails, rather than claiming success. A further finding while fixing this: the final
+"rolled back ...; every process is running the previous commit" message used to print unconditionally the
+moment `reload_everything` returned, with no check that the rollback's own reload actually left every process
+online — `confirm_rolled_back_online` (a short, capped-at-10s wait, then a plain `pm2 status` read for every
+app) closes that gap, escalating to CRITICAL if the previous commit is not actually online either, rather
+than reassuring an operator who has not been told the truth.
+
+**A committed harness now exists for this: `scripts/deploy.test.mjs`.** The throwaway harness this entry's
+own earlier findings describe as "not kept as a checked-in test" was rebuilt as a real one, following a
+review that rebuilt roughly the same harness independently in under an hour and found the `reload_everything`
+bug immediately with it — evidence that the investment was worth keeping rather than re-paying per reviewer.
+It runs `scripts/deploy.sh` (the real, current file, piped over stdin the same way CI invokes it) against a
+throwaway git repository and stand-in `pm2`/`npm`/`node`/`python3`/`pipenv`, covering the happy path, a pm2
+reload failure that must roll back rather than die, and a control-panel build failure that must abort before
+reloading anything. Each `writeDefaultStubs({ failReload, failBuildWeb })` scenario fails only its *first*
+invocation (a marker file), not forever — failing forever silently conflated "the forward path failed" with
+"the rollback itself also failed," a different, already-covered CRITICAL case, and produced a false negative
+in this file's own early draft before that was noticed and fixed. `scripts/deploy.sh` is still not
+exhaustively rehearsed by this harness — it covers the scenarios worth a committed regression test, not
+every branch — but the one this rework round's own reload-guard fix needed is in it, and fails without that
+fix (verified by reverting the fix and confirming the test catches it, then restoring it).
+
+---
+
+## D-41 — `scripts/ops-monitor.mjs`: what counts as unhealthy beyond a bare HTTP status, one page per outage rather than one per poll, and why a webhook rather than email
+
+**Problem (OPS-12).** COST-5 made every process's own health observable — a `/health` endpoint each — but
+observable is not the same as *noticed*: nobody is watching those endpoints unless something polls them, and
+a naive poll-and-alert would either miss a real outage (`apps/bot`'s own `/health` reports `200` for as long
+as the gateway is connected, whether or not the model provider behind it is actually answering — a real
+outage in COST-5's own list of things to notice) or spam an operator once per poll for the whole duration of
+a sustained one.
+
+**Choice — `evaluate()` reads past the bare HTTP status for the one case it does not already cover.** A `503`
+or an unreachable process is unhealthy, full stop — the four processes' own health servers already draw that
+line correctly (each one's own module comment explains why it reports what it does and nothing else). The
+one gap: `apps/bot`'s own `model.errorRate`/`model.calls` (`createCountingModelClient`, COST-5) is carried in
+the body but never flips the status code, because the gateway and the provider are genuinely independent
+failures and the endpoint's own author was explicit that it "deliberately reports nothing else." `evaluate()`
+treats a sustained high error rate (`>= 50%` over `>= 5` calls — enough that a single transient failure on
+the first retry after a cold start cannot page anyone) as unhealthy too, on top of the status check, so a
+provider outage is noticed even while the gateway itself is fine.
+
+**Choice — notify on a transition, not on every poll, and assume healthy for a name never seen before.**
+`planNotifications` compares this poll's verdict against the last one it computed for that name; only a
+change produces a notification. The one exception is deliberate: a name with no prior observation is treated
+as "was healthy" rather than "was unhealthy," so the monitor's own (re)start is silent when everything is
+actually fine, but still pages immediately if a process is *already* down the moment it starts watching — a
+box rebooting mid-outage must not delay the page until some later transition that was never coming, because
+nothing before it registered as "was healthy" to transition away from.
+
+**Choice — a webhook POST, not email.** `apps/api`'s own `logging-email-sender.ts` (D-19/D-20) has no real
+mail transport configured yet — refusing outright in production rather than pretending to send — so email
+was not an option "already there" to build on, and standing one up is a new service this slice's own brief
+explicitly said to prefer against. A single POST with both `content` (Discord's own incoming-webhook key) and
+`text` (Slack's) in the same JSON body is understood by either without branching on which was configured, and
+needs no vendor SDK — an operator creates one incoming webhook in whichever chat tool they already use and
+sets `OPS_ALERT_WEBHOOK_URL`. When it is unset, the same transition is still written to stdout/stderr, which
+pm2 already redirects to `logs/pm2-ops-monitor-out.log`/`logs/pm2-ops-monitor-error.log` (OPS-2) — degraded, not silent, the same shape
+`logging-email-sender.ts` itself takes for its own equivalent gap.
+
+**Deliberately dependency-free from `@bloombot/config`.** `scripts/health-check.mjs` and
+`scripts/ops-monitor.mjs` duplicate the four processes' own default ports rather than importing
+`packages/config`'s schema for them, the same reason `scripts/dev.mjs`'s own module comment already gives
+for avoiding that import: it would make these scripts only work once the workspace has been built. The
+duplication is pinned by `scripts/health-check.test.mjs`'s own "matches packages/config's own defaults" case,
+so a schema default changing without updating this file's copy is a red build rather than a silent drift.
+
+**Limits.** `ops-monitor` has no health endpoint of its own — `scripts/deploy.sh`'s own `HEALTH_CHECKED_APPS`
+deliberately excludes it, checked only at the pm2 level (still-running, not still-working) the same as the
+Python bot. A crashed `ops-monitor` is itself invisible to the thing it exists to make outages visible
+through; pm2 restarting it (the same supervision every other process here gets) is the mitigation, not a
+deeper one — a monitor that watches its own watcher was judged out of scope for this slice.
+
+**Rework round — three findings, reproduced against a real `.env`-shaped fixture, a real webhook response,
+and real math.**
+
+1. **This process never actually loaded `.env`.** `run()` read `process.env.OPS_ALERT_WEBHOOK_URL` directly;
+   pm2 does not load `.env` for a process on its own behalf (`ecosystem.config.cjs`'s own module comment
+   claims "every Node process here loads `.env` itself," which was true for the four apps and false for this
+   one), so a webhook configured exactly as `env.example` and every deployment doc in this slice instructed
+   silently never reached the running process — every page degraded to a log line nobody was watching, with
+   no error anywhere. The identical gap existed in `scripts/health-check.mjs`, with a worse blast radius: a
+   `.env`-only `API_PORT` override never reached it either, so `scripts/deploy.sh` would poll the *default*
+   port forever, `ECONNREFUSED` on every check, and roll back every single deploy regardless of whether
+   anything was actually wrong. Fixed with a shared `scripts/load-dotenv.mjs` (the same `loadDotEnvOnce`
+   contract `@bloombot/config`'s own `loadDotEnv` has — a value already in `process.env` wins, a missing file
+   is not an error), called from a new `resolveMonitorConfig`/`resolveEndpoints` seam in each script rather
+   than inline in `run()`, specifically so a regression test could exercise the composition with an injectable
+   `.env` path — never a file literally named `.env`, the same precaution `packages/config/tests/dotenv.test.ts`
+   already takes, for the same reason (a hook in this repository blocks writes to `.env*`, and a test exempted
+   from that guard would be a test worth distrusting). `scripts/load-dotenv.test.mjs`,
+   `scripts/health-check.test.mjs`'s own `resolveEndpoints` case and `scripts/ops-monitor.test.mjs`'s own
+   `resolveMonitorConfig` case all fail without the fix — verified by reverting the `loadDotEnvOnce` calls and
+   confirming the failure, then restoring them.
+
+2. **The model-error-rate limb read a lifetime average, not a running rate.** `createCountingModelClient`'s
+   own counters (`packages/core`) never reset; `evaluate` compared them straight against the threshold, so a
+   course server up a week with 400 calls and 8 errors (2%) would need roughly 384 *more* consecutive failures
+   — about 19 hours at 20 calls/hour — to ever trip 50%-of-5 once the provider actually went fully down. The
+   mirror case was as bad: the first five calls right after a deploy reset the counters could trip the
+   threshold on ordinary noise, and "recovered" would not fire again for hours while the lifetime average
+   slowly diluted back down. Fixed by windowing: `evaluate` now takes each process's own `{calls, errors}`
+   snapshot from the *previous* poll and evaluates the delta since then, returning the new snapshot for
+   `planNotifications` to carry forward (a `previousModel` map, parallel to the existing `previousHealthy`
+   one). A restart — the counters going backwards between polls — is detected and evaluated against the raw
+   post-restart totals rather than a nonsensical negative rate. `scripts/ops-monitor.test.mjs` now includes a
+   case with a low lifetime rate and a high windowed one (pages), the mirror (a high lifetime rate, a clean
+   window, does not page), and a three-tick simulation of a real outage windowed correctly tick by tick.
+
+3. **`notify` treated a webhook that answered as delivered, whether or not the answer said so.** Only a
+   thrown `fetch` (a network failure) was treated as a failure; a webhook that resolves normally but rejects
+   the message — Discord's own `404 Unknown Webhook` after someone recreates the alerting channel's own
+   integration, a Slack webhook someone revoked — logged the exact same "delivered" line as a page that
+   actually reached anyone. The tell was in this file's own pre-existing test: the fake `fetchFn` returned
+   `{ ok: true }`, a field the code never read. Fixed by checking `response.ok` and treating a non-`ok`
+   response the same as a thrown error — logged at `error`, not silently accepted.
+
+---
+
+## D-42 — `docs/CUTOVER.md`: rehearsal reuses the production bot token safely by construction, and rollback needs no credential un-rotated
+
+**Problem (OPS-9, OPS-10, OPS-11).** Three requirements that only make sense written down together: a
+rehearsal has to prove the real cutover will work without ever touching the live database or a real course
+server; the cutover itself has to rotate every credential the Python system used without that rotation
+causing its own outage; and the rollback has to actually work, using nothing the cutover deleted.
+
+**Choice — the rehearsal reuses the same bot token as the running Python bot, invited into a disposable test
+server, rather than provisioning a second bot application.** Gateway events for one bot token fan out to
+every active session across every guild that bot is in, regardless of which guild the event came from — so a
+rehearsal `apps/bot` connected with the production token technically receives events from real course servers
+too. `docs/RUNNING_LOCALLY.md`'s own reuse table already established reusing the real `BOT_TOKEN` for local
+development as this project's convention; the rehearsal does the same thing for the same reason, and needs
+a real, separate safety argument for why a rehearsal process seeing real events is not a real risk.
+
+**Review finding — the first version of that argument was wrong, and named the wrong gate.** It claimed
+CORE-2's course matching was what kept a real course server's messages unanswered by the rehearsal (the
+rehearsal database "only ever contains whatever `bot_config.yml` named" for the rehearsal, so a real category
+would be "unrecognized"). That is false the moment §1.2 runs: the rehearsal import reads the *real*
+`bot_config.yml`, so the rehearsal database ends up knowing exactly the real course names — CORE-2 would
+match them. The actual gate is earlier and unconditional: `packages/discord/src/handle-mention.ts` resolves
+the Discord *server binding* (SURF-3, `resolveDiscordServerBinding`) before any course or category matching
+runs at all, and `packages/legacy-import` never writes a server-binding row — there is nothing in
+`bot_config.yml` to derive one from. The rehearsal organization therefore starts with no Discord server bound
+to it whatsoever; the disposable test server §1.3 has an operator bind by hand is the only one it will ever
+answer in. `docs/CUTOVER.md`'s own §1.3 now states this — the absence of a binding, not an accident of course
+naming — and adds the instruction that actually follows from it: never bind a real course server to the
+rehearsal organization, because doing so removes the one thing standing between the rehearsal and a second
+bot double-answering real students on the production token. The original, wrong version of this argument was
+the kind of thing an operator would have improvised past if they read it and trusted it — worse than no
+argument at all, because it pointed at a mechanism (CORE-2) that direction §1.2 of the same document
+independently disables (importing the real config).
+
+**Choice — rotate while both systems are stopped, not while either is live.** OPS-11's own text asks that
+rotation not itself cause an outage; sequencing it between "Python stopped" (§2.2) and "platform started"
+(§2.5) means there is no window where a running process holds a credential that has already been
+invalidated — `docs/CUTOVER.md`'s own §2.3 places rotation there rather than before stopping Python or after
+starting the platform. The OpenAI key specifically is rotated in two steps spanning that window on purpose:
+the new key is created before the platform starts, but the *old* one is not revoked until §2.6 confirms the
+platform is actually answering with the new one — revoking early would turn a rotation into a self-inflicted
+outage if the new key had been mistyped into `.env`.
+
+**Finding — `BOT_PERMISSIONS` and a re-invite are not part of rotation, and the runbook says so explicitly.**
+This slice's own brief flagged the interaction and it is real, even though it is not spelled out anywhere
+else in this repository yet: Discord grants a bot its permissions in a server at the moment it is invited
+(`docs/DISCORD_SETUP.md`'s own step 1 decides the permission integer and invites the bot with it, but does
+not itself say the grant is fixed from then on) — a separate `fix/scaffold-403` slice, landing concurrently
+with this one, is adding that fact as a comment on `env.example`'s own `BOT_PERMISSIONS`, which this entry
+does not depend on to make its point. Resetting a token in the Discord developer portal changes which secret
+authenticates as the bot, not what it is permitted to do in any server it is already in — an operator who
+re-invited the bot "just in case" during a rotation would be doing unnecessary, disruptive work for zero
+effect on the permissions themselves. `docs/CUTOVER.md`'s §2.3 states this as a "does not need" rather than
+leaving it to be inferred or rediscovered live.
+
+**Choice — rollback needs no credential un-rotated.** Because §2.3 writes the rotated credentials into the
+**one** `.env` file both the Python bot and the platform read (D-9), stopping the platform and restarting
+the Python bot (`docs/CUTOVER.md`'s own §3) hands the Python bot the same already-rotated values the platform
+was using — there is nothing to reverse. This is a property of D-9's own shared-file choice, not new
+machinery this slice added; §3 states it explicitly so an operator mid-incident does not go looking for the
+pre-rotation values.
+
+**Limits.** The rollback in §3 puts the *processes* back, not the import: `docs/CUTOVER.md`'s own §2.4 import
+is not undone by stopping the platform, and is not meant to be — MIG-4's idempotency is what makes re-running
+it later, once cutover is retried, cost nothing rather than duplicate anything.
+
+---
+
+## D-43 — `docs/DEPLOY_DROPLET.md`/`docs/DEPLOY_APP_PLATFORM.md`: no production email transport exists, and App Platform's component model does not fit this platform's one-SQLite-file architecture
+
+**Problem.** A late addition to this slice's own brief asked for two operator-facing deployment
+documents — a droplet, and DigitalOcean App Platform as an alternative — complete enough for
+someone who has never seen this repository to follow start to finish, including every
+third-party setup step. Writing them surfaced two things neither this slice nor any earlier one
+had said plainly in one place.
+
+**Finding — there is no production email transport in this codebase.** `packages/auth/src/email.ts`
+ships an `EmailSender` port and a recording fake for tests; its own module comment says the real
+implementation "is a later slice's adapter package" and none has landed. `apps/api/src/logging-email-sender.ts#buildEmailSender`
+refuses to start `apps/api` at all when `NODE_ENV=production` — not merely refusing to send —
+so **the platform cannot serve email sign-in in production today, and `apps/api` will not start
+in production at all** until a real adapter exists. This is not a deployment-document gap
+(there is no SMTP host or API key this document could tell an operator to configure — nothing
+in the codebase reads one) — it is application code this slice did not build and was
+explicitly told not to invent inside a docs task. Both new documents state this in an
+unmissable callout near their own top rather than let it be discovered by an operator trying to
+follow them, and this file's own instructions to the supervisor say the same thing: this needs
+its own scoped slice before a real production deployment can rely on email sign-in, and before
+`apps/api` can run with `NODE_ENV=production` at all.
+
+**Finding — DigitalOcean App Platform's component model does not fit this platform's
+architecture, as built.** `docs/DECISIONS.md`'s own D-2 keeps SQLite deliberately, and states
+outright that the choice "holds only while the deployment is single-host" — `apps/api`,
+`apps/bot`, `apps/worker` and `apps/mcp` each open the *same* file directly, and App Platform's
+Service/Worker/Job components each run on their own container with their own local disk, not a
+filesystem shared across components. Deployed as four separate components the way their own
+names would suggest, none could open the file the others have open. `docs/DEPLOY_APP_PLATFORM.md`
+says this plainly, gives the one option that avoids it without new engineering (one combined
+component, pinned to one instance, and even then only with a persistent volume App Platform may
+or may not currently offer for that component type — flagged as unverified rather than assumed)
+and its real costs (no horizontal scaling, no zero-downtime deploy — the two things App Platform
+is usually chosen for, given up for none of the benefit), and separately scopes what a real fit
+would take: a Postgres migration (D-2's own escape hatch, but only the schema/query half of it
+is actually built — `packages/db/src/repos/jobs.ts`'s own claim function is isolated for a
+Postgres implementation that does not exist yet, D-2's own "Limits" paragraph says as much) and
+an object-storage adapter for `packages/db/src/attachment-storage.ts`'s own already-abstracted
+`AttachmentStorage` interface (the port exists; the S3-compatible implementation does not).
+Neither is built here — a document recommending App Platform without saying this would describe
+a deployment that risks losing real student data on an ordinary redeploy, which `docs/DEPLOY_APP_PLATFORM.md`'s
+own opening paragraph states is worse than a document that says the fit is not there yet.
+
+**Choice — recommend the droplet, and say why, rather than present two equally-weighted
+options.** The brief asked to compare, not to be sold, so both documents state the
+recommendation and the reasoning openly (this repository's own tooling — `ecosystem.config.cjs`,
+`scripts/deploy.sh`, the CI deploy job — is already built for the droplet shape) rather than
+stopping at "here are your two options."
+
+**Limits.** Neither new document was exercised against a real DigitalOcean account as part of
+this slice — nginx config, App Platform component behavior and current storage offerings are
+written from this codebase's own architecture and general knowledge of the product, flagged
+with an explicit "verify against DigitalOcean's current documentation" note in
+`docs/DEPLOY_APP_PLATFORM.md` rather than presented with false certainty about a product surface
+that changes independently of this repository.
+
+
+**Rework round — a second review checked both documents against the code directly and found what
+reads plausibly but does not survive being followed literally.** In order of how much damage
+each would have caused an operator following the document at 9pm:
+
+- **`docs/CUTOVER.md`'s Phase 2 could not be executed as written, and said nothing about it.**
+  §2.2 stops the Python bot and §2.3 irreversibly resets the Discord bot token before §2.5 ever
+  tries to start `apps/api` — which, per this entry's own finding, does not start at all in
+  production. An operator following the document in order meets a crash-looping API with the old
+  system already stopped and the credential already rotated, with no warning it was coming.
+  Fixed with an explicit callout at the top of Phase 2 (referencing **AUTH-5**, the tracked,
+  in-progress fix, rather than asserting a permanent block) and corrected wording in §2.5/§2.6
+  naming exactly what still works (`bot`/`worker`/`mcp`, Discord answering) and what does not
+  (`api`, the panel, any sign-in) until it lands. The droplet document's own callout separately
+  overclaimed that Google sign-in specifically "does not depend on this and is unaffected" — false,
+  since `apps/api`'s own `main()` evaluates `buildEmailSender` before the whole process ever
+  starts listening, so every route it serves is unreachable, not only the email one; corrected in
+  both the callout and the `GOOGLE_CLIENT_ID` table row.
+
+- **The rehearsal's own safety argument named the wrong mechanism.** See D-42's own rework-round
+  addition above for the full finding — the fix belongs there since D-42 is the entry that made
+  the original (wrong) claim.
+
+- **`VITE_GOOGLE_CLIENT_ID` was undocumented anywhere, and it is the only sign-in path that could
+  actually work while AUTH-5 is outstanding.** `apps/web/src/pages/SignIn.tsx` reads it from
+  `import.meta.env` at Vite **build time**, from `apps/web`'s own `.env`/`.env.production` —
+  Vite's `envDir` defaults to the directory holding `vite.config.ts`, not the repository root, so
+  the root `.env` this document used for every other variable is invisible to this one build
+  step, and `scripts/deploy.sh` rebuilds the panel on every deploy in a non-interactive shell, so
+  a one-off exported shell variable would work once and silently regress on the first deploy
+  after. Fixed by moving the panel's own first build out of §3 (before any third-party setup) and
+  into §4.3, after `apps/web/.env.production` is written, with a new row in the env-var table
+  making the distinct mechanism (build-time, `apps/web`-scoped, not `packages/config`) explicit.
+
+- **The App Platform document buried its own headline finding 135 lines in, and hedged twice
+  where the answer does not depend on unverifiable specifics.** "There is no production email
+  transport" was a subordinate clause in §4's own text rather than a callout — lifted to the top
+  of the document, immediately after the title, on the reasoning that someone comparing the two
+  deployment documents should not have to reach §4 to learn it changes nothing about which one to
+  pick. Separately, "whether App Platform currently offers a persistent volume... is exactly the
+  kind of product detail that changes" and "verify App Platform's own deploy strategy options
+  support a hard cutover" both hedged a conclusion that does not actually depend on the hedge:
+  App Platform's Service/Worker components have no attachable persistent volume at all (Spaces
+  and Managed Databases are DigitalOcean's own answer for anything that must persist), and its
+  deploys are rolling by design — a new container is started and confirmed healthy before the old
+  one stops — so `instance_count: 1` bounds steady-state replicas without preventing two
+  containers holding the same SQLite file open across every single deploy. Both sections now
+  state the conclusion as a fact about the product's design, not a possibility to go check.
+
+- **`docs/DEPLOY_DROPLET.md` had a working-order bug (nginx referencing a certificate that does
+  not exist yet, with no DNS step to make certbot's own challenge succeed at all) and several
+  smaller ones**, closed in the same pass: DNS-first with a `dig` check (§5.1), an HTTP-only
+  nginx block before `certbot --nginx` writes its own TLS one rather than a hand-written `443`
+  block (§5.2–5.3), a dedicated-user creation step with the `chmod o+x` Ubuntu 24.04's own
+  `0750` home directories need for nginx to traverse into `apps/web/dist` at all (§2), one
+  consistent checkout path used throughout instead of two that disagreed, `pipenv install`
+  actually run once (§3), course attachments added to the backup alongside the database plus an
+  actual rehearsed restore procedure rather than a backup with no way back (§8.1), a worker
+  health-check command in the post-deploy checklist (§8.3), `ufw` alongside the cloud firewall
+  (§1), an explicit warning that `env.example`'s two non-empty placeholders
+  (`BOT_APP_ID=your_bot_app_id`, `BOT_PERMISSIONS=your_bot_permissions_integer`) pass every
+  truthiness check silently, the `PUBLIC_APP_URL` table row's trailing-slash reasoning corrected
+  (it is Discord's redirect URI that breaks, not the origin check, which normalizes a trailing
+  slash away), and "two redirect URIs" corrected to one — the connect-surface slice landing
+  concurrently reuses the install flow's own `discordRedirectUri` rather than registering a
+  second one.
+
+**Limits, updated.** The corrections above were checked against this repository's own source
+(`apps/web/vite.config.ts`, `apps/web/src/pages/SignIn.tsx`, `apps/api/src/middleware/origin.ts`,
+`packages/discord/src/handle-mention.ts`) rather than merely re-argued; the DigitalOcean-specific
+claims (App Platform's storage and deploy-strategy behavior) remain unverified against a live
+account, as this entry's own original "Limits" paragraph already disclosed, and still call for
+the same verify-before-relying discipline that paragraph asks for.
+
+---
+
+## D-44 — `packages/auth`/`apps/api`/`apps/web`/`apps/mcp`/`packages/discord`: the connect surface — LINK-6..8's own server and screens, why a first version could write into any tenant, and what changed to close it
+
+**Problem.** LINK-1 (D-35) declines anyone whose person has no `connectedAt`, and `beginDiscordPersonLink`/
+`completeDiscordPersonLink`/`issueMcpPersonLinkToken`/`completeMcpPersonLink` (`packages/auth/src/person-link.ts`)
+prove an identity and attach or merge it — but nothing in `apps/` ever called any of them. A student's first
+Discord message got LINK-1's invitation to a page that did not exist; the web chat listed no courses for
+anybody admitted by a roster or a Discord role, because nothing had ever proven their Discord identity belongs
+to the account signing into the panel. D-37's own "Limits" named this gap directly and pointed at this slice
+to close it. A rework round (two independent reviewers, one on conformance and reachability, one on security)
+found the mechanism itself sound — every identity-takeover shape either reviewer could construct was refused,
+`peekDiscordPersonLinkCodeVerifier`'s own lifecycle held, and a reviewer's own reproduction proved a
+roster-admitted student really can connect and reach an answer — but found the *authorization* wrong: **any
+signed-in account could write a `people` row into any organization**, gated on nothing but the organization
+existing.
+
+**Choice — the survivor is the caller's own web person *in the organization the connect attempt names*, not
+the account's personal one.** `beginDiscordPersonLink`/`issueMcpPersonLinkToken` need a survivor `personId`
+before any proof exists (D-35's own "bound at issue" — getting this backwards is an account takeover). A
+student's Discord identity almost always lives in an *institution's* organization, admitted by a roster import
+or a Discord role, long before that student has a reason to sign into the panel — proving the identity there,
+in *that* organization, is what lets `connectOrMerge` (`person-link.ts`) find the already-admitted person and
+merge into it (LINK-4), rather than attaching a fresh, never-enrolled identity nobody can reach a course
+through. This part of the design held through the rework unchanged.
+
+**What the rework actually found.** A first version resolved (or created) that survivor — `@bloombot/auth`'s
+`ensureWebPersonForAccount` — gated only on `organizationExists`, *before* any Discord or MCP proof existed.
+Reproduced directly: `POST .../mcp/preview {"token":"not-a-token"}` against a real organization the caller had
+never touched created a *connected* person there (a `web` identity, `connectedAt` set) — a junk request with no
+proof at all — and `GET .../chat/courses` for that organization went from `404` to `200 {"courses":[]}`
+permanently, converting an unrelated route into a tenant-existence oracle. `/discord/begin` showed the same
+shape even more directly: `200` for a real organization the caller had no relationship to, `404` for one that
+did not exist — a plain existence oracle — while planting an unbounded stream of `person_link_challenges` rows
+in the foreign tenant either way. "Require a membership first" is not the fix: a student connecting for the
+first time legitimately has *no* membership in the institution's own organization — that is the entire point of
+the flow. The actual fix is ordering: **nothing is created, and nothing is connected, until organization-specific
+proof is already in hand.**
+
+**Choice — MCP peeks the token's own organization before writing anything.** An MCP token is already bound to
+an organization the moment it is issued (LINK-3's own identity-bound-at-issue design for that surface) — so the
+proof was available for free, just not checked first. `peekMcpPersonLink` (new, `person-link.ts`) is a plain
+read: given a token, it reports the organization and identity it names, with no survivor and no write involved
+at all. `/mcp/preview` and `/mcp/confirm` (`routes/person-link.ts`) both peek first — refusing not-found-shaped,
+before `ensureWebPersonForAccount` is ever called, when the token does not exist or names a different
+organization than the URL. A junk token, or a token real for a *different* organization, now creates nothing:
+proven directly (`apps/api/tests/routes/person-link.test.ts`'s own "the tenant-write oracle is closed" block,
+replaying the reviewer's exact reproduction and asserting no `people` row and no oracle afterward).
+
+**Choice — Discord cannot do the same, so it writes a *bare* survivor instead.** `beginDiscordPersonLink` needs
+a real, already-persisted `personId` before Discord's OAuth ever starts — PPL-4's own "survivor bound at issue,"
+unchanged, and not something this rework revisits. There is genuinely no organization-specific proof to check
+before that first write: the caller has proven their *account*, nothing about this particular institution.
+`resolveOrCreateBareDiscordSurvivor` (`routes/person-link.ts`) resolves the account's *existing* survivor in
+this organization when one already exists (a legitimate repeat visit, found by `web` identity — a plain read),
+and otherwise creates a genuinely bare person: no identity attached at all, `connectedAt` left `null`. That row
+is indistinguishable, to every other route in this app, from the organization not existing: `routes/chat.ts`
+resolves a caller by `web` identity, this row has none; LINK-1's own gate reads `connectedAt`, this row's stays
+`null`. It costs a little inert storage in a foreign organization — an accepted, bounded residual, not a
+resource this app reclaims today — and grants nothing until Discord's own OAuth genuinely completes, at which
+point `/discord/confirm` attaches the account's own `web` identity too (`attachWebIdentityOrMerge`, falling back
+to a merge on the one genuine race two concurrent `begin()` calls for the same account could produce), *after*
+the Discord identity has already set `connectedAt` for a real reason.
+
+**Choice — session binding moved in-memory, because the database challenge has nowhere to carry it.**
+`person_link_challenges` carries a survivor `personId`, never an `accountId` — there was no column to check "is
+the caller confirming this the same account that began it" against. Before the rework that check did not really
+exist: whichever account happened to resolve the *same* `web`-connected survivor passed, silently, and because
+that resolution itself created a person on demand, *any* signed-in account resolved to *some* person, so the
+check was satisfiable by construction. A reviewer proved this precisely: replacing the resolved survivor with
+`peeked.personId` read directly off the challenge — a tautological self-check — left the entire `apps/api` suite
+green, 13 files, 168 tests. `PendingDiscordConnect` (`routes/person-link.ts`) is this router's own in-memory
+record of which account began a given attempt — the same process-local, never-persisted device the OAuth code
+exchange itself already used, extended to carry the binding this flow actually needs checked.
+`/discord/preview` and `/discord/confirm` both refuse not-found-shaped, before touching the database at all, the
+moment the caller's own session names a different account than the one recorded at `begin`. Verified by mutating
+the shipped code the identical way the reviewer's own mutation did (deleting the `accountId` comparison) and
+watching the new cross-account test fail — restoring it, the test passes again.
+
+**Choice — a caller mismatch spends nothing, unlike a genuine redemption.** `completeDiscordPersonLink`'s own
+"consumed either way" rule exists because a *redeemed* secret proves something regardless of what it is redeemed
+against — replaying it teaches an attacker nothing new. A session mismatch is a different failure: `state` was
+never touched, so the rule does not apply, and applying it anyway hands a stranger who merely learned a
+previewed `state` (browser history, a shared machine) a way to permanently deny the real owner's own connect
+attempt. `routes/person-link.ts` only calls `completeDiscordPersonLink` — the one call that actually
+consumes — once the caller's own session has already matched; a mismatch refuses without reaching it, leaving
+`state` exactly as live as it was. Proven the same way as the session-binding check itself: sabotaging the route
+to consume on a mismatch (matching the pre-rework shape) makes the same cross-account test fail on its own
+second half — the victim's later, legitimate confirm.
+
+**Choice — `bloombot_connectAssistant` (`apps/mcp/src/server.ts`) checks the organization exists but not
+membership, deliberately, and catches whatever the insert still throws.** A first version took `organizationId`
+straight from the model's tool arguments into `issueMcpPersonLinkToken` with no check at all: a foreign but real
+organization minted a valid, redeemable token with no proof; a nonexistent one threw `better-sqlite3`'s own
+`FOREIGN KEY constraint failed` straight into the tool result — a raw driver error handed to an untrusted
+client, and a cruder existence oracle than the one already accepted for the HTTP surface. `memberships.getMembership`
+(`call-tool.ts`'s own tenancy check for the dispatch catalog) is the wrong fix here for the identical reason it
+is wrong for the HTTP routes above: MCP-3's "exactly one account's authority and nothing more" describes what a
+*dispatched action* may see, not who may attempt to connect — a student's assistant legitimately requests a
+token for the student's own institution, an organization the student has no membership in by design. What
+actually gates this tool, the same as its HTTP siblings, is that minting a token creates nothing in `people` at
+all (only a `person_link_challenges` row, swept by its own TTL); the write happens only once a human redeems it
+against a matching organization on the panel. The fix here is narrower: check the organization exists first
+(closing the raw-error leak, and the cruder oracle it was), and catch whatever the insert still throws as a
+last resort, logged rather than surfaced. An organization id is still not a secret — minting a token for a
+real, foreign organization is accepted and tested as a deliberate choice, not an oversight.
+
+**Two defects in the preview primitive, unchanged by this round, still worth restating plainly.**
+`previewOutcome` (`person-link.ts`) did not check the *survivor's* own `mergedIntoPersonId` — a survivor merged
+away after their own attempt began (a fast, concurrent proof from elsewhere) previewed as `{kind: 'attach'}`
+even though the real completion would refuse; fixed by checking `people.getPerson(...).mergedIntoPersonId`
+first. `previewDiscordPersonLink` took no caller identity at all, unlike `completeDiscordPersonLink`'s own
+`callerPersonId` — fixed by adding and checking it, refusing a mismatch the identical "no oracle" way. Both
+remain mutation-verified: reverting either fix locally fails the regression test written for it and no other.
+
+**Reusing the install flow's own redirect URI, and the preview/confirm split — unchanged.** LINK-7's OAuth round
+trip lands back on `${PUBLIC_APP_URL}/discord/callback` — the same physical page `discord-servers.ts`'s own
+install flow already uses, told apart client-side by which `sessionStorage` marker is present, rather than
+registering a second redirect URI with the real Discord application. `/discord/preview` spends the OAuth code
+once (Discord's own codes are single-use) and previews the outcome without redeeming `state` itself (LINK-6's
+"a visit is not consent"); `/discord/confirm` never trusts a client-resupplied identity, only what preview
+already proved and this router recorded.
+
+**The framing this decision got wrong the first time, corrected here.** The first version of this record
+claimed "the web chat now works" without qualification. That overstates what actually ships: connecting creates
+a *person*, not a *membership*, and `apps/web/src/pages/Shell.tsx` derives which organization the panel acts
+in from `account.memberships` alone. A student who connects through the Discord invitation is fully reachable
+*on Discord* — the acceptance test proves that end to end, over real HTTP, for an account with no membership
+anywhere relevant — but that same student opening the web panel directly sees only their own personal
+organization (the one membership every account gets), whose own Chat tab has no course to show and whose own
+"not connected" link (`pages/Chat.tsx`) points at `/connect/<personal-org>`, not the institution's. Connecting
+again there succeeds and still lists nothing, because the institution's organization — where the actual
+enrolment lives — is not something the panel's own organization switcher offers a connected-but-not-a-member
+account any way to reach. This is not a defect this rework introduces or claims to close: `Shell.tsx`'s own
+organization selection is membership-shaped throughout, a UI/read-surface question (something like "which
+organizations does this account have a *connected person* in, not only a membership" would need its own
+endpoint and its own switcher behaviour) genuinely separate from proving an identity, which is this slice's own
+scope. Recorded here as a real, correctly-scoped gap for a follow-up slice, not fixed in this one.
+
+**Rework, round two — the write was deferred, not authorized, and the actual exploit used a hop this same
+slice added.** The choices above closed a *junk* proof (a made-up token, an unrelated code) — they did not
+check that a *genuine* proof was organization-specific. A reviewer reproduced the original exploit end to end,
+over a live API and a live MCP server, using one ordinary account with no membership, enrolment or person
+anywhere near a victim tenant: `bloombot_connectAssistant` (`apps/mcp/src/server.ts`) mints a person-link token
+for *any* organization id, membership-free, by design (its own doc comment, D-44's own first-round choice,
+unchanged and still correct on its own terms) — so the "organization-specific proof" `/mcp/preview`/
+`/mcp/confirm` waited for was something the attacker could simply mint for themselves. Redeeming that
+self-minted token against the victim organization returned `200`/`200` and left a `connectedAt`-set person
+there, LINK-1's own gate granted with nothing an institution ever admitted. The Discord half had the identical
+shape by a different route: a caller with no relationship to an organization can always produce a *genuine*
+OAuth proof of their own, real, never-before-seen-there snowflake — this file's own original text ("nothing is
+created, and nothing is connected, until organization-specific proof is already in hand") was wrong, because
+neither a snowflake the caller owns nor a token the platform mints on demand is organization-specific; both
+only ever proved *a* identity, never one the organization itself had any reason to trust.
+
+**The actual rule: a caller with no membership in an organization may complete only a `merge` or
+`already-connected` outcome there, never a fresh `attach`.** "Organization-specific proof" has to mean the
+identity being proved already resolves to a person *that organization already admitted* — a roster import or a
+Discord role, `connectOrMerge`'s own `merge` branch — not a person this router would be minting the first
+record of. This preserves the real student flow exactly (this file's own acceptance test previews
+`outcome.kind === 'merge'`, because a roster-admitted student's Discord identity already belongs to someone)
+while refusing a caller who merely proved *an* identity, not one this organization ever admitted. Implemented
+two ways, matching each surface's own shape (`routes/person-link.ts#attachWithoutMembershipIsForbidden`,
+`memberships.getMembership` — the same tenancy check `routes/actions.ts` already runs before dispatching
+anything): for MCP, `ensureWebPersonForAccount` (which creates) is dropped from `/mcp/preview`/`/mcp/confirm`
+entirely, replaced by `people.resolveIdentity` — the same read-only shape `routes/chat.ts`'s own
+`resolveConnectedCallerPerson` already uses — refusing outright when the account has no existing person there
+at all (an MCP connect into an organization the account has never otherwise reached is meaningless regardless,
+since there is no enrolment for an assistant to help with); for Discord, which still has to write a bare
+survivor before OAuth even starts (unchanged), the gate moves to `/discord/preview` — an `attach` outcome for a
+non-member is refused as an ordinary preview failure, before the identity is ever cached for confirm to
+redeem, so the screen never promises an outcome it does not allow (LINK-6's own "the page names ... whether
+anything will be merged into it").
+
+**A second, independent finding in the same round — the bare-survivor deferral was not bounded.**
+`resolveOrCreateBareDiscordSurvivor`'s own first-round doc comment claimed a "repeat visit" reuse branch that,
+for a bare person (no identity at all), could never actually fire — every `/discord/begin` call before a
+connect completed minted a fresh row, unbounded: reproduced directly, 200 calls left 200 `people` rows and 200
+`person_link_challenges` rows in the same victim organization, nothing sweeping either. Fixed by extending the
+reuse check to the in-memory `pendingDiscordConnects` map itself (an attempt still live for the exact
+`(accountId, organizationId)` pair reuses its own survivor rather than minting a second one), and by sweeping
+expired entries at `/discord/begin` too, not only at `preview`/`confirm`.
+
+This bounds the `people` rows and nothing else, which is worth stating exactly, because the first version of
+this paragraph claimed more than it delivered and a verification round re-measured it: 200 `/discord/begin`
+calls from one account against one foreign organization now leave **one** `people` row — the fix works — but
+still **200** `person_link_challenges` rows and **200** `pendingDiscordConnects` map entries, one per request
+each, held for the full `DEFAULT_PERSON_LINK_TTL_MS` window (ten minutes) and swept afterwards. The permanent
+row is the one that mattered, since nothing sweeps `people`; the challenge rows and map entries expire on their
+own. Growth of the bounded resource is therefore roughly one row per account per organization per TTL window,
+not one per request — an account that waits out the TTL between attempts still adds a new bare row each time, a
+residual accepted and stated plainly rather than solved further (`apps/mcp`'s own session-eviction rework, D-36, bounds a comparable
+resource the identical way, by TTL, not by eliminating repeat use).
+
+**Also fixed, this round.** A test titled "reuses the same survivor" asserted `toBeGreaterThanOrEqual(1)` —
+true for any value — while its own in-body comment admitted the reuse it claimed to prove never fired; deleting
+the reuse branch entirely left the whole suite green. Fixed to assert an exact count across five repeat calls,
+not two. The two MCP routes answered a nonexistent organization and a real organization the token simply did
+not name with two different error codes (`organization_not_found` vs. `person_link_not_found`) — an oracle
+`peekMcpPersonLink`'s own match check already made the separate existence check redundant for; removed, so both
+answer identically now (`/discord/begin`'s own equivalent `200`-vs-`404` distinction was checked and does *not*
+become moot the same way — begin still has to reject a nonexistent organization before its own insert, and
+nothing about the merge-only rule changes that; left as-is, matching the "an organization id is not a secret"
+choice this file already made, now further justified since the row it gates is bare, inert and bounded). The
+now-unreachable `organizationExists` check inside `/discord/confirm` (the `pending.organizationId` comparison
+already refuses any mismatch first) was removed rather than merely re-commented as redundant. A stray reference
+to `pendingDiscordIdentities` — a name that was renamed to `pendingDiscordConnects` in round one and never
+updated in one leftover comment — cited a precedent that never existed under that name; corrected to cite
+PLAT-4 (`docs/SPEC.md`: "Four processes, each single-instance … Never clustered"), the actual thing that
+licenses process-local state here, alongside the residual cost that state carries: a restart between `begin`
+and `confirm` loses the in-memory record even though the database challenge is still live, answering
+`person_link_not_found` for an attempt that has not actually expired, and permanently orphaning the bare
+survivor `begin` already wrote.
+
+**`e2e/connect.spec.ts` — the missing Playwright coverage, added.** LINK-6/8 span front and back end, and
+`CLAUDE.md` asks for e2e coverage there; the API-level acceptance test is genuinely end to end against a real
+database but never touches a browser. The new spec drives a real browser through `/connect/:organizationId`
+signed out (asking to sign in, the same as a real invitation would), redeems a real emailed sign-in link, and
+returns to that same organization's own connect screen — then redeems a real, freshly-minted MCP token through
+the real `/mcp/preview`/`/mcp/confirm` routes, the LINK-8 half `apps/mcp/tests/server.test.ts`'s own test suite
+already proves the *minting* side of with a real MCP SDK client. What it does not cover: Discord's own OAuth
+screen, which would need a second, fake OAuth provider standing in for discord.com that this harness does not
+build (`e2e/support/start-api.ts` already points `apps/api`'s own Discord configuration at unreachable loopback
+addresses on purpose) — the Discord half of LINK-7 stays proven at the API-integration level, not through a
+browser, and this spec's own module comment says so plainly rather than overclaiming, the same discipline
+`chat.spec.ts`'s own module comment already holds itself to.
+
+**Limits.** `redeemJoinLink`/`course_join_links` (ENRL-3/ENRL-4) remain unwired from any route — a *web-only*
+student who has never touched Discord still has no way to reach a course through this slice; that mechanism
+admits (enrols), while this one connects (proves an identity), and D-37's own "Limits" already named the
+join-link route as separate, deferred work. `apps/mcp` is touched only for `bloombot_connectAssistant` — no
+other tool, no change to `tool-surface.ts`'s own catalog or `call-tool.ts`'s dispatch path. LINK-9's own
+decision — what happens to a person who already existed before connecting was required — is D-45, immediately
+below.
+
+---
+
+## D-45 — `packages/discord`/`packages/auth`: LINK-9 — nobody who could already ask is locked out, and why "ask them once" needed no code of its own
+
+**Problem.** LINK-1 (D-35) declined every unconnected person's first message the moment it merged — including
+every student who already had a working conversation before connecting was required. LINK-9 asks for a
+deliberate, written answer to what happens to them: connect them on their next proven sign-in, admit them until
+a deadline, or ask them once — not a consequence of a migration that happened to leave a column null.
+
+**Choice — "ask them once," and it needed no migration or backfill because D-44 already builds the mechanism
+that makes it true.** Before this slice, "ask them once" was not actually available as an option: LINK-1's
+invitation pointed at a connect screen that did not exist, so an already-active student's first post-LINK-1
+message was not "asked once and then fine" — it was declined, permanently, with no working way back. D-44
+closes exactly that: the *same* invitation (`connectInvitationText`, already sent to every unconnected person
+on every surface, new and returning alike) now leads to a real page, and following it does not create a new,
+empty account — `connectOrMerge`'s own attach-or-merge shape (unchanged by this slice) means an *already-
+existing*, previously-active person's identity is either attached directly to the caller's survivor or merges
+that survivor's history in, never dropped (LINK-4). Concretely: a student who has been asking a course
+questions for a month, unconnected only because LINK-1 shipped after they started, gets the identical
+invitation a brand-new student gets, follows it once, and every prior conversation, enrolment and usage row is
+still there afterward under the survivor they end up connected as. The friction is real but bounded to exactly
+one interruption — the same friction D-28 already priced in for every new student ("thirty students each meet
+a connect prompt instead of a reply") — not a *second*, additional cost layered on top of it for anyone who
+merely happened to exist first.
+
+**Why not a grace period or a deadline-based admission.** Both would mean re-opening LINK-1's own gate — an
+allowance answered *before* `connectedAt` is set, whether bounded by a clock or not, is precisely the
+unattributed-allowance window D-28 refused to reopen ("the alternative ... leaves a window where a person has
+an unattributed allowance ... that is D-4's evasion, reintroduced"). A deadline also has no natural expiry this
+platform can compute on its own: unlike an account or a course, a Discord-surface person has no "when did this
+start mattering" timestamp distinct from `createdAt`, which already predates LINK-1 for every person this
+question is about — a deadline keyed on it would not distinguish "existed for a year" from "existed for a day
+before this shipped."
+
+**Why not an automatic connect on next proven sign-in, the way the web surface's own healing path
+(`healWebPersonForReturningAccount`, D-37) works.** That path works because a *web* account's own sign-in event
+is itself a proof this package already trusts (D-37's own "a signed-in web caller is the account — they proved
+control of it by signing in") — healing simply extends an already-authenticated event to a person row that
+happened not to exist yet. Discord has no equivalent "proven sign-in" event this platform can observe
+passively: nothing about a returning Discord message proves anything beyond what it already proved before
+LINK-1 shipped (the sender controls that snowflake, which `resolvePersonByIdentity` already believed). The only
+thing that *actually* proves a Discord identity belongs to a specific, signed-in account is Discord's own
+OAuth — which is precisely LINK-7's connect flow, reachable only by a person taking an action, not something
+this platform can trigger silently on their behalf. "Ask them once" is therefore not a fallback chosen for lack
+of a better option; it is the *only* sound option once "connect on next proven sign-in" is read literally for
+this surface — Discord supplies no sign-in event this platform did not already have before LINK-1.
+
+**Cost, stated plainly.** Every Discord student active before this slice shipped hits exactly one connect
+prompt on their next message, identical in kind (not merely similar) to what a brand-new student meets from
+their very first message onward — D-28's own already-accepted cost, not a new one this decision introduces.
+Nothing here is reversible by a configuration flag the way D-28's own "Cost, stated plainly" flags LINK-1
+itself as ("reversible per course later if it proves worse than the evasion it prevents") — LINK-9 is a
+statement about what happens to *existing* data under an already-shipped gate, not a second gate with its own
+on/off switch.
+
+**Limits.** This says nothing about a student who was active, then stopped asking questions, and returns after
+a long gap with no memory of ever needing to connect — the UX cost of that surprise is real and unmeasured;
+nothing in this slice instruments how often it actually happens. An operator-initiated bulk notification ("your
+course now requires connecting; here is the link") is a real mitigation this decision does not build — it would
+need every affected student's own contact information, which an unconnected Discord person may not have at all
+(no verified address — PPL-5's own `hasVerifiedAddress`, D-35's rework finding 4), and is therefore its own,
+separate requirement this SPEC does not currently name. Reachability through the *panel itself*, as opposed to
+Discord, carries the same limit D-44 now states plainly: a connected person is not a membership, and
+`Shell.tsx`'s own organization switcher does not yet offer a connected-but-not-a-member account any way to
+reach the institution's organization from inside the panel.
+
+## D-46 — `docs/CUTOVER.md`: a legacy-imported organization has no members, and nothing in the panel can add its first one
+
+**Problem, found while driving Phase 2 of the cutover runbook end to end.** The must-fix-1
+finding from this rework round's own review (a missing bind step left every real course
+server silently unanswered) led to writing that step — which, on inspection, cannot actually
+be performed: the Discord install route (`apps/api/src/routes/discord-servers.ts`) resolves
+"the caller's organization... from their own membership, never the request body" (its own
+module comment), so binding a server requires the caller to already be a member of the target
+organization. `packages/legacy-import` creates the organization, its project, its courses, its
+people and their messages, but writes no `memberships` row at all — there is nothing in
+`bot_config.yml` an instructor's platform account could be derived from. The one action that
+grants a membership, `memberships.grant` (`packages/actions/src/actions/memberships.ts`),
+refuses on purpose unless the target *already* holds a membership in that organization —
+ENRL-5's own "granted only by an existing owner" is enforced by requiring an existing member
+to grant to, a deliberate choice that closed a real security hole (its own "Rework finding 1":
+an earlier version let *any* signed-in caller grant themselves a role in *any* organization by
+guessing its id) at the cost of removing "invite a first member" from the action layer
+entirely. The result: a legacy-imported organization has no path to its first member through
+anything the panel exposes, and MIG-2 never anticipated this — it describes what the import
+produces, not who can act on it afterward.
+
+**Choice — bootstrap the founding owner with the same repository function the platform's own
+code already trusts, run once by hand, rather than a hand-written `INSERT`.**
+`packages/db/src/repos/memberships.ts#createMembership(organizationId, accountId, role, db)`
+is exactly "add an existing account to an organization with a role" — its own doc comment
+says so — and is already what a second membership goes through internally; it is simply not
+reachable from outside the codebase for a *first* one. `docs/CUTOVER.md`'s own §1.3 (rehearsal)
+and §2.6 (the real cutover) both now instruct the operator to run a small script,
+`tmp/bootstrap-membership.mjs`, that imports `accounts`/`memberships` from `@bloombot/db`
+(the same package `apps/api`'s own routes import), resolves the instructor's account by email
+(`accounts.getAccountByEmail`, the same documented TEN-2 exception `sign-in.ts` itself uses),
+and calls `createMembership` with role `'owner'` — reusing the real, tested insert shape
+rather than risking a hand-rolled SQL statement getting a nullable column or an enum value
+wrong. The instructor still has to sign in once first, ordinarily, so the account exists to
+grant the membership to.
+
+**Why not build the missing action instead, in this slice.** This is a docs/production-
+hardening slice, not a feature slice — inventing a new action (`memberships.inviteFirst`, or
+teaching `legacy-import` to create a founding membership from some field `bot_config.yml`
+does not reliably carry, like an instructor's email) is real design work with its own
+authorization questions (who is allowed to become the founding owner of an *imported*
+organization — the person who ran the import, on the droplet, is not the same thing as "an
+account, resolved by email, that AUTH-2's Google verifier or a sign-in link has actually
+proven") that this slice's own brief did not scope and should not improvise. The workaround
+above is deliberately narrow — a droplet-local script, run once per cutover, never committed,
+importing only what `apps/api`'s own routes already import — not a precedent for routinely
+bypassing the action layer.
+
+**Limits.** This is a real gap this document is working around, not one it closes — the
+correct fix is a scoped action (or an extension to `legacy-import` itself) that lets an
+imported organization's first member be established through the ordinary authorization
+path, not a script an operator has to remember exists. Flagging it here, rather than only in
+the runbook, is so it is discoverable as a follow-up requirement rather than rediscovered the
+next time someone runs a legacy import.
+
+**Numbering note.** Taken as the next number after D-43 in this branch's own history; a
+commit on the (unmerged, in-review) AUTH-5 branch also references "D-46" for its own entry —
+flagged to the supervisor to resolve at merge, per this project's own numbering convention.
+
 ## D-47 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
 
 **Problem.** `apps/api/src/logging-email-sender.ts#buildEmailSender` refused outright under

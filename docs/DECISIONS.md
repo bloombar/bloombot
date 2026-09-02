@@ -3793,8 +3793,8 @@ AUTH-5's own text forbids, "accepting a sign-in it will silently drop." The fix 
 (`tokens.ts`): `requestSignInLink` now wraps the send in a `try`/`catch`, deletes the token row outright (not
 "mark used" — a token nobody received was never a legitimate single use to record) on any thrown error, and
 rethrows unchanged, so the caller still sees the ordinary `500` the choice above already describes and the
-address is
-immediately eligible for a fresh attempt rather than locked out. `packages/db/src/repos/sign-in-tokens.ts#deleteSignInToken`
+address is immediately eligible for a fresh attempt rather than locked out.
+`packages/db/src/repos/sign-in-tokens.ts#deleteSignInToken`
 is the one new repository function this needed — a straight `DELETE`, not `consumeSignInToken`'s conditional
 `UPDATE`, since there is no "was this already used" race to resolve for a row nobody legitimately touched.
 

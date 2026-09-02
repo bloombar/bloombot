@@ -45,6 +45,10 @@ import {
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
+import {
+  buildPersonLinkRouter,
+  type PendingDiscordIdentity,
+} from './routes/person-link.js'
 
 export interface ServerDependencies {
   db: Database
@@ -76,6 +80,8 @@ export interface ServerDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, threaded through the same way — omitted, `answerQuestion` prices every call at its own zero-rate default and logs a warning each time (see that file's own `NO_PRICING_CONFIGURED` comment). */
   pricing?: PricingTable
+  /** LINK-6/7 — `routes/person-link.ts`'s own in-memory cache of a Discord identity already proven (via `/discord/preview`'s own code exchange) but not yet bound. Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
+  pendingDiscordIdentities?: Map<string, PendingDiscordIdentity>
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -146,6 +152,23 @@ export function buildApp(deps: ServerDependencies): Express {
       discordOauthBase: deps.discordOauthBase,
       ...(deps.discordPermissions
         ? { discordPermissions: deps.discordPermissions }
+        : {}),
+    })
+  )
+  app.use(
+    '/organizations/:organizationId/person-link',
+    buildPersonLinkRouter({
+      db: deps.db,
+      logger: deps.logger,
+      discordRestClient: deps.discordRestClient,
+      discordClientId: deps.discordClientId,
+      // Reuses the install flow's own redirect URI — see
+      // `routes/person-link.ts`'s own module comment for why the two flows
+      // share one physical page.
+      discordRedirectUri: deps.discordRedirectUri,
+      discordOauthBase: deps.discordOauthBase,
+      ...(deps.pendingDiscordIdentities
+        ? { pendingDiscordIdentities: deps.pendingDiscordIdentities }
         : {}),
     })
   )

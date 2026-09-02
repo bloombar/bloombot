@@ -60,6 +60,7 @@ import { randomUUID } from 'node:crypto'
 import type { Express, Request, Response } from 'express'
 import express from 'express'
 
+import { issueMcpPersonLinkToken } from '@bloombot/auth'
 import type { Database } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
@@ -351,6 +352,75 @@ function describeToolError(error: unknown): string {
   return 'This request could not be completed.'
 }
 
+/**
+ * LINK-8: a single tool, registered directly rather than through
+ * `tool-surface.ts`'s own allowlist — this mints a person-link token, not a
+ * call through `dispatch()`, so it shares none of `registerTools`'s own
+ * shape (no `organizationId`-merged action schema, no membership check, no
+ * destructive-confirmation path: issuing a token binds nothing yet, only a
+ * later `POST .../person-link/mcp/confirm` on the panel spends it).
+ *
+ * The identity this tool connects is fixed to `accountId` — the account
+ * `authenticateBearerToken` already proved this whole connection is (MCP-3:
+ * "a connection carries exactly one account's authority and nothing more")
+ * — never a caller-supplied external id: LINK-8's own "the account it will
+ * attach to is fixed when it is issued" holds by construction, because
+ * there is no argument here an assistant's own generated tool-call text
+ * could use to name a different one. `organizationId` is the one input this
+ * tool does take: which organization's own person the resulting token
+ * should be redeemable against, the same "not derivable from the session
+ * alone" reasoning `tool-surface.ts`'s own tools already have for the
+ * identical field.
+ *
+ * The token reaches the assistant *only* through this call's own result
+ * (LINK-3's "delivered where only that caller can read it" — the same
+ * guarantee an MCP tool result already gives the account-bearing catalog
+ * above): nothing here posts it to a channel, a page, or a log — `deps.db`
+ * is the only thing this function touches besides its own return value.
+ */
+function registerPersonLinkTool(
+  mcpServer: McpServer,
+  deps: ServerDependencies,
+  accountId: string
+): void {
+  mcpServer.registerTool(
+    'bloombot_connectAssistant',
+    {
+      description:
+        'Connect this assistant to your Bloombot account in a given organization. ' +
+        'Returns a single-use, short-lived token — hand it to the person you are ' +
+        'assisting so they can paste it into the Bloombot panel (Connect an ' +
+        'assistant) to finish connecting. Never post this token anywhere else.',
+      inputSchema: {
+        organizationId: z
+          .string()
+          .min(1)
+          .describe(
+            'The organization this token should connect an assistant identity within.'
+          ),
+      },
+    },
+    async (args: { organizationId: string }): Promise<CallToolResult> => {
+      const issued = issueMcpPersonLinkToken(
+        args.organizationId,
+        accountId,
+        deps.db
+      )
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              token: issued.token,
+              expiresAt: issued.expiresAt,
+            }),
+          },
+        ],
+      }
+    }
+  )
+}
+
 function buildMcpServer(
   deps: ServerDependencies,
   accountId: string
@@ -359,6 +429,7 @@ function buildMcpServer(
     capabilities: { tools: {} },
   })
   registerTools(mcpServer, deps, accountId)
+  registerPersonLinkTool(mcpServer, deps, accountId)
   return mcpServer
 }
 

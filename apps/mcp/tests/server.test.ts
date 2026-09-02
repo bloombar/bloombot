@@ -349,6 +349,119 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
   })
 })
 
+describe('bloombot_connectAssistant (LINK-8)', () => {
+  it('is on the tool list, not gated behind organizationId the same way the dispatch catalog is (it takes its own)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    })
+
+    const listResult = findMessage(response.messages, 1)?.result as {
+      tools: { name: string; inputSchema: { required?: string[] } }[]
+    }
+    const tool = listResult.tools.find(
+      (candidate) => candidate.name === 'bloombot_connectAssistant'
+    )
+    expect(tool).toBeDefined()
+    expect(tool?.inputSchema.required).toContain('organizationId')
+  })
+
+  it('returns a token in the tool result, redeemable to connect the calling account as an mcp identity', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+
+    const callResult = findMessage(response.messages, 1)?.result as {
+      isError?: boolean
+      content: { type: string; text: string }[]
+    }
+    expect(callResult.isError).toBeFalsy()
+    const body = JSON.parse(callResult.content[0]?.text ?? 'null') as {
+      token: string
+      expiresAt: number
+    }
+    expect(body.token.length).toBeGreaterThan(20)
+    expect(body.expiresAt).toBeGreaterThan(Date.now())
+
+    // The token this call minted actually redeems — LINK-3's own proof —
+    // and it is bound to the *calling account*, never a value this call's
+    // own arguments named (there is no argument for one at all: LINK-8's
+    // "the account it will attach to is fixed when it is issued").
+    const { previewMcpPersonLink } = await import('@bloombot/auth')
+    const { people } = await import('@bloombot/db')
+    const survivor = people.createPerson(caller.organizationId, {}, testDb.db)
+    const preview = previewMcpPersonLink(body.token, survivor.id, testDb.db)
+    expect(preview?.identity).toEqual({
+      surface: 'mcp',
+      externalId: caller.accountId,
+    })
+  })
+
+  it('two calls for the same account and organization mint two independent, single-use tokens', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const first = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+    const second = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+
+    const firstToken = (
+      JSON.parse(
+        (
+          findMessage(first.messages, 1)?.result as {
+            content: { text: string }[]
+          }
+        ).content[0]?.text ?? 'null'
+      ) as { token: string }
+    ).token
+    const secondToken = (
+      JSON.parse(
+        (
+          findMessage(second.messages, 2)?.result as {
+            content: { text: string }[]
+          }
+        ).content[0]?.text ?? 'null'
+      ) as { token: string }
+    ).token
+    expect(firstToken).not.toBe(secondToken)
+  })
+})
+
 describe('session lifecycle — bounded growth (rework finding: a live listener measured unbounded retention with no cap and no reclaim)', () => {
   it('closes the session and evicts it from the map when the client sends DELETE /mcp — the same session id then reads as unknown', async () => {
     testDb = createTestDatabase()

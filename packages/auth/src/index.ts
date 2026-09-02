@@ -38,6 +38,7 @@ export {
   requestSignInLink,
   redeemSignInLink,
   signInWithGoogle,
+  ensureWebPersonForAccount,
   type RequestSignInLinkDeps,
   type SignInResult,
 } from './sign-in.js'
@@ -61,6 +62,7 @@ export {
 export {
   beginDiscordPersonLink,
   consumeDiscordPersonLink,
+  peekDiscordPersonLinkCodeVerifier,
   previewDiscordPersonLink,
   completeDiscordPersonLink,
   issueMcpPersonLinkToken,

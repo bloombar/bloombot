@@ -204,6 +204,7 @@ describe('previewDiscordPersonLink (LINK-3: "the page names the account being co
     const preview = previewDiscordPersonLink(
       begun.state,
       'snowflake-1',
+      personId,
       testDb.db
     )
 
@@ -232,6 +233,7 @@ describe('previewDiscordPersonLink (LINK-3: "the page names the account being co
     const preview = previewDiscordPersonLink(
       begun.state,
       'snowflake-1',
+      survivorId,
       testDb.db
     )
 
@@ -244,8 +246,41 @@ describe('previewDiscordPersonLink (LINK-3: "the page names the account being co
   it('refuses for a state that does not redeem', () => {
     testDb = createTestDatabase()
     expect(
-      previewDiscordPersonLink('made-up-state', 'snowflake-1', testDb.db)
+      previewDiscordPersonLink(
+        'made-up-state',
+        'snowflake-1',
+        'some-person-id',
+        testDb.db
+      )
     ).toBeUndefined()
+  })
+
+  // Rework — the fix for the preview-side oracle: a caller who is not the
+  // same person `state` was issued to must not be able to learn anything
+  // from previewing it, the same "state fixation" check
+  // `completeDiscordPersonLink` already applies at redemption. Fails
+  // without the `callerPersonId` check (a preview would succeed for anyone
+  // who merely knows a valid `state`, regardless of who they are signed in
+  // as).
+  it('refuses when callerPersonId does not match the survivor the state was issued for — the preview-side state-fixation fix', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const begun = beginDiscordPersonLink(organizationId, personId, testDb.db)
+    const someoneElse = people.createPerson(organizationId, {}, testDb.db)
+
+    const preview = previewDiscordPersonLink(
+      begun.state,
+      'snowflake-1',
+      someoneElse.id,
+      testDb.db
+    )
+
+    expect(preview).toBeUndefined()
+    // Not burned by the mismatched preview — the real survivor can still
+    // complete it.
+    expect(
+      completeDiscordPersonLink(begun.state, 'snowflake-1', personId, testDb.db)
+    ).toBeDefined()
   })
 })
 
@@ -447,6 +482,7 @@ describe('completeDiscordPersonLink (LINK-3, LINK-4)', () => {
     const stillLive = previewDiscordPersonLink(
       begun.state,
       'snowflake-1',
+      personId,
       testDb.db
     )
     expect(stillLive?.outcome).toEqual({ kind: 'attach' })
@@ -557,6 +593,46 @@ describe('previewMcpPersonLink', () => {
     expect(
       completeMcpPersonLink(issued.token, personId, testDb.db)
     ).toBeDefined()
+  })
+
+  // Rework — the named "ignores a survivor's mergedIntoPersonId" defect: a
+  // preview must not promise an outcome completion would then refuse.
+  // `completeMcpPersonLink`'s own real `connectIdentity` call refuses
+  // outright once `survivorPersonId` names a person merged away
+  // (`people.ts`'s own doc comment) — the MCP surface carries no survivor
+  // at issue time to repoint on a merge the way a Discord challenge does
+  // (`person-link-challenges.ts#repointOutstandingChallenges`), so a
+  // survivor merged away *after* the token was issued (a race: a different,
+  // faster proof merges the caller into someone else while their own
+  // "connect an assistant" token is still unredeemed) is exactly the case
+  // that reaches this. Fails without the `previewOutcome` fix: the old code
+  // reported `{ kind: 'attach' }` here, a promise `completeMcpPersonLink`
+  // would then refuse to keep.
+  it('refuses (rather than reporting "attach") when the caller-supplied survivor has since been merged away', () => {
+    testDb = createTestDatabase()
+    const { organizationId, personId } = seedOrgAndPerson(testDb.db)
+    const issued = issueMcpPersonLinkToken(
+      organizationId,
+      'mcp-client-1',
+      testDb.db
+    )
+    const otherPerson = people.createPerson(organizationId, {}, testDb.db)
+    const merged = people.mergePeople(
+      organizationId,
+      otherPerson.id,
+      personId,
+      testDb.db
+    )
+    if (!merged) throw new Error('setup failed')
+
+    const preview = previewMcpPersonLink(issued.token, personId, testDb.db)
+
+    expect(preview).toBeUndefined()
+    // The real completion agrees — it too refuses for the merged-away
+    // survivor, so the preview's refusal was honest, not merely different.
+    expect(
+      completeMcpPersonLink(issued.token, personId, testDb.db)
+    ).toBeUndefined()
   })
 })
 

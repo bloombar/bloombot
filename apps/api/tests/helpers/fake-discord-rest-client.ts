@@ -12,6 +12,7 @@ import type {
   DiscordChannel,
   DiscordGuildMember,
   DiscordGuildSummary,
+  DiscordIdentifiedUser,
   DiscordOAuthToken,
   DiscordRestClient,
   DiscordRole,
@@ -27,6 +28,7 @@ export interface FakeDiscordRestClient extends DiscordRestClient {
   exchangeCalls: ExchangeCall[]
   getUserGuildsCalls: string[]
   getBotGuildsCalls: string[]
+  getCurrentUserCalls: string[]
 }
 
 export interface FakeDiscordRestClientOptions {
@@ -36,9 +38,13 @@ export interface FakeDiscordRestClientOptions {
   userGuilds?: DiscordGuildSummary[]
   /** What `getBotGuilds` resolves with — the guilds the bot itself is a member of. */
   botGuilds?: DiscordGuildSummary[]
+  /** What `getCurrentUser` (LINK-7) resolves with — the connecting caller's own real snowflake and username. Defaults to a distinctive, greppable id/username pair. */
+  currentUser?: DiscordIdentifiedUser
   /** When set, `exchangeAuthorizationCode` rejects with this instead of resolving — a Discord REST failure a route must let propagate to `errorMiddleware`, not swallow. */
   exchangeError?: Error
 }
+
+export const FAKE_DISCORD_USER_ID = 'fake-discord-user-id'
 
 export const FAKE_DISCORD_ACCESS_TOKEN = 'fake-discord-user-access-token'
 
@@ -48,12 +54,14 @@ export function createFakeDiscordRestClient(
   const exchangeCalls: ExchangeCall[] = []
   const getUserGuildsCalls: string[] = []
   const getBotGuildsCalls: string[] = []
+  const getCurrentUserCalls: string[] = []
   const accessToken = options.accessToken ?? FAKE_DISCORD_ACCESS_TOKEN
 
   return {
     exchangeCalls,
     getUserGuildsCalls,
     getBotGuildsCalls,
+    getCurrentUserCalls,
 
     exchangeAuthorizationCode(input): Promise<DiscordOAuthToken> {
       exchangeCalls.push(input)
@@ -74,6 +82,16 @@ export function createFakeDiscordRestClient(
     getBotGuilds(botToken): Promise<DiscordGuildSummary[]> {
       getBotGuildsCalls.push(botToken)
       return Promise.resolve(options.botGuilds ?? [])
+    },
+
+    getCurrentUser(userAccessToken): Promise<DiscordIdentifiedUser> {
+      getCurrentUserCalls.push(userAccessToken)
+      return Promise.resolve(
+        options.currentUser ?? {
+          id: FAKE_DISCORD_USER_ID,
+          username: 'fake-discord-username',
+        }
+      )
     },
 
     // SRV-6's guild-management calls, and ROST-10/ROST-11's

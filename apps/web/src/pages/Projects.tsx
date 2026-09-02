@@ -24,6 +24,7 @@ import {
 import { ApiError } from '../api/client.js'
 import type { Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
+import { useModal } from '../components/modal/ModalProvider.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { AddIcon, ArchiveIcon, DuplicateIcon, RestoreIcon } from '../icons.js'
@@ -76,6 +77,7 @@ export function Projects({
   const [busyProjectId, setBusyProjectId] = useState<string | undefined>(
     undefined
   )
+  const { confirm } = useModal()
 
   // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
   // below (on mount, and whenever `includeArchived` changes) and directly
@@ -125,6 +127,25 @@ export function Projects({
   }
 
   const handleArchive = async (project: Project) => {
+    // WEB-15 — archiving and deleting must never look alike (PROJ-2:
+    // archiving is reversible, Restore is right there), so this confirms
+    // through the *non-destructive* path — a plain, primary-styled
+    // confirm, not the danger-red one `destructive: true` renders — while
+    // still confirming at all, because archiving a whole term stops every
+    // course inside it routing, more consequence than disabling one course
+    // ever has, and disabling already confirms (`pages/Courses.tsx`,
+    // `pages/CourseEditor.tsx`). One rule — a destructive action confirms
+    // as destructive, a merely consequential one still confirms, plainly —
+    // applied the same way everywhere it appears. Restoring undoes exactly
+    // this, so it never needs to ask first.
+    if (project.archivedAt === null) {
+      const confirmed = await confirm({
+        title: `Archive ${project.name}?`,
+        description: 'Its courses stop routing. You can restore it.',
+        confirmLabel: 'Archive',
+      })
+      if (!confirmed) return
+    }
     setError(undefined)
     setBusyProjectId(project.id)
     try {

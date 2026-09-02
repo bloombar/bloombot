@@ -100,15 +100,29 @@ export function ScaffoldButton({
     pollingSinceRef.current ??= Date.now()
     const poll = () => {
       getJobStatus(organizationId, job.id).then(
-        (status) => setJob(status),
+        (status) => {
+          setJob(status)
+          // Rework finding — gated on the *freshly fetched* status, not
+          // merely elapsed time: before this, the hint was set purely from
+          // how long polling had been running, so a job that spent a while
+          // `pending` and then started `running` (scaffolding a dozen
+          // channels through Discord's own rate limit routinely takes
+          // longer than the hint threshold) kept showing "Still queued —
+          // make sure the background worker is running" *while the worker
+          // was demonstrably running it* — the UI claimed two contradictory
+          // states at once. The hint now means only what it says: this job
+          // is still `pending`, past the threshold, and nothing has claimed
+          // it yet.
+          setStillQueued(
+            status.status === 'pending' &&
+              Date.now() - (pollingSinceRef.current ?? Date.now()) >
+                stillQueuedHintAfterMs
+          )
+        },
         (caught: unknown) => {
           if (caught instanceof ApiError) setError(caught)
           else throw caught
         }
-      )
-      setStillQueued(
-        Date.now() - (pollingSinceRef.current ?? Date.now()) >
-          stillQueuedHintAfterMs
       )
     }
     const timer = setInterval(poll, pollIntervalMs)

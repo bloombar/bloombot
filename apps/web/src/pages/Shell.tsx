@@ -189,7 +189,14 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           <Button
             variant="secondary"
             icon={<SignOutIcon aria-hidden="true" className="size-4" />}
-            onClick={() => void handleSignOut()}
+            // WEB-16 rework — every other navigation this shell starts goes
+            // through `guardedNavigate` (the nav row, the home control, the
+            // organization switcher, just above); signing out is a
+            // navigation too, and leaves the shell just as completely, so a
+            // dirty course form two components down deserves the same
+            // chance to confirm before it is lost that clicking any other
+            // tab already gives it.
+            onClick={() => guardedNavigate(() => void handleSignOut())}
             disabled={signingOut}
           >
             {signingOut ? 'Signing out…' : 'Sign out'}

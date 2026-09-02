@@ -1,9 +1,20 @@
 /**
  * WEB-10, over HTTP: the web chat surface. Every scenario here proves the
- * same properties `routes/chat.ts`'s own module comment describes —
- * ENRL-2's "a course a person is not enrolled in is refused as not
- * found," `answerQuestion` actually running (the fake model client records
- * every call it receives), and a signed-out caller reaching none of it.
+ * same properties `routes/chat.ts`'s own module comment describes — a
+ * signed-in web caller resolves *only* to a person it is already connected
+ * to (never one this route creates), ENRL-2's "a course a person is not
+ * enrolled in is refused as not found," `answerQuestion` actually running
+ * (the fake model client records every call it receives), and a
+ * signed-out caller reaching none of it.
+ *
+ * `seedEnrolledCourse` admits its person the way production actually does
+ * — a `discord`-surface identity, via `enrolViaRoster` — never the caller's
+ * own web identity: seeding the enrolment against a web person (this
+ * file's own former mistake) made every reachability assertion tautological
+ * about the exact bug this rework fixes. `connectCallerTo` is the separate,
+ * explicit step that simulates a connect flow having already run, through
+ * the real `people.connectIdentity` (LINK-3's own merged path) — never a
+ * raw `connectedAt` write.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -14,6 +25,7 @@ import request from 'supertest'
 import {
   courses,
   enrolments,
+  organizations,
   people,
   projects,
   type Database,
@@ -31,21 +43,19 @@ afterEach(() => {
 })
 
 /**
- * A course this organization's bound Discord server could route to, plus —
- * for every test but the "not enrolled" one — an active enrolment admitting
- * `caller`'s own web person into it, via `enrolViaRoster` (ENRL-3): the same
- * "written through the real repos, never the surface under test" discipline
- * `helpers/seed.ts`'s own module comment already holds itself to. The
- * person enrolled is resolved exactly the way `routes/chat.ts` itself
- * resolves the caller — `people.resolvePersonByIdentity` on the `'web'`
- * surface, keyed on the account id — so the enrolment actually belongs to
- * whichever person the route under test will resolve.
+ * A course this organization's bound Discord server could route to, with an
+ * active enrolment admitting a `discord`-surface person into it via
+ * `enrolViaRoster` — the same admission path a real roster import uses
+ * (`apps/worker`'s own `roster-import.ts`), and the *only* kind of person
+ * any real enrolment in this system ever belongs to (this file's own module
+ * comment). Returns that person's id, never `caller`'s own — connecting the
+ * two, when a scenario needs that, is `connectCallerTo`'s own explicit job.
  */
 function seedEnrolledCourse(
   db: Database,
   caller: SignedInCaller,
   options: { enrol?: boolean } = {}
-): { courseId: string } {
+): { courseId: string; discordPersonId: string } {
   // A fresh project name per call — this app's own PROJ-1 constraint is
   // unique per organization, and this helper is called more than once for
   // the same organization in a handful of these tests (a second, unenrolled
@@ -76,20 +86,41 @@ function seedEnrolledCourse(
   if (!created.ok) throw new Error('test setup: course creation refused')
   const courseId = created.course.id
 
+  const discordPerson = people.resolvePersonByIdentity(
+    caller.organizationId,
+    { surface: 'discord', externalId: `discord-user-${randomUUID()}` },
+    db
+  )
   if (options.enrol ?? true) {
-    const person = people.resolvePersonByIdentity(
-      caller.organizationId,
-      { surface: 'web', externalId: caller.accountId },
-      db
-    )
     enrolments.enrolViaRoster(
       caller.organizationId,
-      { courseId, personId: person.id },
+      { courseId, personId: discordPerson.id },
       db
     )
   }
 
-  return { courseId }
+  return { courseId, discordPersonId: discordPerson.id }
+}
+
+/**
+ * Connects `caller`'s own web identity onto `personId` — the real
+ * `people.connectIdentity` (LINK-3's merged path), standing in here for
+ * whatever future connect/join-link flow would do this for a real student;
+ * see `routes/chat.ts`'s own module comment for what today's chat surface
+ * does and does not make reachable without it.
+ */
+function connectCallerTo(
+  db: Database,
+  caller: SignedInCaller,
+  personId: string
+): void {
+  const connected = people.connectIdentity(
+    caller.organizationId,
+    personId,
+    { surface: 'web', externalId: caller.accountId },
+    db
+  )
+  if (!connected) throw new Error('test setup: connectIdentity refused')
 }
 
 describe('routes/chat.ts (WEB-10)', () => {
@@ -103,14 +134,38 @@ describe('routes/chat.ts (WEB-10)', () => {
     expect((response.body as { error: string }).error).toBe('not_signed_in')
   })
 
-  it('lists only the courses this account is actively enrolled in', async () => {
+  // WEB-10 rework, finding 1 — the regression this whole file exists to
+  // catch: before the rework, this router resolved the caller with
+  // `people.resolvePersonByIdentity` (create on demand), which can never
+  // find a real enrolment — every one belongs to a `discord`-surface person
+  // (`seedEnrolledCourse`'s own module comment) — so `GET .../chat/courses`
+  // returned `{courses: []}` for every real student, forever, no matter
+  // what an instructor configured. This seeds the enrolment the way
+  // production actually creates one and proves the *unconnected* case is
+  // now an honest, distinct refusal — not a silently empty list that reads
+  // as "you are not enrolled" when the real problem is "nobody has ever
+  // connected this account to that enrolment."
+  it('a signed-in account with no connected person in this organization is refused as not-connected, not shown an empty list', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const { courseId } = seedEnrolledCourse(testDb.db, caller)
-    // A second course this same account is not enrolled in — proves the
-    // list is scoped to the enrolment, not to "every course in the
-    // organization" (ENRL-2).
-    seedEnrolledCourse(testDb.db, caller, { enrol: false })
+    seedEnrolledCourse(testDb.db, caller)
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_not_connected'
+    )
+  })
+
+  it('once genuinely connected to the enrolled (discord-surface) person, the same course is reachable', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
 
     const app = await buildTestApp(testDb.db)
     const response = await request(app)
@@ -124,9 +179,13 @@ describe('routes/chat.ts (WEB-10)', () => {
     expect(body.courses[0]?.title).toBe('Intro to Testing')
   })
 
-  it('a fresh account, admitted nowhere yet, sees an empty course list', async () => {
+  it('lists only the courses this connected person is actively enrolled in — a second course this same person is not enrolled in never appears', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    // A second course the same discord-surface person is *not* enrolled in.
+    seedEnrolledCourse(testDb.db, caller, { enrol: false })
 
     const app = await buildTestApp(testDb.db)
     const response = await request(app)
@@ -134,15 +193,101 @@ describe('routes/chat.ts (WEB-10)', () => {
       .set('Cookie', caller.cookieHeader)
 
     expect(response.status).toBe(200)
-    expect((response.body as { courses: unknown[] }).courses).toEqual([])
+    const body = response.body as { courses: { id: string }[] }
+    expect(body.courses).toHaveLength(1)
+    expect(body.courses[0]?.id).toBe(courseId)
   })
 
-  it('asking a course this account is not enrolled in is refused as not found (ENRL-2)', async () => {
+  // WEB-10 rework, finding 2 — one person, one allowance (LINK-5). Before
+  // the rework, every chat visit resolved (and, the first time, created) a
+  // *second*, web-surface person distinct from the discord-surface one an
+  // enrolment actually belongs to — two person rows, two usage counters,
+  // two transcripts, in the same organization, for the same human. Once
+  // connected the real way, exactly one person answers to this account.
+  it('does not create a second person or a second allowance for an already-connected caller', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
-      enrol: false,
-    })
+    const { discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+
+    const beforeCount = people.listPeople(
+      caller.organizationId,
+      testDb.db
+    ).length
+
+    const app = await buildTestApp(testDb.db)
+    await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+
+    const afterCount = people.listPeople(
+      caller.organizationId,
+      testDb.db
+    ).length
+    expect(afterCount).toBe(beforeCount)
+  })
+
+  // WEB-10 rework, finding 3 — TEN-5: a foreign or nonexistent organization
+  // is refused the identical way, and never written to. Before the rework,
+  // `resolvePersonByIdentity` inserted a `people` row into whatever
+  // organization the URL named, before anything checked the caller had any
+  // relationship to it at all — reachable by any signed-in account against
+  // any other tenant's organization id, and a nonexistent id produced a raw
+  // foreign-key `500` (an existence oracle) rather than the same `404`.
+  it('a caller with no relationship to a foreign organization is refused, and nothing is written to it', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const victimOrganizationId = randomUUID()
+    organizations.createOrganization(
+      victimOrganizationId,
+      { name: 'Victim Org', isPersonal: false },
+      testDb.db
+    )
+    const beforeCount = people.listPeople(
+      victimOrganizationId,
+      testDb.db
+    ).length
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .get(`/organizations/${victimOrganizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_not_connected'
+    )
+    expect(people.listPeople(victimOrganizationId, testDb.db)).toHaveLength(
+      beforeCount
+    )
+  })
+
+  it('a nonexistent organization is refused the identical way a real, foreign one is — not a 500, and no existence oracle', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .get(`/organizations/${randomUUID()}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_not_connected'
+    )
+  })
+
+  it('asking a course this connected person is not enrolled in is refused as not found (ENRL-2)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(
+      testDb.db,
+      caller,
+      {
+        enrol: false,
+      }
+    )
+    connectCallerTo(testDb.db, caller, discordPersonId)
 
     const app = await buildTestApp(testDb.db)
     const response = await request(app)
@@ -159,10 +304,33 @@ describe('routes/chat.ts (WEB-10)', () => {
     )
   })
 
-  it('asks a question through the exact same answerQuestion pipeline, and the reply is on the transcript afterward', async () => {
+  it('an unconnected caller posting a message is refused as not-connected, before the model is ever asked', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { courseId } = seedEnrolledCourse(testDb.db, caller)
+    const model = new FakeModelClient('unused')
+
+    const app = await buildTestApp(testDb.db, { model })
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+
+    expect(response.status).toBe(404)
+    expect((response.body as { error: string }).error).toBe(
+      'chat_not_connected'
+    )
+    expect(model.calls).toHaveLength(0)
+  })
+
+  it('asks a question through the exact same answerQuestion pipeline, and the reply is on the transcript afterward', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
     const model = new FakeModelClient('# Welcome\n\nAsk away.')
 
     const app = await buildTestApp(testDb.db, { model })
@@ -208,7 +376,8 @@ describe('routes/chat.ts (WEB-10)', () => {
   it('an empty question is refused as invalid input before it ever reaches the model', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const { courseId } = seedEnrolledCourse(testDb.db, caller)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
     const model = new FakeModelClient('unused')
 
     const app = await buildTestApp(testDb.db, { model })
@@ -227,10 +396,57 @@ describe('routes/chat.ts (WEB-10)', () => {
     expect(model.calls).toHaveLength(0)
   })
 
+  // WEB-10 rework, finding 7 — bounded, not just non-empty. The allowance
+  // counts requests, never characters, so an unbounded `text` is no real
+  // spending bound at all.
+  it('a question over the length ceiling is refused as invalid input before it ever reaches the model', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('unused')
+
+    const app = await buildTestApp(testDb.db, { model })
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'a'.repeat(4001) })
+
+    expect(response.status).toBe(400)
+    expect((response.body as { error: string }).error).toBe(
+      'action_input_invalid'
+    )
+    expect(model.calls).toHaveLength(0)
+  })
+
+  it('a question at exactly the length ceiling is accepted', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('ok')
+
+    const app = await buildTestApp(testDb.db, { model })
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'a'.repeat(4000) })
+
+    expect(response.status).toBe(200)
+    expect(model.calls).toHaveLength(1)
+  })
+
   it('a model that rejects (e.g. OPENAI_API_KEY unset — apps/api/src/index.ts#createUnconfiguredModelClient) apologizes rather than 500ing', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
-    const { courseId } = seedEnrolledCourse(testDb.db, caller)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
     // `answerQuestion`'s own defined outcome for a model call that throws
     // (`packages/core/src/answer.ts`'s `failed-with-apology`) — this route
     // must pass that outcome straight through as an ordinary `200`, not let

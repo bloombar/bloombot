@@ -98,6 +98,42 @@ function parseMaxRequestsPerDay(
   return { ok: true, value }
 }
 
+/**
+ * WEB-16: "a refusal names the field it concerns and appears next to it
+ * rather than only at the top." `error.body.issues` already carries
+ * `{ path, message }` per field — both this form's own client-side check
+ * (`handleSave`'s own `maxRequestsPerDay` refusal, above) and a refused
+ * `courses.save` (`action_input_invalid`) build it the same way — this
+ * just reads the one issue naming `fieldName`, if any, so the field's own
+ * `FormField` can render it right there. `ErrorMessage` at the top of this
+ * form still renders the same summary it always has (WEB-5's own
+ * convention every other refusal in this app already follows); this is
+ * additive, not a replacement for it.
+ */
+function fieldErrorMessage(
+  error: ApiError | undefined,
+  fieldName: string
+): string | undefined {
+  return error?.body.issues?.find((issue) => issue.path[0] === fieldName)
+    ?.message
+}
+
+/**
+ * `FormField`'s own `error?: string` is exact-optional (`tsconfig.base.json`),
+ * so passing `error={fieldErrorMessage(...)}` directly fails to typecheck
+ * whenever it is `undefined` — this spreads the prop in only when there
+ * actually is a message, the same `{...(x ? { prop: x } : {})}` device this
+ * file's own `handleSave` already uses for `SaveCourseInput`'s optional
+ * fields.
+ */
+function fieldErrorProp(
+  error: ApiError | undefined,
+  fieldName: string
+): { error: string } | Record<string, never> {
+  const message = fieldErrorMessage(error, fieldName)
+  return message !== undefined ? { error: message } : {}
+}
+
 /** Blank editable state for a brand-new course — `enabled: false`: a fresh course's category and role names have not been confirmed against this term's Discord server yet, so it starts disabled the same way a duplicated course does (D-23), rather than defaulting to routing immediately. */
 function blankForm() {
   return {
@@ -494,7 +530,10 @@ export function CourseEditor({
           server exactly.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
-          <FormField label="Admins role">
+          <FormField
+            label="Admins role"
+            {...fieldErrorProp(error, 'adminsRole')}
+          >
             <input
               aria-label="Admins role"
               value={form.adminsRole}
@@ -507,7 +546,10 @@ export function CourseEditor({
               className={textInputClasses}
             />
           </FormField>
-          <FormField label="Students role">
+          <FormField
+            label="Students role"
+            {...fieldErrorProp(error, 'studentsRole')}
+          >
             <input
               aria-label="Students role"
               value={form.studentsRole}
@@ -524,7 +566,7 @@ export function CourseEditor({
       </section>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Title">
+        <FormField label="Title" {...fieldErrorProp(error, 'title')}>
           <input
             aria-label="Title"
             value={form.title}
@@ -535,7 +577,7 @@ export function CourseEditor({
           />
         </FormField>
 
-        <FormField label="File prefix">
+        <FormField label="File prefix" {...fieldErrorProp(error, 'filePrefix')}>
           <input
             aria-label="File prefix"
             value={form.filePrefix}
@@ -755,6 +797,7 @@ export function CourseEditor({
         <FormField
           label="Max requests per day"
           help="A whole number greater than zero, or leave blank to use the platform default."
+          {...fieldErrorProp(error, 'maxRequestsPerDay')}
         >
           <input
             aria-label="Max requests per day"

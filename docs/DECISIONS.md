@@ -3084,35 +3084,76 @@ the model names, even protocol-restricted, which still lets a message load a tra
 private address the moment it renders) and a `<style>` block are all neutralized; ordinary Markdown (headings,
 bold, links, fenced code, GFM tables) renders as real elements.
 
-**Choice — WEB-10's backend resolves the caller's own `'web'`-surface identity, not LINK-1's `connectedAt`.**
-At the time this slice ran, `packages/db/src/repos/people.ts` and `packages/core/src/answer.ts` were both
-being changed by a separate, open, unmerged PR (`feat/LINK-1-account-linking`, LINK-1..5/PPL-4/5 — a person
-proven to hold more than one surface identity, merged into one so allowance and transcript follow them
-everywhere, gated behind a new `person.connectedAt`/`'not-connected'` refusal). Editing either file here would
-have collided with that PR's own changes to the same lines. `apps/api/src/routes/chat.ts` instead resolves the
-caller through `people.resolvePersonByIdentity(organizationId, { surface: 'web', externalId: account.id }, db)`
-— the exact same "create on demand" function every other surface's first contact already uses (PPL-3;
-`packages/discord`'s own `handle-mention.ts` resolves a person identically, from the arriving Discord user
-id), and calls the *current*, unmodified `answerQuestion` — no `connectedAt` gate exists on this branch yet.
-This is not a workaround standing in for LINK-1's own job: `connectIdentity`/`mergePeople` (that PR's own
-functions) are about *merging two already-distinct people proven to be the same human* — a different, larger
-problem than "give a first-time web caller a person of their own," which PPL-3 already solves for every other
-surface. Once LINK-1 merges, `routes/chat.ts` will need its own small follow-up (reading `person.connectedAt`,
-handling `'not-connected'` the way SURF-6's other refusals are handled per-surface) — a few-line addition, not
-a rewrite, tracked here rather than guessed at inline.
+**Choice, as first written — WEB-10's backend resolves the caller's own `'web'`-surface identity, not LINK-1's
+`connectedAt`.** At the time this slice first ran, `packages/db/src/repos/people.ts` and
+`packages/core/src/answer.ts` were both being changed by a separate, open, unmerged PR
+(`feat/LINK-1-account-linking`, LINK-1..5/PPL-4/5 — a person proven to hold more than one surface identity,
+merged into one so allowance and transcript follow them everywhere, gated behind a new
+`person.connectedAt`/`'not-connected'` refusal). Editing either file here would have collided with that PR's
+own changes to the same lines, so `apps/api/src/routes/chat.ts` instead resolved the caller through
+`people.resolvePersonByIdentity(organizationId, { surface: 'web', externalId: account.id }, db)` — the same
+"create on demand" function every other surface's first contact already uses (PPL-3) — and called the
+*then-current*, unmodified `answerQuestion`, with no `connectedAt` gate on that branch yet.
 
-**What reaching an enrolled course via the web needs, that this slice does not add.** ENRL-2's own text — "the
-web surface lets a person pick the course they are asking, from the courses they are enrolled in" — assumes
-an enrolment already exists; ENRL-3's three admission paths (a Discord role, a roster row, a redeemed join
-link) are how one gets there. A join link's redemption is not wired to any HTTP route yet
-(`repos/course-join-links.ts`'s own `redeemCourseJoinLink`, D-31's "Limits": "the next slice that adds a
-`POST /join` route ... is the one that has to bind `callerAssertedPersonId` to a real, already-authenticated
-identity"). That route is a "connect screen" in the sense this slice's own brief excludes ("Do not start ...
-the panel's connect screens") — binding a web account to a course is a distinct, separately-scoped feature,
-not a Markdown-rendering concern. `e2e/chat.spec.ts` proves the chat surface itself works by seeding the one
-fact that route will eventually produce (`enrolments.enrolViaRoster`, called directly, the same device
-`e2e/course-configuration.spec.ts` already uses for its own Discord server binding) — today, a real student
-reaches this screen only via a Discord role or a roster row, both pre-existing paths unrelated to this slice.
+**Rework finding — this was wrong, on three counts a review round caught together, and the claim above that it
+was merely an interim measure was false: the chat surface it produced was not reachable by any real student at
+all, not "reachable, pending a small follow-up."** Kept here, corrected, rather than deleted — the record of
+what was tried and why it did not hold is worth as much as the record of what worked (this file's own
+convention throughout).
+
+1. *Unreachable in production.* Every real enrolment in this system belongs to a `discord`-surface person —
+   `handle-mention.ts`'s own first contact, `roster-import.ts`'s own admission — never to a person created by
+   `resolvePersonByIdentity` on the `'web'` surface. `enrolments.listCoursesForPerson` keys strictly on
+   `person.id`, so a web-surface person created this way could never resolve to a real enrolment, for any
+   account, ever — not a gap a future configuration or a join-link route alone would close, because nothing
+   pointed the two person rows at each other in the first place. The slice's own test suite and e2e spec hid
+   this: both seeded the enrolment against a web-surface person *resolved the same way the route itself would*
+   — tautological about the exact bug this rework fixes, proving only that the code agreed with itself.
+2. *A second allowance.* A `{surface: 'web'}` person and a `{surface: 'discord'}` person for the same human are
+   two distinct rows, two usage counters, two transcripts, in the same organization — exactly what LINK-5 ("one
+   person, one allowance, across every surface") and D-28 exist to prevent, reintroduced by this router's own
+   person resolution. Once LINK-1 merged, `answerQuestion` began declining every person whose `connectedAt` is
+   `null` — which a `resolvePersonByIdentity`-created person always is — so the practical effect became total:
+   every web chat message declined, silently (`Chat.tsx`'s own `describeDeclineNotice` had no case for
+   `'not-connected'`, so nothing was shown at all — a student watched their own message post and then nothing
+   happen, a silent hang).
+3. *A cross-tenant write, before anything checked the caller belonged there.* `resolveCallerPerson` called a
+   *creating* function on the raw `:organizationId` URL param before any check that the caller had a
+   relationship to that organization — reachable by any signed-in account against any other tenant's
+   organization id (writing a `people` row that carried the attacker's own account id, the refusal issued only
+   after the write), and a nonexistent organization id produced a raw foreign-key `500` rather than the same
+   `404` every other foreign or absent id in this app answers — an existence oracle.
+
+**The fix.** A signed-in web caller *is* the account — they proved control of it by signing in, which is
+exactly the proof LINK-3 already asks of every other surface's own connect step, so a *second*, separate
+"connect your web account" action was never actually needed for the web surface itself. `@bloombot/auth`'s
+`sign-in.ts` (`createConnectedWebPerson`) now creates the account's own person, in its own personal
+organization, and connects it immediately — through the real, merged `people.ts#connectIdentity` (LINK-3's own
+path), never a raw `connectedAt` column write — the moment the account itself is created (both
+`findOrCreateAccountForEmail`'s and `tryCreateAccountForEmail`'s "new account" branches; `createPerson`'s own
+`db` parameter widened from `Database` to `Executor` so it can be called from inside their existing
+transaction, the same widening `getPerson`'s own doc comment already explains for the identical reason).
+`routes/chat.ts` now only ever *looks up* that person (`people.resolveIdentity` — read-only, so there is no
+insert left for a foreign or nonexistent organization id to reach) and refuses with the same `chat_not_connected`
+"invited to connect" shape LINK-1 gives every other unconnected identity when there is none, or when
+`connectedAt` is somehow still `null`. The organization's own existence is checked explicitly, first, so a
+foreign and a nonexistent organization id answer identically (TEN-5) rather than a `404` for one and a `500`
+existence oracle for the other.
+
+**What this does, and does not, make reachable.** A person created and connected this way lives in the
+account's own *personal* organization (TEN-1's own one created alongside it) — the one organization known at
+that exact moment. Reaching a course in a *different* organization (an institution's own, where a real student
+is admitted through a Discord role or a roster row) still requires something to connect that same account's web
+identity to the person that admission already created there — LINK-3's own proof, same as any other surface —
+which is exactly what a join-link "connect" route would do, and remains out of this slice's own scope (its own
+module comment, and D-31's "Limits", on why `redeemCourseJoinLink` is still unwired from any route). Until that
+lands, an account with no connection in a given organization is refused honestly (`chat_not_connected`) rather
+than shown a misleading empty course list or a silent hang — `apps/api/tests/routes/chat.test.ts` seeds an
+enrolment the way production actually creates one (a `discord`-surface person, `enrolViaRoster`) and proves
+both halves: unreachable and honestly refused before any connection exists, reachable once
+`people.connectIdentity` — the real function, not a shortcut — has connected the two, the same device a future
+join-link route would use. `e2e/chat.spec.ts` no longer creates its own person at all; it looks up the one
+`sign-in.ts` already created and connected for the same account, and enrols that.
 
 **Choice — `apps/api`'s own `OPENAI_API_KEY` is optional, unlike `apps/bot`'s.** `apps/bot`'s `main()` calls
 `requireEnv('OPENAI_API_KEY')` and refuses to start without it — reasonable there, since a bot process with no
@@ -3128,6 +3169,18 @@ transient provider failure already would. `apps/api/tests/routes/chat.test.ts`'s
 apologizes rather than 500ing" proves the mechanism this relies on: `middleware/errors.ts` never sees the
 rejection, because `routes/chat.ts` awaits `answerQuestion` itself, which already turned it into an ordinary
 result.
+
+**Choice — a question is bounded at 4,000 characters, not merely non-empty.** `postMessageInputSchema` shipped
+as `z.string().min(1)`, bounded only by `express.json()`'s own 100 kB body limit — a reviewer measured a 99 kB
+request reaching the model on a single call. CORE-3's own daily allowance counts *requests*, never tokens or
+characters, so an unbounded `text` was no real spending bound at all: ten questions a day at ~$0.02 each
+(Discord's own 2,000-character ceiling keeps a question small) became ten questions a day at up to ~$0.60 each
+on the web — and COST-3's own spending cap is organization-wide, so one student asking one oversized question
+on the web could exhaust a tenant's cap and decline every Discord student in the same organization alongside
+them. `4000` matches Discord's own outer bound on a single message (`packages/discord/src/split.ts`'s own
+`DISCORD_MESSAGE_LIMIT`, `2000`, is that file's *reply*-splitting threshold, not Discord's inbound ceiling —
+Discord itself accepts up to 4,000 characters from a Nitro account) — this surface is bounded no more
+generously than the one it mirrors, not picked arbitrarily.
 
 ## D-37 — `apps/web`: one modal primitive for alert/confirm/prompt, and the focus-restoration bug only a real browser caught
 

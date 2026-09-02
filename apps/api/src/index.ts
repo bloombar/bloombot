@@ -55,17 +55,10 @@ const PROCESS_NAME = 'api'
  * `packages/core/src/answer.ts`'s own `NO_PRICING_CONFIGURED` comment
  * already uses for the identical class of gap).
  */
-function createUnconfiguredModelClient(logger: Logger): ModelClient {
+function createUnconfiguredModelClient(): ModelClient {
   return {
-    ask: () => {
-      logger.warn(
-        {},
-        'apps/api: OPENAI_API_KEY is not set — the web chat surface will apologize to every question until it is configured'
-      )
-      return Promise.reject(
-        new Error('apps/api: OPENAI_API_KEY is not configured')
-      )
-    },
+    ask: () =>
+      Promise.reject(new Error('apps/api: OPENAI_API_KEY is not configured')),
   }
 }
 
@@ -147,9 +140,21 @@ async function main(): Promise<void> {
   // wrapper's whole purpose is feeding `apps/bot`'s own health endpoint a
   // running call count, which this process has no equivalent of — nothing
   // here reads the stats a counting client would report.
+  if (!openaiApiKey) {
+    // Rework finding — this used to log from inside `ask()`, so it fired
+    // once *per chat request* rather than once at startup, exactly the
+    // opposite of what this file's own module comment (and `docs/DECISIONS.md`)
+    // already claimed it did. Logged here, once, at the only place that
+    // actually knows the key is missing before a single request has
+    // arrived.
+    logger.warn(
+      {},
+      'apps/api: OPENAI_API_KEY is not set — the web chat surface will apologize to every question until it is configured'
+    )
+  }
   const model = openaiApiKey
     ? createOpenAiModelClient({ apiKey: openaiApiKey, logger })
-    : createUnconfiguredModelClient(logger)
+    : createUnconfiguredModelClient()
   const admission = createAdmissionGate({
     limit: admissionLimit,
     waitMs: admissionWaitMs,

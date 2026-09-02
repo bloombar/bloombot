@@ -35,10 +35,28 @@ export interface ChatProps {
   organizationId: string
 }
 
-/** A refusal `answerQuestion` reports as a *kind*, not an error — WEB-10's own surface has to say something in its place, since none of these carry text. */
-function describeDeclineNotice(
-  kind: ChatAnswerResult['kind']
-): string | undefined {
+/**
+ * A refusal `answerQuestion` reports as a *kind*, not an error — WEB-10's
+ * own surface has to say something in its place, since none of these carry
+ * text. Only ever called for a *non-answered* kind (`Chat.tsx`'s own
+ * `handleSend` already branches `answered`/`answered-last-request`/
+ * `failed-with-apology` — every kind that carries a reply — away before
+ * this runs), so the exhaustiveness check below covers exactly the
+ * remaining, textless kinds.
+ *
+ * The `never` assignment is deliberate, not decorative: before it existed,
+ * `default: return undefined` silently swallowed any kind this function had
+ * not been taught about — `not-connected` (LINK-1, merged after this
+ * surface was first built) reached here, got no notice and no reply, and a
+ * student watched their own message post and then nothing happen at all. A
+ * kind this function does not name is now a compile error, not a blank
+ * screen. In practice `routes/chat.ts` refuses an unconnected caller before
+ * `answerQuestion` ever runs (that file's own module comment), so this
+ * particular case should be unreachable from this route — the branch stays
+ * here anyway, for the same reason every other "unreachable in practice"
+ * guard in this codebase does: defended, not assumed.
+ */
+function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
   switch (kind) {
     case 'declined-over-limit':
       return 'You have reached the maximum number of questions for today.'
@@ -50,8 +68,20 @@ function describeDeclineNotice(
       return 'This course is not currently accepting questions.'
     case 'not-configured':
       return 'This course has not been set up to answer questions yet.'
-    default:
-      return undefined
+    case 'not-connected':
+      return 'Your account is not connected here yet. Ask your instructor for help connecting it.'
+    case 'answered':
+    case 'answered-last-request':
+    case 'failed-with-apology':
+      // Handled by `handleSend` before this function is ever called for
+      // one of these — see this function's own doc comment.
+      return 'Something went wrong.'
+    default: {
+      const exhaustive: never = kind
+      throw new Error(
+        `describeDeclineNotice: unhandled kind ${String(exhaustive)}`
+      )
+    }
   }
 }
 
@@ -169,6 +199,20 @@ export function Chat({ organizationId }: ChatProps) {
     } finally {
       setSending(false)
     }
+  }
+
+  // WEB-10 rework — `chat_not_connected` is not an error to alarm anyone
+  // with: it is the same "invited to connect" outcome LINK-1 gives an
+  // unconnected identity on any other surface (`routes/chat.ts`'s own
+  // module comment), an expected state for an account nobody has connected
+  // yet, not a failure. Shown as a plain notice, not `ErrorMessage`.
+  if (coursesError?.body.error === 'chat_not_connected') {
+    return (
+      <p className="text-sm text-neutral-600">
+        Your account is not connected to a course here yet. Ask your instructor
+        for help connecting it.
+      </p>
+    )
   }
 
   if (coursesError) {

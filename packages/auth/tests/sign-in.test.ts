@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { accounts, organizations, schema } from '@bloombot/db'
+import { accounts, organizations, people, schema } from '@bloombot/db'
 
 import { RecordingEmailSender } from '../src/email.js'
 import type { GoogleIdentity } from '../src/link.js'
@@ -54,6 +54,36 @@ describe('redeemSignInLink (AUTH-1, TEN-1)', () => {
     expect(organizationRow).toMatchObject({ isPersonal: true })
   })
 
+  // WEB-10/LINK-1 rework: a signed-in web caller is the account — no
+  // separate "connect your web account" step exists or is needed, so this
+  // person is created and connected the moment the account itself is,
+  // through the real `connectIdentity` path, not a raw column write.
+  it("connects the account's own web person at creation, through the real connectIdentity path — not a raw connectedAt write", () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('new.instructor@example.edu', testDb.db)
+
+    const result = redeemSignInLink(token, testDb.db)
+    expect(result).toBeDefined()
+
+    const membershipRows = testDb.db.select().from(schema.memberships).all()
+    const organizationId = membershipRows[0]!.organizationId
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: result!.account.id },
+      testDb.db
+    )
+    expect(person).toBeDefined()
+    // Connected immediately (LINK-1's own gate) — `answerQuestion` declines
+    // any person whose `connectedAt` is still `null`, and a web-authenticated
+    // account has already proven itself by signing in (this file's own new
+    // `createConnectedWebPerson` doc comment).
+    expect(person?.connectedAt).not.toBeNull()
+    // Exactly one person for this organization — creation is not doubled up
+    // with some other write this test would otherwise miss.
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
   it('does not create a second account for a returning sign-in', () => {
     testDb = createTestDatabase()
     const first = issueSignInToken('returning@example.edu', testDb.db)
@@ -65,6 +95,25 @@ describe('redeemSignInLink (AUTH-1, TEN-1)', () => {
     expect(secondResult?.createdAccount).toBe(false)
     expect(secondResult?.account.id).toBe(firstResult?.account.id)
     expect(testDb.db.select().from(schema.accounts).all()).toHaveLength(1)
+  })
+
+  it('does not create a second web person for a returning sign-in', () => {
+    testDb = createTestDatabase()
+    const first = issueSignInToken('returning-person@example.edu', testDb.db)
+    const firstResult = redeemSignInLink(first.token, testDb.db)
+    const membershipRows = testDb.db.select().from(schema.memberships).all()
+    const organizationId = membershipRows[0]!.organizationId
+
+    const second = issueSignInToken('returning-person@example.edu', testDb.db)
+    redeemSignInLink(second.token, testDb.db)
+
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: firstResult!.account.id },
+      testDb.db
+    )
+    expect(person).toBeDefined()
   })
 
   // Finding 2 of the AUTH-1..4 rework, belt-and-braces half: redeeming a
@@ -252,6 +301,26 @@ describe('signInWithGoogle (AUTH-2)', () => {
     expect(result?.account.email).toBe('brand-new@example.edu')
     const membershipRows = testDb.db.select().from(schema.memberships).all()
     expect(membershipRows).toHaveLength(1)
+  })
+
+  it("connects the account's own web person at creation (tryCreateAccountForEmail's own branch)", () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'brand-new-connected@example.edu' }),
+      testDb.db
+    )
+    expect(result?.createdAccount).toBe(true)
+    const membershipRows = testDb.db.select().from(schema.memberships).all()
+    const organizationId = membershipRows[0]!.organizationId
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: result!.account.id },
+      testDb.db
+    )
+    expect(person).toBeDefined()
+    expect(person?.connectedAt).not.toBeNull()
   })
 
   // AUTH-2's own attack sentence, exercised end to end: an unverified email

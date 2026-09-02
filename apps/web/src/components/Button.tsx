@@ -60,6 +60,25 @@ export function Button({
   ref,
   ...rest
 }: ButtonProps) {
+  // WEB-12's own "an icon never carries meaning alone" — enforced here, not
+  // only documented: an icon-only button (has `icon`, no visible label
+  // text, no `aria-label`) warns loudly in development rather than shipping
+  // a control a screen reader has nothing to say about. Dev-only
+  // (`import.meta.env.DEV`) — this is a build-time lint substitute, not a
+  // production-facing check, and a console warning on every render of every
+  // button in production would be its own kind of noise.
+  if (
+    import.meta.env.DEV &&
+    icon &&
+    !children &&
+    !rest['aria-label'] &&
+    !rest['aria-labelledby']
+  ) {
+    console.error(
+      'Button: an icon-only button (no visible label text) must carry an aria-label — WEB-12 requires every icon-only control to have an accessible name.'
+    )
+  }
+
   return (
     <button
       ref={ref}

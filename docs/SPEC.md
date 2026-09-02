@@ -1295,6 +1295,36 @@ surface they arrived on. Asking in Discord, in the web chat and through an assis
 on one count and continues one conversation, so a cap cannot be evaded by changing surface
 and an instructor sees one student rather than three.
 
+#### LINK-6 The connect page names the account and waits to be told to proceed
+
+Arriving at the connect address shows who is about to be connected to what — the account
+signed in, the identity being attached, and whether anything will be merged into it — and
+does nothing until the person says to. A visit is not consent. The page can describe the
+outcome without spending the proof, so a person who followed a link by mistake, or who is
+signed in as somebody else on a shared machine, can leave without having changed anything.
+
+#### LINK-7 Connecting Discord is signing in with Discord
+
+The panel's connect flow sends the person to Discord's own authorization screen and
+completes on the way back, binding the account that Discord itself asserts — never one the
+request claims. The exchange is tied to the browser session that began it, so a link
+prepared by one person cannot be finished by another.
+
+#### LINK-8 An assistant is handed its token where only it can read it
+
+A person connects an assistant from the panel, and the token reaches the assistant through
+the tool result or a direct message — never a channel, a page, or a log. It is single-use
+and short-lived, and the account it will attach to is fixed when it is issued, so a token
+that leaks anyway attaches nothing to whoever found it.
+
+#### LINK-9 Nobody who could already ask is locked out by connecting
+
+Introducing the connect requirement must not silently stop answering every student who
+already had a working conversation. Whatever the platform does for people who existed
+before connecting was required — connect them on their next proven sign-in, admit them
+until a deadline, or ask them once — it is a decision made deliberately and written down,
+not a consequence of a migration that left a column null.
+
 ### 29. Legacy Import
 
 #### MIG-1 The import reads a copy, never the live database

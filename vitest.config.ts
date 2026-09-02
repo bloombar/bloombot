@@ -30,6 +30,33 @@ export default defineConfig({
     },
   },
   test: {
+    // Run `afterEach` hooks in registration order rather than vitest's
+    // default reverse order.
+    //
+    // `apps/web/tests/setup.ts` registers Testing Library's `cleanup()`, and
+    // it registers first, because a setup file runs before the test file that
+    // uses it. Under the default `'stack'` ordering that makes it run *last* —
+    // so a file whose own `afterEach` calls `vi.resetAllMocks()` strips every
+    // mock's implementation while the previous test's components are still
+    // mounted. `cleanup()` then unmounts them, which flushes pending passive
+    // effects, and a component that fetches on mount calls a mock that now
+    // returns `undefined`: `Cannot read properties of undefined (reading
+    // 'then')`, thrown from a component with no relationship to the test that
+    // reports it.
+    //
+    // Stated honestly, because it would be easy to claim more: that ordering
+    // was confirmed by instrumenting the hooks, and it is a real hazard. It
+    // has *not* been shown to cause the two intermittent failures that
+    // prompted this — one in `CourseAttachments`, one in `CourseInstructions`,
+    // both mount-fetching components, both matching the shape above. Neither a
+    // reviewer nor I could reproduce either deliberately across roughly forty
+    // runs. So this closes a hazard that should not exist regardless; it is
+    // not a fix with a proven bug attached to it, and if those failures recur
+    // this is not the explanation.
+    //
+    // It belongs at the root: set inside a `projects[]` entry it is silently
+    // ignored, which cost one round to discover.
+    sequence: { hooks: 'list' },
     // QA-4: the coverage floor sits over the logic that matters — the
     // data-access layer and the answering pipeline (`.claude/CLAUDE.md`) —
     // not a blanket percentage across the tree — a package like `db` has

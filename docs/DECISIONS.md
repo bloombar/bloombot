@@ -3728,3 +3728,253 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
+---
+
+## D-40 — `ecosystem.config.cjs`/`scripts/deploy.sh`: the migration runs once, outside the four processes' own race, and a deploy's rollback covers every process it reloaded
+
+**Problem.** `apps/api`/`apps/bot`/`apps/worker`/`apps/mcp` each call `runMigrations(db)` in their own
+`main()` — correct for one process, and a race for four started together: `packages/db/src/migrate.ts`'s own
+idempotency (a `__drizzle_migrations` row per file, in the same transaction as the schema change it records)
+protects against corruption, but nothing before this slice guaranteed the migration had already been applied
+*before* any of the four even tried, so the first production deploy to actually start more than one of them
+together would have been the first time that race was live. `scripts/deploy.sh` (OPS-7) also only ever knew
+about one process (`bloombot`, the Python bot) — extending it to the four Node processes needed both a
+migration step and a reload/health-check/rollback loop none of them had.
+
+**Choice — `scripts/deploy.sh` runs `packages/db`'s own `run-migrate.js --i-know` once, after the build and
+before any Node process is reloaded.** Not a new migration mechanism: the existing `db:migrate` CLI
+(`packages/db/src/run-migrate.ts`), already guarded against an accidental `data/` write by
+`assertMigratablePath`, and already idempotent. `--i-know` is not a bypass of that guard for this call — it
+is the deliberate, intended use the guard's own module comment describes ("a migration sometimes has to run
+against the live file"). Once this step has run, every process's own `runMigrations(db)` at its own startup
+becomes the fast no-op idempotency already promised — a safety net for a process started outside this script
+(`npm run dev`, a manual `pm2 start` of one app), not the thing doing the real work in production anymore.
+
+**Found while wiring this in — `packages/db/src/run-migrate.ts` and `packages/legacy-import/src/cli.ts` never
+called `loadDotEnv()`.** Every other entry point (`apps/*/src/index.ts`) loads `.env` before touching
+`CONFIG`, per CFG-5; these two CLIs read `CONFIG.DATABASE_PATH` directly, so `npm run db:migrate` and
+`npm run legacy:import` only ever saw a credential-bearing environment when it happened to already be
+exported in the shell — never from `.env`, the one place this project's own convention says configuration is
+supposed to live. Fixed the same way every other entry point already does it: `loadDotEnv()`, first line of
+`main()`. No test pins this beyond the manual, end-to-end walk this slice's own report describes (running the
+real built CLI against a `tmp/` fixture, first without the fix reproducing the gap, then with it) — `main()`
+is intentionally unexported, the same as every other process's own thin entry point, and this repository has
+no existing pattern for spawning a CLI under test; inventing one for a single `loadDotEnv()` call was judged
+not worth the weight it would add.
+
+**Choice — `scripts/deploy.sh` reloads every pm2 app by name individually, and rolls every one of them back
+together on any failure.** `NODE_APPS` (`api`, `bot`, `worker`, `mcp`, `ops-monitor`) is reloaded one at a
+time (`pm2 reload <name>`, or `pm2 start ecosystem.config.cjs --only <name>` the first time — never a bare
+`pm2 start ecosystem.config.cjs`, which would start every app in the file including one a fresh droplet is
+not yet ready for) so a bad build of one does not bounce the other three. Health is checked two ways after
+the shared `HEALTH_WAIT`: `check_pm2_health` (generalized from the Python-only check this script already
+had) proves a process is still running and pm2 has not had to restart it again; `scripts/health-check.mjs`
+proves the four with an HTTP surface are actually *working* (COST-5's own running-versus-working
+distinction) — a process pm2 sees as `online` but whose database or gateway is unreachable fails this even
+though the pm2-level check saw nothing wrong. Any failure, from either check, rolls back every process this
+deploy touched, not only the one that failed — a deploy is one unit here, the same commit for every process,
+so a partial rollback would leave some processes on the new commit and some on the old with no record of
+which was which.
+
+**Rehearsal finding — a rollback that itself fails used to die silently.** `restore_previous_checkout`'s own
+rebuild (`npm run build` against the restored, previous commit) used to run as a plain statement under
+`set -e`; if it failed, the whole script died with whatever the failing command itself printed and nothing
+saying a rollback — not an ordinary deploy — had just failed to complete. This is the exact case OPS-10's own
+text warns about ("the rollback path is the part most likely to be written and never tested"), and it was
+found by testing it: a throwaway git repository under `tmp/`-equivalent scratch space, a stand-in `pm2` that
+tracks a small JSON process list, and a stand-in `npm`/`node` for the build and the migration step, driven
+through a build failure, a migration failure, and an unhealthy-after-reload rollback. The unhealthy-after-
+reload case is what surfaced it: rollback's own rebuild was made to fail too, and the script exited non-zero
+with no message beyond the failing build's own output — indistinguishable, from the log alone, from an
+ordinary deploy failure that never touched a running process, when in fact any process already reloaded onto
+the broken commit was still running it. Fixed by checking each step of `restore_previous_checkout` explicitly
+and failing with a message that says plainly this is not recoverable by re-running the script — see
+`docs/CUTOVER.md`'s own §4 for what an operator does next. This harness was not kept as a checked-in test
+(no existing pattern in this repository for spawning `scripts/deploy.sh` under test, and building a
+permanent `pm2`/git mock was judged a bigger investment than this slice's budget); `scripts/deploy.sh` is
+still verified the way OPS-7 already established — `shellcheck`, `bash -n`, and this rehearsal — not by an
+automated regression test of its own control flow.
+
+**Limits.** A migration that fails partway through is not itself rolled back — `runMigrations` applies
+whatever it reaches before the failure, and there is no automatic way to undo a partially-applied migration
+(the same limit `npm run db:migrate` already has run by hand). `scripts/deploy.sh` says this plainly rather
+than claiming a recovery it cannot actually perform; `docs/CUTOVER.md` tells an operator what to check by
+hand if it happens.
+
+**Second rehearsal finding, found writing `docs/DEPLOY_DROPLET.md` — the static panel was never rebuilt at
+all.** PLAT-4's fourth process is a static build nginx serves directly (`apps/web/dist`), not one of the pm2
+apps `reload_everything` loops over — and the root `npm run build` does not produce it; only the workspace-
+scoped `npm run build --workspace apps/web` does (`package.json`'s own `pree2e` script already needs both,
+separately, for the same reason). `scripts/deploy.sh` built only the root workspace, so every deploy would
+correctly reload `api`/`bot`/`worker`/`mcp`/`ops-monitor` onto the new commit while nginx went on serving
+whichever panel build happened to already be sitting in `apps/web/dist` — silently mismatched against the
+API underneath it, and never rebuilt by any rollback either. Fixed by adding the same explicit,
+failure-checked build call in both the forward path and `restore_previous_checkout`, verified the same way as
+the rest of this entry: the throwaway harness, re-run through both the happy path and the unhealthy-after-
+reload rollback, confirming "building the control panel" (and, on rollback, "rebuilding the control panel for
+the previous commit") now appears in the log exactly once per path, in the right order.
+
+---
+
+## D-41 — `scripts/ops-monitor.mjs`: what counts as unhealthy beyond a bare HTTP status, one page per outage rather than one per poll, and why a webhook rather than email
+
+**Problem (OPS-12).** COST-5 made every process's own health observable — a `/health` endpoint each — but
+observable is not the same as *noticed*: nobody is watching those endpoints unless something polls them, and
+a naive poll-and-alert would either miss a real outage (`apps/bot`'s own `/health` reports `200` for as long
+as the gateway is connected, whether or not the model provider behind it is actually answering — a real
+outage in COST-5's own list of things to notice) or spam an operator once per poll for the whole duration of
+a sustained one.
+
+**Choice — `evaluate()` reads past the bare HTTP status for the one case it does not already cover.** A `503`
+or an unreachable process is unhealthy, full stop — the four processes' own health servers already draw that
+line correctly (each one's own module comment explains why it reports what it does and nothing else). The
+one gap: `apps/bot`'s own `model.errorRate`/`model.calls` (`createCountingModelClient`, COST-5) is carried in
+the body but never flips the status code, because the gateway and the provider are genuinely independent
+failures and the endpoint's own author was explicit that it "deliberately reports nothing else." `evaluate()`
+treats a sustained high error rate (`>= 50%` over `>= 5` calls — enough that a single transient failure on
+the first retry after a cold start cannot page anyone) as unhealthy too, on top of the status check, so a
+provider outage is noticed even while the gateway itself is fine.
+
+**Choice — notify on a transition, not on every poll, and assume healthy for a name never seen before.**
+`planNotifications` compares this poll's verdict against the last one it computed for that name; only a
+change produces a notification. The one exception is deliberate: a name with no prior observation is treated
+as "was healthy" rather than "was unhealthy," so the monitor's own (re)start is silent when everything is
+actually fine, but still pages immediately if a process is *already* down the moment it starts watching — a
+box rebooting mid-outage must not delay the page until some later transition that was never coming, because
+nothing before it registered as "was healthy" to transition away from.
+
+**Choice — a webhook POST, not email.** `apps/api`'s own `logging-email-sender.ts` (D-19/D-20) has no real
+mail transport configured yet — refusing outright in production rather than pretending to send — so email
+was not an option "already there" to build on, and standing one up is a new service this slice's own brief
+explicitly said to prefer against. A single POST with both `content` (Discord's own incoming-webhook key) and
+`text` (Slack's) in the same JSON body is understood by either without branching on which was configured, and
+needs no vendor SDK — an operator creates one incoming webhook in whichever chat tool they already use and
+sets `OPS_ALERT_WEBHOOK_URL`. When it is unset, the same transition is still written to stdout/stderr, which
+pm2 already redirects to `logs/ops-monitor.log` (OPS-2) — degraded, not silent, the same shape
+`logging-email-sender.ts` itself takes for its own equivalent gap.
+
+**Deliberately dependency-free from `@bloombot/config`.** `scripts/health-check.mjs` and
+`scripts/ops-monitor.mjs` duplicate the four processes' own default ports rather than importing
+`packages/config`'s schema for them, the same reason `scripts/dev.mjs`'s own module comment already gives
+for avoiding that import: it would make these scripts only work once the workspace has been built. The
+duplication is pinned by `scripts/health-check.test.mjs`'s own "matches packages/config's own defaults" case,
+so a schema default changing without updating this file's copy is a red build rather than a silent drift.
+
+**Limits.** `ops-monitor` has no health endpoint of its own — `scripts/deploy.sh`'s own `HEALTH_CHECKED_APPS`
+deliberately excludes it, checked only at the pm2 level (still-running, not still-working) the same as the
+Python bot. A crashed `ops-monitor` is itself invisible to the thing it exists to make outages visible
+through; pm2 restarting it (the same supervision every other process here gets) is the mitigation, not a
+deeper one — a monitor that watches its own watcher was judged out of scope for this slice.
+
+---
+
+## D-42 — `docs/CUTOVER.md`: rehearsal reuses the production bot token safely by construction, and rollback needs no credential un-rotated
+
+**Problem (OPS-9, OPS-10, OPS-11).** Three requirements that only make sense written down together: a
+rehearsal has to prove the real cutover will work without ever touching the live database or a real course
+server; the cutover itself has to rotate every credential the Python system used without that rotation
+causing its own outage; and the rollback has to actually work, using nothing the cutover deleted.
+
+**Choice — the rehearsal reuses the same bot token as the running Python bot, invited into a disposable test
+server, rather than provisioning a second bot application.** Gateway events for one bot token fan out to
+every active session across every guild that bot is in, regardless of which guild the event came from — so a
+rehearsal `apps/bot` connected with the production token technically receives events from real course servers
+too. This is safe by construction, not merely by care: CORE-2 attributes a message to a course the *routing
+process's own database* knows about, and the rehearsal's database (`tmp/rehearsal-platform.db`) only ever
+contains whatever `bot_config.yml` named for the rehearsal — a real course category is unrecognized, the same
+as any message nobody configured a course for, and CORE-2's own text is explicit that an unmatched message
+"is ignored rather than answered." `docs/RUNNING_LOCALLY.md`'s own reuse table already established reusing
+the real `BOT_TOKEN` for local development as this project's convention; the rehearsal does the same thing
+for the same reason, and the CORE-2 argument above is what makes it safe to also point at a disposable
+server rather than requiring a whole second Discord application just to rehearse safely.
+
+**Choice — rotate while both systems are stopped, not while either is live.** OPS-11's own text asks that
+rotation not itself cause an outage; sequencing it between "Python stopped" (§2.2) and "platform started"
+(§2.5) means there is no window where a running process holds a credential that has already been
+invalidated — `docs/CUTOVER.md`'s own §2.3 places rotation there rather than before stopping Python or after
+starting the platform. The OpenAI key specifically is rotated in two steps spanning that window on purpose:
+the new key is created before the platform starts, but the *old* one is not revoked until §2.6 confirms the
+platform is actually answering with the new one — revoking early would turn a rotation into a self-inflicted
+outage if the new key had been mistyped into `.env`.
+
+**Finding — `BOT_PERMISSIONS` and a re-invite are not part of rotation, and the runbook says so explicitly.**
+This slice's own brief flagged the interaction and it is real, even though it is not spelled out anywhere
+else in this repository yet: Discord grants a bot its permissions in a server at the moment it is invited
+(`docs/DISCORD_SETUP.md`'s own step 1 decides the permission integer and invites the bot with it, but does
+not itself say the grant is fixed from then on) — a separate `fix/scaffold-403` slice, landing concurrently
+with this one, is adding that fact as a comment on `env.example`'s own `BOT_PERMISSIONS`, which this entry
+does not depend on to make its point. Resetting a token in the Discord developer portal changes which secret
+authenticates as the bot, not what it is permitted to do in any server it is already in — an operator who
+re-invited the bot "just in case" during a rotation would be doing unnecessary, disruptive work for zero
+effect on the permissions themselves. `docs/CUTOVER.md`'s §2.3 states this as a "does not need" rather than
+leaving it to be inferred or rediscovered live.
+
+**Choice — rollback needs no credential un-rotated.** Because §2.3 writes the rotated credentials into the
+**one** `.env` file both the Python bot and the platform read (D-9), stopping the platform and restarting
+the Python bot (`docs/CUTOVER.md`'s own §3) hands the Python bot the same already-rotated values the platform
+was using — there is nothing to reverse. This is a property of D-9's own shared-file choice, not new
+machinery this slice added; §3 states it explicitly so an operator mid-incident does not go looking for the
+pre-rotation values.
+
+**Limits.** The rollback in §3 puts the *processes* back, not the import: `docs/CUTOVER.md`'s own §2.4 import
+is not undone by stopping the platform, and is not meant to be — MIG-4's idempotency is what makes re-running
+it later, once cutover is retried, cost nothing rather than duplicate anything.
+
+---
+
+## D-43 — `docs/DEPLOY_DROPLET.md`/`docs/DEPLOY_APP_PLATFORM.md`: no production email transport exists, and App Platform's component model does not fit this platform's one-SQLite-file architecture
+
+**Problem.** A late addition to this slice's own brief asked for two operator-facing deployment
+documents — a droplet, and DigitalOcean App Platform as an alternative — complete enough for
+someone who has never seen this repository to follow start to finish, including every
+third-party setup step. Writing them surfaced two things neither this slice nor any earlier one
+had said plainly in one place.
+
+**Finding — there is no production email transport in this codebase.** `packages/auth/src/email.ts`
+ships an `EmailSender` port and a recording fake for tests; its own module comment says the real
+implementation "is a later slice's adapter package" and none has landed. `apps/api/src/logging-email-sender.ts#buildEmailSender`
+refuses to start `apps/api` at all when `NODE_ENV=production` — not merely refusing to send —
+so **the platform cannot serve email sign-in in production today, and `apps/api` will not start
+in production at all** until a real adapter exists. This is not a deployment-document gap
+(there is no SMTP host or API key this document could tell an operator to configure — nothing
+in the codebase reads one) — it is application code this slice did not build and was
+explicitly told not to invent inside a docs task. Both new documents state this in an
+unmissable callout near their own top rather than let it be discovered by an operator trying to
+follow them, and this file's own instructions to the supervisor say the same thing: this needs
+its own scoped slice before a real production deployment can rely on email sign-in, and before
+`apps/api` can run with `NODE_ENV=production` at all.
+
+**Finding — DigitalOcean App Platform's component model does not fit this platform's
+architecture, as built.** `docs/DECISIONS.md`'s own D-2 keeps SQLite deliberately, and states
+outright that the choice "holds only while the deployment is single-host" — `apps/api`,
+`apps/bot`, `apps/worker` and `apps/mcp` each open the *same* file directly, and App Platform's
+Service/Worker/Job components each run on their own container with their own local disk, not a
+filesystem shared across components. Deployed as four separate components the way their own
+names would suggest, none could open the file the others have open. `docs/DEPLOY_APP_PLATFORM.md`
+says this plainly, gives the one option that avoids it without new engineering (one combined
+component, pinned to one instance, and even then only with a persistent volume App Platform may
+or may not currently offer for that component type — flagged as unverified rather than assumed)
+and its real costs (no horizontal scaling, no zero-downtime deploy — the two things App Platform
+is usually chosen for, given up for none of the benefit), and separately scopes what a real fit
+would take: a Postgres migration (D-2's own escape hatch, but only the schema/query half of it
+is actually built — `packages/db/src/repos/jobs.ts`'s own claim function is isolated for a
+Postgres implementation that does not exist yet, D-2's own "Limits" paragraph says as much) and
+an object-storage adapter for `packages/db/src/attachment-storage.ts`'s own already-abstracted
+`AttachmentStorage` interface (the port exists; the S3-compatible implementation does not).
+Neither is built here — a document recommending App Platform without saying this would describe
+a deployment that risks losing real student data on an ordinary redeploy, which `docs/DEPLOY_APP_PLATFORM.md`'s
+own opening paragraph states is worse than a document that says the fit is not there yet.
+
+**Choice — recommend the droplet, and say why, rather than present two equally-weighted
+options.** The brief asked to compare, not to be sold, so both documents state the
+recommendation and the reasoning openly (this repository's own tooling — `ecosystem.config.cjs`,
+`scripts/deploy.sh`, the CI deploy job — is already built for the droplet shape) rather than
+stopping at "here are your two options."
+
+**Limits.** Neither new document was exercised against a real DigitalOcean account as part of
+this slice — nginx config, App Platform component behavior and current storage offerings are
+written from this codebase's own architecture and general knowledge of the product, flagged
+with an explicit "verify against DigitalOcean's current documentation" note in
+`docs/DEPLOY_APP_PLATFORM.md` rather than presented with false certainty about a product surface
+that changes independently of this repository.
+

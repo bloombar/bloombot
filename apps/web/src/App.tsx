@@ -1,11 +1,22 @@
 /**
- * The whole panel: three screens and no router library (the brief for this
- * slice is explicit that a shell this small does not need one) — `App`
- * reads `window.location.pathname` itself and switches on it.
+ * The whole panel: several screens and no router library (the brief for
+ * this slice is explicit that a shell this small does not need one) —
+ * `App` reads `window.location.pathname` itself and switches on it.
  *
  *  - `/sign-in/:token` — an emailed link lands here (`pages/RedeemLink.tsx`).
  *  - `/discord/callback` — Discord's own OAuth redirect lands here
- *    (`pages/DiscordCallback.tsx`).
+ *    (`pages/DiscordCallback.tsx`), for either the install flow or LINK-7's
+ *    connect flow (that page's own module comment on how it tells the two
+ *    apart).
+ *  - `/connect/:organizationId` — LINK-1/LINK-2's own invitation address
+ *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
+ *    every other path below, since a Discord invitation cannot know which
+ *    it will be.
+ *  - `/platform-admin` — ADMIN-4's console (`pages/Admin.tsx`); reachable
+ *    by any signed-in account (deliberately *not* `/admin`, `apps/api`'s
+ *    own mount for this screen's reads and writes — see this file's own
+ *    comment on that path, below), with `routes/admin.ts` the one place
+ *    AUTH-4 is actually enforced.
  *  - anything else — the signed-in shell (`pages/Shell.tsx`) or the
  *    sign-in screen (`pages/SignIn.tsx`), decided by `GET /auth/me`
  *    (WEB-2: the session itself, never anything this app stored).
@@ -22,6 +33,7 @@ import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
 import { Admin } from './pages/Admin.js'
+import { Connect, PENDING_CONNECT_ORG_KEY } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -77,9 +89,26 @@ export function App() {
     refreshSession()
   }, [refreshSession])
 
+  // LINK-6/7 rework: a sign-in redemption (an emailed link, `RedeemLink`'s
+  // own `onRedeemed`) used to always return to the shell — for a visitor
+  // who arrived at `/connect/:organizationId` signed out (`Connect.tsx`
+  // stashes `PENDING_CONNECT_ORG_KEY` the moment it renders that way), that
+  // stranded them on the shell instead of back on the connect screen they
+  // actually came for. Checked here, not inside `Connect.tsx` itself: this
+  // is the one function every "I am done, go somewhere sensible" callback
+  // in this app already funnels through.
   const returnToShell = useCallback(() => {
-    goToRoot()
-    setPath('/')
+    const pendingConnectOrganizationId = sessionStorage.getItem(
+      PENDING_CONNECT_ORG_KEY
+    )
+    if (pendingConnectOrganizationId) {
+      const target = `/connect/${pendingConnectOrganizationId}`
+      window.history.replaceState(null, '', target)
+      setPath(target)
+    } else {
+      goToRoot()
+      setPath('/')
+    }
     refreshSession()
   }, [refreshSession])
 
@@ -91,13 +120,31 @@ export function App() {
     }
   }
 
+  // LINK-6/7 rework, finding 8 — `onConnected` used to be `returnToShell`
+  // itself, which reads `PENDING_CONNECT_ORG_KEY` from `sessionStorage` —
+  // already removed by `DiscordCallback.tsx`'s own preview step, well
+  // before confirm (and this callback) ever runs. That silently sent a
+  // freshly connected student to the ordinary shell instead of back to
+  // this same organization's own connect screen, exactly the outcome that
+  // page's own doc comment says must not happen — and every existing test
+  // stayed green, because none of them checked *where* a confirmed connect
+  // actually landed. Fixed by navigating on the argument this callback
+  // already receives, not a sessionStorage key that is gone by the time it
+  // fires.
   if (path === '/discord/callback') {
     return (
       <DiscordCallback
         search={window.location.search}
+        account={session.kind === 'signed-in' ? session.account : undefined}
         onInstalled={(organizationId, serverId) => {
           setJustInstalled({ organizationId, serverId })
           returnToShell()
+        }}
+        onConnected={(organizationId) => {
+          const target = `/connect/${organizationId}`
+          window.history.replaceState(null, '', target)
+          setPath(target)
+          refreshSession()
         }}
         onDone={returnToShell}
       />
@@ -123,6 +170,24 @@ export function App() {
         </Button>
       </div>
     )
+  }
+
+  // LINK-1/LINK-2 — the invitation address, reachable whether or not this
+  // browser already has a session: `Connect.tsx` itself renders `SignIn`
+  // when `account` is `null`, so this app does not have to decide that here
+  // the way it does for every other path below.
+  const connectMatch = /^\/connect\/([^/]+)$/.exec(path)
+  if (connectMatch) {
+    const organizationId = connectMatch[1]
+    if (organizationId) {
+      return (
+        <Connect
+          organizationId={organizationId}
+          account={session.kind === 'signed-in' ? session.account : null}
+          onSignedIn={refreshSession}
+        />
+      )
+    }
   }
 
   if (session.kind === 'signed-in') {

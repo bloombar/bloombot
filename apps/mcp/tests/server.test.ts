@@ -14,7 +14,12 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createPlatformRegistry } from '@bloombot/actions'
-import { closeDatabase, openDatabase, runMigrations } from '@bloombot/db'
+import {
+  closeDatabase,
+  openDatabase,
+  organizations,
+  runMigrations,
+} from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
@@ -346,6 +351,187 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
     }
     expect(callResult.isError).toBe(true)
     expect(callResult.content[0]?.text).toMatch(/was not confirmed/)
+  })
+})
+
+describe('bloombot_connectAssistant (LINK-8)', () => {
+  it('is on the tool list, not gated behind organizationId the same way the dispatch catalog is (it takes its own)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    })
+
+    const listResult = findMessage(response.messages, 1)?.result as {
+      tools: { name: string; inputSchema: { required?: string[] } }[]
+    }
+    const tool = listResult.tools.find(
+      (candidate) => candidate.name === 'bloombot_connectAssistant'
+    )
+    expect(tool).toBeDefined()
+    expect(tool?.inputSchema.required).toContain('organizationId')
+  })
+
+  it('returns a token in the tool result, redeemable to connect the calling account as an mcp identity', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+
+    const callResult = findMessage(response.messages, 1)?.result as {
+      isError?: boolean
+      content: { type: string; text: string }[]
+    }
+    expect(callResult.isError).toBeFalsy()
+    const body = JSON.parse(callResult.content[0]?.text ?? 'null') as {
+      token: string
+      expiresAt: number
+    }
+    expect(body.token.length).toBeGreaterThan(20)
+    expect(body.expiresAt).toBeGreaterThan(Date.now())
+
+    // The token this call minted actually redeems — LINK-3's own proof —
+    // and it is bound to the *calling account*, never a value this call's
+    // own arguments named (there is no argument for one at all: LINK-8's
+    // "the account it will attach to is fixed when it is issued").
+    const { previewMcpPersonLink } = await import('@bloombot/auth')
+    const { people } = await import('@bloombot/db')
+    const survivor = people.createPerson(caller.organizationId, {}, testDb.db)
+    const preview = previewMcpPersonLink(body.token, survivor.id, testDb.db)
+    expect(preview?.identity).toEqual({
+      surface: 'mcp',
+      externalId: caller.accountId,
+    })
+  })
+
+  it('two calls for the same account and organization mint two independent, single-use tokens', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const first = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+    const second = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: caller.organizationId },
+      },
+    })
+
+    const firstToken = (
+      JSON.parse(
+        (
+          findMessage(first.messages, 1)?.result as {
+            content: { text: string }[]
+          }
+        ).content[0]?.text ?? 'null'
+      ) as { token: string }
+    ).token
+    const secondToken = (
+      JSON.parse(
+        (
+          findMessage(second.messages, 2)?.result as {
+            content: { text: string }[]
+          }
+        ).content[0]?.text ?? 'null'
+      ) as { token: string }
+    ).token
+    expect(firstToken).not.toBe(secondToken)
+  })
+
+  // D-44 rework — a reviewer's own reproduction: no existence check at all
+  // meant a nonexistent organization threw `better-sqlite3`'s own
+  // `FOREIGN KEY constraint failed` straight into the tool result.
+  it('refuses cleanly for a nonexistent organization, never leaking a raw driver error', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: randomUUID() },
+      },
+    })
+
+    const callResult = findMessage(response.messages, 1)?.result as {
+      isError?: boolean
+      content: { type: string; text: string }[]
+    }
+    expect(callResult.isError).toBe(true)
+    expect(callResult.content[0]?.text).not.toMatch(/FOREIGN KEY|SQLITE/i)
+    expect(callResult.content[0]?.text).toMatch(
+      /does not exist or you do not have access/
+    )
+  })
+
+  // D-44 rework — deliberately no membership check (this file's own doc
+  // comment on why: an assistant legitimately requests a token for the
+  // caller's own institution, which the caller has no *membership* in by
+  // design), proven directly: a real organization the caller does not
+  // belong to still mints a token.
+  it('mints a token for a real organization the caller has no membership in — by design, not an oversight', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const foreignOrganizationId = randomUUID()
+    organizations.createOrganization(
+      foreignOrganizationId,
+      { name: 'A Different Institution', isPersonal: false },
+      testDb.db
+    )
+    const app = buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const response = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'bloombot_connectAssistant',
+        arguments: { organizationId: foreignOrganizationId },
+      },
+    })
+
+    const callResult = findMessage(response.messages, 1)?.result as {
+      isError?: boolean
+      content: { type: string; text: string }[]
+    }
+    expect(callResult.isError).toBeFalsy()
+    const body = JSON.parse(callResult.content[0]?.text ?? 'null') as {
+      token: string
+    }
+    expect(body.token.length).toBeGreaterThan(20)
   })
 })
 

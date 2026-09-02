@@ -12,6 +12,7 @@ import { accounts, organizations, people, schema } from '@bloombot/db'
 import { RecordingEmailSender } from '../src/email.js'
 import type { GoogleIdentity } from '../src/link.js'
 import {
+  ensureWebPersonForAccount,
   redeemSignInLink,
   requestSignInLink,
   signInWithGoogle,
@@ -545,5 +546,149 @@ describe('requestSignInLink (AUTH-1)', () => {
     await requestSignInLink('returning-requester@example.edu', deps)
 
     expect(emailSender.sent).toHaveLength(2)
+  })
+
+  // AUTH-5's must-fix 1: until this slice, the only senders in this
+  // codebase were a file writer and a logger, neither of which throws in
+  // practice — this is the first sender that routinely does, and the first
+  // test to prove `requestSignInLink` does not leave a dead-but-active
+  // token behind when it does.
+  it('discards the token and rethrows when the mail port fails to send, so an immediate retry is not silently dropped', async () => {
+    testDb = createTestDatabase()
+    const failingSender = {
+      send: vi.fn().mockRejectedValue(new Error('relay unreachable')),
+    }
+    const deps = {
+      db: testDb.db,
+      emailSender: failingSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await expect(requestSignInLink('victim@example.edu', deps)).rejects.toThrow(
+      'relay unreachable'
+    )
+
+    // The whole point: the row `issueSignInToken` wrote is gone, not just
+    // unused — `hasActiveSignInToken` (the flooding guard exercised above)
+    // must not see it and refuse the next attempt.
+    expect(
+      testDb.db
+        .select()
+        .from(schema.signInTokens)
+        .all()
+        .filter((row) => row.email === 'victim@example.edu')
+    ).toHaveLength(0)
+
+    // The retry this whole fix exists for: a working sender, right after
+    // the failure, actually sends — proving the address is not locked out
+    // for the token's own fifteen-minute lifetime the way it would be if
+    // the failed attempt's token were still "active".
+    const workingSender = new RecordingEmailSender()
+    await requestSignInLink('victim@example.edu', {
+      ...deps,
+      emailSender: workingSender,
+    })
+    expect(workingSender.sent).toHaveLength(1)
+  })
+})
+
+describe('ensureWebPersonForAccount (LINK-6/7/8)', () => {
+  it('creates a connected web person in an organization other than the account own personal one', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('instructor@example.edu', testDb.db)
+    const signedIn = redeemSignInLink(token, testDb.db)
+    if (!signedIn) throw new Error('setup failed')
+    // An institution's own organization — not the account's personal one
+    // `redeemSignInLink` just created — the same "a different organization
+    // than the one this account already knows" shape a Discord invitation's
+    // own connect flow reaches.
+    const institutionId = crypto.randomUUID()
+    organizations.createOrganization(
+      institutionId,
+      { name: 'Institution', isPersonal: false },
+      testDb.db
+    )
+
+    const person = ensureWebPersonForAccount(
+      institutionId,
+      signedIn.account.id,
+      testDb.db
+    )
+
+    expect(person.organizationId).toBe(institutionId)
+    expect(person.connectedAt).not.toBeNull()
+    expect(
+      people.resolveIdentity(
+        institutionId,
+        { surface: 'web', externalId: signedIn.account.id },
+        testDb.db
+      )?.id
+    ).toBe(person.id)
+  })
+
+  it('is idempotent — a second call for the same organization and account returns the same person, creating nothing further', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('idempotent@example.edu', testDb.db)
+    const signedIn = redeemSignInLink(token, testDb.db)
+    if (!signedIn) throw new Error('setup failed')
+    const institutionId = crypto.randomUUID()
+    organizations.createOrganization(
+      institutionId,
+      { name: 'Institution', isPersonal: false },
+      testDb.db
+    )
+
+    const first = ensureWebPersonForAccount(
+      institutionId,
+      signedIn.account.id,
+      testDb.db
+    )
+    const second = ensureWebPersonForAccount(
+      institutionId,
+      signedIn.account.id,
+      testDb.db
+    )
+
+    expect(second.id).toBe(first.id)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.people)
+        .all()
+        .filter((row) => row.organizationId === institutionId)
+    ).toHaveLength(1)
+  })
+
+  it('two different organizations for the same account get two different people', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('multi-org@example.edu', testDb.db)
+    const signedIn = redeemSignInLink(token, testDb.db)
+    if (!signedIn) throw new Error('setup failed')
+    const orgA = crypto.randomUUID()
+    const orgB = crypto.randomUUID()
+    organizations.createOrganization(
+      orgA,
+      { name: 'Org A', isPersonal: false },
+      testDb.db
+    )
+    organizations.createOrganization(
+      orgB,
+      { name: 'Org B', isPersonal: false },
+      testDb.db
+    )
+
+    const personA = ensureWebPersonForAccount(
+      orgA,
+      signedIn.account.id,
+      testDb.db
+    )
+    const personB = ensureWebPersonForAccount(
+      orgB,
+      signedIn.account.id,
+      testDb.db
+    )
+
+    expect(personA.id).not.toBe(personB.id)
   })
 })

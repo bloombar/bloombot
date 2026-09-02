@@ -1326,6 +1326,15 @@ the tool result or a direct message — never a channel, a page, or a log. It is
 and short-lived, and the account it will attach to is fixed when it is issued, so a token
 that leaks anyway attaches nothing to whoever found it.
 
+#### LINK-10 A connected person can reach the course they connected to, in the browser
+
+Connecting proves who somebody is; it does not make them a member of the institution running
+the course. The panel's organization switcher is built from memberships, so a student who has
+connected — and who Discord now answers — still opens the web app and sees only their own
+personal organization, with no way to reach the course their enrolment lives in. The browser has
+to know about the organizations a person is connected into, not only the ones their account
+administers, or LINK-6's payoff never arrives on the web surface at all.
+
 #### LINK-9 Nobody who could already ask is locked out by connecting
 
 Introducing the connect requirement must not silently stop answering every student who

@@ -142,6 +142,23 @@ export const envSchema = z.object({
   // never be treated as "accept any audience", so an empty value here makes
   // the real verifier refuse every token rather than skip the check.
   GOOGLE_CLIENT_ID: z.string().default(''),
+
+  // AUTH-5 — the real mail transport's non-secret configuration. The
+  // credential half (`MAIL_SMTP_USER`/`MAIL_SMTP_PASSWORD`) is deliberately
+  // not here — read directly by `apps/api`, the same CFG-5 convention
+  // `BOT_TOKEN`/`OPENAI_API_KEY` already take, so a credential never sits in
+  // a schema whose whole job is describing shape rather than guarding a
+  // secret. `apps/api/src/logging-email-sender.ts#buildEmailSender` is what
+  // decides whether these are actually required (unconditionally, in
+  // production) — this schema only proves they parse, the same "a schema
+  // proves shape, a dedicated module proves meaning" split
+  // `MODEL_PRICING_JSON` already takes with `pricing.ts`.
+  MAIL_SMTP_HOST: z.string().default(''),
+  MAIL_SMTP_PORT: port(587),
+  // The `From:` header every real email carries. No real-service default
+  // the way `OPENAI_BASE_URL` has one — a sending address is always
+  // institution-specific.
+  MAIL_FROM: z.string().default(''),
 })
 
 /** The validated environment. */

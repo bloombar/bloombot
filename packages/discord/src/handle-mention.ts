@@ -79,15 +79,16 @@ export interface HandleMentionDependencies {
   /** COST-1/COST-6's per-model rates, passed straight through to `answerQuestion`'s own `AnswerDependencies.pricing`. Optional, the same reason `admission` is optional above: `apps/bot`'s own `main()` builds the real, configured table once (from `@bloombot/config`'s `getModelPricingTable`) and passes it here; a caller that omits it gets `answerQuestion`'s own zero-rate default. */
   pricing?: PricingTable
   /**
-   * LINK-2's own address: the control panel's URL, embedded verbatim (and
-   * alone — no token, see this file's own `connectInvitationText`) in the
-   * invitation an unconnected person is answered with. Required, not
-   * defaulted: unlike `botDisplayName`/`admission`/`pricing`, there is no
-   * safe placeholder for a URL a student would actually be told to visit —
-   * `apps/bot`'s own `main()` reads it from `CONFIG.PUBLIC_APP_URL`, the
-   * same "packages/core/packages/discord never read CONFIG" discipline
-   * (D-29) every other configured value already crosses this boundary
-   * under.
+   * LINK-2's own address: the control panel's base URL — `connectInvitationText`
+   * (below) appends `/connect/${organizationId}`, never a token or anything
+   * student-specific (this file's own doc comment on that function has the
+   * fuller reasoning for why an organization id is not the secret LINK-2
+   * forbids). Required, not defaulted: unlike `botDisplayName`/`admission`/
+   * `pricing`, there is no safe placeholder for a URL a student would
+   * actually be told to visit — `apps/bot`'s own `main()` reads it from
+   * `CONFIG.PUBLIC_APP_URL`, the same "packages/core/packages/discord never
+   * read CONFIG" discipline (D-29) every other configured value already
+   * crosses this boundary under.
    */
   connectUrl: string
 }
@@ -145,15 +146,39 @@ function overSpendingCapRefusalText(courseTitle: string): string {
 }
 
 /**
- * LINK-1/LINK-2 — the invitation an unconnected identity's first message
- * gets, instead of an answer: `connectUrl` and nothing else. No token, no
- * course name, no student-specific detail of any kind — LINK-2's own
- * reasoning is that a course channel is public, so anything more than a
+ * LINK-1/LINK-2/LINK-6/LINK-7 — the invitation an unconnected identity's
+ * first message gets, instead of an answer: an address and nothing else.
+ * No token, no course name, no student-specific detail of any kind — LINK-2's
+ * own reasoning is that a course channel is public, so anything more than a
  * plain address here is something the first person to read it could spend
  * on this student's behalf.
+ *
+ * The address names `organizationId` (`pages/Connect.tsx`, `apps/web`) —
+ * not itself a secret, unlike a claim token: knowing an organization's id
+ * grants nothing by itself (TEN-2's own refusal is still keyed on proof,
+ * not on knowing an id), it only tells the connect screen which
+ * organization's own person the OAuth round trip it begins should try to
+ * find. Without it, a signed-in caller's own connect flow would have no way
+ * to know which organization's roster- or role-admitted person to look for
+ * (`routes/person-link.ts`'s own module comment has the fuller reasoning).
  */
-function connectInvitationText(connectUrl: string): string {
-  return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectUrl}, then ask again.`
+function connectInvitationText(
+  connectUrl: string,
+  organizationId: string
+): string {
+  // `CONFIG.PUBLIC_APP_URL` (`packages/config/src/env.ts`'s own `z.url()`)
+  // accepts a trailing slash, and before this file appended a path itself
+  // a trailing slash was harmless — the bare URL was sent verbatim either
+  // way. Now it is not: `https://app.example.edu/` plus `/connect/<org>`
+  // produces `https://app.example.edu//connect/<org>`, which `apps/web`'s
+  // own `App.tsx` route regex (`/^\/connect\/([^/]+)$/`) does not match —
+  // a student following it lands on the shell or sign-in with no connect
+  // screen and no error at all. Stripped here, the same
+  // `stripTrailingSlashes` device `packages/discord-rest`'s own
+  // `authorize-url.ts`/`client.ts` already use for the identical class of
+  // "a configured base URL might carry one" defect.
+  const connectAddress = `${connectUrl.replace(/\/+$/, '')}/connect/${organizationId}`
+  return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectAddress}, then ask again.`
 }
 
 /** ENRL-6/D-35 rework finding 5 — the same "reaches the student, not a silent drop or a silent revival" treatment every other refusal in this file already gets: an instructor's own `enrolments.end` sticks, and the student is told plainly rather than left guessing why holding the role no longer answers them. */
@@ -510,7 +535,10 @@ export async function handleMention(
       // first-message outcome for anyone not yet connected). No model call
       // was made and no allowance was spent (`@bloombot/core`'s own
       // `answer.ts` guarantees that, before this ever runs).
-      await sendReply(reply, connectInvitationText(deps.connectUrl))
+      await sendReply(
+        reply,
+        connectInvitationText(deps.connectUrl, organizationId)
+      )
       logger.info(
         { organizationId, courseId, personId: person.id },
         'handleMention: declined, person is not yet connected to a verified account'

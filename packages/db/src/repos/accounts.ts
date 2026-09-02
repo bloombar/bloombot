@@ -50,22 +50,25 @@ export function getAccountByEmail(
 }
 
 /**
- * Look up an account by id alone, with no organization to check it against.
+ * Look up an account by id, with no organization scoping at all — the same
+ * TEN-2 exception `getAccountByEmail` already is, for the identical reason:
+ * `apps/api`'s own `GET /auth/me` (LINK-6's own "the account signed in")
+ * already knows exactly which account a *valid, already-authenticated
+ * session* proved, before any organization is in play — scoping this
+ * lookup to one would ask the caller to already know something (which
+ * organization to check) the session itself does not carry, for a read
+ * that discloses nothing beyond what the caller's own session already
+ * proved about itself.
  *
- * TEN-2 exception, the same class as `getAccountByEmail`: AUTH-4's
- * platform-administrator check reads an account's own `email` against the
- * `ADMIN_EMAILS` allowlist, and a platform administrator is not — by
- * ADMIN-4's own text — necessarily a member of the organization it is
- * about to act on (an admin console read spans every organization, and
- * ADMIN-5's tenant deletion targets one an administrator may hold no
- * membership in at all). `getAccountInOrganization` cannot serve that
- * caller: it deliberately returns nothing for an account with no
- * membership in the organization named, which is exactly the account this
- * function has to find.
+ * Also what `routes/admin.ts`'s own `isRequestFromPlatformAdministrator`
+ * (ADMIN-4) resolves a session's account through: a platform administrator
+ * is not — by ADMIN-4's own text — necessarily a member of the
+ * organization an admin-console read or an ADMIN-5 tenant deletion acts
+ * on, so `getAccountInOrganization` cannot serve that caller either.
  */
 export function getAccountById(
   accountId: string,
-  db: Database
+  db: Executor
 ): Account | undefined {
   return db.select().from(accounts).where(eq(accounts.id, accountId)).get()
 }

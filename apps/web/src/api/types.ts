@@ -30,9 +30,10 @@ export interface MembershipSummary {
   role: string
 }
 
-/** `GET /auth/me`'s `account` field — `null` for an anonymous or dead session. */
+/** `GET /auth/me`'s `account` field — `null` for an anonymous or dead session. `email` (LINK-6): `pages/Connect.tsx` names the account signed in, not merely which organizations it belongs to. */
 export interface AccountSummary {
   id: string
+  email: string
   memberships: MembershipSummary[]
 }
 
@@ -54,6 +55,43 @@ export interface InstallBeginResponse {
 /** `POST /organizations/:organizationId/discord-servers/install/callback`. */
 export interface InstallCallbackResponse {
   serverId: string
+}
+
+/** `POST /organizations/:organizationId/person-link/discord/begin` (LINK-7). */
+export interface PersonLinkBeginResponse {
+  authorizationUrl: string
+  expiresAt: number
+}
+
+/**
+ * `@bloombot/auth`'s own `PersonLinkPreview` (`person-link.ts`), as
+ * `routes/person-link.ts` passes it through — mirrored by hand, the same
+ * "this app does not import `@bloombot/auth`" boundary (PLAT-2) this
+ * file's own module comment already explains for every other shape here.
+ * LINK-6: this is what a connect screen names before asking anyone to
+ * confirm.
+ */
+export type PersonLinkOutcome =
+  | { kind: 'attach' }
+  | { kind: 'already-connected' }
+  | { kind: 'merge'; existingPersonId: string }
+
+export interface PersonLinkPreview {
+  organizationId: string
+  survivorPersonId: string
+  identity: { surface: 'discord' | 'mcp'; externalId: string }
+  outcome: PersonLinkOutcome
+}
+
+/** `POST /organizations/:organizationId/person-link/discord/preview` (LINK-6/7). */
+export interface DiscordPersonLinkPreviewResponse {
+  preview: PersonLinkPreview
+  discordUsername?: string
+}
+
+/** `POST /organizations/:organizationId/person-link/mcp/preview` (LINK-6/8). */
+export interface McpPersonLinkPreviewResponse {
+  preview: PersonLinkPreview
 }
 
 /**

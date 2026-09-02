@@ -17,14 +17,19 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 // TEN-2's two documented exceptions, and why each is safe:
 //  - accounts.ts#getAccountByEmail: an account exists before any organization
 //    does, so sign-in has to find it by email alone.
+//  - accounts.ts#getAccountById: the same class, one level up (LINK-6) —
+//    `GET /auth/me` already knows exactly which account a valid,
+//    already-authenticated session proved, before any organization is in
+//    play, so scoping this lookup to one would ask the caller to supply
+//    something the session itself does not carry. Also what
+//    `routes/admin.ts`'s own `isRequestFromPlatformAdministrator` (ADMIN-4)
+//    resolves a session's account through: a platform administrator is not
+//    necessarily a member of the organization an admin-console read or an
+//    ADMIN-5 tenant deletion targets, so `getAccountInOrganization` cannot
+//    serve that caller either.
 //  - accounts.ts#disableAccount: `disabled_at` lives on `accounts`, not
 //    `memberships` — disabling is account-wide, not scoped to one
 //    organization (AUTH-1..4 rework, finding 3).
-//  - accounts.ts#getAccountById: AUTH-4's platform-administrator check
-//    reads an account's own email with no organization to scope the lookup
-//    by — a platform administrator is not necessarily a member of the
-//    organization an admin-console read or an ADMIN-5 tenant deletion
-//    targets (ADMIN-4/ADMIN-5).
 //  - organizations.ts#listTenantDeletions: ADMIN-5's own audit trail, read
 //    by the platform-administrator console — spans every (former)
 //    organization by definition, the same class `cost-ledger.ts`'s own
@@ -86,7 +91,7 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    caller already knows the organization; nothing about a merge needs to
 //    find a challenge by secret alone).
 const ALLOWLIST: Record<string, string[]> = {
-  'accounts.ts': ['getAccountByEmail', 'disableAccount', 'getAccountById'],
+  'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
   'organizations.ts': ['listTenantDeletions'],
   'course-join-links.ts': ['redeemJoinLink'],
@@ -108,6 +113,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'createSignInToken',
     'consumeSignInToken',
     'hasActiveSignInToken',
+    'deleteSignInToken',
   ],
   'sessions.ts': [
     'createSession',

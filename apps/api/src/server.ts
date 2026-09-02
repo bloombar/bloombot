@@ -46,6 +46,10 @@ import { buildAdminRouter } from './routes/admin.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
+import {
+  buildPersonLinkRouter,
+  type PendingDiscordConnect,
+} from './routes/person-link.js'
 import { buildTranscriptExportsRouter } from './routes/transcript-exports.js'
 
 export interface ServerDependencies {
@@ -84,6 +88,8 @@ export interface ServerDependencies {
   apiHealthUrl: string
   /** Overridable so a test can fake the three processes' health responses with no real network — `checkPlatformHealth`'s own `fetchFn` option, threaded through `routes/admin.ts`. */
   adminHealthFetch?: typeof fetch
+  /** LINK-6/7 — `routes/person-link.ts`'s own in-memory record of an in-flight Discord connect attempt (D-44's own session-binding rework). Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
+  pendingDiscordConnects?: Map<string, PendingDiscordConnect>
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -171,6 +177,23 @@ export function buildApp(deps: ServerDependencies): Express {
   app.use(
     '/organizations/:organizationId/transcript-exports',
     buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
+  )
+  app.use(
+    '/organizations/:organizationId/person-link',
+    buildPersonLinkRouter({
+      db: deps.db,
+      logger: deps.logger,
+      discordRestClient: deps.discordRestClient,
+      discordClientId: deps.discordClientId,
+      // Reuses the install flow's own redirect URI — see
+      // `routes/person-link.ts`'s own module comment for why the two flows
+      // share one physical page.
+      discordRedirectUri: deps.discordRedirectUri,
+      discordOauthBase: deps.discordOauthBase,
+      ...(deps.pendingDiscordConnects
+        ? { pendingDiscordConnects: deps.pendingDiscordConnects }
+        : {}),
+    })
   )
   // ADMIN-4/ADMIN-5 — mounted at `/admin`, not under
   // `/organizations/:organizationId/...` (`routes/admin.ts`'s own module

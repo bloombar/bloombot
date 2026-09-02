@@ -5,7 +5,7 @@
  * rework this file follows).
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
@@ -38,6 +38,26 @@ describe('Chat (WEB-10)', () => {
       await screen.findByText(/not connected to a course here yet/)
     ).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  // LINK-6/7 — the invitation is now a real link to `pages/Connect.tsx`,
+  // for this same organization, not merely advice to find an instructor.
+  it('an unconnected account can navigate straight to the connect screen for this organization', async () => {
+    listChatCourses.mockRejectedValue(
+      new ApiError(404, { error: 'chat_not_connected' })
+    )
+    const assign = vi.fn()
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign },
+      writable: true,
+    })
+
+    render(<Chat organizationId="org-1" />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Connect your account' })
+    )
+
+    expect(assign).toHaveBeenCalledWith('/connect/org-1')
   })
 
   it('a connected account with no enrolments sees the distinct "not enrolled" message, not the connect invitation', async () => {

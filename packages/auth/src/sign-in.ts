@@ -25,7 +25,11 @@ import {
 
 import type { EmailSender } from './email.js'
 import { decideLinkOutcome, type GoogleIdentity } from './link.js'
-import { issueSignInToken, consumeSignInToken } from './tokens.js'
+import {
+  issueSignInToken,
+  consumeSignInToken,
+  discardSignInToken,
+} from './tokens.js'
 import {
   createSession,
   revokeAllSessions,
@@ -174,6 +178,98 @@ function healWebPersonForReturningAccount(
 }
 
 /**
+ * LINK-6/7 — resolve (or create) the account's own connected web person in
+ * `organizationId`, on demand, the moment a connect flow (Discord OAuth,
+ * LINK-7; an MCP token, LINK-8) needs a survivor to bind onto in an
+ * organization that is not necessarily the account's own personal one.
+ * `createConnectedWebPerson` above only ever runs for the account's *own*
+ * personal organization, at sign-in time (that function's own doc comment:
+ * "the only organization this function's own caller has just created") —
+ * but the Discord or MCP identity a connect flow is proving typically lives
+ * in a *different* organization's own person: an institution's, admitted by
+ * a roster import or a Discord role, long before this account ever signed
+ * in. `apps/api`'s own connect routes call this to get a survivor for
+ * exactly that organization, then hand it to `beginDiscordPersonLink`/
+ * `issueMcpPersonLinkToken`/`completeMcpPersonLink` — `person-link.ts`'s own
+ * `connectOrMerge` does the rest: attaching the identity fresh if nobody
+ * held it yet, or merging in whoever already did (LINK-4), which is how a
+ * roster-admitted person's own conversation, enrolment and usage end up on
+ * this account's person rather than stranded on a person this account has
+ * no other way to reach.
+ *
+ * Read-then-create, not a raw insert: an existing person for this
+ * `(organizationId, accountId)` pair is returned unchanged (the ordinary,
+ * idempotent case — a caller connecting a second identity, or simply
+ * re-visiting the connect screen, already has one). Creating one runs the
+ * identical `createPerson` + `connectIdentity` sequence
+ * `createConnectedWebPerson` already uses, inside its own transaction, so a
+ * concurrent caller creating the same pair first is caught the same way
+ * `resolvePersonByIdentity`'s own race already is — the loser's insert
+ * fails the identity's own unique constraint, and the winner is looked up
+ * and returned instead of a raw driver error escaping.
+ *
+ * Does *not* check that `organizationId` actually exists — the same
+ * "assumes a valid id, insert fails loudly on a foreign key otherwise"
+ * shape `createPerson` itself already has. `apps/api`'s own route is where
+ * TEN-5's "a foreign and a nonexistent id refuse identically" is enforced
+ * (checked explicitly, before this ever runs — see `routes/person-link.ts`),
+ * the same split `routes/chat.ts`'s own WEB-10 fix already draws between
+ * this package (assumes a valid id) and the HTTP layer (checks one).
+ */
+export function ensureWebPersonForAccount(
+  organizationId: string,
+  accountId: string,
+  db: Database
+): peopleRepo.Person {
+  const identity = { surface: 'web' as const, externalId: accountId }
+  const existing = peopleRepo.resolveIdentity(organizationId, identity, db)
+  if (existing) return existing
+
+  try {
+    return db.transaction((tx) => {
+      const again = peopleRepo.resolveIdentity(organizationId, identity, tx)
+      if (again) return again
+
+      const person = peopleRepo.createPerson(organizationId, {}, tx)
+      const connected = peopleRepo.connectIdentity(
+        organizationId,
+        person.id,
+        identity,
+        tx
+      )
+      if (!connected) {
+        throw new Error(
+          `ensureWebPersonForAccount: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
+        )
+      }
+      // `person` (above) predates `connectIdentity`'s own write —
+      // `connectedAt` on it is still `null`, since `createPerson` sets it
+      // and `connectIdentity` is what changes it a moment later. Re-read so
+      // the caller — `apps/api`'s own connect routes, which check
+      // `connectedAt` to decide what a preview screen says — sees the row
+      // as it actually stands, not as it stood a statement ago.
+      return peopleRepo.getPerson(organizationId, person.id, tx) ?? person
+    })
+  } catch (error) {
+    // The same race `resolvePersonByIdentity` (`@bloombot/db`'s `people.ts`)
+    // already handles for its own identical read-then-insert shape: a
+    // concurrent caller winning the same `(organizationId, accountId)` pair
+    // first fails this transaction's own insert against
+    // `person_identities_org_surface_external_unique`, not the
+    // `accounts.email` constraint `isUniqueEmailViolation` below checks for
+    // — this function never touches `accounts` at all.
+    if (
+      error instanceof BetterSqlite3.SqliteError &&
+      error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    ) {
+      const winner = peopleRepo.resolveIdentity(organizationId, identity, db)
+      if (winner) return winner
+    }
+    throw error
+  }
+}
+
+/**
  * Find the account for `email`, or create one with a fresh personal
  * organization, an `owner` membership and a connected web person, atomically
  * (TEN-1, and `createConnectedWebPerson`'s own doc comment for the person).
@@ -223,6 +319,9 @@ export interface RequestSignInLinkDeps {
  * Returns nothing: the plaintext token's only destination is the outgoing
  * email, never a value this function hands back to its own caller to log,
  * cache, or otherwise let escape the mail port.
+ *
+ * @throws whatever `deps.emailSender.send` throws — see the `catch` below
+ *   for why this is not swallowed.
  */
 export async function requestSignInLink(
   email: string,
@@ -242,11 +341,34 @@ export async function requestSignInLink(
     return
   }
   const { token } = issueSignInToken(email, deps.db)
-  await deps.emailSender.send(
-    email,
-    'Sign in to Bloombot',
-    `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
-  )
+  try {
+    await deps.emailSender.send(
+      email,
+      'Sign in to Bloombot',
+      `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
+    )
+  } catch (error) {
+    // AUTH-5's must-fix 1: until this slice, the only senders in this
+    // codebase were a file writer and a logger, neither of which throws in
+    // practice, so a token this call issued but never actually delivered
+    // was not a case worth handling. A real transport routinely does throw
+    // — a relay blip, a rejected recipient — and without this, the token
+    // row above stays live: `hasActiveSignInToken` would then silently
+    // decline every retry for the rest of its fifteen-minute lifetime,
+    // this function returning cleanly and its caller (`routes/auth.ts`)
+    // answering `204` on every one of them, while nothing is ever sent —
+    // exactly what AUTH-5's own text forbids ("accepting a sign-in it will
+    // silently drop"). Discarding the token here — not consuming it, since
+    // it was never legitimately redeemed — reopens the address for an
+    // immediate retry instead of a fifteen-minute lockout, and the error
+    // still propagates (this function's own contract, and `email.ts`'s
+    // `EmailSender` doc comment: "implementations may throw; `sign-in.ts`
+    // does not catch on the caller's behalf") so `routes/auth.ts`'s
+    // `.catch(next)` still answers the caller honestly rather than a false
+    // `204`.
+    discardSignInToken(token, deps.db)
+    throw error
+  }
 }
 
 /**

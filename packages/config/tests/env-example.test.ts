@@ -86,7 +86,22 @@ describe('env.example (QA-6)', () => {
       'BOT_TOKEN',
       'DISCORD_CLIENT_SECRET',
       'MAIL_FILE',
+      // AUTH-5 — the SMTP relay's own credentials, read directly by
+      // apps/api rather than through the schema (CFG-5): a credential, the
+      // same reason BOT_TOKEN/OPENAI_API_KEY are not part of envSchema
+      // either. MAIL_SMTP_HOST/MAIL_SMTP_PORT/MAIL_FROM are not credentials
+      // and go through the schema instead, so they need no entry here.
+      'MAIL_SMTP_USER',
+      'MAIL_SMTP_PASSWORD',
       'OPENAI_API_KEY',
+      // OPS-12 — scripts/ops-monitor.mjs's own webhook and poll interval,
+      // read directly rather than through the schema for the same reason
+      // this whole list exists: it is not one of the four apps' processes
+      // this schema validates, but a variable read from process.env still
+      // needs to be pinned here so it cannot silently drift from
+      // env.example.
+      'OPS_ALERT_WEBHOOK_URL',
+      'OPS_ALERT_POLL_INTERVAL_MS',
     ]
     const missing = readDirectly.filter((key) => !documented.has(key))
     expect(missing).toEqual([])

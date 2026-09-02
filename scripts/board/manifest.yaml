@@ -2363,6 +2363,21 @@
   phase: 12
   status: In review
   review: false
+- id: LINK-10
+  title: A connected person can reach the course they connected to, in the browser
+  full: Connecting proves who somebody is; it does not make them a member of the
+    institution running the course. The panel's organization switcher is built
+    from memberships, so a student who has connected — and who Discord now
+    answers — still opens the web app and sees only their own personal
+    organization, with no way to reach the course their enrolment lives in. The
+    browser has to know about the organizations a person is connected into, not
+    only the ones their account administers, or LINK-6's payoff never arrives on
+    the web surface at all.
+  section: §28 Account Linking Across Surfaces
+  family: LINK
+  phase: 12
+  status: Backlog
+  review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address
   full: A person gains an identity on a second surface by proving control of the
@@ -2545,7 +2560,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In review
   review: false
 - id: ADMIN-2
   title: Reading a transcript is itself recorded
@@ -2555,7 +2570,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In review
   review: false
 - id: ADMIN-3
   title: Export produces a file, as a job
@@ -2565,7 +2580,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In review
   review: false
 - id: ADMIN-4
   title: A platform administrator sees tenants, not conversations
@@ -2576,7 +2591,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In review
   review: false
 - id: ADMIN-5
   title: Deleting a tenant's data is explicit, confirmed and audited
@@ -2586,7 +2601,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In review
   review: false
 - id: AUTH-5
   title: A sign-in link actually reaches the person
@@ -2601,7 +2616,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 15
-  status: In progress
+  status: Done
   review: false
 - id: OPS-8
   title: The platform deploys as the processes it actually is
@@ -2612,7 +2627,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-9
   title: Cutover is rehearsed against a copy before it is real
@@ -2622,7 +2637,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-10
   title: The old system is retired deliberately, and can be returned to
@@ -2633,7 +2648,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-11
   title: Secrets are rotated at cutover
@@ -2643,7 +2658,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-12
   title: A student-facing failure pages somebody
@@ -2653,7 +2668,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-13
   title: A server administrator can set the platform up from documentation alone

@@ -118,12 +118,14 @@ describe('discordServers.scaffold handler', () => {
             status: 'created',
             adminsOnly: false,
             establishedByThisRun: true,
+            accessRepaired: false,
           },
           {
             name: 'admins',
             status: 'created',
             adminsOnly: true,
             establishedByThisRun: true,
+            accessRepaired: false,
           },
         ],
       },
@@ -138,6 +140,7 @@ describe('discordServers.scaffold handler', () => {
             status: 'created',
             adminsOnly: false,
             establishedByThisRun: true,
+            accessRepaired: false,
           },
         ],
       },
@@ -229,6 +232,7 @@ describe('discordServers.scaffold handler', () => {
             status: 'already_present',
             adminsOnly: false,
             establishedByThisRun: false,
+            accessRepaired: false,
           },
         ],
       },
@@ -338,6 +342,272 @@ describe('discordServers.scaffold handler', () => {
     const allowed = BigInt(String(repair?.body?.['allow'] ?? '0'))
     expect(allowed & 0x400n).toBe(0x400n) // view
     expect(allowed & 0x10n).toBe(0x10n) // manage channels
+  })
+
+  // SRV-9, the test that matters most: the user's actual situation. A
+  // category that already exists without the bot in its overwrites,
+  // holding a channel an instructor created by hand before the category
+  // was repaired — Discord copied the category's overwrites in at that
+  // channel's creation time, then stopped syncing them the moment the
+  // channel got any of its own, so the channel kept its own stale snapshot
+  // even after the category (in an earlier run) was fixed. One scaffold
+  // run must repair both, leaving every other overwrite on each untouched.
+  it('repairs its own access on both a category and a hand-made channel inside it that predate the bot granting itself any (D-51)', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [{ name: 'general', adminsOnly: false }] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parent_id: null,
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+          { id: 'role-students', type: 0, allow: '3072', deny: '0' },
+        ],
+      },
+      {
+        // Made by hand before the category was repaired — its own
+        // overwrites are a snapshot Discord stopped syncing with the
+        // category's the moment it got any of its own, and the bot is
+        // named nowhere in either.
+        id: 'chan-1',
+        type: 0,
+        name: 'general',
+        parent_id: 'cat-1',
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+          { id: 'role-students', type: 0, allow: '3072', deny: '0' },
+        ],
+      },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      categories: {
+        channels: {
+          name: string
+          status: string
+          accessRepaired: boolean
+        }[]
+      }[]
+    }
+
+    const repairs = discordServer.requests.filter(
+      (request) =>
+        request.method === 'PUT' &&
+        request.path.endsWith(`/permissions/${FAKE_BOT_USER_ID}`)
+    )
+    expect(repairs).toHaveLength(2)
+    expect(repairs.map((r) => r.path)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('/channels/cat-1/'),
+        expect.stringContaining('/channels/chan-1/'),
+      ])
+    )
+
+    // Every other overwrite on both the category and the channel survived —
+    // the students role grant and the `@everyone` denial that keeps the
+    // course private, neither replaced nor dropped by the bot's own repair.
+    const stored = discordServer.guildChannelsFor(seeded.guildId) as Record<
+      string,
+      unknown
+    >[]
+    const cat1 = stored.find((c) => c['id'] === 'cat-1') as Record<
+      string,
+      unknown
+    >
+    const chan1 = stored.find((c) => c['id'] === 'chan-1') as Record<
+      string,
+      unknown
+    >
+    for (const row of [cat1, chan1]) {
+      const overwrites = row['permission_overwrites'] as { id: string }[]
+      expect(overwrites.map((o) => o.id).sort()).toEqual(
+        [seeded.guildId, 'role-students', FAKE_BOT_USER_ID].sort()
+      )
+    }
+
+    expect(report.categories[0]?.channels[0]).toEqual(
+      expect.objectContaining({
+        name: 'general',
+        status: 'already_present',
+        accessRepaired: true,
+      })
+    )
+  })
+
+  // The other half of the same judgment call: a channel with none of its
+  // own overwrites inherits its category's through Discord's own cascade
+  // (including the bot's own repair, once the category has one) — writing
+  // to it would be redundant, and would desync it from its category in
+  // Discord's UI. Only the category gets a `PUT`.
+  it('does not write to a channel with no overwrites of its own, once its category alone grants the bot access (D-51)', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [{ name: 'general', adminsOnly: false }] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parent_id: null,
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+        ],
+      },
+      // No `permission_overwrites` of its own at all — inherits the
+      // category's.
+      { id: 'chan-1', type: 0, name: 'general', parent_id: 'cat-1' },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      categories: { channels: { accessRepaired: boolean }[] }[]
+    }
+
+    const writes = discordServer.writeRequests()
+    expect(writes).toHaveLength(1) // the category's own repair, nothing else
+    expect(writes[0]?.path).toContain('/channels/cat-1/')
+    expect(report.categories[0]?.channels[0]?.accessRepaired).toBe(false)
+  })
+
+  // SRV-9's admins-only case: a channel closed to everyone but admins,
+  // created with its own overwrites before the bot granted itself
+  // anything, must be repaired the same way — without widening who can see
+  // it. The repair is one target's own entry; the students role must stay
+  // absent, not get pulled in from anywhere.
+  it('repairs an admins-only channel without widening who can see it (D-51)', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [{ name: 'staff', adminsOnly: true }] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parent_id: null,
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+          { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+          { id: 'role-students', type: 0, allow: '3072', deny: '0' },
+        ],
+      },
+      {
+        // Admins-only by its own overwrite, deliberately excluding the
+        // students role the category itself grants.
+        id: 'chan-1',
+        type: 0,
+        name: 'staff',
+        parent_id: 'cat-1',
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+          { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+        ],
+      },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      categories: {
+        channels: { adminsOnly: boolean; accessRepaired: boolean }[]
+      }[]
+    }
+
+    const stored = discordServer.guildChannelsFor(seeded.guildId) as Record<
+      string,
+      unknown
+    >[]
+    const chan1 = stored.find((c) => c['id'] === 'chan-1') as Record<
+      string,
+      unknown
+    >
+    const overwrites = chan1['permission_overwrites'] as { id: string }[]
+    // The bot was added; the students role, deliberately absent before the
+    // repair, is still absent after it.
+    expect(overwrites.map((o) => o.id).sort()).toEqual(
+      [seeded.guildId, 'role-admins', FAKE_BOT_USER_ID].sort()
+    )
+    expect(overwrites.some((o) => o.id === 'role-students')).toBe(false)
+    expect(report.categories[0]?.channels[0]).toEqual(
+      expect.objectContaining({ adminsOnly: true, accessRepaired: true })
+    )
+  })
+
+  // SRV-7 applied to SRV-9's own repair: once a channel's access has been
+  // fixed, a second run must find the bot already there and write nothing
+  // — for the category and the channel alike.
+  it('writes nothing on a second run once the category and channel access have both been repaired (D-51)', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [{ name: 'general', adminsOnly: false }] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parent_id: null,
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+        ],
+      },
+      {
+        id: 'chan-1',
+        type: 0,
+        name: 'general',
+        parent_id: 'cat-1',
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+        ],
+      },
+    ])
+
+    await runScaffold(seeded.organizationId, seeded.courseId)
+    const writesAfterFirstRun = discordServer.writeRequests().length
+    expect(writesAfterFirstRun).toBe(2) // category repair + channel repair
+
+    const secondReport = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      categories: { channels: { accessRepaired: boolean }[] }[]
+    }
+
+    // No new writes at all — the fake now shows the bot on both, so the
+    // second run finds it already granted everywhere.
+    expect(discordServer.writeRequests()).toHaveLength(writesAfterFirstRun)
+    expect(secondReport.categories[0]?.channels[0]?.accessRepaired).toBe(false)
   })
 
   // Finding 1 of the SRV-6..8 rework: Discord slugs a `GUILD_TEXT`

@@ -46,14 +46,32 @@
  * undeclared, which is precisely the "hand-delete a live course's channels"
  * outcome SRV-8 exists to prevent.
  *
- * A category or channel this run finds `already_present` never had its own
- * permissions written by this run (SRV-8's structural no-edit, above) — so
+ * SRV-9 is the one deliberate exception to that structural no-edit, and it
+ * is narrow on purpose: a course category denies `@everyone`, and Discord
+ * applies that denial to the bot too unless it is missing from a category's
+ * or channel's own overwrites — so an `already_present` category or channel
+ * this run adopts gets a single `PUT /channels/{id}/permissions/{botId}`
+ * whenever the bot is missing there, and nowhere else. That repair applies
+ * one level deeper than it first shipped: an `already_present` *category*
+ * missing the bot has been repaired since `allowBotOverwrite` existed
+ * (below), but an `already_present` *channel* with its own overwrites
+ * (Discord copies a category's overwrites into a channel at creation, then
+ * stops syncing them the moment the channel gets any of its own) did not
+ * inherit that fix and stayed silently unreachable — D-51 has the fuller
+ * reasoning, including why a channel with *no* overwrites of its own is
+ * left alone entirely (it already inherits the category's, repair
+ * included, and writing to it would only desync it from the category in
+ * Discord's UI).
+ *
+ * A category or channel this run finds `already_present` never had any
+ * *other* permission written by this run (SRV-8's structural no-edit,
+ * SRV-9's one exception above) — so
  * `ScaffoldCategoryReport.everyoneDenied`/`ScaffoldChannelReport.adminsOnly`
- * for one of those is *read* from Discord's own response, not copied from
- * what the course declares, and `establishedByThisRun: false` says so
- * (finding 4 of the rework). See `docs/DECISIONS.md` for what a wrong
- * observed value means for an instructor, given this package's structural
- * inability to fix it.
+ * for one of those is *read* from Discord's own response (including the
+ * bot's own repair, if this run made one), not copied from what the course
+ * declares, and `establishedByThisRun: false` says so (finding 4 of the
+ * rework). See `docs/DECISIONS.md` for what a wrong observed value means
+ * for an instructor, given this package's structural inability to fix it.
  */
 
 import { courses, discordServers, type Database } from '@bloombot/db'
@@ -113,6 +131,19 @@ export interface ScaffoldChannelReport {
   adminsOnly: boolean
   /** `true` only for `status: 'created'` — whether `adminsOnly` above is a permission state this run actually set, or merely one it observed on a pre-existing channel it never wrote to. See this file's own module comment and `docs/DECISIONS.md`. */
   establishedByThisRun: boolean
+  /**
+   * SRV-9's own field, distinct from `establishedByThisRun` above: `true`
+   * only for `status: 'already_present'`, and only when this run found the
+   * bot missing from *this channel's own* overwrites and wrote it a single
+   * `PUT /channels/{id}/permissions/{id}` to fix that (D-51) — the channel
+   * half of the same repair `already_present` categories have had since
+   * `allowBotOverwrite`. `false` for a channel that inherits its category's
+   * overwrites (nothing of its own to be missing the bot from) and for one
+   * that already named the bot, so an instructor can tell "I just fixed
+   * this" from "this was already fine" instead of both collapsing into
+   * `already_present`.
+   */
+  accessRepaired: boolean
 }
 
 export interface ScaffoldCategoryReport {
@@ -472,19 +503,58 @@ export function createDiscordScaffoldHandler(
               normalizeChannelName(channel.name)
         )
         if (existingChannel) {
+          // SRV-9's channel half. Discord copies a category's own overwrites
+          // into a channel at creation time, but stops syncing them the
+          // moment the channel gets any of its own — so an instructor who
+          // hand-made a channel before its category was repaired (or a
+          // channel this handler itself made admins-only, before
+          // `allowBotOverwrite` existed) holds a snapshot that never picks
+          // up the category's own repair. `channelOverwritesObserved.length
+          // === 0` is exactly "this channel has none of its own", the same
+          // fallback `channelIsAdminsOnly` already reasons about below —
+          // that channel inherits the category's overwrites (including,
+          // now, the bot's) through Discord's own cascade, so writing here
+          // would be redundant *and* would desync it from its category in
+          // Discord's UI, a real cost to an instructor managing permissions
+          // at the category level. Only a channel with its own overwrites
+          // that omit the bot gets the single repair `PUT`.
+          const channelOverwritesObserved =
+            existingChannel.permissionOverwrites ?? []
+          const botAlreadyGrantedOnChannel = channelOverwritesObserved.some(
+            (entry) => entry.id === botUserId
+          )
+          const accessRepaired =
+            channelOverwritesObserved.length > 0 && !botAlreadyGrantedOnChannel
+          if (accessRepaired) {
+            // The same single-target `PUT` the category repair above uses —
+            // it replaces only the bot's own entry, so every role grant, any
+            // per-member permission an instructor added by hand, and the
+            // `@everyone` denial that makes an admins-only channel
+            // admins-only all survive untouched.
+            await deps.discordRestClient.grantBotChannelAccess(
+              deps.botToken,
+              existingChannel.id,
+              botUserId
+            )
+          }
           channelReports.push({
             name: channel.name,
             status: 'already_present',
             // Finding 4 of the rework: read, not copied from the
             // declaration — this run wrote nothing to an existing channel's
-            // permissions (SRV-8).
+            // *other* permissions (SRV-8). Computed from what this run now
+            // knows the channel's overwrites actually are, so the repair
+            // above (if it happened) is reflected here too.
             adminsOnly: channelIsAdminsOnly(
-              existingChannel.permissionOverwrites ?? [],
+              accessRepaired
+                ? [...channelOverwritesObserved, botOverwrite]
+                : channelOverwritesObserved,
               categoryOverwritesObserved,
               studentsRoleId,
               guildId
             ),
             establishedByThisRun: false,
+            accessRepaired,
           })
           continue
         }
@@ -510,6 +580,11 @@ export function createDiscordScaffoldHandler(
           status: 'created',
           adminsOnly: channel.adminsOnly,
           establishedByThisRun: true,
+          // Not a repair — this run created the channel with the bot's own
+          // overwrite already baked in where it needs one (an admins-only
+          // channel's own `adminsOnlyOverwrites`) or inheriting the
+          // category's (every other channel), never adopting one missing it.
+          accessRepaired: false,
         })
       }
 

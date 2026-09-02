@@ -11,7 +11,7 @@
 
 import { pathToFileURL } from 'node:url'
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, loadDotEnv } from '@bloombot/config'
 import { openDatabase, runMigrations } from '@bloombot/db'
 import { createLogger } from '@bloombot/logger'
 
@@ -43,6 +43,15 @@ function printReport(report: ImportReport): void {
 }
 
 function main(): void {
+  // OPS-9 (found while walking the cutover rehearsal end to end) — every
+  // other entry point (`apps/*/src/index.ts`, `packages/db/src/run-migrate.ts`,
+  // CFG-5) loads `.env` before touching `CONFIG`; this CLI did not, so
+  // `npm run legacy:import` only ever saw `DATABASE_PATH` when it was
+  // already exported in the shell, and threw `EnvValidationError` on a
+  // checkout whose credentials live only in `.env`, the same gap
+  // `run-migrate.ts` had.
+  loadDotEnv()
+
   const log = createLogger('legacy-import')
   const argv = process.argv.slice(2)
   const [snapshotPath, yamlPath] = argv.filter((arg) => arg !== '--i-know')

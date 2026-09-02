@@ -30,8 +30,11 @@
  *    `@bloombot/auth`, a plain read). Both `/mcp/preview` and `/mcp/confirm`
  *    now peek the token *first* — refusing not-found-shaped, no write at
  *    all, when it does not exist or names a different organization than
- *    the URL — and only call `ensureWebPersonForAccount` once that check
- *    passes.
+ *    the URL. (Superseded below, "round two": peeking the *token's* own
+ *    organization was not enough — the token itself can be minted for any
+ *    organization, on demand, by the caller. This paragraph is kept for the
+ *    record of what round one actually fixed, not as a description of what
+ *    ships today.)
  *  - **Discord** cannot do the same: `beginDiscordPersonLink` needs a real,
  *    already-persisted `personId` before Discord's OAuth ever starts
  *    (PPL-4's own "survivor bound at issue," unchanged, not this rework's
@@ -60,14 +63,28 @@
  * created a person on demand, *any* signed-in account resolved to *some*
  * person, so the check was satisfiable by construction, not enforced.
  * `PendingDiscordConnect` (below) is this router's own in-memory record of
- * which account began a given attempt — the same "process-local, never
- * persisted" device `pendingDiscordIdentities` already used for the OAuth
- * code exchange, extended to carry the binding this flow actually needs
- * checked. `/discord/preview` and `/discord/confirm` both refuse
- * not-found-shaped, before touching the database at all, the moment the
- * caller's own session names a different account than the one recorded at
- * `begin` — closing the account-takeover shape a shared `?code=&state=`
- * URL (browser history, a pasted link) would otherwise open.
+ * which account began a given attempt, and of the OAuth code exchange's own
+ * result once `/discord/preview` runs it — process-local state, never
+ * persisted to `db`, licensed by PLAT-4 (`docs/SPEC.md`: "Four processes,
+ * each single-instance … Never clustered") the same way `apps/mcp/src/server.ts`'s
+ * own session map already relies on this process being the only one.
+ * `/discord/preview` and `/discord/confirm` both refuse not-found-shaped,
+ * before touching the database at all, the moment the caller's own session
+ * names a different account than the one recorded at `begin` — closing the
+ * account-takeover shape a shared `?code=&state=` URL (browser history, a
+ * pasted link) would otherwise open.
+ *
+ * The residual cost of process-local state, stated plainly: a restart
+ * (a deploy, a crash, `pm2`'s own supervision) between `begin` and
+ * `confirm` loses this record even though `person_link_challenges` itself
+ * is still live in the database — `/discord/preview`/`/discord/confirm`
+ * answer `person_link_not_found` for a challenge that has not actually
+ * expired, and (for Discord specifically) permanently orphans the bare
+ * survivor `begin` already wrote (this file's own module comment on why
+ * that row is otherwise harmless). The person following the link simply
+ * starts over — LINK-6's own "does nothing until told to" means nothing
+ * was bound either way — but the orphaned row is a real, if bounded, cost
+ * a deploy mid-flow leaves behind.
  *
  * **A caller-mismatch spends nothing, unlike a genuine redemption.**
  * `completeDiscordPersonLink`'s own "consumed either way" rule exists
@@ -113,6 +130,49 @@
  * reopen exactly the account-takeover shape D-35's own rework closed for
  * the redemption itself — a caller could preview honestly and then confirm
  * an arbitrary victim's snowflake instead.
+ *
+ * **D-44 rework, round two — the write was deferred, not authorized, and a
+ * reviewer minted their own proof.** The bare-survivor design above (and
+ * `peekMcpPersonLink`'s own read-before-write ordering) closed a *junk*
+ * token or code — but an MCP token is not itself organization-specific
+ * proof of anything: `apps/mcp`'s own `bloombot_connectAssistant` mints one
+ * for any organization id, deliberately, no membership required (that
+ * tool's own doc comment). Nothing stopped a caller from minting their
+ * *own* token for a victim organization and redeeming it against
+ * themselves — the write this file's own first rework deferred, an
+ * attacker simply performed themselves, over the real MCP and HTTP
+ * surfaces, ending with `connectedAt` set in a tenant they had never
+ * touched. The Discord half had the identical shape: a caller with no
+ * relationship to an organization can always produce a *genuine* Discord
+ * OAuth proof of their own, real, never-before-seen-there snowflake —
+ * "organization-specific proof" was never what either surface actually
+ * checked; both only ever checked "a proof of *something*."
+ *
+ * **The actual rule: a caller with no membership in this organization may
+ * complete only a `merge` or `already-connected` outcome, never a fresh
+ * `attach`.** This is what "organization-specific" has to mean: the
+ * identity being proved must already resolve to a person *this
+ * organization already admitted* — a roster import or a Discord role,
+ * `connectOrMerge`'s own `merge` branch — not a person this router would
+ * be minting the first record of. It preserves the real student flow
+ * exactly (this file's own acceptance test previews `outcome.kind ===
+ * 'merge'`, because a roster-admitted student's Discord identity already
+ * belongs to someone) while refusing a caller who merely proved *an*
+ * identity, not one this organization has ever admitted. For MCP
+ * specifically this is enforced by dropping `ensureWebPersonForAccount`
+ * (which creates) from `/mcp/preview`/`/mcp/confirm` entirely, in favor of
+ * `people.resolveIdentity` — the same read-only shape `routes/chat.ts`'s
+ * own `resolveConnectedCallerPerson` already uses — refusing outright when
+ * the account has no existing person here: an MCP connect into an
+ * organization the account has never otherwise reached is meaningless
+ * regardless (there is no enrolment for an assistant to help with), so
+ * there is nothing for this surface to create in the first place. For
+ * Discord, which still has to write a bare survivor before OAuth even
+ * starts (this comment's own "D-44 rework" section above, unchanged), the
+ * gate moves to `/discord/preview`: an `attach` outcome for a caller with
+ * no membership is treated as a preview failure — refused before the
+ * identity is ever cached for confirm to redeem, the same `404` any other
+ * preview refusal already gives (`attachWithoutMembershipIsForbidden`, below).
  */
 
 import { Router, type Request } from 'express'
@@ -122,14 +182,13 @@ import {
   beginDiscordPersonLink,
   completeDiscordPersonLink,
   completeMcpPersonLink,
-  ensureWebPersonForAccount,
   peekDiscordPersonLinkCodeVerifier,
   peekMcpPersonLink,
   previewDiscordPersonLink,
   previewMcpPersonLink,
   type PersonLinkPreview,
 } from '@bloombot/auth'
-import { organizations, people, type Database } from '@bloombot/db'
+import { memberships, organizations, people, type Database } from '@bloombot/db'
 import {
   buildDiscordAuthorizationUrl,
   DiscordRequestError,
@@ -217,19 +276,37 @@ function sweepExpiredPendingConnects(
 
 /**
  * `/discord/begin`'s own survivor resolution (D-44's rework). Reuses the
- * account's existing survivor in `organizationId` when one already exists
- * (a legitimate repeat visit — resolved by `web` identity, a plain read);
- * creates a *bare* person — no identity attached, `connectedAt` left
- * `null` — otherwise. This file's own module comment has the full
- * reasoning for why a bare person is the safe thing to write before any
- * Discord-specific proof exists: it is inert everywhere else in this app
- * until `attachWebIdentityOrMerge` (below) gives it a `web` identity, which
- * only happens after that proof actually lands.
+ * account's existing survivor in `organizationId` in two cases — a
+ * legitimate repeat visit *after* connecting (resolved by `web` identity, a
+ * plain read), or a repeat/concurrent `begin()` for an attempt still
+ * in-flight (resolved from `pendingDiscordConnects`'s own in-memory record,
+ * below) — and only creates a *bare* person — no identity attached,
+ * `connectedAt` left `null` — when neither finds one. This file's own
+ * module comment has the full reasoning for why a bare person is the safe
+ * thing to write before any Discord-specific proof exists.
+ *
+ * Rework finding — a bare survivor carries no identity, so the `web`-identity
+ * lookup alone could never find one: the *first* version of this function's
+ * own doc comment claimed a "repeat visit" reuse branch that, for anyone who
+ * had not yet completed a connect, could never fire — every `begin()` before
+ * completion minted a fresh row, unbounded, for as many times as a caller
+ * cared to call it (measured directly: 200 calls, 200 rows, nothing sweeps
+ * them). The `pendingDiscordConnects` scan closes that: an attempt still
+ * live in this process's own memory for this exact `(accountId,
+ * organizationId)` pair reuses its own survivor rather than minting a
+ * second one. This bounds growth to roughly one row per account per
+ * organization per `DEFAULT_PERSON_LINK_TTL_MS` window, not one row per
+ * request — the residual (an account that waits out the TTL between
+ * attempts still adds a new bare row each time) is accepted and stated
+ * plainly, not solved further: `apps/mcp`'s own session-eviction rework
+ * (D-36) bounds a comparable resource the identical way, by TTL, not by
+ * eliminating repeat use.
  */
 function resolveOrCreateBareDiscordSurvivor(
   organizationId: string,
   accountId: string,
-  db: Database
+  db: Database,
+  pendingDiscordConnects: Map<string, PendingDiscordConnect>
 ): people.Person {
   const existing = people.resolveIdentity(
     organizationId,
@@ -237,7 +314,43 @@ function resolveOrCreateBareDiscordSurvivor(
     db
   )
   if (existing) return existing
+
+  for (const connect of pendingDiscordConnects.values()) {
+    if (connect.accountId !== accountId) continue
+    if (connect.organizationId !== organizationId) continue
+    const reused = people.getPerson(
+      organizationId,
+      connect.survivorPersonId,
+      db
+    )
+    if (reused) return reused
+  }
+
   return people.createPerson(organizationId, {}, db)
+}
+
+/**
+ * D-44 rework, round two — the rule that closes the self-minted-proof
+ * exploit (this file's own module comment): a caller with no membership in
+ * `organizationId` may complete only a `merge` or `already-connected`
+ * outcome, never a fresh `attach`. `memberships.getMembership` is the same
+ * tenancy check `routes/actions.ts`/`routes/discord-servers.ts` already run
+ * before dispatching anything for a signed-in account — reused here as the
+ * one signal available that distinguishes "staff of this institution,
+ * legitimately testing their own connect flow" from "a caller who merely
+ * proved an identity nobody here admitted." A student's own real, roster-
+ * or role-admitted flow is untouched (`outcome.kind` is always `merge` or
+ * `already-connected` for one — this file's own acceptance test asserts
+ * exactly that).
+ */
+function attachWithoutMembershipIsForbidden(
+  organizationId: string,
+  accountId: string,
+  outcomeKind: PersonLinkPreview['outcome']['kind'],
+  db: Database
+): boolean {
+  if (outcomeKind !== 'attach') return false
+  return memberships.getMembership(organizationId, accountId, db) === undefined
 }
 
 /**
@@ -308,10 +421,16 @@ export function buildPersonLinkRouter(
       return
     }
 
+    // Sweeps before the reuse scan below, not only inside preview/confirm —
+    // an attempt this scan would otherwise treat as "still live" needs to
+    // actually still be live (rework finding, this file's own module
+    // comment on `resolveOrCreateBareDiscordSurvivor`).
+    sweepExpiredPendingConnects(pendingDiscordConnects, Date.now())
     const survivor = resolveOrCreateBareDiscordSurvivor(
       organizationId,
       accountId,
-      deps.db
+      deps.db,
+      pendingDiscordConnects
     )
     const begun = beginDiscordPersonLink(organizationId, survivor.id, deps.db)
     pendingDiscordConnects.set(begun.state, {
@@ -424,14 +543,12 @@ export function buildPersonLinkRouter(
       res.status(404).json({ error: 'person_link_not_found' })
       return
     }
-    // Redundant with `pending.organizationId` already being a real,
-    // begin-time-validated organization — kept explicit anyway, the same
-    // uniform TEN-5 shape every other handler in this file holds itself
-    // to, rather than relying on that invariant silently.
-    if (!organizationExists(organizationId, deps.db)) {
-      res.status(404).json({ error: 'organization_not_found' })
-      return
-    }
+    // No `organizationExists` check here (rework finding — removed, not
+    // merely re-explained): `pending.organizationId` is already a real
+    // organization, checked at `/discord/begin`, and the comparison above
+    // already refuses any mismatch — this check could never fire false,
+    // and a reviewer's own mutation (deleting it) left the whole suite
+    // green, confirming it was dead rather than merely provably redundant.
     if (!pending.discordExternalId) {
       // No preceding `/discord/preview` — the OAuth code can only be
       // exchanged once, so this handler has no way to redo it itself.
@@ -477,20 +594,33 @@ export function buildPersonLinkRouter(
         .json({ error: 'invalid_request', issues: parsed.error.issues })
       return
     }
-    if (!organizationExists(organizationId, deps.db)) {
-      res.status(404).json({ error: 'organization_not_found' })
-      return
-    }
+    // No `organizationExists` check here (rework finding — this file's own
+    // module comment): checking it separately, before the peek below,
+    // answered a nonexistent organization with a *different* error code
+    // than a real one the token merely does not name — an oracle by itself.
+    // The peek-and-match check alone already refuses both identically:
+    // `peeked.organizationId` can never equal an organization id that does
+    // not exist, so there is nothing an existence check adds.
     const peeked = peekMcpPersonLink(parsed.data.token, deps.db)
     if (!peeked || peeked.organizationId !== organizationId) {
       res.status(404).json({ error: 'person_link_not_found' })
       return
     }
-    const survivor = ensureWebPersonForAccount(
+    // D-44 rework, round two (this file's own module comment) — read-only,
+    // never `ensureWebPersonForAccount`: an MCP connect creates nothing.
+    // The account must already have a person here — reached only through a
+    // prior Discord connect, or genuinely already this organization's own
+    // (an instructor's personal-org sign-in, say) — or there is no
+    // enrolment for an assistant to reach and nothing to preview.
+    const survivor = people.resolveIdentity(
       organizationId,
-      accountId,
+      { surface: 'web', externalId: accountId },
       deps.db
     )
+    if (!survivor) {
+      res.status(404).json({ error: 'person_link_not_found' })
+      return
+    }
     const preview = previewMcpPersonLink(
       parsed.data.token,
       survivor.id,
@@ -519,20 +649,23 @@ export function buildPersonLinkRouter(
         .json({ error: 'invalid_request', issues: parsed.error.issues })
       return
     }
-    if (!organizationExists(organizationId, deps.db)) {
-      res.status(404).json({ error: 'organization_not_found' })
-      return
-    }
+    // No `organizationExists` check — same reasoning as `/mcp/preview`,
+    // immediately above it in this file.
     const peeked = peekMcpPersonLink(parsed.data.token, deps.db)
     if (!peeked || peeked.organizationId !== organizationId) {
       res.status(404).json({ error: 'person_link_not_found' })
       return
     }
-    const survivor = ensureWebPersonForAccount(
+    // Read-only — same as `/mcp/preview`, this file's own module comment.
+    const survivor = people.resolveIdentity(
       organizationId,
-      accountId,
+      { surface: 'web', externalId: accountId },
       deps.db
     )
+    if (!survivor) {
+      res.status(404).json({ error: 'person_link_not_found' })
+      return
+    }
     const result = completeMcpPersonLink(
       parsed.data.token,
       survivor.id,
@@ -618,6 +751,25 @@ async function previewDiscordConnect(input: {
     deps.db
   )
   if (!preview) return undefined
+
+  // D-44 rework, round two — this file's own module comment: a caller with
+  // no membership here may only merge into (or already hold) an identity
+  // this organization already admitted, never mint a fresh `attach`.
+  // Refused as an ordinary preview failure — never cached, so
+  // `/discord/confirm`'s own "no preceding preview" check refuses it too —
+  // rather than shown and then refused at confirm, which would let this
+  // screen promise an outcome it does not actually allow (LINK-6's own
+  // "the page names ... whether anything will be merged into it").
+  if (
+    attachWithoutMembershipIsForbidden(
+      pending.organizationId,
+      pending.accountId,
+      preview.outcome.kind,
+      deps.db
+    )
+  ) {
+    return undefined
+  }
 
   return {
     preview,

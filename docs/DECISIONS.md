@@ -3865,14 +3865,92 @@ organizations does this account have a *connected person* in, not only a members
 endpoint and its own switcher behaviour) genuinely separate from proving an identity, which is this slice's own
 scope. Recorded here as a real, correctly-scoped gap for a follow-up slice, not fixed in this one.
 
+**Rework, round two — the write was deferred, not authorized, and the actual exploit used a hop this same
+slice added.** The choices above closed a *junk* proof (a made-up token, an unrelated code) — they did not
+check that a *genuine* proof was organization-specific. A reviewer reproduced the original exploit end to end,
+over a live API and a live MCP server, using one ordinary account with no membership, enrolment or person
+anywhere near a victim tenant: `bloombot_connectAssistant` (`apps/mcp/src/server.ts`) mints a person-link token
+for *any* organization id, membership-free, by design (its own doc comment, D-44's own first-round choice,
+unchanged and still correct on its own terms) — so the "organization-specific proof" `/mcp/preview`/
+`/mcp/confirm` waited for was something the attacker could simply mint for themselves. Redeeming that
+self-minted token against the victim organization returned `200`/`200` and left a `connectedAt`-set person
+there, LINK-1's own gate granted with nothing an institution ever admitted. The Discord half had the identical
+shape by a different route: a caller with no relationship to an organization can always produce a *genuine*
+OAuth proof of their own, real, never-before-seen-there snowflake — this file's own original text ("nothing is
+created, and nothing is connected, until organization-specific proof is already in hand") was wrong, because
+neither a snowflake the caller owns nor a token the platform mints on demand is organization-specific; both
+only ever proved *a* identity, never one the organization itself had any reason to trust.
+
+**The actual rule: a caller with no membership in an organization may complete only a `merge` or
+`already-connected` outcome there, never a fresh `attach`.** "Organization-specific proof" has to mean the
+identity being proved already resolves to a person *that organization already admitted* — a roster import or a
+Discord role, `connectOrMerge`'s own `merge` branch — not a person this router would be minting the first
+record of. This preserves the real student flow exactly (this file's own acceptance test previews
+`outcome.kind === 'merge'`, because a roster-admitted student's Discord identity already belongs to someone)
+while refusing a caller who merely proved *an* identity, not one this organization ever admitted. Implemented
+two ways, matching each surface's own shape (`routes/person-link.ts#attachWithoutMembershipIsForbidden`,
+`memberships.getMembership` — the same tenancy check `routes/actions.ts` already runs before dispatching
+anything): for MCP, `ensureWebPersonForAccount` (which creates) is dropped from `/mcp/preview`/`/mcp/confirm`
+entirely, replaced by `people.resolveIdentity` — the same read-only shape `routes/chat.ts`'s own
+`resolveConnectedCallerPerson` already uses — refusing outright when the account has no existing person there
+at all (an MCP connect into an organization the account has never otherwise reached is meaningless regardless,
+since there is no enrolment for an assistant to help with); for Discord, which still has to write a bare
+survivor before OAuth even starts (unchanged), the gate moves to `/discord/preview` — an `attach` outcome for a
+non-member is refused as an ordinary preview failure, before the identity is ever cached for confirm to
+redeem, so the screen never promises an outcome it does not allow (LINK-6's own "the page names ... whether
+anything will be merged into it").
+
+**A second, independent finding in the same round — the bare-survivor deferral was not bounded.**
+`resolveOrCreateBareDiscordSurvivor`'s own first-round doc comment claimed a "repeat visit" reuse branch that,
+for a bare person (no identity at all), could never actually fire — every `/discord/begin` call before a
+connect completed minted a fresh row, unbounded: reproduced directly, 200 calls left 200 `people` rows and 200
+`person_link_challenges` rows in the same victim organization, nothing sweeping either. Fixed by extending the
+reuse check to the in-memory `pendingDiscordConnects` map itself (an attempt still live for the exact
+`(accountId, organizationId)` pair reuses its own survivor rather than minting a second one), and by sweeping
+expired entries at `/discord/begin` too, not only at `preview`/`confirm`. This bounds growth to roughly one row
+per account per organization per `DEFAULT_PERSON_LINK_TTL_MS` window (ten minutes), not one row per request —
+an account that waits out the TTL between attempts still adds a new bare row each time, a residual accepted and
+stated plainly rather than solved further (`apps/mcp`'s own session-eviction rework, D-36, bounds a comparable
+resource the identical way, by TTL, not by eliminating repeat use).
+
+**Also fixed, this round.** A test titled "reuses the same survivor" asserted `toBeGreaterThanOrEqual(1)` —
+true for any value — while its own in-body comment admitted the reuse it claimed to prove never fired; deleting
+the reuse branch entirely left the whole suite green. Fixed to assert an exact count across five repeat calls,
+not two. The two MCP routes answered a nonexistent organization and a real organization the token simply did
+not name with two different error codes (`organization_not_found` vs. `person_link_not_found`) — an oracle
+`peekMcpPersonLink`'s own match check already made the separate existence check redundant for; removed, so both
+answer identically now (`/discord/begin`'s own equivalent `200`-vs-`404` distinction was checked and does *not*
+become moot the same way — begin still has to reject a nonexistent organization before its own insert, and
+nothing about the merge-only rule changes that; left as-is, matching the "an organization id is not a secret"
+choice this file already made, now further justified since the row it gates is bare, inert and bounded). The
+now-unreachable `organizationExists` check inside `/discord/confirm` (the `pending.organizationId` comparison
+already refuses any mismatch first) was removed rather than merely re-commented as redundant. A stray reference
+to `pendingDiscordIdentities` — a name that was renamed to `pendingDiscordConnects` in round one and never
+updated in one leftover comment — cited a precedent that never existed under that name; corrected to cite
+PLAT-4 (`docs/SPEC.md`: "Four processes, each single-instance … Never clustered"), the actual thing that
+licenses process-local state here, alongside the residual cost that state carries: a restart between `begin`
+and `confirm` loses the in-memory record even though the database challenge is still live, answering
+`person_link_not_found` for an attempt that has not actually expired, and permanently orphaning the bare
+survivor `begin` already wrote.
+
+**`e2e/connect.spec.ts` — the missing Playwright coverage, added.** LINK-6/8 span front and back end, and
+`CLAUDE.md` asks for e2e coverage there; the API-level acceptance test is genuinely end to end against a real
+database but never touches a browser. The new spec drives a real browser through `/connect/:organizationId`
+signed out (asking to sign in, the same as a real invitation would), redeems a real emailed sign-in link, and
+returns to that same organization's own connect screen — then redeems a real, freshly-minted MCP token through
+the real `/mcp/preview`/`/mcp/confirm` routes, the LINK-8 half `apps/mcp/tests/server.test.ts`'s own test suite
+already proves the *minting* side of with a real MCP SDK client. What it does not cover: Discord's own OAuth
+screen, which would need a second, fake OAuth provider standing in for discord.com that this harness does not
+build (`e2e/support/start-api.ts` already points `apps/api`'s own Discord configuration at unreachable loopback
+addresses on purpose) — the Discord half of LINK-7 stays proven at the API-integration level, not through a
+browser, and this spec's own module comment says so plainly rather than overclaiming, the same discipline
+`chat.spec.ts`'s own module comment already holds itself to.
+
 **Limits.** `redeemJoinLink`/`course_join_links` (ENRL-3/ENRL-4) remain unwired from any route — a *web-only*
 student who has never touched Discord still has no way to reach a course through this slice; that mechanism
 admits (enrols), while this one connects (proves an identity), and D-37's own "Limits" already named the
 join-link route as separate, deferred work. `apps/mcp` is touched only for `bloombot_connectAssistant` — no
-other tool, no change to `tool-surface.ts`'s own catalog or `call-tool.ts`'s dispatch path. A bare Discord
-survivor's own inert-row cost (this decision's own "Choice" above) is accepted, not bounded by a rate limit or
-a cap on attempts per account — a real residual, sized well below what the pre-rework write-with-connectedAt
-defect cost, and named here rather than left for a future reader to wonder whether it was noticed. LINK-9's own
+other tool, no change to `tool-surface.ts`'s own catalog or `call-tool.ts`'s dispatch path. LINK-9's own
 decision — what happens to a person who already existed before connecting was required — is D-45, immediately
 below.
 

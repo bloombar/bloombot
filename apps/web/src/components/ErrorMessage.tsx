@@ -10,6 +10,7 @@
  */
 
 import type { ApiError } from '../api/client.js'
+import { ErrorIcon } from '../icons.js'
 
 /** Every field-level message for a validation failure, one per line — `path` joined with `.`, the same way `packages/config`'s own env-validation report does. */
 function issueLines(error: ApiError): string[] {
@@ -89,15 +90,21 @@ export function describeApiError(error: ApiError): {
 export function ErrorMessage({ error }: { error: ApiError }) {
   const { headline, details } = describeApiError(error)
   return (
-    <div role="alert" className="error-message">
-      <p>{headline}</p>
-      {details.length > 0 && (
-        <ul>
-          {details.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
+    <div
+      role="alert"
+      className="flex gap-2 rounded-md border border-danger-600 bg-danger-50 px-3 py-2 text-sm text-danger-700"
+    >
+      <ErrorIcon aria-hidden="true" className="size-5 shrink-0" />
+      <div>
+        <p>{headline}</p>
+        {details.length > 0 && (
+          <ul className="mt-1 list-disc pl-4">
+            {details.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }

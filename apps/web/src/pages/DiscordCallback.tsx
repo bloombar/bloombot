@@ -26,8 +26,9 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, completeDiscordInstall } from '../api/client.js'
-import { PENDING_INSTALL_ORG_KEY } from '../components/InstallButton.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { PENDING_INSTALL_ORG_KEY } from '../components/InstallButton.js'
 
 export interface DiscordCallbackProps {
   search: string
@@ -103,23 +104,32 @@ export function DiscordCallback({
 
   if (state.kind === 'missing') {
     return (
-      <div>
-        <p>There is nothing to complete here.</p>
-        <button type="button" onClick={onDone}>
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-4">
+        <p className="text-sm text-neutral-700">
+          There is nothing to complete here.
+        </p>
+        <Button variant="secondary" onClick={onDone}>
           Return to the control panel
-        </button>
+        </Button>
       </div>
     )
   }
   if (state.kind === 'error') {
     return (
-      <div>
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-4">
         <ErrorMessage error={state.error} />
-        <button type="button" onClick={onDone}>
+        <Button variant="secondary" onClick={onDone}>
           Return to the control panel
-        </button>
+        </Button>
       </div>
     )
   }
-  return <p>Finishing installation…</p>
+  return (
+    <p
+      role="status"
+      className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+    >
+      Finishing installation…
+    </p>
+  )
 }

@@ -3438,3 +3438,293 @@ with `requires: []` (MCP-3's own "a connection authenticates itself, at request 
 credential of its own at startup, unlike the bot or the worker), and `scripts/dev.test.mjs` is updated to match
 — closing the one limitation the first version of this decision recorded that a rebase, not further code, was
 what could actually fix.
+
+## D-37 — `apps/web`/`apps/api`: the design system's tokens, the chat sanitizer's allowlist, and how WEB-10 resolves a web person without LINK-1
+
+**Problem.** WEB-11..17 ask for one styling system, one icon set, a responsive shell and a set of conventions
+(primary/secondary/destructive, form errors, keyboard/AA) — none of it existed; the panel was unstyled HTML.
+WEB-10 asks for a web chat surface that renders Markdown safely, through the same `@bloombot/core#answerQuestion`
+pipeline the Discord surface calls. Both landed in the same slice (`spec/web-chat-shell`) because they are the
+same screen work, per that slice's own brief.
+
+**Choice — Tailwind v4, tokens in `style.css`'s own `@theme`, not a `tailwind.config.js`.** `@tailwindcss/vite`
+(the v4-native integration) reads `apps/web/src/style.css`'s `@theme` block directly — a brand scale, a
+neutral scale, `success`/`warning`/`danger` semantic accents, two named type sizes, and two named spacing
+values (`--spacing-header`/`--spacing-footer`, so `AppShell.tsx`'s fixed header/footer and its main content's
+padding can never drift out of sync with each other). Named once, here, rather than as literal hex codes and
+pixel values scattered across every component — the brief's own "we can review and refine later" is one edit
+to this file, not a sweep. No separate stylesheet exists anywhere else in `apps/web` (WEB-11's own "not
+several").
+
+**Choice — Lucide icons named by intent, not by Lucide's own component name.** `icons.ts` re-exports `Pencil`
+as `EditIcon`, `Trash2` as `DeleteIcon`, and so on for every recurring intent WEB-12 names — edit, delete,
+add, remove-from-list, disable, enable, duplicate, archive/restore. A call site imports `EditIcon` and reads
+"edit"; changing *which* Lucide icon means "edit" later is one line here, not a search-and-replace. Every
+icon-only control supplies its own `aria-label` at the call site (this file only names which icon a screen
+reader would otherwise say nothing about).
+
+**Choice — the chat sanitizer is an explicit allowlist, and why that is the load-bearing property, not merely
+a preference.** `apps/web/src/markdown-schema.ts`'s `CHAT_MARKDOWN_SCHEMA` extends `hast-util-sanitize`'s own
+`defaultSchema` but replaces `tagNames`/`attributes`/`protocols` with an explicit, narrow list — exactly what
+WEB-10's own headings/emphasis/lists/links/fenced-code, plus GFM's tables/strikethrough (already in the
+pipeline via `remark-gfm`). A denylist has to anticipate every dangerous thing a model or a student might
+type — the next `on*` attribute, the next dangerous protocol, an element nobody thought to ban yet; an
+allowlist only has to name the handful of things Markdown legitimately produces, and everything else (a raw
+`<script>`, an `onerror`, a `javascript:` URL, an `<iframe>`) is refused by construction. Two layers, not one:
+`react-markdown`'s own default pipeline never turns raw HTML in the Markdown source into real DOM at all (no
+`rehype-raw`, `allowDangerousHtml` never set) — a literal `<script>` written into a message is parsed as an
+HTML node and dropped outright; `rehype-sanitize` against this schema is the second layer, holding the line on
+what Markdown *syntax itself* can legitimately produce (a `[text](url)` link is real Markdown, not raw HTML,
+and needs its `href`'s protocol checked). Verified directly (see `docs/DECISIONS.md`'s own habit of recording
+what a rework actually proved, and `apps/web/tests/chat-message.test.tsx`'s own hostile-input cases): a raw
+`<script>`, an `<img onerror>`, a Markdown link to `javascript:`, a raw-HTML `<a href="javascript:">`, a
+Markdown image (images are excluded from the schema entirely — an `<img src>` is a live fetch to whatever URL
+the model names, even protocol-restricted, which still lets a message load a tracking pixel or probe a
+private address the moment it renders) and a `<style>` block are all neutralized; ordinary Markdown (headings,
+bold, links, fenced code, GFM tables) renders as real elements.
+
+**Choice, as first written — WEB-10's backend resolves the caller's own `'web'`-surface identity, not LINK-1's
+`connectedAt`.** At the time this slice first ran, `packages/db/src/repos/people.ts` and
+`packages/core/src/answer.ts` were both being changed by a separate, open, unmerged PR
+(`feat/LINK-1-account-linking`, LINK-1..5/PPL-4/5 — a person proven to hold more than one surface identity,
+merged into one so allowance and transcript follow them everywhere, gated behind a new
+`person.connectedAt`/`'not-connected'` refusal). Editing either file here would have collided with that PR's
+own changes to the same lines, so `apps/api/src/routes/chat.ts` instead resolved the caller through
+`people.resolvePersonByIdentity(organizationId, { surface: 'web', externalId: account.id }, db)` — the same
+"create on demand" function every other surface's first contact already uses (PPL-3) — and called the
+*then-current*, unmodified `answerQuestion`, with no `connectedAt` gate on that branch yet.
+
+**Rework finding — this was wrong, on three counts a review round caught together, and the claim above that it
+was merely an interim measure was false: the chat surface it produced was not reachable by any real student at
+all, not "reachable, pending a small follow-up."** Kept here, corrected, rather than deleted — the record of
+what was tried and why it did not hold is worth as much as the record of what worked (this file's own
+convention throughout).
+
+1. *Unreachable in production.* Every real enrolment in this system belongs to a `discord`-surface person —
+   `handle-mention.ts`'s own first contact, `roster-import.ts`'s own admission — never to a person created by
+   `resolvePersonByIdentity` on the `'web'` surface. `enrolments.listCoursesForPerson` keys strictly on
+   `person.id`, so a web-surface person created this way could never resolve to a real enrolment, for any
+   account, ever — not a gap a future configuration or a join-link route alone would close, because nothing
+   pointed the two person rows at each other in the first place. The slice's own test suite and e2e spec hid
+   this: both seeded the enrolment against a web-surface person *resolved the same way the route itself would*
+   — tautological about the exact bug this rework fixes, proving only that the code agreed with itself.
+2. *A second allowance.* A `{surface: 'web'}` person and a `{surface: 'discord'}` person for the same human are
+   two distinct rows, two usage counters, two transcripts, in the same organization — exactly what LINK-5 ("one
+   person, one allowance, across every surface") and D-28 exist to prevent, reintroduced by this router's own
+   person resolution. Once LINK-1 merged, `answerQuestion` began declining every person whose `connectedAt` is
+   `null` — which a `resolvePersonByIdentity`-created person always is — so the practical effect became total:
+   every web chat message declined, silently (`Chat.tsx`'s own `describeDeclineNotice` had no case for
+   `'not-connected'`, so nothing was shown at all — a student watched their own message post and then nothing
+   happen, a silent hang).
+3. *A cross-tenant write, before anything checked the caller belonged there.* `resolveCallerPerson` called a
+   *creating* function on the raw `:organizationId` URL param before any check that the caller had a
+   relationship to that organization — reachable by any signed-in account against any other tenant's
+   organization id (writing a `people` row that carried the attacker's own account id, the refusal issued only
+   after the write), and a nonexistent organization id produced a raw foreign-key `500` rather than the same
+   `404` every other foreign or absent id in this app answers — an existence oracle.
+
+**The fix.** A signed-in web caller *is* the account — they proved control of it by signing in, which is
+exactly the proof LINK-3 already asks of every other surface's own connect step, so a *second*, separate
+"connect your web account" action was never actually needed for the web surface itself. `@bloombot/auth`'s
+`sign-in.ts` (`createConnectedWebPerson`) now creates the account's own person, in its own personal
+organization, and connects it immediately — through the real, merged `people.ts#connectIdentity` (LINK-3's own
+path), never a raw `connectedAt` column write — the moment the account itself is created (both
+`findOrCreateAccountForEmail`'s and `tryCreateAccountForEmail`'s "new account" branches; `createPerson`'s own
+`db` parameter widened from `Database` to `Executor` so it can be called from inside their existing
+transaction, the same widening `getPerson`'s own doc comment already explains for the identical reason).
+`routes/chat.ts` now only ever *looks up* that person (`people.resolveIdentity` — read-only, so there is no
+insert left for a foreign or nonexistent organization id to reach) and refuses with the same `chat_not_connected`
+"invited to connect" shape LINK-1 gives every other unconnected identity when there is none, or when
+`connectedAt` is somehow still `null`. The organization's own existence is checked explicitly, first, so a
+foreign and a nonexistent organization id answer identically (TEN-5) rather than a `404` for one and a `500`
+existence oracle for the other.
+
+**What this does, and does not, make reachable.** A person created and connected this way lives in the
+account's own *personal* organization (TEN-1's own one created alongside it) — the one organization known at
+that exact moment. Reaching a course in a *different* organization (an institution's own, where a real student
+is admitted through a Discord role or a roster row) still requires something to connect that same account's web
+identity to the person that admission already created there — LINK-3's own proof, same as any other surface —
+which is exactly what a join-link "connect" route would do, and remains out of this slice's own scope (its own
+module comment, and D-31's "Limits", on why `redeemCourseJoinLink` is still unwired from any route). Until that
+lands, an account with no connection in a given organization is refused honestly (`chat_not_connected`) rather
+than shown a misleading empty course list or a silent hang — `apps/api/tests/routes/chat.test.ts` seeds an
+enrolment the way production actually creates one (a `discord`-surface person, `enrolViaRoster`) and proves
+both halves: unreachable and honestly refused before any connection exists, reachable once
+`people.connectIdentity` — the real function, not a shortcut — has connected the two, the same device a future
+join-link route would use. `e2e/chat.spec.ts` no longer creates its own person at all; it looks up the one
+`sign-in.ts` already created and connected for the same account, and enrols that.
+
+**Choice — `apps/api`'s own `OPENAI_API_KEY` is optional, unlike `apps/bot`'s.** `apps/bot`'s `main()` calls
+`requireEnv('OPENAI_API_KEY')` and refuses to start without it — reasonable there, since a bot process with no
+model client has no reason to hold a Discord gateway connection open at all. `apps/api` is different:
+`docs/RUNNING_LOCALLY.md` already promises "the API and the panel still come up" for a checkout missing
+Discord credentials (`BOT_TOKEN` unset skips only the bot/worker), and this slice's own `routes/chat.ts`
+addition must not quietly grow a second, undocumented way to fail that promise. `answerQuestion` already has a
+defined, ordinary outcome for a model call that throws — `failed-with-apology` — so `apps/api/src/index.ts`'s
+`createUnconfiguredModelClient` builds a `ModelClient` whose `ask()` always rejects (logging a warning once, at
+startup) when `OPENAI_API_KEY` is unset, rather than refusing to boot: the panel, sign-in and every other
+screen stay usable, and chat itself degrades to an apology exactly the way a real, configured key's own
+transient provider failure already would. `apps/api/tests/routes/chat.test.ts`'s own "a model that rejects ...
+apologizes rather than 500ing" proves the mechanism this relies on: `middleware/errors.ts` never sees the
+rejection, because `routes/chat.ts` awaits `answerQuestion` itself, which already turned it into an ordinary
+result.
+
+**Choice — a question is bounded at 4,000 characters, not merely non-empty.** `postMessageInputSchema` shipped
+as `z.string().min(1)`, bounded only by `express.json()`'s own 100 kB body limit — a reviewer measured a 99 kB
+request reaching the model on a single call. CORE-3's own daily allowance counts *requests*, never tokens or
+characters, so an unbounded `text` was no real spending bound at all: ten questions a day at ~$0.02 each
+(Discord's own 2,000-character ceiling keeps a question small) became ten questions a day at up to ~$0.60 each
+on the web — and COST-3's own spending cap is organization-wide, so one student asking one oversized question
+on the web could exhaust a tenant's cap and decline every Discord student in the same organization alongside
+them. `4000` matches Discord's own outer bound on a single message (`packages/discord/src/split.ts`'s own
+`DISCORD_MESSAGE_LIMIT`, `2000`, is that file's *reply*-splitting threshold, not Discord's inbound ceiling —
+Discord itself accepts up to 4,000 characters from a Nitro account) — this surface is bounded no more
+generously than the one it mirrors, not picked arbitrarily.
+
+**Rework finding — `GET .../chat/courses/:courseId/messages` was still a write.** Round two's own fix closed
+the write on `GET .../chat/courses`, but the transcript route still called `conversations.getOrCreateConversation`
+to *read* a transcript — measured, opening a course's chat for the first time (nothing asked yet) took
+`conversations` from `0` to `1` rows on a plain `GET`. `middleware/origin.ts` exempts `GET` from the CSRF check
+and states why: "a GET is not supposed to change anything in the first place" — a sentence this one route made
+false. `packages/db/src/repos/conversations.ts` now splits the lookup from the insert:
+`resolveConversationLookup` (private) resolves the course's own `conversationScope` and looks for an existing
+conversation once; `findExistingConversation` (new, exported, read-only) is that lookup on its own, and
+`getOrCreateConversation` — still the only function in this package that ever inserts a conversation — reuses
+the same lookup rather than repeating it. `routes/chat.ts`'s GET handler calls `findExistingConversation` and
+treats "no conversation yet" as an empty transcript (`{ messages: [] }`); the `POST` handler is the one place
+that still calls `getOrCreateConversation`, and only when a question is actually being asked.
+`apps/api/tests/routes/chat.test.ts` proves it by counting rows before and after a GET against a fresh course.
+
+**Rework finding — LINK-9's own healing path: an account that signed up before this shipped never got a web
+person at all, silently and permanently.** `createConnectedWebPerson` only ever ran on the account-*creation*
+branches of `findOrCreateAccountForEmail`/`tryCreateAccountForEmail`. Reproduced against an account shaped
+exactly like every already-deployed one — organization, account and membership, written directly, no person —
+`chat_not_connected` on every future sign-in, forever, with nothing telling the account holder or an operator
+why: an instructor who signed in the week before this deployed would be refused after it, a colleague who
+signs up the day after would not, and the difference would look like a bug report nobody could reproduce.
+`healWebPersonForReturningAccount` (`packages/auth/src/sign-in.ts`) closes it: called from every *returning*
+sign-in (`redeemSignInLink`'s own "not `createdAccount`" branch, and `signInWithGoogle`'s own `link` branch),
+inside the same transaction the caller already has, it finds the account's own personal organization —
+`memberships.listMembershipsForAccount` and `organizations.getOrganizationById`, both widened from `Database`
+to `Executor` for the same "called from inside another transaction" reason `createOrganization`'s and
+`createPerson`'s own doc comments already give — and creates+connects a person there only if
+`people.resolveIdentity` finds none, so a post-rework account (which already has one) pays one cheap indexed
+read on every sign-in and does nothing further. `createConnectedWebPerson` itself was also tightened in the
+same pass: it used to discard `connectIdentity`'s own return value, so a refusal there — unreachable today,
+since the organization and person id are both freshly minted in the same transaction — would have left a
+person with `connectedAt` still `null` and no identity at all, silently. It now throws instead, making that
+unreachability structural rather than merely argued.
+
+**For the record, so it is not re-litigated** — reachability cannot be closed inside this slice, and that is
+correct, not merely deferred for lack of time. `people` are organization-scoped (TEN-2): a student enrolled in
+a university's own organization needs a web person *in that organization*, but `sign-in.ts` (and its healing
+path above) can only ever create one in the account's *own* personal organization — the one organization known
+at sign-in time — and that student's roster enrolment belongs to a `discord`-surface person regardless, in the
+university's organization, admitted by roster import or a Discord role, never by anything this slice touches.
+Nothing unites the two records but LINK-3's own proof — the same connect step every other surface already
+requires, merging the two through `people.ts#mergePeople` the identical way a Discord or MCP identity merges
+into an existing person today. That proof, and the route that redeems it, is LINK-6..9 on the base branch —
+the phase that actually makes web chat reachable for a student admitted anywhere other than their own personal
+organization. `e2e/chat.spec.ts`'s own module comment says the same thing about what that spec does and does
+not prove, for the same reason: an earlier version of that comment claimed the spec proved reachability
+through a Discord role or a roster row, which it does not — it enrols the account's own web person directly,
+the identical tautology `apps/api/tests/routes/chat.test.ts`'s own `connectCallerTo` helper exists to escape.
+
+## D-38 — `apps/web`: one modal primitive for alert/confirm/prompt, and the focus-restoration bug only a real browser caught
+
+**Problem.** WEB-15 requires every destructive action to confirm before it runs; WEB-16's unsaved-changes
+guard needs the identical confirmation shape. Built per screen, this is either `window.confirm` (no styling,
+no destructive/primary distinction, fails WEB-15 outright) or a bespoke dialog component copied per screen —
+exactly the "second copy of the modal markup" duplication that makes a later refinement a sweep instead of an
+edit, the same reasoning `style.css`'s own `@theme` block already gives for design tokens (D-37).
+
+**Choice — one `<Modal>` component, three modes, reached through `useModal()`.** `components/modal/Modal.tsx`
+renders alert/confirm/prompt from one markup, chosen by a `kind` prop; `components/modal/ModalProvider.tsx`
+mounts exactly one `<Modal>` for the whole app (`main.tsx`) and exposes `alert()`/`confirm()`/`prompt()` as
+promises — a caller writes `const ok = await confirm({...})` rather than wiring `open`/`onConfirm`/`onCancel`
+state into every screen. `InstallButton.tsx`'s own former `ConfirmDialog.tsx` (this slice's own earlier,
+bespoke dialog, written before the coordinator's explicit "standardize modals" instruction arrived
+mid-slice) was deleted and rewired onto this primitive rather than kept alongside it.
+
+**Choice — built on the native `<dialog>` element, not a hand-rolled overlay.** `showModal()` already traps
+focus, makes the rest of the page inert to interaction and assistive technology, and (when closed via its own
+`close()`) restores focus to whatever triggered it — WEB-17's own three requirements, for free, without this
+component reimplementing any of them and risking a subtly wrong trap. `Modal.tsx` still chooses *which*
+control gets initial focus deliberately (a prompt focuses its own field; a destructive confirm focuses Cancel,
+never the destructive button — the coordinator's own explicit instruction, since a stray `Enter` the instant
+the dialog opens must never run the destructive action).
+
+**Rework finding — unmounting the dialog on close skipped the browser's own focus-restoration algorithm
+entirely, and only `e2e/keyboard.spec.ts` (a real browser) caught it.** `ModalProvider` originally rendered
+`{current && <Modal open .../>}` — clearing `current` on Cancel/Confirm/`Escape` *unmounted* the `<dialog>`
+element outright rather than calling its native `close()` first. Focus restoration is `close()`'s own job;
+ripping the element out of the DOM without ever calling it means the browser has no dialog left to restore
+focus *from*, and focus simply falls back to `<body>`. `apps/web/tests/setup.ts`'s own jsdom polyfill (jsdom
+does not implement `showModal`/`close` at all) only simulates the `open` attribute toggling — it cannot
+reproduce native focus-restoration, so every one of this component's own unit tests (`tests/modal.test.tsx`)
+stayed green through this bug. The fix: `ModalProvider` now keeps a `renderedRequest` — the *last* request's
+own content, set once and never cleared — and renders `<Modal>` unconditionally once any request has ever
+been shown, toggling only its `open` prop (`current !== undefined`). `Modal.tsx`'s own effect is the *only*
+place that ever calls the native `close()` now (its own `<dialog onClose>` handler, which used to double as a
+second, redundant path to the same `onCancel` callback, was removed — a native `close` event now fires at
+most once per settle, from this one call site, rather than twice). This is exactly the case WEB-17's own text
+warns about: "a keyboard test that clicks is not a keyboard test" — a `fireEvent.click` in jsdom cannot
+distinguish "the dialog closed" from "the dialog closed *and restored focus correctly*"; only a real browser,
+driven by real keys, can.
+
+**What a caller supplies.** `alert({ title, description?, confirmLabel? })` resolves once acknowledged.
+`confirm({ title, description?, confirmLabel?, cancelLabel?, destructive? })` resolves `true`/`false`, never
+rejects — a caller never needs a `.catch` just to handle "backed out." `prompt({ title, label, placeholder?,
+initialValue?, validate? })` resolves the typed value or `undefined`; `validate` returns an error string to
+keep the dialog open with that message shown, or `undefined` to let it close. A second call while one is
+already open queues behind it (`queueRef`) rather than clobbering the first caller's own pending promise.
+
+## D-39 — `apps/web`: unsaved-changes guard — what "dirty" means, cross-component navigation, and why `beforeunload` is the one case `Modal.tsx` cannot cover
+
+**Problem.** The coordinator's own instruction, mid-slice: forms must confirm before an unsaved edit is lost
+— Cancel on the form, in-app navigation started elsewhere (the hamburger menu, a nav link, the home icon,
+browser Back), and leaving the page entirely — reusing the modal primitive (D-38), not a second
+implementation, and never firing on a form nobody touched.
+
+**Choice — "dirty" is a value comparison against a baseline, not a keystroke count.** `hooks/useFormDirty.ts`
+takes `baseline`/`current` and compares them (`JSON.stringify`, since every caller builds both from the same
+object shape via the same code path, so key order never differs between them — a plain-object form's state is
+exactly what that comparison assumes). A value typed and then reverted compares equal again; nothing here
+remembers that a keystroke ever happened. `pages/CourseEditor.tsx` keeps a `baseline` state alongside `form`,
+updated in the same three places `form` is ever set *from* a real record rather than an edit (a fresh blank
+form, a load, a save) — never on a field-by-field change — so a successful save clears the dirty state the
+same way it already resets `form` itself.
+
+**Choice — a `NavigationGuardProvider`, so a navigation started outside the dirty form can still ask it
+first.** `hooks/navigation-guard.tsx` is a small context: a dirty form calls `registerGuard(fn)` (and
+`registerGuard(null)` once clean or unmounted); anything that navigates within the shell calls
+`guardedNavigate(action)`, which runs `action` immediately if nothing is registered, or after the registered
+guard resolves `true`. `pages/Shell.tsx` wraps every navigation callback it hands to `AppShell`/
+`OrganizationSwitcher` (the nav row, the home control, and the organization switcher — cheap to include and
+in the same spirit as the coordinator's own explicit list, even though not named verbatim there) in
+`guardedNavigate`, without needing to know anything about whatever nested page might currently be a dirty
+form — `pages/CourseEditor.tsx` is the one example today, reachable through `ProjectsPanel`/`Courses`, several
+components below `Shell.tsx` itself. `useUnsavedChangesGuard(isDirty)` is what a form actually calls: it
+registers/unregisters with the guard above, and exposes `confirmDiscard()` — the exact same check and the
+exact same dialog wording — for the form's *own* Cancel control to call directly, so "a navigation that starts
+outside the form" and "the form's own exit" are one confirmation, reachable two ways, not two dialogs with
+possibly-different wording.
+
+**Why `beforeunload` is the one case this app's own `Modal.tsx` cannot cover, and is registered only while
+dirty.** The moment `beforeunload` fires, the page is already tearing down — no React state update, no dialog
+render, no `await` can happen before the browser proceeds, so the shared modal primitive (D-38) is
+structurally unable to render anything for this case. The only lever a `beforeunload` handler has is
+`event.preventDefault()`, which asks the *browser's own* native prompt to appear instead — worded by the
+browser, not this app, and not stylable to match WEB-11's design system. `useUnsavedChangesGuard` registers
+this handler only inside an effect gated on `isDirty`, and the cleanup removes it the instant the form becomes
+clean again — leaving it registered unconditionally would fire the browser's own prompt when leaving an
+untouched form, training a person to click through it without reading it (WEB-16's own "a clean form leaves
+with no prompt").
+
+**Limits.** Switching organizations via `OrganizationSwitcher` is guarded the same way nav/home are, but this
+slice did not add a guard around the browser's own back/forward navigation as a *distinct* case: `apps/web`
+has no client-side router (`App.tsx`'s own module comment — three screens, `window.location.pathname` read
+directly, no history entries pushed for in-panel navigation), so pressing Back from inside the panel is
+already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
+than a separate in-app case to intercept.
+

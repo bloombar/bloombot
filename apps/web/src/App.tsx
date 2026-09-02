@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
+import { Button } from './components/Button.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -103,18 +104,22 @@ export function App() {
   }
 
   if (session.kind === 'loading') {
-    return <p>Loading…</p>
+    return (
+      <p className="p-6 text-sm text-neutral-500" role="status">
+        Loading…
+      </p>
+    )
   }
 
   if (session.kind === 'unreachable') {
     return (
-      <div>
-        <p role="alert">
+      <div className="flex flex-col items-start gap-3 p-6">
+        <p role="alert" className="text-sm text-danger-700">
           Could not reach Bloombot. Check your connection and try again.
         </p>
-        <button type="button" onClick={refreshSession}>
+        <Button variant="primary" onClick={refreshSession}>
           Try again
-        </button>
+        </Button>
       </div>
     )
   }

@@ -83,11 +83,23 @@ function isUniqueConstraintError(error: unknown): boolean {
   )
 }
 
-/** Create a person directly — used by an import that already knows the roster fields. */
+/**
+ * Create a person directly — used by an import that already knows the
+ * roster fields, and by `@bloombot/auth`'s `sign-in.ts` (LINK-1 rework),
+ * which creates a signed-in account's own web person inside the same
+ * transaction that creates its personal organization.
+ *
+ * `db` accepts `Executor`, not just `Database` — the same widening
+ * `getPerson`'s own doc comment explains, for the identical reason: a
+ * caller inside its own `db.transaction(...)` callback has a `tx` that is
+ * structurally not a `Database` (`courses.ts`'s own comment on why), and
+ * `sign-in.ts#findOrCreateAccountForEmail`/`#tryCreateAccountForEmail` both
+ * need to call this from inside theirs.
+ */
 export function createPerson(
   organizationId: string,
   input: NewPerson,
-  db: Database
+  db: Executor
 ): Person {
   return db
     .insert(people)

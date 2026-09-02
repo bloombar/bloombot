@@ -30,6 +30,7 @@ import type {
   ChatMessageEntry,
   Course,
   CourseAttachmentSummary,
+  CourseInstructionRevisionSummary,
   CourseSummary,
   DiscordPersonLinkPreviewResponse,
   DuplicateProjectResult,
@@ -316,10 +317,14 @@ export interface SaveCourseCategoryInput {
 /**
  * `courses.save`'s own input (`packages/actions/src/actions/courses.ts`).
  * `id` present means update; absent means create. Every nullable field
- * (`promptId`, `instructions`, `model`, `vectorStoreId`,
- * `maxRequestsPerDay`) follows the same omitted-preserves/explicit-null-
- * clears rule the action itself documents — see `docs/DECISIONS.md` for how
- * `pages/CourseEditor.tsx` maps its form onto this.
+ * (`promptId`, `model`, `vectorStoreId`, `maxRequestsPerDay`) follows the
+ * same omitted-preserves/explicit-null-clears rule the action itself
+ * documents — see `docs/DECISIONS.md` for how `pages/CourseEditor.tsx` maps
+ * its form onto this. `instructions` is not a field here at all (WEB-19,
+ * D-54) — `courses.save` no longer accepts it, on create or on update, and
+ * `saveCourseInstructions` below (`courseInstructions.save`) is the only way
+ * to change one, since that is the action that also records who changed it
+ * and when (FILE-4).
  */
 export interface SaveCourseInput {
   id?: string
@@ -330,7 +335,6 @@ export interface SaveCourseInput {
   adminsRole: string
   studentsRole: string
   promptId?: string | null
-  instructions?: string | null
   model?: string | null
   vectorStoreId?: string | null
   maxRequestsPerDay?: number | null
@@ -381,6 +385,54 @@ export function disableCourse(
   courseId: string
 ): Promise<{ disabled: boolean }> {
   return dispatchAction(organizationId, 'courses.disable', { courseId })
+}
+
+/**
+ * WEB-19/FILE-4 — a course's instructions, edited as their own versioned
+ * record rather than a plain field on `courses.save`: `courseInstructions.save`,
+ * `.list` and `.restore`, each a thin wrapper over `dispatchAction` like
+ * every other action this file already reaches through. What
+ * `components/CourseInstructions.tsx` calls.
+ */
+
+/** Save a new revision of a course's instructions, replacing the live text. Returns the course's own bare row (`courses.Course` — no categories or channels, matching `courseInstructions.save`'s own return shape), not the full `Course` a form manages. */
+export function saveCourseInstructions(
+  organizationId: string,
+  courseId: string,
+  instructions: string
+): Promise<CourseSummary> {
+  return dispatchAction<CourseSummary>(
+    organizationId,
+    'courseInstructions.save',
+    {
+      courseId,
+      instructions,
+    }
+  )
+}
+
+/** Every revision a course has, newest first (FILE-4) — what the history list reads. */
+export function listCourseInstructionRevisions(
+  organizationId: string,
+  courseId: string
+): Promise<CourseInstructionRevisionSummary[]> {
+  return dispatchAction<CourseInstructionRevisionSummary[]>(
+    organizationId,
+    'courseInstructions.list',
+    { courseId }
+  )
+}
+
+/** Restore an earlier revision — itself recorded as a new revision (FILE-4): history that can be rewritten is not history. */
+export function restoreCourseInstructionRevision(
+  organizationId: string,
+  revisionId: string
+): Promise<CourseSummary> {
+  return dispatchAction<CourseSummary>(
+    organizationId,
+    'courseInstructions.restore',
+    { revisionId }
+  )
 }
 
 /**

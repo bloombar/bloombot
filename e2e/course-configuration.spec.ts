@@ -11,8 +11,9 @@
  *  - Real: the browser (`pages/Projects.tsx`, `pages/Courses.tsx`,
  *    `pages/CourseEditor.tsx`), a real `apps/api` (`e2e/support/start-api.ts`),
  *    a real throwaway SQLite database, and every action this UI drives —
- *    `projects.create`, `courses.save`, `courses.enable` — reached exactly
- *    the way any other caller reaches them (WEB-7/PROJ-5's own point).
+ *    `projects.create`, `courses.save`, `courses.enable`,
+ *    `courseInstructions.save` (WEB-19) — reached exactly the way any other
+ *    caller reaches them (WEB-7/PROJ-5's own point).
  *  - Real: `@bloombot/discord`'s own `handleMention` (SURF-1..6) and
  *    `@bloombot/core`'s `answerQuestion`/`routeMessage` underneath it — the
  *    actual routing and answering pipeline, unmodified, running against the
@@ -95,10 +96,7 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByRole('button', { name: projectName }).click()
 
   // 3. Define a course in it (WEB-8): title, roles (CFG-3), one category
-  //    (CFG-4) — the two names that decide routing (WEB-9) — instructions
-  //    (CFG-2: D-3's escape hatch — a course with neither `instructions` nor
-  //    `promptId` set answers nothing at all, `answerQuestion`'s own
-  //    "not-configured" result) — and enable it.
+  //    (CFG-4) — the two names that decide routing (WEB-9) — and enable it.
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
   await page.getByLabel('File prefix').fill(`wd-${suffix}`)
@@ -106,7 +104,6 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByRole('button', { name: 'Add category' }).click()
   await page.getByLabel('Category name').fill(categoryName)
-  await page.getByLabel('Instructions').fill(courseInstructions)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
 
@@ -114,6 +111,19 @@ test('a project and course defined entirely in the panel route and answer a matc
   // it only renders once `courseId` is set, i.e. once `courses.save`
   // actually returned a saved course rather than a refusal.
   await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+
+  // WEB-19/FILE-4: instructions (CFG-2: D-3's escape hatch — a course with
+  // neither `instructions` nor `promptId` set answers nothing at all,
+  // `answerQuestion`'s own "not-configured" result) are saved through their
+  // own versioned action, `courseInstructions.save`, not `courses.save` —
+  // `components/CourseInstructions.tsx`'s own section, offered only once the
+  // course exists (the same "existing record only" gate the knowledge-files
+  // and Discord-channels sections below it use). "Current" only renders
+  // once `courseInstructions.list` actually reads back the revision this
+  // save just recorded.
+  await page.getByLabel('Instructions').fill(courseInstructions)
+  await page.getByRole('button', { name: 'Save instructions' }).click()
+  await expect(page.getByText('Current')).toBeVisible()
 
   // 4. This is where the browser's own part ends. Everything from here
   //    reads back the same database `apps/api` just wrote to, and drives

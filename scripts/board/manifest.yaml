@@ -2339,7 +2339,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-7
   title: Connecting Discord is signing in with Discord
@@ -2351,7 +2351,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-8
   title: An assistant is handed its token where only it can read it
@@ -2363,7 +2363,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-9
   title: Nobody who could already ask is locked out by connecting
@@ -2376,7 +2376,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: LINK-10
   title: A connected person can reach the course they connected to, in the browser

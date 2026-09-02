@@ -203,7 +203,10 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
       body: { status: 'completed' },
     })
 
-    await page.getByLabel('Course file').setInputFiles({
+    // The label names the drop zone (a real button, so the keyboard reaches
+    // it); the picker behind it is the `input[type=file]`, which is what
+    // Playwright sets files on.
+    await page.locator('input[type="file"]').setInputFiles({
       name: 'syllabus.pdf',
       mimeType: 'application/pdf',
       buffer: Buffer.from('%PDF-1.4 e2e fixture'),
@@ -291,7 +294,10 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
         body: { error: { message: 'unsupported file type' } },
       })
 
-      await page.getByLabel('Course file').setInputFiles({
+      // The label names the drop zone (a real button, so the keyboard reaches
+      // it); the picker behind it is the `input[type=file]`, which is what
+      // Playwright sets files on.
+      await page.locator('input[type="file"]').setInputFiles({
         name: 'notes.exe',
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('not actually notes'),

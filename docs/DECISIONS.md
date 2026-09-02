@@ -2791,3 +2791,249 @@ are still unwired from any live surface (rework finding 4's own "nothing calls i
 adds a `POST /join` route (web) or a Discord-side redemption is the one that has to bind
 `callerAssertedPersonId` to a real, already-authenticated identity; neither function can do that itself from a
 secret and a bare id.
+
+---
+
+## D-35 — `packages/db`/`packages/auth`/`packages/core`/`packages/discord`: what a merge does with two conversations on one course, what it does with usage and cost, whether it can be undone, and what changed in routing
+
+**Problem.** LINK-1..5/PPL-4/5 build the mechanism D-28 already designed: an unattributed identity is invited,
+not answered (LINK-1/LINK-2); a Discord or MCP identity is proven, not asserted (LINK-3, PPL-4); proving a
+second identity that already belongs to someone merges the two (LINK-4); and, once merged, one allowance and
+one conversation follow the person across every surface (LINK-5).
+
+**Choice — `connectedAt`, not identity count, is LINK-1's own gate.** `people.connectedAt` (nullable) is set
+exactly once, by `mergePeople`, the moment a *proof* first attaches a second identity onto a person — never by
+`resolvePersonByIdentity` (PPL-3's own first-sight creation) and never by a roster import
+(`mergeRosterFields`/`overwriteRosterFields`, neither of which touches it). `answerQuestion`
+(`packages/core/src/answer.ts`) declines with `not-connected` before admission, the spending cap or the
+allowance are ever touched whenever `connectedAt` is `null` — LINK-1's own "no model call, no allowance spent"
+is true by construction, not by a caller remembering to check first, because the gate sits in the one pipeline
+every surface already calls (CORE-1's own "one pipeline every surface calls" is what carries LINK-1 to Discord
+today and to the web chat and MCP surfaces automatically once they call `answerQuestion` too).
+
+**Cost, stated plainly, the same way D-28 already does.** Every brand-new person's *first* message, on any
+surface — not merely a second surface — now gets the invitation instead of an answer, because `resolvePersonByIdentity`
+never sets `connectedAt`. This is D-28's own trade, not a new one introduced here: "the alternative — answer on
+the first surface, require connecting only for a second — leaves a window where a person has an unattributed
+allowance ... that is D-4's evasion, reintroduced." The whole existing Discord regression suite exercises this
+directly: `packages/discord/tests/helpers/seed.ts#seedBoundServerWithCourse` now connects a person under the
+default `authorId` before most tests run (a real, if throwaway, merge — not a raw column write), and the
+handful of tests that specifically exercise identity *creation* (SURF-4, the D-31 rework) opt out
+(`connectDefaultAuthor: false`) since they assert on `people.listPeople`'s own count, not on whether the
+message was answered.
+
+**Choice — what a merge does with two conversations on the same course.** `conversations` has two partial
+unique indexes (`schema.ts`, CONV-1) that a plain "reassign the loser's conversation to the survivor" would
+violate the moment both people already have one for the same `(course, surface-scope)` — this is the "unique
+constraints you will hit" case the brief names directly. `mergePeople` (`packages/db/src/repos/people.ts`)
+resolves it by *combining* the two transcripts into the survivor's own conversation row: every message from
+both, interleaved back into the order they actually happened (`mergeMessagesByCreatedAt`, a stable merge on
+`createdAt` — both inputs are already each internally ordered by their own `sequence`, CONV-2's own ordering
+column), re-sequenced 0..N-1, and re-pointed at the survivor's conversation and person id. Nothing is dropped —
+CONV-2's "no delete path for a message" holds through a merge exactly as it does everywhere else. The loser's
+own conversation row is left in place, now empty, rather than reassigned (which would recreate the exact
+collision this branch avoids) or deleted (nothing in this package deletes a conversation row, and `mergePeople`
+does not start). `upstreamThreadId` keeps the survivor's own value when it already has one — never overwritten
+by the loser's, so a live model-thread resumption is never silently swapped for a different one mid-merge.
+
+**Choice — what a merge does with the day's usage.** LINK-4's own text is explicit that this is a requirement,
+not a suggestion: "the day's usage is combined rather than restarted." `mergePeople` adds the loser's own count,
+for every `(course, day)` it has one, onto the survivor's row for the same pair (creating one if the survivor
+had none) — the same `ON CONFLICT DO UPDATE ... count + excluded` shape `usage.ts#incrementUsage` already uses,
+just summing an arbitrary amount rather than incrementing by one. The loser's own row is left exactly as it
+was: harmless history nothing reads through the loser's id again, since every identity that used to resolve to
+the loser now resolves to the survivor. Tested directly (`packages/db/tests/people-merge.test.ts`) against the
+brief's own suspicion — the combined count is asserted to be the *sum*, not the larger of the two and not a
+reset.
+
+**Choice — enrolments follow the same "one active row wins, nothing is silently dropped" shape.** An *ended*
+enrolment moves to the survivor outright (no unique constraint to collide with). An *active* one moves only if
+the survivor holds no active enrolment for that course already; when it does, the loser's row is *ended*
+instead of moved — `enrolments_org_course_person_active_unique` permits at most one active row per
+`(organization, course, person)`, and the survivor's own enrolment (whichever one it already had) is what the
+merged person keeps. The loser's now-ended row stays as the historical record of how they were originally
+admitted, the same "ended, not deleted" discipline ENRL-6 already holds every other enrolment row to.
+
+**Choice — cost ledger entries are deliberately left alone.** `cost_ledger_entries` rows are not reassigned to
+the survivor during a merge, unlike identities, conversations, enrolments and usage. They are a historical
+attribution of what was actually spent, by which id, at the time the call was made — not a live balance a
+merge needs to keep correct the way a daily allowance is (nothing reads `cost_ledger_entries` by `personId`
+to decide whether to answer the *next* request; `hasReachedSpendingCap`/`listOrganizationTotals` are both
+organization-wide sums, indifferent to which person a row names). Reassigning them would rewrite history
+("this person spent this" becomes false the moment it is reassigned) for no read that needs it to be true. If
+a future requirement needs "how much has this merged person's *whole* history cost, across every id they were
+ever known by," that reader can already resolve it by following `mergedIntoPersonId` back through
+`people`, the same chain COST-4's own instructor-facing read would have to walk regardless of how the ledger
+rows are attributed.
+
+**Choice — a merge is not undone by anything in this slice.** `mergedIntoPersonId`/`mergedAt` record *that* a
+merge happened and which person survived it, but there is no `unmergePeople` and no code path that ever clears
+either column. D-28's own "Limits" paragraph named this as one of the two questions deliberately left open —
+"whether a merge is ever reversible" — and nothing in LINK-1..5's own text requires an answer here: undoing a
+merge would mean re-splitting interleaved messages back into two conversations, reversing a usage sum with no
+record of which half came from which side once further requests have landed on top of it, and deciding which
+of two now-identical-looking enrolment histories to revive — none of which this slice's brief asks for, and
+guessing at the shape now would be inventing a requirement the way D-28 already warned against.
+
+**Choice — what changed in routing for Discord (D-34's own unfinished business, closed here).**
+`packages/discord/src/handle-mention.ts` now calls `enrolments.enrolViaDiscordRole` once a message resolves to
+a matched course, before `answerQuestion` runs — exactly the change D-34's own "what the linking slice should
+change in routing" named: "holds the role, so route it" becomes "holds the role, so admit them once, then
+route through the stored enrolment." Concretely, for Discord: a role holder's *first* message used to route and
+answer with no `enrolments` row behind it at all; every message now leaves one behind (idempotently —
+`enrolViaDiscordRole`'s own no-op when an active enrolment already exists, or when the author does not hold the
+course's `studentsRole`, makes this safe to call on every matched message, not only the first). `routeMessage`'s
+own category-or-role match, unchanged, is still the only thing that decides which *course* a message belongs
+to; a person routed by category alone, holding no relevant role, still gets an enrolment write attempt that
+quietly does nothing (`enrolViaDiscordRole` returns `undefined`, caught and logged, never surfaced to the
+student). **What this slice's own first pass got wrong, and the rework below fixes**: it left ENRL-6 hollow for
+a role holder specifically — an instructor's `enrolments.end` was silently undone by that same student's very
+next `@bloombot`, because `enrolViaDiscordRole` was written (D-34, the previous slice) `reviveEnded: true`, and
+this slice is what actually calls it from a live message path for the first time. See "Rework, finding 5"
+below for the fix — `reviveEnded: false`, and `handleMention` now refuses to answer (not merely to leave an
+audit row) when a student who holds the course's `studentsRole` has an enrolment an instructor ended.
+
+**Limits.** The web chat and MCP surfaces get LINK-1's own gate for free (`answerQuestion` is the one place it
+lives), but neither surface exists yet to call `beginDiscordPersonLink`/`issueMcpPersonLinkToken`/
+`completeDiscordPersonLink`/`completeMcpPersonLink` (`packages/auth/src/person-link.ts`) — this slice's own
+brief is explicit that it "provides the token mechanism, not the server." The actual Discord OAuth token
+exchange (`code` → an access token → `/users/@me`'s own snowflake) is not built here either, the same way
+`discord-install.ts` leaves Discord's own REST calls to `@bloombot/discord-rest` and `apps/api`'s own routes —
+whichever slice wires the web panel's connect screens is the one that completes that round trip and calls
+`completeDiscordPersonLink` with the snowflake it got back, and is also the one that establishes
+`callerPersonId`/`survivorPersonId` from a real, already-authenticated session (see "Rework, finding 3" below —
+this package trusts its caller for that the same way `dispatch.ts`'s own `accountId` already does).
+`people.ts#hasVerifiedAddress` (PPL-5) has no caller yet either — there is no transcript-read or export action
+in this platform today (`ADMIN-1..5`, not yet built) — it exists ahead of its own caller so that phase does not
+have to invent the check when it lands.
+
+---
+
+### Rework — two independent reviewers, converging on the same account-takeover and four more
+
+A rework pass on this slice found the connect flow itself unsafe to ship, plus four smaller defects. Each is
+its own finding below, in the reviewers' own numbering; each has a regression test that fails without its fix
+(`packages/auth/tests/person-link.test.ts`, `packages/db/tests/people-merge.test.ts`,
+`packages/discord/tests/handle-mention.test.ts`).
+
+**Rework, finding 1 — a successful proof of a never-before-seen identity never set `connectedAt`.**
+`connectIdentity` (`people.ts`) wrote the `person_identities` row and nothing else; `connectedAt` was set only
+by `mergePeople`. Every MCP connect is exactly this case (LINK-3's own token exists *because* that surface has
+no prior identity to merge against), and so is any Discord connect for a student who had not yet messaged the
+bot: the proof succeeded, the identity attached, and the person was still declined by the LINK-1 gate on their
+very next message — a loop with no exit, since redoing the same successful proof is itself idempotent. Fixed by
+setting `connectedAt` (the same `coalesce`-never-move-backward write `mergePeople` already used) on both of
+`connectIdentity`'s own successful branches — the fresh attach, and the idempotent "already this person's own
+identity" branch (re-proving an identity you hold is still a proof).
+
+**Rework, finding 2 — `connectIdentity` accepted a person who had already been merged away, and a merge could
+strand an in-flight connect attempt.** `mergePeople` already refused a merged-away *survivor*; `connectIdentity`
+had no equivalent guard on the `personId` it was asked to attach an identity to, reachable whenever the identity
+itself was new (the common case). Concretely: a person begins a Discord connect attempt (a ten-minute-lived
+challenge naming them as its own survivor); within that window a *different*, faster proof merges them into
+someone else; their still-live challenge redeems successfully and attaches a genuinely proven identity to a
+tombstone — which `mergePeople` now correctly refuses ever to merge forward, so the attempt is permanently
+declined with no way out. Fixed on both sides: `connectIdentity` now refuses a `personId` whose
+`mergedIntoPersonId` is set, and `mergePeople` re-points every outstanding (unused) Discord challenge naming the
+loser as its survivor onto the new survivor instead
+(`person-link-challenges.ts#repointOutstandingChallenges`), so the in-flight attempt still completes, against
+whoever the person actually is by the time it redeems. `mcp` challenges need no equivalent repointing — see
+finding 3, immediately below, for why they no longer carry a survivor at issue time at all.
+
+**Rework, finding 3 — the proof bound the wrong side, on both surfaces, and the MCP half was an account
+takeover.** This is the finding that mattered most. `completeMcpPersonLink(token, mcpExternalId)` took the
+identity being connected as a bare, caller-supplied string, and attached whoever owned it to the challenge's own
+person — so an attacker holding nothing but their *own*, legitimately-issued token could name an arbitrary
+victim's identity and absorb them:
+
+```
+victim   = resolvePersonByIdentity(org, {mcp, 'victim-mcp-id'})   // transcripts, enrolments, usage
+attacker = createPerson(org, {})
+issued   = issueMcpPersonLinkToken(org, attacker.id, db)          // the attacker's own legitimate token
+completeMcpPersonLink(issued.token, 'victim-mcp-id', db)
+→ attacker absorbed victim; victim.mergedInto === attacker.id
+```
+
+The Discord half was the same shape by state fixation: `beginDiscordPersonLink` returned a state with nothing
+tying it to the caller who began it, so an attacker could begin their own attempt (survivor = attacker), hand
+the resulting authorization URL to a victim, and — the moment the victim approved it on Discord's own consent
+screen, proving the *victim's real* snowflake — absorb the victim, because nothing checked that the caller
+*redeeming* the state was the same caller who began it.
+
+LINK-3's own text is explicit that a token's *delivery* is what proves the identity ("delivered where only that
+caller can read it"), which means the challenge has to be issued **bound to the identity being connected**, not
+to a survivor that does not exist yet at that point. `person_link_challenges` now binds opposite sides of the
+proof depending on the surface (`schema.ts`'s own `CHECK person_link_challenges_binding_shape_check`, structural
+rather than a convention two functions have to remember): a `discord` challenge is issued bound to the
+*survivor* (`personId`) — sound, because Discord's OAuth genuinely proves the snowflake once the callback runs,
+so the identity side does not need binding in advance — and an `mcp` challenge is issued bound to the *identity*
+(`identityExternalId`) — because MCP has no sign-in of its own, and the token's own delivery to the unconnected
+caller *is* the proof, before any survivor is known. Redemption is symmetric: `completeMcpPersonLink` now takes
+the survivor from its own caller (`survivorPersonId`, asserted by whoever is already authenticated as that
+person — the same trust `dispatch.ts`'s own `DispatchContext.accountId` already places in its caller) rather
+than an identity, and is safe to trust *because* the identity side is fixed by the token — a caller can only
+ever attach the one identity a given token was issued for, never assert an arbitrary one.
+`completeDiscordPersonLink` now takes an additional `callerPersonId` and refuses a mismatch against the
+survivor `state` was issued for — the state-fixation fix, checked inside the one function this module
+advertises for completing a Discord connection rather than left for a future callback route to remember (the
+same way `discord-install.ts`'s own callback route today checks a state's `accountId` against the caller's
+session — this rework brings that check *into* the shared module itself, since `completeDiscordPersonLink` has
+no route of its own yet to lean on). A redeemed secret is still consumed on a caller mismatch, the same
+"spent either way" rule every single-use secret in this package already follows (`tokens.ts#consumeSignInToken`'s
+own comment) — no retry, whatever the outcome.
+
+Redeem-then-attach/merge also now runs as one transaction (this finding's own "also fix" 7, folded in here since
+it is what makes the redesign safe to compose): `connectIdentity`/`mergePeople` (`people.ts`) accept
+`TransactingExecutor`, not `Database`, the same widening `accounts.ts#createAccount` already established for
+this exact "callable standalone, or nested as a savepoint inside a caller's own transaction" shape, and
+`completeDiscordPersonLink`/`completeMcpPersonLink` open one transaction wrapping the consume and the
+attach-or-merge — a redeemed secret whose attach then fails must not stay spent.
+
+Also exposed, for LINK-3's own "the page names the account being connected and waits to be told to proceed":
+`peekChallenge` (`person-link-challenges.ts`) and `previewDiscordPersonLink`/`previewMcpPersonLink`
+(`person-link.ts`) — a read-only inspection of what completing a challenge *would* do (which person, which
+identity, whether it merges someone in) without spending the secret. The connect screens themselves are still a
+later slice; this is the primitive they will need.
+
+**Rework, finding 4 — `hasVerifiedAddress` did not check an address.** It read `person.connectedAt !== null`
+— bit-for-bit the fact the LINK-1 answering gate already reads — which PPL-5 is explicit are two separate
+controls ("one proves which account is speaking, the other decides what may be shown"). Neither of LINK-3's own
+proofs verifies an email at all: Discord's OAuth proves a snowflake, and an MCP token proves possession of a
+private channel. Under the old code a person connected only through Discord, `email` still `null`, read `true`
+— the first transcript-export or carry-a-conversation-onward caller built against this function would have
+disclosed a transcript to someone who had proven nothing more than a snowflake. The only place this platform
+actually verifies an *email* is AUTH-1's redeemed sign-in link or AUTH-2's Google-asserted `emailVerified` —
+both `accounts`, not `people` — so `hasVerifiedAddress` now checks for a `web` `person_identities` row instead
+(PPL-2's own "a web account id"): it can only exist for a person who has connected a real,
+already-email-verified account, which is the actual proxy PPL-5 asks for.
+
+**Rework, finding 5 — the role-based enrolment path silently revived what an instructor ended, and this slice
+is where that became reachable.** `enrolViaDiscordRole` was written (D-34) `reviveEnded: true`, reasoned sound
+in isolation ("holding the role is an ongoing, re-checked fact") but inert until some caller actually admitted
+through it on the live message path — which this slice is what supplied. Once live, `true` meant ENRL-6's own
+"stops the person asking that course" did not hold for a role holder: the student's next `@bloombot` silently
+re-admitted them, with no record the removal had ever happened. Fixed in two parts, both in this slice, not
+deferred: `enrolViaDiscordRole` now passes `reviveEnded: false` (matching `enrolViaRoster`'s own reasoning — an
+ambient Discord role is not the deliberate re-admission decision redeeming a link or importing a roster row is),
+and `handleMention` now refuses to answer, not merely to leave an out-of-step audit row, when a person who holds
+the course's own `studentsRole` gets nothing back from `enrolViaDiscordRole` (which, holding that role, can only
+mean a prior ended row is blocking them — the function's only other refusal, not holding the role at all, is
+already ruled out). An instructor holding no student role of their own (`adminsRole` only, ENRL-5's "a Discord
+role confers none of them") is untouched either way, and category-routed messages are gated by the same
+`studentsRole` check, independent of which signal actually routed the message.
+
+**Also fixed, finding 6 — a token presented to the wrong surface's redemption path was burned before being
+rejected.** `consumeChallenge` matched on the secret's hash alone; checking `surface` only after the `UPDATE`
+had already run meant a Discord state presented to the MCP path (or the reverse) was marked used — destroying
+it for its own, legitimate surface — before the mismatch was ever noticed. `surface` is now part of the
+`WHERE` itself.
+
+**Also fixed, finding 8 — `getPersonIdentity` picked an arbitrary row once a merge made more than one identity
+per surface routine.** A survivor absorbing a loser who had their own Discord identity is exactly `mergePeople`'s
+own main case, which this function's original unordered `.get()` never accounted for. Ordered by `createdAt`
+(oldest first) for determinism — not a full fix: the model's own opening item (`@bloombot/core`'s `answer.ts`)
+can still name the "wrong" (but real, same-human) snowflake for a message that arrived on the survivor's *other*
+identity on the same surface. True per-message accuracy needs the calling surface to pass its own already-known
+external id through rather than this function re-deriving one from `surface` alone, which would touch
+`answer.ts`'s own input shape and every surface adapter's — left out of this rework's own scope, and said here
+plainly rather than silently left half-fixed.

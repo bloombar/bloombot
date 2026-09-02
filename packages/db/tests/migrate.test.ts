@@ -78,6 +78,7 @@ describe('runMigrations', () => {
       'organizations',
       'people',
       'person_identities',
+      'person_link_challenges',
       'projects',
       'sessions',
       'sign_in_tokens',
@@ -164,6 +165,7 @@ describe('runMigrations', () => {
       'organization_id',
     ])
     expect(schema.people).toEqual([
+      'connected_at',
       'created_at',
       'display_name',
       'email',
@@ -171,6 +173,8 @@ describe('runMigrations', () => {
       'github_handle',
       'id',
       'last_name',
+      'merged_at',
+      'merged_into_person_id',
       'organization_id',
     ])
     expect(schema.person_identities).toEqual([

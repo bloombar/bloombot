@@ -11,6 +11,19 @@
  * accumulating sessions faster than they idle out (`server.ts`'s own
  * `sweepIdleSessions`/`MAX_SESSIONS_PER_ACCOUNT`), and this is the number
  * that would show it.
+ *
+ * `shuttingDown` (rework finding) reports `ready: false` from the moment a
+ * shutdown begins, the same `apps/bot`/`apps/worker` own health endpoints
+ * already do for their own `gatewayConnected`/`workerHealthStatus` flags —
+ * an earlier version of this endpoint kept reporting `ready: true` for the
+ * whole teardown window, which is exactly the "healthy report over a dying
+ * process" shape this rework round's finding 6 already fixed once, for
+ * `buildToolDefinitions`. The database itself stays open and reachable
+ * until `shutdown.ts`'s own `closeDb()` actually runs, so `database` is
+ * still a real round trip either way — only `ready` is forced, the same
+ * "hardcoding the wrong field reads as an outage, not an orderly shutdown"
+ * reasoning `apps/worker/src/health.ts#workerHealthStatus`'s own comment
+ * gives for doing the same thing there.
  */
 
 import type { Database } from '@bloombot/db'
@@ -22,13 +35,29 @@ export interface HealthStatus {
   sessions: number
 }
 
-/** A cheap, real round trip to the database, checked fresh on every call rather than cached from the moment it last changed. `sessionCount` is read straight off `server.ts`'s own session map size — a plain number, not anything this function has to compute itself. */
-export function checkHealth(db: Database, sessionCount: number): HealthStatus {
+/**
+ * A cheap, real round trip to the database, checked fresh on every call
+ * rather than cached from the moment it last changed. `sessionCount` is
+ * read straight off `server.ts`'s own session map size — a plain number,
+ * not anything this function has to compute itself. `shuttingDown`
+ * defaults to `false` so every existing caller (most of this app's own
+ * tests) is unaffected; `server.ts`'s own `/health` route is the one real
+ * caller that ever passes `true`.
+ */
+export function checkHealth(
+  db: Database,
+  sessionCount: number,
+  shuttingDown = false
+): HealthStatus {
   let database = true
   try {
     db.$client.prepare('select 1').get()
   } catch {
     database = false
   }
-  return { ready: database, database, sessions: sessionCount }
+  return {
+    ready: database && !shuttingDown,
+    database,
+    sessions: sessionCount,
+  }
 }

@@ -3194,9 +3194,34 @@ surface at all defeated that exclusion in one read — reproduced live by enqueu
 reading its payload straight back through `jobs.get`. The id being otherwise unguessable (`jobs.list` is also
 off the surface) was never a real guard and is not relied on as one. Fixed with `ToolSurfaceEntry.sanitizeOutput`
 — a per-tool output transform, applied in `call-tool.ts` after `dispatch` succeeds, before this file's own
-`callTool` returns. `jobs.get`'s own entry supplies `withoutJobPayload`, which strips the one field; every
-other field (`status`, `attempts`, `result`, timestamps) still reaches the model, so the tool stays useful for
-"did my job finish" without also handing back what the job was importing.
+`callTool` returns.
+
+**Round two of the same finding — `payload` was not the only field carrying it, and denylisting one field at a
+time is what produced this in the first place.** The first version of this fix (previous paragraph) stripped
+`payload` and left every other field, reasoned about as "status, attempts, result, timestamps still reach the
+model, so the tool stays useful" — wrong, because `result` is exactly as capable of carrying PII as `payload`
+is, and a **succeeded** `roster.import` job's own `result` is a `RosterImportReport`
+(`apps/worker/src/handlers/roster-import.ts`) that carries a student's email or Discord handle in eight of its
+own array fields (`unresolvedHandles`, `channelsCreated`, `channelsAlreadyPresent`, `channelAccessGranted`,
+`channelsNotCreated`, `channelsFailed`, `channelNameCollisions`, `ambiguousHandles`, plus `peopleCreated`/
+`peopleMerged`/`rosterFieldsDeclined`). Reproduced live, one job-state later than the first finding: claim and
+complete a roster-import job with a real report, then `jobs.get` it back — four students' addresses and
+handles in the response. The existing test only ever exercised a *pending* job, whose `result` is always
+`null`, which is exactly why it stayed green through this. Fixed properly this time:
+`allowlistJobFields` (`tool-surface.ts`) returns exactly `{id, kind, status, attempts, maxAttempts, lastError,
+createdAt, updatedAt}` and nothing else — an allowlist, not a denylist, so the next handler that returns a
+richer report does not reopen this by default the way `result` just did. `lastError` stays on the list, but
+checked, not assumed: every `throw` in every handler this catalog registers today names a course, an
+organization, a job kind, or a malformed-payload shape, never a roster row — a per-row failure in
+`roster.import` is caught and pushed into the report (still excluded, as part of `result`), never re-thrown to
+become `lastError`. That is a property of today's handlers, not something this tool enforces mechanically; a
+future handler that threw a per-row error naming a student would reopen the same shape through the one field
+this tool still returns. Making that mechanical — asserting, in a shared place, that no handler's own thrown
+error text can embed request-specific data — is bigger than this tool and is not this round's fix. The test
+that exercises this now claims and *completes* a job with a real `RosterImportReport`
+(`seedCompletedRosterImportJob`) before reading it back, and asserts no email or handle appears anywhere in
+the serialized tool result — not that one particular key is absent, the same mistake the first version of this
+test made.
 
 **Rework finding 3 — the session map never released anything, and one account could exhaust the process.**
 `onsessionclosed` (the SDK's own hook) fires only for a client-driven `DELETE`; nothing closed a session this
@@ -3270,6 +3295,20 @@ the attachment's own filename; `courses.save` names the course's own title (or, 
 about to get). A target that does not resolve at all (a made-up id, or input that does not validate) skips the
 confirmation entirely — `dispatch` produces the real refusal instead, and asking a human to confirm deleting
 something that does not exist or is not theirs is not a question worth asking.
+
+**Choice — `courses.save`'s own `describeCourseSaveTarget` asks for confirmation on a pure create too, even
+though a brand-new course has no existing categories or channels for it to destroy.** `entity.existingCourse`
+is only set when `input.id` names a course that already exists (`courses.ts`'s own `CourseSaveEntity`); a
+create has nothing to replace, so the confirmation this round adds for it is not, strictly, guarding against
+data loss the way it is for an update. Left as-is, deliberately, rather than narrowing `resolveTargetLabel`
+(`call-tool.ts`) to skip the gate on a pure create: `courses.save` is one action for both create and update —
+the same call shape, told apart only by whether `input.id` is present — and a caller (or a model filling in
+arguments) getting that wrong is exactly the kind of mistake this file's own `describeTarget` mechanism exists
+to catch before it happens rather than after. This fails safe (one unnecessary confirmation on an ordinary
+create) rather than unsafe (a caller who meant to create ends up silently updating, or the reverse), which is
+the trade this repository's own idiom already prefers elsewhere (TEN-5's own refusal shape is the same kind of
+"say no when genuinely unsure" choice). Noted here rather than left for a future reader to wonder whether it
+was an oversight.
 
 **Also fixed, smaller.** `call-tool.ts`'s own module comment used to claim a missing or malformed
 `organizationId` "refuses the same way an organization the caller cannot see does" — true only inside

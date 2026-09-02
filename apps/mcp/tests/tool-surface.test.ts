@@ -183,8 +183,8 @@ describe('MCP-2 — the tool surface is chosen, not derived', () => {
     ])
   })
 
-  describe("jobs.get's output is sanitized — a job's own payload can carry PII (a roster CSV) this surface must not hand to a model", () => {
-    it('strips payload from a real jobs.get definition', () => {
+  describe("jobs.get's output is reduced to an allowlist — a job's own payload and result can each carry PII (a roster CSV; a roster-import report's own students) this surface must not hand to a model", () => {
+    it('keeps only the allowed fields, dropping payload and result entirely — not merely one key inside them', () => {
       const registry = createPlatformRegistry()
       const jobsGet = buildToolDefinitions(registry).find(
         (definition) => definition.name === 'jobs.get'
@@ -194,15 +194,55 @@ describe('MCP-2 — the tool surface is chosen, not derived', () => {
       const sanitized = jobsGet?.sanitizeOutput?.({
         id: 'job-1',
         kind: 'roster.import',
+        status: 'succeeded',
+        attempts: 1,
+        maxAttempts: 5,
+        lastError: null,
         payload: {
           courseId: 'course-1',
           csvText: 'name,email\nA,a@example.edu',
         },
-        result: null,
+        // A real completed roster-import job's own `result` shape
+        // (`RosterImportReport`) — PII in several fields at once, the same
+        // way the real report this was found live against carries it.
+        result: {
+          courseId: 'course-1',
+          guildId: 'guild-1',
+          peopleCreated: [{ line: 2, discord: 'ada#1', personId: 'p1' }],
+          unresolvedHandles: [
+            { line: 3, discord: 'bob#2', email: 'bob@school.edu' },
+          ],
+          channelsCreated: [
+            {
+              line: 2,
+              email: 'ada@school.edu',
+              channelName: 'ada',
+              category: 'Week 1',
+            },
+          ],
+        },
+        createdAt: 1,
+        updatedAt: 2,
       })
 
       expect(sanitized).not.toHaveProperty('payload')
-      expect(sanitized).toMatchObject({ id: 'job-1', kind: 'roster.import' })
+      expect(sanitized).not.toHaveProperty('result')
+      expect(sanitized).toEqual({
+        id: 'job-1',
+        kind: 'roster.import',
+        status: 'succeeded',
+        attempts: 1,
+        maxAttempts: 5,
+        lastError: null,
+        createdAt: 1,
+        updatedAt: 2,
+      })
+      // The allowlist's own point, stated as the actual property under
+      // test rather than a key name: no address or handle survives
+      // anywhere in the sanitized output, serialized or not.
+      expect(JSON.stringify(sanitized)).not.toContain('school.edu')
+      expect(JSON.stringify(sanitized)).not.toContain('#1')
+      expect(JSON.stringify(sanitized)).not.toContain('#2')
     })
 
     it('leaves a non-object output untouched, rather than throwing', () => {

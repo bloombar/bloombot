@@ -45,12 +45,14 @@
  * transport itself, e.g. from the idle sweep below — wiring `onclose`
  * instead of duplicating a `sessions.delete` at every call site that closes
  * a transport is what keeps those two ways of ending a session from
- * drifting apart); `MAX_SESSIONS_PER_ACCOUNT` refuses a new session once one
- * account already holds too many; and `sweepIdleSessions` — a pure
- * function, tested directly with an injected clock rather than a real timer
- * — closes whatever has not made a request in `SESSION_IDLE_TIMEOUT_MS`,
- * run on an interval `buildApp` starts and `.unref()`s so it never itself
- * keeps this process alive.
+ * drifting apart); `MAX_SESSIONS_PER_ACCOUNT` evicts the account's own
+ * oldest session once a new one would put it over the cap, rather than
+ * refusing the new one — see `evictOldestSessionForAccount`'s own call site
+ * for why refusing punished an ordinary client for merely reconnecting; and
+ * `sweepIdleSessions` — a pure function, tested directly with an injected
+ * clock rather than a real timer — closes whatever has not made a request
+ * in `SESSION_IDLE_TIMEOUT_MS`, run on an interval `buildApp` starts and
+ * `.unref()`s so it never itself keeps this process alive.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -352,17 +354,27 @@ function jsonRpcError(res: Response, status: number, message: string): void {
  * actually evicts the map entry when the transport itself closes, not only
  * when a client sends `DELETE`) builds its own map and passes it in, then
  * reads it directly rather than only observing HTTP responses.
+ *
+ * `isShuttingDown` — rework finding: an earlier version of `/health` kept
+ * reporting `ready: true` for this process's entire teardown window, the
+ * same "healthy report over something already going away" shape this
+ * rework round already fixed once (`buildToolDefinitions` at startup, D-36).
+ * Defaults to `() => false`; `index.ts` passes a closure over its own
+ * `shuttingDown` flag, the same device `apps/bot`'s own `gatewayConnected`
+ * and `apps/worker`'s own `shuttingDown` already thread into their health
+ * endpoints.
  */
 export function buildApp(
   deps: ServerDependencies,
-  sessions: Map<string, McpSession> = new Map()
+  sessions: Map<string, McpSession> = new Map(),
+  isShuttingDown: () => boolean = () => false
 ): Express {
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json())
 
   app.get('/health', (_req, res) => {
-    const status = checkHealth(deps.db, sessions.size)
+    const status = checkHealth(deps.db, sessions.size, isShuttingDown())
     res.status(status.ready ? 200 : 503).json(status)
   })
 
@@ -402,6 +414,36 @@ function sessionCountForAccount(
     if (session.accountId === accountId) count++
   }
   return count
+}
+
+/**
+ * Closes and evicts `accountId`'s own least-recently-active session —
+ * `MAX_SESSIONS_PER_ACCOUNT`'s own eviction half (this file's own module
+ * comment). `undefined` if the account holds none (unreachable from this
+ * function's one caller, which only reaches here once the cap is already
+ * met, but guarded rather than assumed).
+ */
+function evictOldestSessionForAccount(
+  sessions: Map<string, McpSession>,
+  accountId: string
+): string | undefined {
+  let oldestId: string | undefined
+  let oldestSession: McpSession | undefined
+  for (const [sessionId, session] of sessions) {
+    if (session.accountId !== accountId) continue
+    if (
+      !oldestSession ||
+      session.lastActivityAt < oldestSession.lastActivityAt
+    ) {
+      oldestId = sessionId
+      oldestSession = session
+    }
+  }
+  if (oldestId) {
+    sessions.delete(oldestId)
+    void oldestSession?.transport.close()
+  }
+  return oldestId
 }
 
 async function handleMcpRequest(
@@ -459,11 +501,20 @@ async function handleMcpRequest(
       sessionCountForAccount(sessions, accountId) >= MAX_SESSIONS_PER_ACCOUNT
     ) {
       // This file's own module comment — the ceiling half of the session
-      // lifecycle rework. `429`: this is a rate/quota refusal, not an
-      // authorization one (the account is real and signed in; it simply
-      // already holds as many live sessions as it is allowed).
-      jsonRpcError(res, 429, 'too_many_sessions')
-      return
+      // lifecycle rework, and its own rework: an earlier version refused
+      // the new session outright (`429`) once an account hit the cap, which
+      // punished an *ordinary* client for reconnecting. `StreamableHTTPClientTransport#close()`
+      // — what a normal client calls on an ordinary disconnect — does not
+      // send `DELETE`; only its own `terminateSession()` does, so a
+      // restarted assistant leaves its old session in this map until the
+      // idle sweep eventually reaps it. Twenty reconnects inside the sweep
+      // window (measured live: 20 connect→`close()` cycles left
+      // `sessions.size === 20`, and the 21st was refused) is not exotic.
+      // Evicting the account's own oldest session instead means a
+      // legitimate reconnect is never refused — it costs the account's own
+      // least-recently-active session, never someone else's, and never a
+      // refusal a real assistant would have no good way to recover from.
+      evictOldestSessionForAccount(sessions, accountId)
     }
 
     const mcpServer = buildMcpServer(deps, accountId)

@@ -63,7 +63,17 @@ async function main(): Promise<void> {
   // the *first real session* with a `500` and a healthy-looking `/health`
   // moments earlier, instead of failing this process's own startup.
   const toolDefinitions = buildToolDefinitions(registry)
-  const app = buildApp({ db, logger, toolDefinitions })
+  // Rework finding — `/health` used to keep reporting `ready: true` for
+  // this process's whole teardown window; `shuttingDown` is flipped by
+  // `shutdown` below and read fresh by `server.ts`'s own `/health` route
+  // on every request, the same `apps/bot`/`apps/worker` own pattern
+  // (`gatewayConnected`/`workerHealthStatus`) for the same reason.
+  let shuttingDown = false
+  const app = buildApp(
+    { db, logger, toolDefinitions },
+    undefined,
+    () => shuttingDown
+  )
 
   const server = createServer(app)
 
@@ -93,6 +103,9 @@ async function main(): Promise<void> {
   // first (`shutdown.ts`'s own module comment).
   const shutdown = createShutdown({
     logger,
+    setShuttingDown: () => {
+      shuttingDown = true
+    },
     closeServer: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()))

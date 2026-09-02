@@ -14,24 +14,28 @@ import { createShutdown, type ShutdownDependencies } from '../src/shutdown.js'
 function makeDeps(
   overrides: Partial<ShutdownDependencies> = {}
 ): ShutdownDependencies & {
+  setShuttingDown: ReturnType<typeof vi.fn>
   closeServer: ReturnType<typeof vi.fn>
   closeDb: ReturnType<typeof vi.fn>
 } {
   return {
     logger: { info: vi.fn() },
+    setShuttingDown: vi.fn(),
     closeServer: vi.fn().mockResolvedValue(undefined),
     closeDb: vi.fn(),
     ...overrides,
   } as ShutdownDependencies & {
+    setShuttingDown: ReturnType<typeof vi.fn>
     closeServer: ReturnType<typeof vi.fn>
     closeDb: ReturnType<typeof vi.fn>
   }
 }
 
 describe('createShutdown', () => {
-  it('closes the server, then the database, in that order', async () => {
+  it('sets shutting-down, then closes the server, then the database, in that order', async () => {
     const deps = makeDeps()
     const order: string[] = []
+    deps.setShuttingDown.mockImplementation(() => order.push('setShuttingDown'))
     deps.closeServer.mockImplementation(async () => {
       order.push('closeServer')
     })
@@ -39,7 +43,18 @@ describe('createShutdown', () => {
 
     await createShutdown(deps)('SIGTERM')
 
-    expect(order).toEqual(['closeServer', 'closeDb'])
+    expect(order).toEqual(['setShuttingDown', 'closeServer', 'closeDb'])
+  })
+
+  it('flips shutting-down before closing anything — /health must stop reporting ready before the server (and so, eventually, the process) actually goes away', async () => {
+    const deps = makeDeps()
+    deps.closeServer.mockImplementation(async () => {
+      expect(deps.setShuttingDown).toHaveBeenCalled()
+    })
+
+    await createShutdown(deps)('SIGTERM')
+
+    expect(deps.setShuttingDown).toHaveBeenCalledTimes(1)
   })
 
   it('logs the signal it was called with', async () => {

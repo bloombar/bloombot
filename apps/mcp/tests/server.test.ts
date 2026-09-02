@@ -52,14 +52,15 @@ function createFakeLogger() {
 
 function buildTestApp(
   overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] },
-  sessions?: Map<string, McpSession>
+  sessions?: Map<string, McpSession>,
+  isShuttingDown?: () => boolean
 ) {
   const deps: ServerDependencies = {
     logger: createFakeLogger(),
     toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
     ...overrides,
   }
-  return sessions ? buildApp(deps, sessions) : buildApp(deps)
+  return buildApp(deps, sessions, isShuttingDown)
 }
 
 /** A fake `StreamableHTTPServerTransport` — just enough surface for `sweepIdleSessions` to exercise (`.close()`), with no real SDK object or HTTP request involved at all. */
@@ -114,6 +115,16 @@ describe('the health endpoint', () => {
     const response = await request(app).get('/health')
 
     expect(response.body).toMatchObject({ sessions: 1 })
+  })
+
+  it('reports not-ready (503) once shutdown has begun, even though the database is still reachable — a rework finding: this used to keep reporting ready: true for the whole teardown window', async () => {
+    testDb = createTestDatabase()
+    const app = buildTestApp({ db: testDb.db }, undefined, () => true)
+
+    const response = await request(app).get('/health')
+
+    expect(response.status).toBe(503)
+    expect(response.body).toMatchObject({ ready: false, database: true })
   })
 
   it('reports not-ready (503) when the database is unreachable', async () => {
@@ -391,26 +402,56 @@ describe('session lifecycle — bounded growth (rework finding: a live listener 
     expect(sessions.size).toBe(0)
   })
 
-  it('refuses a new session (429) once one account already holds MAX_SESSIONS_PER_ACCOUNT of them', async () => {
+  it("evicts the account's own oldest session — never refuses — once a new one would put it over MAX_SESSIONS_PER_ACCOUNT", async () => {
+    // Rework finding: an earlier version refused the new session (429)
+    // instead. `StreamableHTTPClientTransport#close()` — what an ordinary
+    // client calls on a normal disconnect — does not send `DELETE`, so a
+    // restarted assistant's old session stays in the map until the idle
+    // sweep eventually reaps it; refusing a legitimate reconnect inside
+    // that window punished ordinary use. Eviction means a new session
+    // always succeeds, at the cost of the account's own least-recently-used
+    // one — never a refusal, and never another account's session.
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
     const app = buildTestApp({ db: testDb.db })
 
-    for (let i = 0; i < MAX_SESSIONS_PER_ACCOUNT; i++) {
+    const oldestSession = await initializeMcpSession(app, caller.token)
+    for (let i = 1; i < MAX_SESSIONS_PER_ACCOUNT; i++) {
       await initializeMcpSession(app, caller.token)
     }
     expect((await request(app).get('/health')).body).toMatchObject({
       sessions: MAX_SESSIONS_PER_ACCOUNT,
     })
 
-    await expect(initializeMcpSession(app, caller.token)).rejects.toThrow()
+    // One more — succeeds, not refused, and the total does not grow past
+    // the cap.
+    await expect(
+      initializeMcpSession(app, caller.token)
+    ).resolves.toMatchObject({ sessionId: expect.any(String) })
+    expect((await request(app).get('/health')).body).toMatchObject({
+      sessions: MAX_SESSIONS_PER_ACCOUNT,
+    })
+
+    // The very first session — the account's own oldest at the moment the
+    // cap was hit — is the one that paid for it.
+    const evicted = await sendMcpRequest(app, oldestSession, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    })
+    expect(evicted.status).toBe(404)
 
     // The ceiling is per-account, not global — a second account can still
-    // start its own first session.
+    // start its own first session, and does not evict anything of the
+    // first account's.
     const otherCaller = seedSignedInAccount(testDb.db)
     await expect(
       initializeMcpSession(app, otherCaller.token)
     ).resolves.toMatchObject({ sessionId: expect.any(String) })
+    expect((await request(app).get('/health')).body).toMatchObject({
+      sessions: MAX_SESSIONS_PER_ACCOUNT + 1,
+    })
   })
 })
 

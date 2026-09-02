@@ -23,6 +23,7 @@ import { buildToolDefinitions } from '../src/tool-surface.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 import {
   seedAttachment,
+  seedCompletedRosterImportJob,
   seedCourse,
   seedOtherOrganization,
   seedSignedInAccount,
@@ -156,8 +157,8 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
     })
   })
 
-  describe("jobs.get's own output never carries a job's payload — a roster-import job's payload is a raw CSV of students' names and emails, and roster.import is deliberately off this surface for exactly that reason (tool-surface.ts's own module comment)", () => {
-    it('strips payload from a real callTool result, not merely from the sanitizer function in isolation', async () => {
+  describe("jobs.get's own output carries neither a job's payload nor its result — a roster-import job's payload is a raw CSV of students' names and emails, and a completed one's own result (a RosterImportReport) carries the same kind of PII in several of its own fields; roster.import is deliberately off this surface for exactly that reason (tool-surface.ts's own module comment)", () => {
+    it('strips payload from a pending job', async () => {
       testDb = createTestDatabase()
       const caller = seedSignedInAccount(testDb.db)
       const job = jobs.enqueueJob(
@@ -187,6 +188,42 @@ describe('MCP-1 — an assistant reaches the platform through the action layer',
       expect(result.output).not.toHaveProperty('payload')
       expect(JSON.stringify(result.output)).not.toContain('ada@example.edu')
       expect(result.output).toMatchObject({ id: job.id, kind: 'roster.import' })
+    })
+
+    it("strips result from a succeeded job — a pending job's own result is always null, which is why an earlier version of this test (exercising only a pending job) stayed green after result leaked", async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const jobId = seedCompletedRosterImportJob(
+        testDb.db,
+        caller.organizationId
+      )
+
+      const result = await callTool(
+        'jobs.get',
+        { organizationId: caller.organizationId, jobId },
+        {
+          toolDefinitions: toolDefinitions(),
+          db: testDb.db,
+          accountId: caller.accountId,
+          requestConfirmation: () => Promise.resolve(false),
+        }
+      )
+
+      expect(result.output).not.toHaveProperty('payload')
+      expect(result.output).not.toHaveProperty('result')
+      expect(result.output).toMatchObject({
+        id: jobId,
+        kind: 'roster.import',
+        status: 'succeeded',
+      })
+      // The property under test, not a key name: no student's address or
+      // Discord handle survives anywhere in the serialized tool result —
+      // `seedCompletedRosterImportJob`'s own report carries both, in
+      // several fields at once, the same way a real completed import does.
+      const serialized = JSON.stringify(result.output)
+      expect(serialized).not.toContain('school.edu')
+      expect(serialized).not.toContain('ada#1')
+      expect(serialized).not.toContain('bob#2')
     })
   })
 })

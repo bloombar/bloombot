@@ -62,20 +62,50 @@
  * confirmation design, not folded into MCP-4's "destructive" bucket as an
  * afterthought).
  *
- * `jobs.get` is on the surface, but its output is sanitized
- * (`sanitizeOutput`, below): a job's own `payload` can carry whatever the
- * action that enqueued it wrote — `roster.import`'s own job payload is
- * `{ courseId, csvText }` (`packages/actions/src/actions/roster.ts`), a raw
- * CSV of students' names and emails — and `jobs.get` (`repos/jobs.ts`)
- * returns it unfiltered. `roster.import` itself is deliberately off this
- * surface for exactly that reason (previous paragraph); leaving `jobs.get`
- * unsanitized would have handed the same data to a model through one
- * allowlisted read, defeating that exclusion entirely — found live, in this
- * slice's own rework round, by reading a roster-import job's payload back
- * through this tool. `jobs.list` is not on the surface either, so a job id
- * is not otherwise guessable from this surface, but that was never the
- * actual guard: this file's own reasoning has to hold regardless of what
- * else is or is not exposed, not lean on an id being hard to find.
+ * `jobs.get` is on the surface, but its output is reduced to an allowlist
+ * (`sanitizeOutput`, below: `allowlistJobFields`) — never a denylist of one
+ * field at a time. A job's own `payload` can carry whatever the action that
+ * enqueued it wrote (`roster.import`'s own is `{ courseId, csvText }`, a
+ * raw CSV of students' names and emails) and its `result` can carry
+ * whatever the *handler* that ran it wrote back: a completed
+ * `roster.import` job's own `RosterImportReport`
+ * (`apps/worker/src/handlers/roster-import.ts`) carries a student's email
+ * or Discord handle in eight of its own array fields
+ * (`unresolvedHandles`, `channelsCreated`, `channelsAlreadyPresent`,
+ * `channelAccessGranted`, `channelsNotCreated`, `channelsFailed`,
+ * `channelNameCollisions`, `ambiguousHandles`, plus `peopleCreated`/
+ * `peopleMerged`/`rosterFieldsDeclined`). `roster.import` itself is
+ * deliberately off this surface for exactly that reason (previous
+ * paragraph); a first version of this file stripped only `payload` and
+ * left `result` untouched, which handed the same PII back through the same
+ * tool one job-state later — found live, in this slice's own rework round,
+ * by claiming and completing a roster-import job with a real report and
+ * reading it straight back through `jobs.get`. Denylisting a second field
+ * closes today's finding and reopens the same shape the moment a future
+ * handler's own report carries something else this tool has no business
+ * repeating — an allowlist does not: `allowlistJobFields` names every field
+ * this tool may return, once, and a handler that starts returning a richer
+ * `result` does not silently widen what a model can read through it.
+ * `jobs.list` is not on the surface either, so a job id is not otherwise
+ * guessable from this surface, but that was never the actual guard: this
+ * file's own reasoning has to hold regardless of what else is or is not
+ * exposed, not lean on an id being hard to find.
+ *
+ * `lastError` is on the allowlist — checked directly, not merely assumed
+ * safe: every `throw` in every handler this catalog registers today
+ * (`roster.import`, `courseAttachments.attach`/`.detach`,
+ * `discordServers.scaffold`) names a course, an organization, a job kind or
+ * a malformed-payload shape, never a row from a roster or a specific
+ * student — a per-row failure in `roster.import` (a Discord API error
+ * creating one student's channel, say) is caught and pushed into
+ * `report.channelsFailed` (still a `result` field, still excluded), never
+ * re-thrown to become this job's own `lastError`. This is a property of
+ * today's handlers, not one `jobs.get` enforces mechanically — a future
+ * handler that threw a per-row error including a student's own address
+ * would reopen exactly this shape through the one field this tool does
+ * still return, the same way `result` did. See `docs/DECISIONS.md` D-36
+ * for the fuller reasoning and what would have to change to make that
+ * mechanical rather than reviewed.
  */
 
 import type { ActionRegistry, AnyAction } from '@bloombot/actions'
@@ -101,22 +131,47 @@ export interface ToolSurfaceEntry {
    */
   describeTarget?: (entity: unknown, input: unknown) => string
   /**
-   * Strips whatever this tool's own output must not hand to a model —
-   * `jobs.get`'s own `payload` (this file's own module comment on why).
-   * Applied after `dispatch` succeeds, never before — a refusal or a
-   * validation failure never reaches this at all.
+   * Reduces this tool's own output to what it may actually hand to a model
+   * — `jobs.get`'s own `allowlistJobFields` (this file's own module
+   * comment on why an allowlist, not a denylist). Applied after `dispatch`
+   * succeeds, never before — a refusal or a validation failure never
+   * reaches this at all.
    */
   sanitizeOutput?: (output: unknown) => unknown
 }
 
-/** `jobs.get`'s own `JobStatus` shape, narrowed to just enough to drop `payload` — importing `@bloombot/actions`' own `JobStatus` type here would pull a type this file has no other reason to depend on for one field name. */
-function withoutJobPayload(output: unknown): unknown {
+/**
+ * `jobs.get`'s own output, reduced to an allowlist — this file's own
+ * module comment on why an allowlist, not a denylist, and on why
+ * `lastError` is on it. Neither `payload` (what the action that enqueued
+ * this job wrote) nor `result` (what the handler that ran it wrote back)
+ * is named here, on purpose: whatever either one carries, for any job kind
+ * this platform ever registers, stays off this tool's own output unless a
+ * future, deliberate edit adds a specific field of one to this list by
+ * name — the same "a reviewer has to add it by hand" discipline
+ * `MCP_TOOL_SURFACE` itself already holds every tool to.
+ */
+const JOBS_GET_ALLOWED_FIELDS = [
+  'id',
+  'kind',
+  'status',
+  'attempts',
+  'maxAttempts',
+  'lastError',
+  'createdAt',
+  'updatedAt',
+] as const
+
+function allowlistJobFields(output: unknown): unknown {
   if (output === null || typeof output !== 'object' || Array.isArray(output)) {
     return output
   }
-  const rest = { ...(output as Record<string, unknown>) }
-  delete rest['payload']
-  return rest
+  const source = output as Record<string, unknown>
+  const allowed: Record<string, unknown> = {}
+  for (const field of JOBS_GET_ALLOWED_FIELDS) {
+    if (field in source) allowed[field] = source[field]
+  }
+  return allowed
 }
 
 /** `courseAttachments.detach`'s own entity — `packages/actions/src/actions/course-attachments.ts`'s `Attachment`, narrowed to the one field this needs. */
@@ -154,7 +209,7 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'enrolments.listForPerson' },
   { actionName: 'enrolments.checkAccess' },
   { actionName: 'costLedger.organizationUsage' },
-  { actionName: 'jobs.get', sanitizeOutput: withoutJobPayload },
+  { actionName: 'jobs.get', sanitizeOutput: allowlistJobFields },
   // Ordinary writes — reversible, or end/disable access without discarding
   // the record itself (this file's own module comment above).
   { actionName: 'projects.create' },

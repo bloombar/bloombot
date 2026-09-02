@@ -2545,7 +2545,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In progress
   review: false
 - id: ADMIN-2
   title: Reading a transcript is itself recorded
@@ -2555,7 +2555,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In progress
   review: false
 - id: ADMIN-3
   title: Export produces a file, as a job
@@ -2565,7 +2565,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In progress
   review: false
 - id: ADMIN-4
   title: A platform administrator sees tenants, not conversations
@@ -2576,7 +2576,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In progress
   review: false
 - id: ADMIN-5
   title: Deleting a tenant's data is explicit, confirmed and audited
@@ -2586,7 +2586,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Backlog
+  status: In progress
   review: false
 - id: AUTH-5
   title: A sign-in link actually reaches the person
@@ -2601,7 +2601,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 15
-  status: In progress
+  status: In review
   review: false
 - id: OPS-8
   title: The platform deploys as the processes it actually is

@@ -84,22 +84,43 @@ export interface ServerDependencies {
   logger: Logger
   /** Built once, before this process starts listening (`index.ts`) — `call-tool.ts`'s own `CallToolContext.toolDefinitions` doc comment on why this is precomputed rather than rebuilt per call or per session. */
   toolDefinitions: readonly McpToolDefinition[]
+  /**
+   * How long an `elicitation/create` request waits for a human before
+   * giving up. Defaults to `DEFAULT_ELICITATION_TIMEOUT_MS` (30s);
+   * injectable so a test can drive it down to a couple of seconds rather
+   * than share this process's own production ceiling.
+   *
+   * Rework finding: this used to be a module-level constant equal to
+   * `30_000` — the exact same number `vitest.config.ts`'s own root
+   * `testTimeout` carries (inherited in a later rebase, after this
+   * constant was already written). A CI run showed two failures landing at
+   * 30008ms/30006ms — a hung elicitation and a vitest test timeout are
+   * indistinguishable at that point: the server sits for its own full
+   * budget, vitest kills the test at essentially the same instant, and the
+   * report says nothing about which end actually stalled. Making this
+   * injectable, and `tests/mcp-e2e.test.ts` passing a value an order of
+   * magnitude below `testTimeout`, means a genuine hang now fails fast
+   * with `ConfirmationRequiredError`'s own message well before vitest's
+   * own ceiling, instead of dying at it.
+   */
+  elicitationTimeoutMs?: number
 }
 
 const SERVER_INFO = { name: 'bloombot-mcp', version: '0.1.0' }
 
 /**
- * How long an `elicitation/create` request waits for a human before giving
- * up. The SDK's own default (`DEFAULT_REQUEST_TIMEOUT_MSEC`) is 60 seconds
- * — reasonable for an ordinary request/response, too long for a single
- * `tools/call` to sit open waiting on a person who may never answer at all
- * (declining the confirmation is the safe fallback either way — MCP-4 fails
- * closed on a timeout the same as an explicit decline — but a caller
- * holding a connection open for a full minute is needless latency for no
- * benefit). Thirty seconds is enough to read a short confirmation and
- * decide, short enough that an abandoned call frees the connection quickly.
+ * The production default for `ServerDependencies.elicitationTimeoutMs`
+ * (`index.ts` never overrides it). The SDK's own default
+ * (`DEFAULT_REQUEST_TIMEOUT_MSEC`) is 60 seconds — reasonable for an
+ * ordinary request/response, too long for a single `tools/call` to sit
+ * open waiting on a person who may never answer at all (declining the
+ * confirmation is the safe fallback either way — MCP-4 fails closed on a
+ * timeout the same as an explicit decline — but a caller holding a
+ * connection open for a full minute is needless latency for no benefit).
+ * Thirty seconds is enough to read a short confirmation and decide, short
+ * enough that an abandoned call frees the connection quickly.
  */
-const ELICITATION_TIMEOUT_MS = 30_000
+export const DEFAULT_ELICITATION_TIMEOUT_MS = 30_000
 
 /**
  * MCP-4: asks the *client application* to confirm a destructive tool,
@@ -126,7 +147,8 @@ async function requestElicitedConfirmation(
   mcpServer: McpServer,
   tool: McpToolDefinition,
   organizationId: string,
-  targetLabel: string
+  targetLabel: string,
+  elicitationTimeoutMs: number
 ): Promise<boolean> {
   if (!mcpServer.server.getClientCapabilities()?.elicitation?.form) {
     return false
@@ -147,7 +169,7 @@ async function requestElicitedConfirmation(
         required: ['confirm'],
       },
     },
-    { timeout: ELICITATION_TIMEOUT_MS }
+    { timeout: elicitationTimeoutMs }
   )
   return result.action === 'accept' && result.content?.['confirm'] === true
 }
@@ -195,6 +217,8 @@ function registerTools(
   deps: ServerDependencies,
   accountId: string
 ): void {
+  const elicitationTimeoutMs =
+    deps.elicitationTimeoutMs ?? DEFAULT_ELICITATION_TIMEOUT_MS
   for (const tool of deps.toolDefinitions) {
     mcpServer.registerTool(
       tool.name,
@@ -232,7 +256,8 @@ function registerTools(
                 mcpServer,
                 confirmingTool,
                 organizationId,
-                targetLabel
+                targetLabel,
+                elicitationTimeoutMs
               ),
           })
           return {

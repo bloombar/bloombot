@@ -3323,10 +3323,43 @@ nothing cross-checking it) never could. `buildToolDefinitions(registry, surface 
 injectable second parameter now, so a test can build definitions around a fake action (finding 5's own
 attribution coverage did not need this, but MCP-5 in general — a metered action this platform's real catalog
 does not have yet — has nowhere else to be tested against without it). `elicitInput` now passes an explicit
-30-second `timeout` (`ELICITATION_TIMEOUT_MS`) rather than the SDK's own 60-second default — MCP-4 already
-fails closed on a timeout the same as an explicit decline, so this is a latency fix, not a correctness one.
+30-second `timeout` (`DEFAULT_ELICITATION_TIMEOUT_MS`) rather than the SDK's own 60-second default — MCP-4
+already fails closed on a timeout the same as an explicit decline, so this is a latency fix, not a correctness
+one.
 `apps/mcp/src/shutdown.ts` splits this process's own signal handling into its own testable module, matching
 `apps/bot`/`apps/worker`'s own `createShutdown` rather than staying inlined the simpler way `apps/api`'s does.
+
+**CI-only flake in `tests/mcp-e2e.test.ts` — a hung elicitation and a vitest test timeout were
+indistinguishable.** Reported by CI, not reproducible locally (macOS, 15+ solo runs, a full-suite-loaded run,
+and a CPU-stressed run all passed): two of the file's five tests (`cancel`, and the message-naming test, which
+uses `decline`) failed at 30008ms/30006ms — `ELICITATION_TIMEOUT_MS`'s own then-value, 30 seconds, is exactly
+`vitest.config.ts`'s own root `testTimeout`, inherited three commits later in this same slice's own rebase,
+after the constant was already written with no reason to expect it would ever collide with anything. At that
+exact ceiling a genuine server-side timeout (the client never answers, `elicitInput` gives up, the tool call
+still resolves — correctly — as a fail-closed refusal) and vitest simply killing the test read identically:
+same elapsed time, no way to tell which end actually stalled from the report alone. Fixed structurally, the
+one change made regardless of ever pinning the exact CI-only cause: `ServerDependencies.elicitationTimeoutMs`
+is now injectable (defaulting to `DEFAULT_ELICITATION_TIMEOUT_MS`, still 30 seconds, in production —
+`index.ts` never overrides it), and `tests/mcp-e2e.test.ts` runs every one of its own tests at 2 seconds, with
+one dedicated test at 300ms proving the fail-closed-on-timeout path fires at all (nothing did before this
+round — the file's other tests all supply an answer). A real hang now fails in a couple of seconds with a
+message that says a confirmation was not given, not sixty times that with a message that says nothing.
+
+The file was also restructured so every test owns its entire scenario — `setUp()`/`ctx.dispose()`, called
+inside each test's own `try`/`finally` — rather than a shared module-level `let client/server` reassigned per
+test and torn down from one shared `afterEach`: no two tests share a server, a client, a port, or a database
+connection, and one test's own teardown can never be mistaken for bleeding into the next test's timing budget.
+`dispose()` also now calls the client transport's own `terminateSession()` (a real `DELETE /mcp`) before
+`client.close()` — `close()` alone does not send `DELETE` (this file's own D-36 finding, `MAX_SESSIONS_PER_ACCOUNT`),
+so the prior version left each test's own server-side session semantically "open" until the test's own server
+was discarded moments later; terminating it explicitly is strictly more correct regardless of whether it bears
+on the CI failure. None of this pinpoints the CI-only race with certainty — the two candidates found while
+reading the SDK's own client transport (`StreamableHTTPClientTransport`'s private `_reconnectionTimeout`/
+`_scheduleReconnection` fields: the standalone SSE stream used for server-to-client pushes reconnects on its
+own backoff schedule, and a reconnect racing a real `elicitation/create` push is a plausible way to lose one
+on a slower network path) and the general shape of insufficiently isolated test resources are both left as
+educated hypotheses, not confirmed causes. If CI is still flaky after this, that reconnection path is the next
+thing to instrument.
 
 **Rebase.** This slice was rebased onto `origin/feat/PLAT-1-multi-surface-platform` directly rather than onto
 `feat/LINK-1-account-linking` (D-28's own linking branch, still in review) — this slice never depended on the

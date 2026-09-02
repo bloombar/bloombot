@@ -23,7 +23,10 @@ import {
   DISCORD_SCAFFOLD_JOB_KIND,
 } from '../../src/handlers/discord-scaffold.js'
 import { createFakeLogger } from '../helpers/fake-logger.js'
-import { FakeDiscordGuildServer } from '../helpers/fake-discord-guild-server.js'
+import {
+  FakeDiscordGuildServer,
+  FAKE_BOT_USER_ID,
+} from '../helpers/fake-discord-guild-server.js'
 import { seedOrganizationWithBoundCourse } from '../helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
@@ -232,6 +235,111 @@ describe('discordServers.scaffold handler', () => {
     ])
   })
 
+  // The bug this test exists for, observed in the field: a scaffold run
+  // created its category and then failed `403` on every channel inside it,
+  // four more times, with a message that named no cause.
+  //
+  // A course category denies `@everyone` view. Discord applies that denial to
+  // the bot as well unless the bot is an Administrator, so the very next
+  // call — creating a channel whose `parent_id` is that category — is refused
+  // by the category the bot itself just made. The fix is an overwrite for the
+  // bot's own user id, and this asserts it is actually sent, on both the
+  // ordinary category and the admins-only channel.
+  it('grants the bot itself access to the category it closes, so it can still create channels inside it', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      {
+        name: 'Week 1',
+        channels: [
+          { name: 'general', adminsOnly: false },
+          { name: 'staff', adminsOnly: true },
+        ],
+      },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    await runScaffold(seeded.organizationId, seeded.courseId)
+
+    const writes = discordServer.writeRequests()
+    const categoryCreate = writes.find(
+      (request) => request.body?.['type'] === 4
+    )
+    const overwrites = (categoryCreate?.body?.['permission_overwrites'] ??
+      []) as { id: string; type: number; allow: string }[]
+
+    const botEntry = overwrites.find((entry) => entry.id === FAKE_BOT_USER_ID)
+    expect(botEntry).toBeDefined()
+    expect(botEntry?.type).toBe(1) // a member overwrite, not a role
+    // View (0x400) and Manage Channels (0x10) are the two that decide whether
+    // the next create succeeds; assert the bits rather than a magic string.
+    const allowed = BigInt(botEntry?.allow ?? '0')
+    expect(allowed & 0x400n).toBe(0x400n)
+    expect(allowed & 0x10n).toBe(0x10n)
+
+    // The admins-only channel closes itself the same way, so the same trap
+    // exists there and is closed the same way.
+    const adminsOnlyCreate = writes.find(
+      (request) =>
+        request.body?.['type'] === 0 &&
+        Array.isArray(request.body?.['permission_overwrites'])
+    )
+    const adminsOnlyOverwrites = (adminsOnlyCreate?.body?.[
+      'permission_overwrites'
+    ] ?? []) as { id: string }[]
+    expect(
+      adminsOnlyOverwrites.some((entry) => entry.id === FAKE_BOT_USER_ID)
+    ).toBe(true)
+  })
+
+  // The second half of the field failure. The first run created a category
+  // with no overwrite for the bot, so every channel inside it was refused —
+  // and every *later* run adopted that same category unchanged and failed
+  // identically. A guild carrying a category from before the fix has to be
+  // repaired on adoption, or scaffolding that course never works again.
+  it('repairs its own access on a category created before the bot granted itself any', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [{ name: 'general', adminsOnly: false }] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+    // Exactly what an earlier version of this handler left behind: the
+    // category exists, `@everyone` is denied, and the bot is named nowhere.
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        type: 4,
+        name: 'Week 1',
+        parent_id: null,
+        permission_overwrites: [
+          { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+          { id: 'role-students', type: 0, allow: '3072', deny: '0' },
+        ],
+      },
+    ])
+
+    await runScaffold(seeded.organizationId, seeded.courseId)
+
+    const repair = discordServer.requests
+      .filter((request) => request.method === 'PUT')
+      .find((request) =>
+        request.path.endsWith(`/permissions/${FAKE_BOT_USER_ID}`)
+      )
+    expect(repair).toBeDefined()
+    // It targets the adopted category, not some channel inside it.
+    expect(repair?.path).toContain('/channels/cat-1/')
+    const allowed = BigInt(String(repair?.body?.['allow'] ?? '0'))
+    expect(allowed & 0x400n).toBe(0x400n) // view
+    expect(allowed & 0x10n).toBe(0x10n) // manage channels
+  })
+
   // Finding 1 of the SRV-6..8 rework: Discord slugs a `GUILD_TEXT`
   // channel's own name at creation (spaces become dashes) — `general chat`
   // comes back from the guild as `general-chat`, never `general chat`. A
@@ -313,9 +421,15 @@ describe('discordServers.scaffold handler', () => {
       }[]
     }
 
-    // Nothing was created at all — both the category and its channel were
+    // Nothing was *created* — both the category and its channel were
     // recognised as already present despite the case/whitespace mismatch.
-    expect(discordServer.writeRequests()).toHaveLength(0)
+    // The one write is the bot granting itself access to a category made
+    // before it did that (a `PUT` on one overwrite, never a create), which is
+    // what stops an adopted category refusing every channel inside it.
+    expect(
+      discordServer.writeRequests().filter((r) => r.method === 'POST')
+    ).toHaveLength(0)
+    expect(discordServer.writeRequests().map((r) => r.method)).toEqual(['PUT'])
     expect(report.categories).toEqual([
       expect.objectContaining({
         name: 'Week 1',
@@ -640,8 +754,13 @@ describe('discordServers.scaffold handler', () => {
       }[]
     }
 
-    // Nothing was written — both were already present.
-    expect(discordServer.writeRequests()).toHaveLength(0)
+    // Nothing was created — both were already present. The single `PUT` is
+    // the bot's own access repair on the adopted category; it rewrites one
+    // overwrite entry and leaves the observed permission state this test is
+    // about untouched, which the report assertions below then prove.
+    expect(
+      discordServer.writeRequests().filter((r) => r.method === 'POST')
+    ).toHaveLength(0)
     expect(report.categories).toEqual([
       expect.objectContaining({
         status: 'already_present',

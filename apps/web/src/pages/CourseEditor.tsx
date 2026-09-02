@@ -36,6 +36,18 @@
  * write-side half (no new course may acquire one even if a caller supplies
  * one directly, `packages/actions/src/actions/courses.ts`'s own comment).
  *
+ * WEB-19/FILE-4: Instructions is not one of this form's own fields at all
+ * any more — `components/CourseInstructions.tsx`, embedded below, saves it
+ * through the versioned `courseInstructions.save` instead of this form's
+ * `courses.save`, which no longer accepts the field
+ * (`packages/actions/src/actions/courses.ts`'s own comment,
+ * `docs/DECISIONS.md` D-54). Offered on the same "existing record only" gate
+ * as the knowledge files and Discord channels sections below — a course
+ * that does not exist yet has nothing for a revision's `courseId` to point
+ * at. Its own dirtiness is folded into this form's one `isDirty`
+ * (`instructionsDirty`, below) rather than that component registering a
+ * second navigation guard — see its own module comment for why.
+ *
  * WEB-18/FILE-1..3: a course's knowledge files (what it is grounded in) are
  * `components/CourseAttachments.tsx`'s own screen, embedded below — see
  * that file's module comment for the upload/pending/ready/failed/detach
@@ -44,7 +56,7 @@
  * channels section and the enable/disable toggle both already use.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError, getCourse, saveCourse } from '../api/client.js'
 import { disableCourse, enableCourse } from '../api/client.js'
@@ -52,6 +64,7 @@ import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
 import type { Course, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
+import { CourseInstructions } from '../components/CourseInstructions.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { FormField } from '../components/FormField.js'
@@ -154,7 +167,7 @@ function fieldErrorProp(
   return message !== undefined ? { error: message } : {}
 }
 
-/** Blank editable state for a brand-new course — `enabled: false`: a fresh course's category and role names have not been confirmed against this term's Discord server yet, so it starts disabled the same way a duplicated course does (D-23), rather than defaulting to routing immediately. */
+/** Blank editable state for a brand-new course — `enabled: false`: a fresh course's category and role names have not been confirmed against this term's Discord server yet, so it starts disabled the same way a duplicated course does (D-23), rather than defaulting to routing immediately. Carries no `instructions` field at all (WEB-19) — `components/CourseInstructions.tsx` manages that on its own, gated to an existing course. */
 function blankForm() {
   return {
     title: '',
@@ -163,7 +176,6 @@ function blankForm() {
     adminsRole: '',
     studentsRole: '',
     promptId: '',
-    instructions: '',
     model: '',
     vectorStoreId: '',
     maxRequestsPerDay: '',
@@ -179,7 +191,6 @@ function formFromCourse(course: Course) {
     adminsRole: course.adminsRole,
     studentsRole: course.studentsRole,
     promptId: course.promptId ?? '',
-    instructions: course.instructions ?? '',
     model: course.model ?? '',
     vectorStoreId: course.vectorStoreId ?? '',
     maxRequestsPerDay:
@@ -213,7 +224,14 @@ export function CourseEditor({
   // the live `form` below; see that hook's own module comment for why
   // "dirty" is a value comparison, not a keystroke count.
   const [baseline, setBaseline] = useState<FormState>(blankForm())
-  const isDirty = useFormDirty(baseline, form)
+  // WEB-19: `components/CourseInstructions.tsx` manages its own text and
+  // its own save, entirely outside `form`/`baseline` above — this is the
+  // one piece of *its* dirtiness this page needs, folded into the same
+  // `isDirty` the navigation guard already reads, since
+  // `hooks/navigation-guard.tsx` only ever honours one registered guard at
+  // a time (that component's own module comment).
+  const [instructionsDirty, setInstructionsDirty] = useState(false)
+  const isDirty = useFormDirty(baseline, form) || instructionsDirty
   const { confirmDiscard } = useUnsavedChangesGuard(isDirty)
   const { confirm } = useModal()
   const [loading, setLoading] = useState(courseId !== undefined)
@@ -323,14 +341,15 @@ export function CourseEditor({
         // Every optional field below is sent explicitly — `null` when the
         // input is empty, the value otherwise — per this module's own
         // comment on why this form never relies on "omitted." `promptId`
-        // and `vectorStoreId` are the two deliberate exceptions (MDL-8,
+        // and `vectorStoreId` are two deliberate exceptions (MDL-8,
         // WEB-18): this form has no control that can change either any
         // more, so neither is ever sent at all
         // — `courses.save`'s own "omitted preserves what is stored" rule
         // is exactly what keeps a course that already has one answered
-        // through it, unchanged, save after save.
-        instructions:
-          form.instructions.trim() === '' ? null : form.instructions,
+        // through it, unchanged, save after save. `instructions` is not a
+        // field of `SaveCourseInput` at all any more (WEB-19) —
+        // `components/CourseInstructions.tsx` saves it through
+        // `courseInstructions.save` instead.
         model: form.model.trim() === '' ? null : form.model.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
         categories,
@@ -502,6 +521,15 @@ export function CourseEditor({
   const handleCancel = async () => {
     if (await confirmDiscard()) onCancel()
   }
+
+  // WEB-19: `useCallback` so `CourseInstructions`'s own `useEffect`
+  // (`onDirtyChange` in its dependency array) does not re-run on every
+  // render of this component for no reason — a new inline arrow function
+  // here every render would still be functionally correct (the same value
+  // set again is a no-op), just needlessly re-running that effect.
+  const handleInstructionsDirtyChange = useCallback((dirty: boolean) => {
+    setInstructionsDirty(dirty)
+  }, [])
 
   if (loading) {
     return (
@@ -781,15 +809,15 @@ export function CourseEditor({
       {/* MDL-8: a course with a stored prompt id (D-3's Python-era escape
           hatch) is answered through it — `buildResponsesRequestBody`
           (`packages/openai/src/responses.ts`) sends `prompt` instead of
-          `instructions` whenever one is set, so the field below is inert on
-          exactly these courses. This is the visibility half of MDL-8: an
-          instructor editing Instructions here must know that, not discover
-          it by an answer never changing. The field itself is never offered
-          for a new course (`blankForm` carries no way to set one) and is no
-          longer editable at all here — MDL-8's own "stop offering it,"
-          applied to an update as well as a create; see
-          `packages/actions/src/actions/courses.ts`'s own `promptId` comment
-          for the write-side half of the same refusal. */}
+          `instructions` whenever one is set, so the `CourseInstructions`
+          section below is inert on exactly these courses. This is the
+          visibility half of MDL-8: an instructor editing instructions there
+          must know that, not discover it by an answer never changing. Never
+          shown for a new course — `form.promptId` only ever comes from a
+          loaded course (`blankForm` carries no way to set one) — and this
+          banner itself is read-only, matching the read-only "Prompt id"
+          field below; see `packages/actions/src/actions/courses.ts`'s own
+          `promptId` comment for the write-side half of the same refusal. */}
       {form.promptId && (
         <p
           role="status"
@@ -802,20 +830,18 @@ export function CourseEditor({
         </p>
       )}
 
-      <FormField label="Instructions">
-        <textarea
-          aria-label="Instructions"
-          value={form.instructions}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              instructions: event.target.value,
-            }))
-          }
-          rows={4}
-          className={textInputClasses}
+      {/* WEB-19/FILE-4: gated the same "existing record only" way as
+          Knowledge files and Discord channels below — a course that does
+          not exist yet has nothing for a revision's `courseId` to point
+          at. See this file's own module comment for why this section owns
+          its own save and reports its own dirtiness up. */}
+      {courseId !== undefined && (
+        <CourseInstructions
+          organizationId={organizationId}
+          courseId={courseId}
+          onDirtyChange={handleInstructionsDirtyChange}
         />
-      </FormField>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField

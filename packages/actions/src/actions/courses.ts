@@ -66,8 +66,24 @@ const categoryInputSchema = z.object({
  * already resolve to an existing course in this organization, so by the
  * time `execute` runs, `input.id` present always means
  * `entity.existingCourse` is set.
+ *
+ * `z.strictObject`, not `z.object` (WEB-19/D-54 rework): a plain `z.object`
+ * silently strips a key it does not recognize rather than refusing it, so
+ * `instructions` — deliberately not declared below, now that
+ * `courseInstructions.save` is the only versioned way to change it — would
+ * otherwise still round-trip through this action's own `dispatch` with no
+ * error at all: a caller (an MCP agent told to "update the course
+ * instructions," a stale client, a script) gets back an ordinary successful
+ * course, sees no refusal, and the instructions never actually changed. The
+ * MCP tool surface already advertises `additionalProperties: false`
+ * (`apps/mcp/src/tool-surface.ts`'s own `z.toJSONSchema`), which only
+ * protects a caller that validates against it — `z.strictObject` is what
+ * makes the *server* refuse the same thing outright
+ * (`action_input_invalid`), the same "the panel not offering a field is not
+ * itself enforcement" reasoning D-53/D-54 already apply to this action's
+ * `execute`, extended to its schema.
  */
-const saveInputSchema = z.object({
+const saveInputSchema = z.strictObject({
   id: z.string().min(1).optional(),
   projectId: z.string().min(1),
   title: z.string().min(1),
@@ -76,7 +92,6 @@ const saveInputSchema = z.object({
   adminsRole: z.string().min(1),
   studentsRole: z.string().min(1),
   promptId: z.string().min(1).nullable().optional(),
-  instructions: z.string().min(1).nullable().optional(),
   model: z.string().min(1).nullable().optional(),
   vectorStoreId: z.string().min(1).nullable().optional(),
   maxRequestsPerDay: z.number().int().positive().nullable().optional(),
@@ -129,17 +144,19 @@ export const saveCourseAction: Action<
     },
   },
   execute: ({ organizationId, input, entity, db }) => {
-    // Finding 2 (rework pass): `promptId`, `instructions`, `model`,
-    // `vectorStoreId` and `maxRequestsPerDay` are optional in
-    // `saveInputSchema` so a caller can update, say, only a course's title
-    // — but that means an *omitted* field must keep whatever is already
-    // stored, not get wiped to `null`. An *explicit* `null` is the caller's
-    // way to clear one, and `exactOptionalPropertyTypes` is exactly what
-    // makes "omitted" (`undefined`) and "explicitly cleared" (`null`) two
-    // different values `input.promptId` etc. can actually carry, rather
-    // than both collapsing to the same thing. On create there is nothing
-    // yet to preserve, so an omitted field there falls back to `null`,
-    // matching `createCourse`'s own previous behaviour.
+    // Finding 2 (rework pass): `promptId`, `model`, `vectorStoreId` and
+    // `maxRequestsPerDay` are optional in `saveInputSchema` so a caller can
+    // update, say, only a course's title — but that means an *omitted*
+    // field must keep whatever is already stored, not get wiped to `null`.
+    // An *explicit* `null` is the caller's way to clear one, and
+    // `exactOptionalPropertyTypes` is exactly what makes "omitted"
+    // (`undefined`) and "explicitly cleared" (`null`) two different values
+    // `input.promptId` etc. can actually carry, rather than both collapsing
+    // to the same thing. On create there is nothing yet to preserve, so an
+    // omitted field there falls back to `null`, matching `createCourse`'s
+    // own previous behaviour. `instructions` is deliberately not part of
+    // this list any more — see this action's own `instructions:` line
+    // below.
     const keepOrClear = <Value>(
       given: Value | null | undefined,
       stored: Value | null | undefined
@@ -168,10 +185,17 @@ export const saveCourseAction: Action<
       promptId: entity.existingCourse
         ? keepOrClear(input.promptId, entity.existingCourse.promptId)
         : null,
-      instructions: keepOrClear(
-        input.instructions,
-        entity.existingCourse?.instructions
-      ),
+      // WEB-19/D-54: `instructions` is never read off `input` at all — it
+      // has no key in `saveInputSchema` any more, and an extra one is
+      // refused outright rather than silently accepted (`saveInputSchema`'s
+      // own comment above, on why `z.strictObject`) — so this always
+      // carries forward whatever a course already has, unchanged, and
+      // `null` for a course being created. The only way to actually change
+      // it is `courseInstructions.save` (FILE-4), which is what stamps an
+      // author and a time onto the change; this action writing the same
+      // column straight from a caller's input, unversioned, is exactly the
+      // gap WEB-19 closed.
+      instructions: entity.existingCourse?.instructions ?? null,
       model: keepOrClear(input.model, entity.existingCourse?.model),
       vectorStoreId: keepOrClear(
         input.vectorStoreId,

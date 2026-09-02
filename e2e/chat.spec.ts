@@ -93,12 +93,18 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   await page.getByLabel('File prefix').fill(`t-${suffix}`)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
-  await page
-    .getByLabel('Instructions')
-    .fill('Answer student questions about the course clearly.')
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
   await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+
+  // WEB-19/FILE-4: instructions are saved through their own versioned
+  // action, offered only once the course exists — see
+  // `course-configuration.spec.ts`'s own comment on the same step.
+  await page
+    .getByLabel('Instructions')
+    .fill('Answer student questions about the course clearly.')
+  await page.getByRole('button', { name: 'Save instructions' }).click()
+  await expect(page.getByText('Current')).toBeVisible()
 
   // 2. Seed the one fact the panel has no screen for yet — this account's
   //    own enrolment in the course it just defined (this file's own module

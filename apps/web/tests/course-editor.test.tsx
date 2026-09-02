@@ -20,12 +20,16 @@ const {
   enableCourse,
   disableCourse,
   listCourseAttachments,
+  listCourseInstructionRevisions,
+  saveCourseInstructions,
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
   enableCourse: vi.fn(),
   disableCourse: vi.fn(),
   listCourseAttachments: vi.fn(),
+  listCourseInstructionRevisions: vi.fn(),
+  saveCourseInstructions: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -39,16 +43,20 @@ vi.mock('../src/api/client.js', async () => {
     enableCourse,
     disableCourse,
     listCourseAttachments,
+    listCourseInstructionRevisions,
+    saveCourseInstructions,
   }
 })
 
-// WEB-18: every "existing course" case in this file renders
-// `components/CourseAttachments.tsx` too, which fetches on mount — an
-// empty list by default so its own request never goes un-stubbed here;
-// `tests/course-attachments.test.tsx` is what actually exercises that
-// component's own behaviour.
+// WEB-18/WEB-19: every "existing course" case in this file renders
+// `components/CourseAttachments.tsx` and `components/CourseInstructions.tsx`
+// too, both of which fetch on mount — an empty list by default so neither
+// request ever goes un-stubbed here; `tests/course-attachments.test.tsx` and
+// `tests/course-instructions.test.tsx` are what actually exercise those
+// components' own behaviour.
 beforeEach(() => {
   listCourseAttachments.mockResolvedValue([])
+  listCourseInstructionRevisions.mockResolvedValue([])
 })
 
 const PROJECT: Project = {
@@ -704,6 +712,99 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  // Rework finding (must-fix 2): `instructionsDirty` folded into this
+  // page's own `isDirty` (`|| instructionsDirty`, this file's own module
+  // comment on why) had no test of its own — deleting the fold left every
+  // other test in this suite, and the whole rest of the app's suite, green.
+  // `components/CourseInstructions.tsx` manages the Instructions textarea
+  // entirely outside `form`/`baseline`, so only a case that edits
+  // *Instructions alone*, leaving the rest of the form untouched, actually
+  // exercises the bridge rather than `useFormDirty(baseline, form)` on its
+  // own.
+  it('an unsaved Instructions edit alone still prompts on Cancel — the WEB-19 dirty bridge', async () => {
+    const onCancel = vi.fn()
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    // Nothing in the main form's own fields changes — only the Instructions
+    // textarea, which `pages/CourseEditor.tsx` no longer manages at all
+    // (WEB-19).
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  it('a successful Instructions save clears the dirty bridge — Cancel right after does not prompt', async () => {
+    const onCancel = vi.fn()
+    getCourse.mockResolvedValue(COURSE)
+    saveCourseInstructions.mockResolvedValue({
+      ...COURSE,
+      instructions: 'Cite the syllabus.',
+    })
+    // Empty on the initial mount (so the textarea starts blank and the
+    // edit below is actually dirty), then the one revision the save
+    // records — the refreshed read `CourseInstructions.tsx`'s own
+    // `refresh` does after a successful save.
+    listCourseInstructionRevisions
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'rev-1',
+          instructions: 'Cite the syllabus.',
+          savedByAccountId: 'account-1',
+          createdAt: Date.now(),
+        },
+      ])
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }))
+    // Waits for the save's own `refresh()` to finish, not merely for the
+    // save to have been dispatched — "Current" only renders once the
+    // second, post-save `listCourseInstructionRevisions` read resolves.
+    await screen.findByText('Current')
+    // `instructionsDirty` itself clears one render later than "Current" —
+    // `CourseInstructions`'s own dirty effect (reading the `text`/`baseline`
+    // that just settled) runs, then calls `onDirtyChange`, which is a
+    // *second* component's state update (`pages/CourseEditor.tsx`'s own
+    // `setInstructionsDirty`) — a tick lets that propagate before Cancel is
+    // clicked, the same wait `tests/navigation-guard.test.tsx` already uses
+    // for the same "a guard's own effect needs a tick" reason.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))

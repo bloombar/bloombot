@@ -17,7 +17,7 @@ import {
   unarchiveProjectAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionConflictError } from '../src/errors.js'
+import { ActionConflictError, ActionInputError } from '../src/errors.js'
 import { seedOrganizationWithProject } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -29,13 +29,19 @@ afterEach(() => {
 
 /**
  * A minimal, always-valid `courses.save` input against `projectId`,
- * overridable per test. The five optional fields (`promptId`,
- * `instructions`, `model`, `vectorStoreId`, `maxRequestsPerDay`) and
- * `conversationScope` are only included in the returned input when the
- * caller's own `overrides` object actually has the key — via `in`, not
- * `??` — so a test can tell "omit this field" (finding 2's preserve case)
- * apart from "pass it as `null`" (finding 2's clear case) the same way a
- * real caller's JSON payload would.
+ * overridable per test. The four optional fields (`promptId`, `model`,
+ * `vectorStoreId`, `maxRequestsPerDay`) and `conversationScope` are only
+ * included in the returned input when the caller's own `overrides` object
+ * actually has the key — via `in`, not `??` — so a test can tell "omit this
+ * field" (finding 2's preserve case) apart from "pass it as `null`"
+ * (finding 2's clear case) the same way a real caller's JSON payload would.
+ *
+ * `instructions` is still an overridable key here (WEB-19: `courses.save`'s
+ * own `saveInputSchema` no longer has one) — this helper doubles as the seed
+ * shape for direct `courses.createCourse` repo calls in a handful of tests
+ * below, and `NewCourse` (`repos/courses.ts`) still has the column. It is
+ * never actually included when the result is dispatched *through*
+ * `saveCourseAction`, since none of those call sites put it in `overrides`.
  */
 function courseSaveInput(
   projectId: string,
@@ -307,6 +313,72 @@ describe('courses.save', () => {
     )
 
     expect(course.promptId).toBeNull()
+  })
+
+  // WEB-19/D-54 (rework: refused, not silently stripped): `instructions` has
+  // no key in `saveInputSchema` at all any more — every write to it has to
+  // go through `courseInstructions.save` (FILE-4), which is what records
+  // who changed it and when. `saveInputSchema` is `z.strictObject`, not
+  // `z.object` (that schema's own comment on why): a plain `z.object` would
+  // silently strip an unrecognized key rather than refuse the call, which
+  // is exactly the shape that let an MCP agent (or any caller past this
+  // test suite's own typed `courseSaveInput` helper) believe an
+  // `instructions` it sent through `courses.save` had taken effect. `dispatch`'s
+  // own `rawInput: unknown` (`dispatch.ts`) is what lets this test send the
+  // field at all, past the static `SaveInput` type — the same "a hand-rolled
+  // HTTP body" a caller reaching the route directly could send.
+  it('WEB-19: a create is refused outright for an explicit instructions field, not silently stripped', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const attempt = dispatch(
+      saveCourseAction,
+      {
+        ...courseSaveInput(projectId),
+        instructions: 'Set through courses.save — must be refused',
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionInputError)
+    // Refused before ever reaching `execute` — no course exists at all,
+    // not one silently created with `instructions` ignored.
+    expect(courses.listCourses(organizationId, testDb.db)).toHaveLength(0)
+  })
+
+  it('WEB-19: an update is refused outright for an explicit instructions field, leaving the stored value untouched', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId, { instructions: 'Be helpful.' }),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const attempt = dispatch(
+      saveCourseAction,
+      {
+        ...courseSaveInput(projectId, {
+          id: created.course.id,
+          title: 'Web Design II',
+        }),
+        instructions: 'Set through courses.save — must be refused',
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionInputError)
+    // Refused before `execute` ever ran — title is still the original, and
+    // instructions is still exactly what `courseInstructions.save` would
+    // have recorded, not the value this call tried to smuggle through.
+    const untouched = courses.getCourse(
+      organizationId,
+      created.course.id,
+      testDb.db
+    )
+    expect(untouched?.title).toBe('Web Design')
+    expect(untouched?.instructions).toBe('Be helpful.')
   })
 
   it('updates an existing course when input carries its id', async () => {

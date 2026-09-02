@@ -14,6 +14,16 @@
  * thing they actually came for, is worse than the few extra `listProjects`
  * mocks that default costs the test file (finding 10 of the WEB-7 rework;
  * `docs/DECISIONS.md` D-25 has the same accounting from the test side).
+ *
+ * LINK-10: which tabs this account even sees depends on its *relationship*
+ * to the active organization, not only which organization is active — a
+ * membership (administers or teaches there) gets every tab; a connected
+ * person with no membership (a student, reachable in this organization only
+ * because they proved an identity there — LINK-3) gets Chat alone. `isMember`
+ * below decides this from `account.memberships`, and `effectiveTab` is what
+ * every branch below actually renders — never `activeTab` directly — so a
+ * tab selection left over from a previously active membership organization
+ * can never leak a screen the server would refuse in this one.
  */
 
 import { useState } from 'react'
@@ -102,6 +112,32 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
     'discord' | 'projects' | 'chat' | 'transcripts'
   >('projects')
 
+  // LINK-10: a membership (TEN-1's administrative relationship) is not the
+  // same thing as a connected person (LINK-3's proof) — a student who has
+  // connected into an institution's own organization administers nothing
+  // there. `routes/actions.ts` refuses every dispatched action for a caller
+  // with no membership, unconditionally, before it even looks up which
+  // action was requested — Discord, Projects and Transcripts are all
+  // reached through `dispatchAction`, so all three would always refuse for
+  // this account in this organization. `routes/chat.ts` is the one screen
+  // built not to need a membership at all — it authorizes on an active
+  // enrolment instead (that file's own module comment). `isMember` mirrors
+  // that server-side boundary here; the server's own refusal, not this
+  // check, is what actually makes any of this safe (`docs/DECISIONS.md`
+  // D-50) — this only decides what the panel *offers*.
+  const isMember = account.memberships.some(
+    (membership) => membership.organizationId === activeOrganizationId
+  )
+  // Chat is the only screen a connected-but-not-a-member account can reach
+  // in this organization — forced here, rather than merely left out of
+  // `navItems` below, so a stale `activeTab` (this shell's own state,
+  // deliberately *not* reset on an organization switch — unlike
+  // `ProjectsPanel`'s/`Chat`'s own `key={activeOrganizationId}` remount,
+  // which resets what is fetched *inside* a tab, not which tab is active)
+  // can never render Discord, Projects or Transcripts for an organization
+  // where the server would refuse every one of them.
+  const effectiveTab = isMember ? activeTab : 'chat'
+
   const installedServerId =
     justInstalled?.organizationId === activeOrganizationId &&
     justInstalled.serverId !== removedServerId
@@ -155,39 +191,55 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
     }
   }
 
+  const chatNavItem = {
+    key: 'chat',
+    label: 'Chat',
+    onClick: () => guardedNavigate(() => setActiveTab('chat')),
+    active: effectiveTab === 'chat',
+  }
+
   return (
     <AppShell
-      onHome={() => guardedNavigate(() => setActiveTab('projects'))}
-      navItems={[
-        {
-          key: 'discord',
-          label: 'Discord',
-          onClick: () => guardedNavigate(() => setActiveTab('discord')),
-          active: activeTab === 'discord',
-        },
-        {
-          key: 'projects',
-          label: 'Projects',
-          onClick: () => guardedNavigate(() => setActiveTab('projects')),
-          active: activeTab === 'projects',
-        },
-        {
-          key: 'chat',
-          label: 'Chat',
-          onClick: () => guardedNavigate(() => setActiveTab('chat')),
-          active: activeTab === 'chat',
-        },
-        {
-          key: 'transcripts',
-          label: 'Transcripts',
-          onClick: () => guardedNavigate(() => setActiveTab('transcripts')),
-          active: activeTab === 'transcripts',
-        },
-      ]}
+      onHome={() =>
+        guardedNavigate(() => setActiveTab(isMember ? 'projects' : 'chat'))
+      }
+      // LINK-10: Discord, Projects and Transcripts are withheld outright for
+      // a connected-but-not-a-member organization, not merely disabled or
+      // left to fail once clicked — a control every click through it would
+      // 404 against is worse offered than absent (this component's own
+      // module comment has the fuller reasoning, and what was deliberately
+      // erred toward).
+      navItems={
+        isMember
+          ? [
+              {
+                key: 'discord',
+                label: 'Discord',
+                onClick: () => guardedNavigate(() => setActiveTab('discord')),
+                active: effectiveTab === 'discord',
+              },
+              {
+                key: 'projects',
+                label: 'Projects',
+                onClick: () => guardedNavigate(() => setActiveTab('projects')),
+                active: effectiveTab === 'projects',
+              },
+              chatNavItem,
+              {
+                key: 'transcripts',
+                label: 'Transcripts',
+                onClick: () =>
+                  guardedNavigate(() => setActiveTab('transcripts')),
+                active: effectiveTab === 'transcripts',
+              },
+            ]
+          : [chatNavItem]
+      }
       headerEnd={
         <>
           <OrganizationSwitcher
             memberships={account.memberships}
+            connectedOrganizations={account.connectedOrganizations}
             activeOrganizationId={activeOrganizationId}
             onChange={(organizationId) =>
               guardedNavigate(() => setActiveOrganizationId(organizationId))
@@ -211,7 +263,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         </>
       }
     >
-      {activeTab === 'discord' ? (
+      {effectiveTab === 'discord' ? (
         <div className="flex flex-col gap-4">
           <h1 className="text-page-title font-semibold text-neutral-900">
             Discord
@@ -224,7 +276,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           />
           {error && <ErrorMessage error={error} />}
         </div>
-      ) : activeTab === 'chat' ? (
+      ) : effectiveTab === 'chat' ? (
         // WEB-10: a fresh `Chat` per organization switch, the same
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
         // already holds itself to — a course selected in the previous
@@ -233,7 +285,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
         />
-      ) : activeTab === 'transcripts' ? (
+      ) : effectiveTab === 'transcripts' ? (
         // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning
         // `Chat`/`ProjectsPanel` already hold themselves to: a project or
         // course selected in the previous organization must not linger

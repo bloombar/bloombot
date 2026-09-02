@@ -89,6 +89,7 @@ describe('App (WEB-1..4)', () => {
             role: 'assistant',
           },
         ],
+        connectedOrganizations: [],
       },
     })
     window.history.pushState(
@@ -136,7 +137,7 @@ describe('App (WEB-1..4)', () => {
   it('a signed-in account visiting /platform-admin sees the platform-administrator console, not the ordinary shell', async () => {
     window.history.replaceState(null, '', '/platform-admin')
     fetchMe.mockResolvedValue({
-      account: { id: 'account-1', memberships: [] },
+      account: { id: 'account-1', memberships: [], connectedOrganizations: [] },
     })
     fetchAdminOrganizations.mockResolvedValue({
       organizations: [],
@@ -182,6 +183,7 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
             role: 'owner',
           },
         ],
+        connectedOrganizations: [],
       },
     })
     window.history.pushState(null, '', '/connect/org-1')
@@ -219,6 +221,7 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
             role: 'owner',
           },
         ],
+        connectedOrganizations: [],
       },
     })
     window.history.pushState(null, '', '/sign-in/a-token')
@@ -251,6 +254,7 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
             role: 'owner',
           },
         ],
+        connectedOrganizations: [],
       },
     })
     previewDiscordPersonLink.mockResolvedValue({

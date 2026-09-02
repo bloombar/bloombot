@@ -28,12 +28,14 @@ const {
   signOut,
   listProjects,
   listCourses,
+  listChatCourses,
 } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
   dispatchAction: vi.fn(),
   signOut: vi.fn(),
   listProjects: vi.fn(),
   listCourses: vi.fn(),
+  listChatCourses: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -47,6 +49,7 @@ vi.mock('../src/api/client.js', async () => {
     signOut,
     listProjects,
     listCourses,
+    listChatCourses,
   }
 })
 
@@ -61,6 +64,27 @@ const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
       role: 'assistant',
     },
   ],
+  connectedOrganizations: [],
+}
+
+// LINK-10: an account with its own personal organization (a membership, as
+// every account has — TEN-1) and a *connected* person in a second
+// organization it does not administer — a student who connected into the
+// institution running their course, exactly the shape this file's own new
+// `describe` block below exercises.
+const CONNECTED_NON_MEMBER_ACCOUNT: AccountSummary = {
+  id: 'account-2',
+  email: 'student@example.edu',
+  memberships: [
+    {
+      organizationId: 'personal-org',
+      organizationName: 'Student',
+      role: 'owner',
+    },
+  ],
+  connectedOrganizations: [
+    { organizationId: 'institution-org', organizationName: 'A University' },
+  ],
 }
 
 beforeEach(() => {
@@ -70,6 +94,17 @@ beforeEach(() => {
   // Individual tests override this where the response matters.
   listProjects.mockResolvedValue([])
   listCourses.mockResolvedValue([])
+  // The connected-only organization's own Chat tab (LINK-10's own `describe`
+  // block below) needs at least one course to render its full screen,
+  // heading included — `pages/Chat.tsx`'s own "not enrolled in a course
+  // here yet" branch has no heading at all.
+  listChatCourses.mockImplementation((organizationId: string) =>
+    Promise.resolve(
+      organizationId === 'institution-org'
+        ? [{ id: 'course-1', title: 'A Course' }]
+        : []
+    )
+  )
 })
 
 afterEach(() => {
@@ -298,5 +333,111 @@ describe('Shell (WEB-3, WEB-4)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Transcripts' })
     ).toBeInTheDocument()
+  })
+
+  // --- LINK-10: a connected-but-not-a-member organization -------------------
+  //
+  // A membership (TEN-1's administrative relationship) is not the same
+  // thing as a connected person (LINK-3's proof) — `routes/actions.ts`
+  // refuses every dispatched action (Discord, Projects, Transcripts) for a
+  // caller with no membership, unconditionally, so none of those tabs are
+  // offered at all once this organization is active. `routes/chat.ts`
+  // authorizes on an active enrolment instead, never a membership, so Chat
+  // stays reachable.
+  describe('a connected-but-not-a-member organization (LINK-10)', () => {
+    it('mounts on the account`s own membership organization by default, offering every tab', () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      expect(
+        screen.getByRole('combobox', { name: 'Organization' })
+      ).toHaveValue('personal-org')
+      expect(
+        screen.getByRole('button', { name: 'Discord' })
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: 'Transcripts' })
+      ).toBeInTheDocument()
+    })
+
+    it('switching to the connected-only organization offers only Chat, and Chat is what actually renders', async () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+
+      // Discord, Projects and Transcripts are gone — not merely disabled —
+      // once this organization is active.
+      expect(
+        screen.queryByRole('button', { name: 'Discord' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Projects' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Transcripts' })
+      ).not.toBeInTheDocument()
+      // Chat renders — the screen this account can actually reach here
+      // (`routes/chat.ts`'s own enrolment-based authorization).
+      await waitFor(() =>
+        expect(listChatCourses).toHaveBeenCalledWith('institution-org')
+      )
+      expect(screen.getByRole('heading', { name: 'Chat' })).toBeInTheDocument()
+    })
+
+    it('a tab selected before the switch (Discord) does not leak into the connected-only organization', async () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // Select Discord while still on the membership organization...
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      expect(
+        screen.getByRole('heading', { name: 'Discord' })
+      ).toBeInTheDocument()
+
+      // ...then switch. Without `effectiveTab` overriding a stale
+      // `activeTab`, this would still try to render `InstallButton` here —
+      // a control this account's every click against would refuse.
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+
+      expect(
+        screen.queryByRole('heading', { name: 'Discord' })
+      ).not.toBeInTheDocument()
+      expect(
+        await screen.findByRole('heading', { name: 'Chat' })
+      ).toBeInTheDocument()
+    })
+
+    it('the home control returns to Chat, not Projects, while a connected-only organization is active', async () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+      await screen.findByRole('heading', { name: 'Chat' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Home' }))
+
+      // Still Chat — 'projects' (this shell's own ordinary home) is not a
+      // screen this account can reach here.
+      expect(
+        screen.queryByRole('button', { name: 'Projects' })
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Chat' })).toBeInTheDocument()
+    })
+
+    it('the switcher offers the connected organization labelled "connected", never a membership role it does not have', () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      const select = screen.getByRole('combobox', { name: 'Organization' })
+      expect(select).toHaveTextContent('A University (connected)')
+    })
   })
 })

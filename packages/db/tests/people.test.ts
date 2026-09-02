@@ -409,4 +409,102 @@ describe('people repo', () => {
       )
     ).toBeUndefined()
   })
+
+  // --- LINK-10: which organizations an account has a connected person in ---
+
+  describe('listConnectedOrganizationsForAccount (LINK-10)', () => {
+    it('reports an organization only once the account`s web identity there is actually connected', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const accountId = randomUUID()
+
+      // PPL-3's own "created on first sight, unconnected" case — a person
+      // exists for this identity, but nothing has proven it yet.
+      const unconnected = people.resolvePersonByIdentity(
+        orgA,
+        { surface: 'web', externalId: accountId },
+        testDb.db
+      )
+      expect(unconnected.connectedAt).toBeNull()
+      expect(
+        people.listConnectedOrganizationsForAccount(accountId, testDb.db)
+      ).toEqual([])
+
+      // The real proof step (LINK-3) — `connectIdentity`, not a raw column
+      // write — is what should make this organization reportable.
+      const connected = people.connectIdentity(
+        orgA,
+        unconnected.id,
+        { surface: 'web', externalId: accountId },
+        testDb.db
+      )
+      expect(connected).toBeDefined()
+
+      expect(
+        people.listConnectedOrganizationsForAccount(accountId, testDb.db)
+      ).toEqual([{ organizationId: orgA, personId: unconnected.id }])
+    })
+
+    it('says nothing about an organization the account has no person in at all', () => {
+      testDb = createTestDatabase()
+      seedTwoOrganizations(testDb)
+
+      expect(
+        people.listConnectedOrganizationsForAccount(randomUUID(), testDb.db)
+      ).toEqual([])
+    })
+
+    // The exact shape LINK-10's own brief warns against seeding around: a
+    // real student's own path is never "a web identity created directly in
+    // the institution's organization" — it is a `discord`-surface person a
+    // roster import admitted, whose identity later *merges* into the
+    // account's own survivor once the account proves it owns that Discord
+    // identity too (`@bloombot/auth#completeDiscordPersonLink`'s own
+    // `connectOrMerge`). `mergePeople` moves every identity to the survivor
+    // outright (that function's own comment) — this proves this read
+    // follows the merge rather than staying pinned to whichever person the
+    // account's `web` identity happened to be created against first.
+    it('follows a merge: an organization becomes reachable through the survivor a discord identity was merged into, not only a person created there directly', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizations(testDb)
+      const accountId = randomUUID()
+
+      // The roster-admitted, discord-surface person — this student's real
+      // starting point, unconnected to any account yet.
+      const rosterPerson = people.resolvePersonByIdentity(
+        orgA,
+        { surface: 'discord', externalId: 'snowflake-1' },
+        testDb.db
+      )
+
+      // The account's own bare survivor in this organization (the same
+      // shape `resolveOrCreateBareDiscordSurvivor`, `apps/api/src/routes/person-link.ts`,
+      // creates before Discord's OAuth round trip even starts — D-44).
+      const survivor = people.createPerson(orgA, {}, testDb.db)
+
+      // The real merge — the roster-admitted identity moves onto the
+      // survivor (LINK-4).
+      const merge = people.mergePeople(
+        orgA,
+        survivor.id,
+        rosterPerson.id,
+        testDb.db
+      )
+      expect(merge?.alreadyMerged).toBe(false)
+
+      // Then the account's own web identity attaches to the same survivor
+      // (`attachWebIdentityOrMerge`'s own second step).
+      const connected = people.connectIdentity(
+        orgA,
+        survivor.id,
+        { surface: 'web', externalId: accountId },
+        testDb.db
+      )
+      expect(connected).toBeDefined()
+
+      expect(
+        people.listConnectedOrganizationsForAccount(accountId, testDb.db)
+      ).toEqual([{ organizationId: orgA, personId: survivor.id }])
+    })
+  })
 })

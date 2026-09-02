@@ -213,6 +213,21 @@ export interface Course extends CourseSummary {
 }
 
 /**
+ * FILE-4/WEB-19 — one revision of a course's instructions, as
+ * `courseInstructions.list` returns it, newest first: what
+ * `components/CourseInstructions.tsx`'s own history list reads, and what a
+ * restore reads back from. `savedByAccountId` is the account id only — this
+ * app has no directory read that turns one into a display name or email
+ * (`docs/DECISIONS.md` D-54), so the history shows the id itself.
+ */
+export interface CourseInstructionRevisionSummary {
+  id: string
+  instructions: string
+  savedByAccountId: string
+  createdAt: number
+}
+
+/**
  * FILE-1..3 (WEB-18) — one of a course's knowledge-file attachments, as
  * `courseAttachments.list` returns it. Deliberately narrower than
  * `packages/db`'s own `CourseAttachment` row: `providerFileId` and the

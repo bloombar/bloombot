@@ -5473,3 +5473,64 @@ directly, but the panel gives no control for it, and no path copies a stored pro
 dashboard to read what the prompt actually says before typing an equivalent into Instructions and then asking
 someone to clear the id — a real gap, left open because this slice's own brief scoped it as deprecation
 ("keep reading it... this is deprecation, not removal"), not migration tooling.
+
+## D-54 — `apps/web`/`packages/actions`: WEB-19 — instructions are edited through their own versioned action, in their own section, and `courses.save` no longer accepts the field at all
+
+**Problem.** `FILE-4`'s versioning, authorship and restore (`courseInstructions.save`/`.list`/`.restore`,
+`D-3`'s own `course_instruction_revisions`) were built and reviewed a phase ago, and no screen ever called any
+of them — the third instance this phase of that exact shape (`docs/SPEC.md`'s own WEB-19 text names the other
+two: the knowledge-files screen, WEB-18/D-52, and the connect surface). `pages/CourseEditor.tsx` still wrote
+`instructions` as a plain field through `courses.save`, so every edit overwrote the last with no revision, no
+author and nothing to restore — exactly the operation FILE-4 exists to make safe on a live course, made unsafe
+by the one screen that reaches it.
+
+**Choice — instructions leave the main form and become their own section, with their own save.** The brief
+named both options as defensible: fold instructions into the one "Save course" button as a second dispatched
+action, or give the field its own section and its own save. A single button dispatching two actions has to
+reconcile two independent failure states behind one control — a category collision but a perfectly good
+instructions save, or the reverse — and render both from one `error` state without conflating which failed.
+`components/CourseInstructions.tsx` is its own section instead, styled and gated the same "existing record
+only" way `components/CourseAttachments.tsx` (D-52) already established: offered only once `courseId` is set,
+since a course that does not exist yet has nothing for a revision's `courseId` foreign key to point at. Each
+save's own success or failure stays legible on its own terms, the same reasoning D-52 already gives for why
+knowledge files are their own section rather than fields on the course form.
+
+**Choice — `courses.save` no longer accepts `instructions` at all, not merely "the panel stops sending it."**
+`D-53`'s own reasoning for `promptId` applies here with more force: "every write in this platform goes through
+`packages/actions`... so the panel choosing not to render a field is not, by itself, an enforcement" — a caller
+reaching `courses.save` directly (the MCP tool surface, which derives its own JSON Schema straight from this
+action's zod schema; a script; a future screen) could still write `instructions` unversioned, which is exactly
+the gap this slice exists to close. Unlike `promptId` (kept as an update-only escape hatch, D-53), `instructions`
+has no legitimate remaining caller through `courses.save` at all — checked, not assumed: the web panel is this
+slice's own fix, the MCP tool surface already lists `courseInstructions.save`/`.restore` directly (so nothing
+there loses capability), and `packages/legacy-import` writes `instructions` through `courses.createCourse` (the
+repository function, not this action) for a one-time config import that predates any revision history existing
+to record. `saveInputSchema` therefore drops the key entirely, and `execute` always carries the existing
+course's own `instructions` forward unchanged (`null` on create) — never reading `input.instructions`, because
+there is no such input any more.
+
+**Choice — this section's own dirtiness is reported up, not tracked with a second navigation guard.**
+`hooks/navigation-guard.tsx` holds exactly one registered guard at a time — its own module comment: "the form
+registers a guard while it is dirty." Two components on one page each calling `useUnsavedChangesGuard`
+independently would register and unregister against the same ref, so whichever last ran would win, silently
+dropping the other's protection. `CourseInstructions` takes an `onDirtyChange` callback instead and reports its
+own pending-edit state on every change; `CourseEditor` folds it into the one `isDirty` it already feeds the
+guard (`mainFormDirty || instructionsDirty`), so an unsaved instructions edit warns before navigation exactly
+like an unsaved title edit, through the one guard the hook actually supports.
+
+**Choice — "who" is the account id, not a display name.** `courseInstructionRevisions.listRevisionsForCourse`
+returns `savedByAccountId`, a bare id — this platform has no action yet that turns an account id into a display
+name or email outside an account's own session (`GET /auth/me`), and building one was not part of this slice's
+own scope (the brief named exactly three existing actions to call, not a new read). The history shows the id
+itself rather than inventing a lookup this slice was not asked for.
+
+**Checked, not changed: `courseInstructions.save`/`.restore` already existed, tested, and correct.** Both were
+already registered (`actions/index.ts`) and already proved a restore adds a new revision rather than rewriting
+history (`packages/actions/tests/course-instructions.test.ts`) — this slice added no behaviour to either, only
+the screen that finally calls them.
+
+**Limits.** The history shows an account id, not a name (above) — a real usability gap for an organization with
+more than one instructor, left open pending a directory read this slice did not build. Restoring a revision
+while the textarea has an unsaved edit of its own discards that edit (the confirmation names this), which is
+the same trade-off `components/CourseAttachments.tsx`'s own detach confirmation makes for a destructive action
+that replaces what is currently on screen.

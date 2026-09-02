@@ -29,13 +29,19 @@ afterEach(() => {
 
 /**
  * A minimal, always-valid `courses.save` input against `projectId`,
- * overridable per test. The five optional fields (`promptId`,
- * `instructions`, `model`, `vectorStoreId`, `maxRequestsPerDay`) and
- * `conversationScope` are only included in the returned input when the
- * caller's own `overrides` object actually has the key — via `in`, not
- * `??` — so a test can tell "omit this field" (finding 2's preserve case)
- * apart from "pass it as `null`" (finding 2's clear case) the same way a
- * real caller's JSON payload would.
+ * overridable per test. The four optional fields (`promptId`, `model`,
+ * `vectorStoreId`, `maxRequestsPerDay`) and `conversationScope` are only
+ * included in the returned input when the caller's own `overrides` object
+ * actually has the key — via `in`, not `??` — so a test can tell "omit this
+ * field" (finding 2's preserve case) apart from "pass it as `null`"
+ * (finding 2's clear case) the same way a real caller's JSON payload would.
+ *
+ * `instructions` is still an overridable key here (WEB-19: `courses.save`'s
+ * own `saveInputSchema` no longer has one) — this helper doubles as the seed
+ * shape for direct `courses.createCourse` repo calls in a handful of tests
+ * below, and `NewCourse` (`repos/courses.ts`) still has the column. It is
+ * never actually included when the result is dispatched *through*
+ * `saveCourseAction`, since none of those call sites put it in `overrides`.
  */
 function courseSaveInput(
   projectId: string,
@@ -307,6 +313,54 @@ describe('courses.save', () => {
     )
 
     expect(course.promptId).toBeNull()
+  })
+
+  // WEB-19/D-54: `instructions` has no key in `saveInputSchema` at all any
+  // more — every write to it has to go through `courseInstructions.save`
+  // (FILE-4), which is what records who changed it and when. `dispatch`'s
+  // own `rawInput: unknown` (`dispatch.ts`) is what lets this test send the
+  // field anyway, past the static `SaveInput` type — the same "a hand-rolled
+  // HTTP body, not only this test suite's own typed helper, could still try
+  // this" a caller reaching the route directly would.
+  it('WEB-19: a create ignores an explicit instructions field — a new course starts with none', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const course = await dispatch(
+      saveCourseAction,
+      {
+        ...courseSaveInput(projectId),
+        instructions: 'Set through courses.save — must be ignored',
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.instructions).toBeNull()
+  })
+
+  it('WEB-19: an update ignores an explicit instructions field, preserving whatever courseInstructions.save last recorded', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId, { instructions: 'Be helpful.' }),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const updated = await dispatch(
+      saveCourseAction,
+      {
+        ...courseSaveInput(projectId, {
+          id: created.course.id,
+          title: 'Web Design II',
+        }),
+        instructions: 'Set through courses.save — must be ignored',
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.instructions).toBe('Be helpful.')
   })
 
   it('updates an existing course when input carries its id', async () => {

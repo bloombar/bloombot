@@ -20,12 +20,14 @@ const {
   enableCourse,
   disableCourse,
   listCourseAttachments,
+  listCourseInstructionRevisions,
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
   enableCourse: vi.fn(),
   disableCourse: vi.fn(),
   listCourseAttachments: vi.fn(),
+  listCourseInstructionRevisions: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -39,16 +41,19 @@ vi.mock('../src/api/client.js', async () => {
     enableCourse,
     disableCourse,
     listCourseAttachments,
+    listCourseInstructionRevisions,
   }
 })
 
-// WEB-18: every "existing course" case in this file renders
-// `components/CourseAttachments.tsx` too, which fetches on mount — an
-// empty list by default so its own request never goes un-stubbed here;
-// `tests/course-attachments.test.tsx` is what actually exercises that
-// component's own behaviour.
+// WEB-18/WEB-19: every "existing course" case in this file renders
+// `components/CourseAttachments.tsx` and `components/CourseInstructions.tsx`
+// too, both of which fetch on mount — an empty list by default so neither
+// request ever goes un-stubbed here; `tests/course-attachments.test.tsx` and
+// `tests/course-instructions.test.tsx` are what actually exercise those
+// components' own behaviour.
 beforeEach(() => {
   listCourseAttachments.mockResolvedValue([])
+  listCourseInstructionRevisions.mockResolvedValue([])
 })
 
 const PROJECT: Project = {

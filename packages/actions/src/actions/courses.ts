@@ -76,7 +76,6 @@ const saveInputSchema = z.object({
   adminsRole: z.string().min(1),
   studentsRole: z.string().min(1),
   promptId: z.string().min(1).nullable().optional(),
-  instructions: z.string().min(1).nullable().optional(),
   model: z.string().min(1).nullable().optional(),
   vectorStoreId: z.string().min(1).nullable().optional(),
   maxRequestsPerDay: z.number().int().positive().nullable().optional(),
@@ -129,17 +128,19 @@ export const saveCourseAction: Action<
     },
   },
   execute: ({ organizationId, input, entity, db }) => {
-    // Finding 2 (rework pass): `promptId`, `instructions`, `model`,
-    // `vectorStoreId` and `maxRequestsPerDay` are optional in
-    // `saveInputSchema` so a caller can update, say, only a course's title
-    // — but that means an *omitted* field must keep whatever is already
-    // stored, not get wiped to `null`. An *explicit* `null` is the caller's
-    // way to clear one, and `exactOptionalPropertyTypes` is exactly what
-    // makes "omitted" (`undefined`) and "explicitly cleared" (`null`) two
-    // different values `input.promptId` etc. can actually carry, rather
-    // than both collapsing to the same thing. On create there is nothing
-    // yet to preserve, so an omitted field there falls back to `null`,
-    // matching `createCourse`'s own previous behaviour.
+    // Finding 2 (rework pass): `promptId`, `model`, `vectorStoreId` and
+    // `maxRequestsPerDay` are optional in `saveInputSchema` so a caller can
+    // update, say, only a course's title — but that means an *omitted*
+    // field must keep whatever is already stored, not get wiped to `null`.
+    // An *explicit* `null` is the caller's way to clear one, and
+    // `exactOptionalPropertyTypes` is exactly what makes "omitted"
+    // (`undefined`) and "explicitly cleared" (`null`) two different values
+    // `input.promptId` etc. can actually carry, rather than both collapsing
+    // to the same thing. On create there is nothing yet to preserve, so an
+    // omitted field there falls back to `null`, matching `createCourse`'s
+    // own previous behaviour. `instructions` is deliberately not part of
+    // this list any more — see this action's own `instructions:` line
+    // below.
     const keepOrClear = <Value>(
       given: Value | null | undefined,
       stored: Value | null | undefined
@@ -168,10 +169,16 @@ export const saveCourseAction: Action<
       promptId: entity.existingCourse
         ? keepOrClear(input.promptId, entity.existingCourse.promptId)
         : null,
-      instructions: keepOrClear(
-        input.instructions,
-        entity.existingCourse?.instructions
-      ),
+      // WEB-19/D-54: `instructions` is never read off `input` at all — it
+      // has no key in `saveInputSchema` any more (below the schema's own
+      // comment for why) — so this always carries forward whatever a
+      // course already has, unchanged, and `null` for a course being
+      // created. The only way to actually change it is
+      // `courseInstructions.save` (FILE-4), which is what stamps an author
+      // and a time onto the change; this action writing the same column
+      // straight from a caller's input, unversioned, is exactly the gap
+      // WEB-19 closed.
+      instructions: entity.existingCourse?.instructions ?? null,
       model: keepOrClear(input.model, entity.existingCourse?.model),
       vectorStoreId: keepOrClear(
         input.vectorStoreId,

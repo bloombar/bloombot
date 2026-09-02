@@ -25,6 +25,7 @@ import { buildApp } from '../../apps/api/src/server.js'
 import { FakeModelClient } from './fake-model-client.js'
 import { FileEmailSender } from './file-email-sender.js'
 import {
+  E2E_API_ORIGIN,
   E2E_API_PORT,
   E2E_ATTACHMENT_STORAGE_DIR,
   E2E_DATABASE_PATH,
@@ -84,6 +85,17 @@ const app = buildApp({
   // characters; see `fake-model-client.ts`'s own module comment for what
   // is and is not real in this harness.
   model: new FakeModelClient('# Bloombot\n\nAnswering from a **fixture**.'),
+  // ADMIN-4 — no bot/worker process runs in this harness (this file's own
+  // module comment: one Playwright project at a time, `apps/web` and this
+  // process only), so these are loopback, unreachable placeholders, the
+  // same device this file already uses for the Discord install flow's own
+  // unused URLs just above. `checkPlatformHealth` treats a failed fetch as
+  // `{ reachable: false }`, never a thrown error, so the admin console
+  // spec still renders — it just sees every process but this one as
+  // unreachable, which is honestly what is true in this harness.
+  botHealthUrl: 'http://127.0.0.1:1/health',
+  workerHealthUrl: 'http://127.0.0.1:1/health',
+  apiHealthUrl: `${E2E_API_ORIGIN}/health`,
 })
 
 const server = createServer(app)

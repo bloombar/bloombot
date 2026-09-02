@@ -99,9 +99,13 @@ configure around. This needs:
   be enough on its own, since two containers would still briefly share it as two writers.
 - **The static panel served separately** — App Platform's own **Static Site** component type
   is a reasonable fit for `apps/web/dist` (it is exactly what it is for), proxied to the
-  combined component's own API routes (`/health`, `/auth`, `/organizations` —
+  combined component's own API routes (`/health`, `/auth`, `/organizations`, `/admin` —
   `apps/web/vite.config.ts`'s own dev-time proxy names the same list) the way App Platform's
-  own routing rules support cross-component paths.
+  own routing rules support cross-component paths. `/admin` is `apps/api`'s own mount for the
+  platform-administrator console (`routes/admin.ts`), a different path from the panel's own
+  `/platform-admin` page — the same collision `docs/DEPLOY_DROPLET.md`'s own nginx block and
+  `docs/DECISIONS.md` D-48 both name, and the same reason to not drop it here either: an
+  administrator console that cannot reach its own API fails silently, not loudly.
 
 This is not a recommendation, only what the constraint in §1 leaves as an option if a Postgres
 migration (§3) is not on the table yet. It gives up App Platform's own horizontal scaling and

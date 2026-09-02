@@ -251,3 +251,88 @@ export type ChatAnswerResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'not-connected' }
+
+/** ADMIN-1: one message in a read-back transcript — mirrors `@bloombot/db`'s own `transcriptAccess.TranscriptEntry` by hand, the same "this app does not import `@bloombot/db`" boundary this whole file's own module comment already explains for every other shape here. */
+export interface TranscriptEntry {
+  personId: string
+  personDisplayName: string | null
+  direction: 'from_person' | 'to_person'
+  content: string
+  createdAt: number
+}
+
+/** `transcripts.read`'s own result — a course's transcript, already filtered by whatever the request asked for. */
+export interface TranscriptReadResult {
+  courseId: string
+  courseTitle: string
+  entries: TranscriptEntry[]
+}
+
+/** `transcripts.listStudents`'s own entries — ADMIN-1's student filter, every person the transcript covers. */
+export interface TranscriptStudent {
+  personId: string
+  personDisplayName: string | null
+}
+
+/** ADMIN-3 — one requested export, mirroring `@bloombot/db`'s own `transcriptExports.TranscriptExport` by hand. */
+export interface TranscriptExport {
+  id: string
+  courseId: string
+  personId: string | null
+  status: 'pending' | 'ready' | 'failed'
+  filename: string | null
+  contentType: string | null
+  sizeBytes: number | null
+  failureReason: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** ADMIN-4 — `GET /admin/organizations`'s own per-organization row: usage only, never a course, a person or a message. */
+export interface AdminOrganizationSummary {
+  organizationId: string
+  organizationName: string
+  totalCostMicros: number
+  estimatedCostMicros: number
+  callCount: number
+}
+
+/** COST-5's own aggregate, as `checkPlatformHealth` (`@bloombot/actions`) reports it — mirrored by hand, the same boundary this file's own module comment already explains. */
+export interface AdminProcessHealth {
+  reachable: boolean
+  status?: unknown
+}
+export interface AdminPlatformHealth {
+  bot: AdminProcessHealth
+  worker: AdminProcessHealth
+  api: AdminProcessHealth
+}
+
+export interface AdminOrganizationsResponse {
+  organizations: AdminOrganizationSummary[]
+  platformHealth: AdminPlatformHealth
+}
+
+/** ADMIN-5's own "names exactly what will be deleted before it happens". */
+export interface OrganizationDeletionPreview {
+  organizationId: string
+  organizationName: string
+  courses: number
+  people: number
+  conversations: number
+  messages: number
+  enrolments: number
+  discordServerBindings: number
+  courseAttachments: number
+  queuedJobs: number
+}
+
+/** ADMIN-5's own audit trail, read back. */
+export interface TenantDeletion {
+  id: string
+  organizationId: string
+  organizationName: string
+  deletedByAccountId: string
+  summary: string
+  deletedAt: number
+}

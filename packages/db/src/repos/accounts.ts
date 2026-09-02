@@ -59,6 +59,12 @@ export function getAccountByEmail(
  * organization to check) the session itself does not carry, for a read
  * that discloses nothing beyond what the caller's own session already
  * proved about itself.
+ *
+ * Also what `routes/admin.ts`'s own `isRequestFromPlatformAdministrator`
+ * (ADMIN-4) resolves a session's account through: a platform administrator
+ * is not — by ADMIN-4's own text — necessarily a member of the
+ * organization an admin-console read or an ADMIN-5 tenant deletion acts
+ * on, so `getAccountInOrganization` cannot serve that caller either.
  */
 export function getAccountById(
   accountId: string,

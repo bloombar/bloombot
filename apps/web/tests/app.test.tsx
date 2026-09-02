@@ -27,6 +27,7 @@ const {
   fetchMe,
   completeDiscordInstall,
   listProjects,
+  fetchAdminOrganizations,
   redeemSignInLink,
   previewDiscordPersonLink,
   confirmDiscordPersonLink,
@@ -34,6 +35,7 @@ const {
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
   listProjects: vi.fn(),
+  fetchAdminOrganizations: vi.fn(),
   redeemSignInLink: vi.fn(),
   previewDiscordPersonLink: vi.fn(),
   confirmDiscordPersonLink: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock('../src/api/client.js', async () => {
     fetchMe,
     completeDiscordInstall,
     listProjects,
+    fetchAdminOrganizations,
     redeemSignInLink,
     previewDiscordPersonLink,
     confirmDiscordPersonLink,
@@ -126,6 +129,32 @@ describe('App (WEB-1..4)', () => {
 
     await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
     expect(fetchMe).toHaveBeenCalledTimes(2)
+  })
+
+  // ADMIN-4 — reached at `/platform-admin`, outside `Shell`'s own organization-scoped
+  // tabs (`pages/Admin.tsx`'s own module comment has why).
+  it('a signed-in account visiting /platform-admin sees the platform-administrator console, not the ordinary shell', async () => {
+    window.history.replaceState(null, '', '/platform-admin')
+    fetchMe.mockResolvedValue({
+      account: { id: 'account-1', memberships: [] },
+    })
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: {
+        bot: { reachable: true },
+        worker: { reachable: true },
+        api: { reachable: true },
+      },
+    })
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Platform administration' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('combobox', { name: 'Organization' })
+    ).not.toBeInTheDocument()
   })
 })
 

@@ -4643,6 +4643,386 @@ call, not a number derived from anything AUTH-5 names — long enough for a real
 relay both resolve in milliseconds) and short enough that a relay which never will does not hold the request
 open indefinitely.
 
+---
+
+## D-48 — `packages/db`/`packages/actions`/`apps/worker`/`apps/api`/`apps/web`: reading a transcript is audited where the read happens, PPL-5 applied to a read versus an export, and the deliberate operation that deletes a tenant
+
+**Problem.** ADMIN-1..5 is the last phase: an instructor reads a course's transcript in the panel, filtered by
+student and by date; every read is written to an audit trail; export runs as a job and produces a file; a
+platform administrator sees organizations, usage and health — and no route into a tenant's transcripts; and
+deleting a tenant's data is a separate, explicit, confirmed, audited operation from TEN-6's "removal preserves
+data". None of the five is free of a question the SPEC states as a conclusion ("the recording should live
+where the read happens", "no route into a tenant's transcripts") without settling how — the same shape D-33's
+own opening paragraph already describes for COST-1..6.
+
+**Choice — the audit write lives inside the one function that actually reads a transcript back, not inside
+either of its callers.** `@bloombot/db`'s `repos/transcript-access.ts#readCourseTranscript` is the single
+function that queries `messages` for a transcript read or export; it writes the `transcript_access_log` row in
+the same `db.transaction(...)` as the `SELECT`, before returning. `@bloombot/actions`' `transcripts.read`
+(ADMIN-1, the panel's own screen) and `apps/worker`'s `handlers/transcripts.ts` job handler (ADMIN-3, the
+export) both call this one function to get the messages they show or write to a file — neither queries
+`messages` itself, and neither could disclose a transcript's contents without the read being recorded. This is
+what ADMIN-2's own text asks for literally: "the recording should live where the read happens, not in the one
+screen that happens to call it today" — a *third* caller added later (an MCP tool reading a transcript back,
+say) is audited for free, not by remembering to add a call to a separate "log it" step. The alternative
+considered and rejected — logging from inside each of the two actions' own `execute` — would have left a
+future third caller with nothing enforcing it wrote one at all, exactly the gap the requirement's own wording
+warns against.
+
+**Choice — PPL-5 gates `transcripts.export` when it names one student, and does not gate `transcripts.read` at
+all.** `people.ts#hasVerifiedAddress` (PPL-5, built ahead of its own caller in the LINK-1..5 slice, D-35) checks
+whether the *person the disclosure is about* has proven an institutional email, not merely a Discord snowflake
+or an MCP token — D-35's own rework finding 4 is explicit that "a person connected only through Discord ...
+read `true`" was the defect that function exists to close. Two readings of "who this gate protects" were
+weighed:
+
+- Gating an *instructor's* ordinary, audited, on-screen read (ADMIN-1) on whether the *student* has ever linked
+  a web account would make CONV-2's own retention guarantee hollow for the ordinary case — a course that only
+  ever meets students through Discord, where no student ever holds a `web` identity at all — turning "a record
+  an instructor may be required to retain" into one they can never actually look at. The instructor's own
+  identity is already proven by their signed-in account (AUTH-1/AUTH-2, a verified email by construction), and
+  their authority to read this course's transcript comes from their membership role (ENRL-5) — a completely
+  different, already-adequate axis than PPL-5's own "which account is speaking, versus what may be shown". Not
+  gating the read is what keeps ADMIN-1 usable for the deployment shape this platform is actually built for.
+- Export is different in kind: it produces a portable file, addressed to one named student when `personId` is
+  given, that leaves the panel's own access-controlled screen and audit boundary entirely — literally "exporting
+  a person's history", PPL-5's own words. `transcripts.export`'s policy refuses (ACT-3-shaped, before a
+  `transcript_exports` row is even created) unless `hasVerifiedAddress` is `true` for a student-filtered export;
+  an unfiltered, whole-course export (transcripts and usage together, ADMIN-3's own text) names no single
+  person's history to gate on and is not refused this way.
+
+**Choice — `deleteOrganizationData` is a plain function in `organizations.ts`, not `dispatch.ts`, reached only
+through `apps/api`'s own `/admin` router.** The same class of exception D-33 already gives
+`listOrganizationTotals`/`checkPlatformHealth`: a platform administrator's own read (or, here, write) is not
+"acting within" one organization the way `DispatchContext.organizationId` assumes every dispatched action is —
+an administrator need hold no membership in the tenant being deleted at all (ADMIN-4's own "not a master key"
+means membership is not what authorizes this, `AUTH-4`'s allowlist, re-checked on every request, is). Every
+organization-scoped table is emptied in one transaction, children before the parents they reference
+(`foreign_keys = ON` on every connection, `client.ts`) — `people.mergedIntoPersonId` is nulled out first,
+breaking the self-reference before any `people` row is deleted, the one ordering surprise a naive per-table
+loop would miss. `accounts`/`sessions`/`sign_in_tokens` are untouched: an account is not scoped to one
+organization (TEN-1), so deleting a tenant removes only `memberships`, the join. `tests/conversations.ts`'s own
+TEN-6 guard ("no repo source deletes a message or a conversation, anywhere in this package") now names
+`organizations.ts` as its one explicit, recorded exception — the same "an exception only if its reason is
+recorded in the same test" discipline ACT-5 already holds itself to.
+
+**Choice — the confirmation is enforced server-side, and reads the same preview an administrator saw.**
+`routes/admin.ts`'s own delete route re-checks `confirmName === organization.name` itself, before touching
+anything — never trusted to the panel's own modal alone. This project's own history has the failure mode this
+guards against by name (a destructive confirmation that only *looks* enforced), so the route's own test
+(`apps/api/tests/routes/admin.test.ts`) proves a mismatched name refuses with `409` and deletes nothing, not
+merely that the panel disables a button.
+
+### Rework — a real browser caught a path collision no unit test could
+
+Playwright's own `e2e/admin-console.spec.ts` (this slice's own extension of the e2e suite, per its brief) failed
+on `GET /admin`'s deep link the first time it ran, though every unit and integration test — including
+`apps/api/tests/routes/admin.test.ts` and `apps/web`'s own component tests for `pages/Admin.tsx` — was green.
+The panel's own client-side page path and `apps/api`'s own `routes/admin.ts` mount were both `/admin`: a
+browser navigation to that path needs `index.html` served back (a page, handled client-side by `App.tsx`), but
+`fetch('/admin/organizations')` from inside that same page needs the request proxied to `apps/api` instead
+(`vite.config.ts`'s own `preview.proxy`, mirroring nginx's job in production, PLAT-4) — one path, two
+irreconcilable meanings, invisible to any test that mocks `api/client.ts` (every unit test in this slice does)
+rather than actually resolving the URL through a real dev/preview server. Fixed by renaming the *panel's* own
+page path to `/platform-admin`, leaving `apps/api`'s own `/admin` mount untouched — the same "a page path and
+the API path it posts to are never the same top-level segment" convention `/sign-in/:token` (a page) and
+`/auth/redeem` (the API route it posts to) already established, just not yet written down as a rule anywhere
+before this. `vite.config.ts`'s own `proxy` object gained a comment naming the convention explicitly, so the
+next screen that needs a bespoke (non-`dispatchAction`) API mount does not rediscover this the same way.
+
+### Rework — two reviewers, six must-fixes, all found by running the user's own path
+
+A second rework round, after both reviewers independently drove real paths through this slice rather than
+trusting its own tests — an instructor's browser session (proven fine), and a *Discord-surface* person's
+transcript through the real worker and the real download route (also proven fine, closing the "seeded the way
+the implementation resolves it" risk this project's own history warns about). Six findings did not hold up,
+each with its own regression test (patched, watched fail, restored):
+
+**Finding 1 — an in-flight export could write a deleted tenant's transcript to disk, permanently, with no row
+left to name or remove it.** `routes/admin.ts`'s own delete gathered ids, deleted every row (including
+`transcript_exports` and `jobs`), then called `AttachmentStorage#remove` on a directory that did not exist yet
+if the worker had not finished writing — a no-op. An export job already past that point, mid-`JSON.stringify`/
+`Buffer.from` over a large course, then wrote the file anyway; `markExportReady` updated zero rows (the row was
+gone) and returned `undefined`, silently. Closed on both sides, the same "close it at the write, and again after
+a drain" shape D-32's own FILE-1..3 handlers already use for the identical class of race: `apps/worker/src/handlers/transcripts.ts`
+now re-reads the export row, organization-scoped, immediately before `attachmentStorage.write` — gone means no
+bytes are written at all, reported `'abandoned'`, the same status `createAttachCourseAttachmentHandler`'s own
+identical race already reports. `routes/admin.ts`'s own immediate sweep is now *awaited* before the response
+(a `200` means those bytes are actually gone, not scheduled to be), and a *second*, delayed sweep
+(`deletedTenantSweepDelayMs`, five seconds in production) runs after the response to catch the residual sliver
+between the worker's own re-check and its write call landing — idempotent either way, since removing bytes that
+were never written, or were already removed, is a no-op. `apps/web/src/pages/Admin.tsx`'s own deletion
+confirmation now names `queuedJobs` too, when there are any, so an administrator sees that an in-flight export
+exists before confirming, not only after.
+
+**Finding 2 — the test named for on-disk destruction asserted nothing about the disk.** `apps/api/tests/routes/admin.test.ts`'s
+own "cleans up a stored transcript export's bytes" wrote no bytes and never called `AttachmentStorage#read`;
+deleting the entire cleanup block left it green. Rewritten to actually write bytes through a real
+`AttachmentStorage` (the same directory the route's own instance resolves to) and assert they are gone after —
+plus a second, dedicated test for finding 1's own delayed sweep, writing bytes *after* the tenant is already
+deleted and polling until the sweep removes them, and a worker-level test (`apps/worker/tests/handlers/transcripts.test.ts`)
+spying on `transcriptExports.getExport` to make the exact race in finding 1 land deterministically rather than
+relying on real concurrency.
+
+**Finding 3 — PPL-5's export gate held only at the request's own `personId`, and the file did not.** Every
+entry an export wrote carried its own `personId`/`personDisplayName`, including an *unfiltered* course export —
+so `jq '.transcript[] | select(.personId=="S")'` reconstructed exactly what a filtered request refuses, and for
+a one-student course the file simply *was* that student's history. The upfront refusal on a named, unverified
+student stays (a real, correct check for that shape); `apps/worker/src/handlers/transcripts.ts` now also filters
+every entry it writes, individually, against `hasVerifiedAddress` — an unverified person's own messages never
+reach *any* export file, filtered or not, and `omittedForUnverifiedAddress` says honestly when that happened
+rather than looking silently complete. The read screen (`transcripts.read`) is unchanged — this finding is
+about the artefact that leaves the system, not the on-screen, audited read D-48's own reasoning above already
+settled.
+
+**Finding 4 — the panel's own most common Export click read as "not found" on a student already on screen.**
+A Discord-only student, selected from the same filter dropdown ADMIN-1's own read already populates, produces
+exactly finding 3's own upfront refusal — and it arrived as `ActionRefusedError` (WEB-5's "not found, or you do
+not have access to it"), though the instructor was already looking at that student's transcript. `transcripts.export`
+now raises `ActionConflictError` for this one case, naming the real reason — safe to name, unlike a not-found
+(D-18's own reasoning: this caller already has full, audited visibility into this student, so the message
+discloses nothing new to *them*) — while a `personId` that does not resolve at all (a foreign organization's,
+TEN-5) stays the generic, indistinguishable refusal, since naming *that* reason would be a real oracle.
+
+**Finding 5 — ADMIN-1's own filters had no test proving they reached the server at all.** Replacing
+`currentFilters()`'s body with `return {}` — the student dropdown and both date pickers entirely decorative —
+left every existing test green; the panel's own filtering is genuinely server-side SQL, unguarded. One test now
+selects a student and a date range, presses "Apply filters", and asserts `readTranscript` was called with
+exactly `{ personId, startAt, endAt }`.
+
+**Finding 6 — `/admin` was not proxied in either deployment guide, so ADMIN-4/ADMIN-5 fail silently on a real
+deployment.** The first rework round (above) fixed this collision in `apps/web/vite.config.ts`'s own dev/preview
+proxy and named it as outstanding for production nginx — correctly flagged as another branch's file at the
+time, but that branch merged before this round, and the gap was real: an administrator's browser loads the SPA
+at `/platform-admin` fine, then every call to `/admin/organizations` gets `index.html` back as a `200`,
+`response.json()` throws, and the console reports a generic failure forever, with nothing pointing back to this
+cause. `docs/DEPLOY_DROPLET.md`'s own nginx block and `docs/DEPLOY_APP_PLATFORM.md`'s own routing list both
+name `/admin` now, alongside `/health`/`/auth`/`/organizations`.
+
+**Also fixed, smaller:** `apps/web/src/pages/Transcripts.tsx`'s own export list rendered a bare clock and a
+timestamp for every non-`ready` status, indistinguishable from `pending` even once a job had exhausted its
+retries and died — `ScaffoldButton.tsx`'s own explicit queued/running/failed labelling is the precedent this
+slice's brief already named and this screen had not followed; it now names `pending`/`ready`/`failed` plainly,
+with the failure reason shown for the last. `transcript-access.ts#listAccessLogForCourse` claimed "newest
+first" and sorted `asc` — the opposite — and, a second instance of the exact ordering-tie class D-48's own first
+rework already fixed for `transcript_exports.sequence`, had no tiebreaker of its own on a table ADMIN-2 exists
+to make trustworthy; both fixed, with `sequence` added the same way. That first fix's own test
+(`listExportsForCourse`, "most recent first") is now paired with an explicit, deterministic tie: two rows
+inserted directly through the schema with an identical injected `createdAt`, asserted on `sequence` alone,
+rather than relying on `Date.now()` happening not to collide within a run (measured at roughly one failure in
+twelve before this, on the ordering the test was supposed to prove) — the same device applied to
+`transcript-access.ts#listAccessLogForCourse`'s own identical fix, below.
+`transcript-access.ts#listAccessLogForCourse` itself claimed "newest first" in its own doc comment while
+actually ordering `asc` — the opposite — and had no tiebreaker of its own on the table ADMIN-2 exists to make
+trustworthy; both fixed the same way `transcript_exports.sequence` already was, with the same deterministic
+tie test. `transcript-access.ts#listPeopleWithTranscript` gained an explicit order (by display name, then
+`personId`) — the Student filter dropdown's own order was previously whatever SQLite happened to return,
+unstable across reloads; its own test seeds two people in the *opposite* order from their display names, since
+a fix that merely preserved insertion order would otherwise pass a naively-ordered seed by coincidence.
+`fetchTenantDeletions` (`apps/web/api/client.ts`) was dead code, called from nowhere despite `pages/Admin.tsx`'s
+own module comment claiming every read goes through it — wired to a real "Deletion history" section on that
+screen, rather than removed, since ADMIN-5's own text requires the deletion to be audited and the read,
+route and repository function already existed, tested, with nothing left to build but the one call. The TEN-6
+delete-guard in `packages/db/tests/conversations.test.ts` excluded the whole of `organizations.ts` rather than
+naming `deleteOrganizationData` specifically, which would silently admit a second, unaudited delete path added
+to that file later; narrowed to the one function, and proven to still catch a delete added elsewhere in that
+file (a regression check on the guard itself, not only on `deleteOrganizationData`). Both `transcript-exports.ts#createPendingExport`'s
+and `transcript-access.ts#readCourseTranscript`'s own `sequence` subqueries were missing their `organizationId`
+scope, in files whose own headers claim no exception — fixed on both, though unreachable in practice (a
+`courseId` is already organization-scoped by the caller's own policy resolve). `ModalProvider.tsx`'s own
+`PromptOptions` carried no `destructive` flag, so ADMIN-5's own typed-name confirmation rendered its submit
+button primary rather than danger, unlike `ConfirmOptions`' identical flag — one field and one line threaded
+through, the same styling `Modal.tsx`'s own `variant={destructive ? …}` already gives a confirm dialog.
+
+**Limits.** `previewOrganizationDeletion` is not exhaustive over every table `deleteOrganizationData` empties
+(`cost_ledger_entries`, `person_identities`, `person_link_challenges`, `discord_install_states` have no count
+in the preview) — deliberately: it is a confirmation a person reads and acts on, not a schema dump, and the
+categories it names are the ones a person recognizes losing. `apps/worker`'s export handler produces JSON, not
+CSV — this slice's own judgment call, not a requirement: nothing in ADMIN-3's text names a format, and a
+hand-rolled CSV writer's own escaping rules are exactly the kind of complexity `roster.ts`'s own module comment
+already warns a slice away from adding without a reason this one does not have. Finding 1's own delayed sweep is a mitigation,
+not a proof: a worker whose own write takes longer than `deletedTenantSweepDelayMs` to land after passing its
+own re-check would still leave an orphaned byte an operator would have to notice by other means (disk usage,
+an audit) — bounded by `handlerTimeoutMs` in practice (a handler this slow is already killed and retried), but
+not eliminated by construction the way the re-check itself closes the larger, originally-reported window.
+
+
+### Rework — a second reviewer, three must-fixes, one an explicit reversal of finding 3 above
+
+A third round, verified by a second reviewer against the code the round above actually shipped rather than
+its own description of itself. Two of the three findings are regressions the round above introduced without
+noticing (a migration that refuses to apply, and an orphaned file only a fragile cross-process sweep would
+ever remove); the third overturns finding 3 above by design, on the reviewer's own explicit authority, not by
+finding it factually wrong.
+
+**Finding 1 — the per-entry filter finding 3 (above) added makes an ordinary course's export come back empty,
+silently, defeating ADMIN-3 for the deployment shape this platform is actually built for.** A class that only
+ever meets students through Discord has `hasVerifiedAddress` false for every one of its students (D-35's own
+"a person connected only through Discord read `true`" is precisely the defect that function was built to
+close) — so finding 3's own per-entry filter dropped every entry from every such course's export, leaving a
+file with `transcript: []` behind a row that still read `ready`, a green tick, and a working Download link.
+Nothing about that state told an instructor their export was empty rather than the course being quiet; the
+`omittedForUnverifiedAddress` field that would have said so honestly lived inside the JSON itself, unread by
+anyone but a script. This is the reviewer's own explicit call, not a rediscovery of finding 3's own reasoning
+being wrong: what finding 3 actually demonstrated was narrower than "an unverified person's *content* must
+never leave in a file" — it was that an unfiltered export could still *reconstruct one named person's history*
+(`jq '.transcript[] | select(.personId=="S")'`), and PPL-5's own words are "exporting a **person's** history" —
+the *identity* is what makes a transcript a *person's* one, not the message text alone. So the fix moves the
+gate from content to identity: `apps/worker/src/handlers/transcripts.ts` now withholds `personId`/
+`personDisplayName` from every entry in an *unfiltered* export (`deidentified: true` in the file, said
+plainly, the same "an instructor should be told, not left to notice a missing field" reasoning
+`omittedForUnverifiedAddress` was reaching for, for a reason that turned out wrong) rather than withholding
+entries by verification status — every message an instructor could already see on screen (ADMIN-1,
+unrestricted, D-48's own reasoning above for why the read itself is not gated) still reaches the file, and
+there is no line in it any caller, `jq` included, can attribute to a named student, because the name is not
+there to select on. A *student-filtered* export is unchanged from finding 3/4 above: it still carries the one
+student's own identity it was asked for — that disclosure is the export's whole point — refused upstream, in
+`transcripts.export`'s own action, unless `hasVerifiedAddress` is `true` for that student, before a
+`transcript_exports` row is even created.
+
+*What this costs, and why it is the right trade.* An unfiltered, whole-course export can no longer be used to
+follow one particular student's own thread through a class discussion — every entry it carries is real and
+complete, but nothing left in the file says which student sent which message, so a caller who wants "what did
+this one student say all term" now has to ask for exactly that (`personId` set), which is the one shape PPL-5
+gates on `hasVerifiedAddress`. That is a real capability lost for the unverified-student case specifically:
+before this fix, an instructor could open an unfiltered export and read straight through to any one student's
+lines by eye; after it, they cannot, for a course where that student has never verified an address. The
+alternative was the empty file finding 3 actually produced for that same case — not a smaller version of the
+same capability, none of it, silently, behind a status that still read `ready`. Between "the export is real but
+anonymous for a student who has not verified" and "the export claims to be ready and is empty", the former is
+the one that keeps ADMIN-3's own promise ("an instructor... collects the file when it is ready" means a file
+with the course's own transcript in it) for the course shape this platform actually serves, and it is the one
+this round ships.
+
+**Finding 2 — migration `0013` refuses to apply to any database that has already run `0012`.**
+`ALTER TABLE transcript_access_log ADD sequence integer NOT NULL` (no `DEFAULT`) is accepted by SQLite only
+against an *empty* table — the moment a real deployment (or a reviewer's own checkout) has written even one
+`transcript_access_log` row, `0013` refuses and the whole migration rolls back, taking every process that
+migrates at boot (`apps/api` and `apps/worker` both do) down with it. `messages.sequence`,
+`course_instruction_revisions.sequence` and `transcript_exports.sequence` never hit this because each was
+added inside the same migration that created its own table — always empty at the point its own `ALTER TABLE`
+ran; `transcript_access_log.sequence` is the one column in this family added, later, to a table the platform
+had already been running with rows in. Fixed with `DEFAULT 0` on the column itself, in both the schema
+(`packages/db/src/schema.ts`) and the regenerated migration SQL — every pre-existing row backfills to `0`,
+which only matters as a tiebreaker against rows inserted before this migration ever ran, and those rows have
+no ordering guarantee to preserve in the first place (the column did not exist yet to give them one).
+`packages/db/tests/migrate.test.ts` gained a test that builds a real, partial migration history through
+`0012` (copying the *actual* migration files and the *actual* journal entries through that point — an earlier
+draft of this test reconstructed the journal with invented timestamps instead, and failed for the wrong
+reason: drizzle's own migration runner watermarks progress by the journal's own `when` value per migration,
+and a fabricated, lower one made it re-run migrations already applied against the real journal's real values),
+seeds one `transcript_access_log` row directly, then runs the rest of the migrations including `0013` and
+asserts it does not throw and the row survives with `sequence: 0`. Reverting the `DEFAULT` reproduces the
+reviewer's own reported failure exactly.
+
+**Finding 3 — the worker knows, in-process, that it just created an orphaned file, and left removing it to a
+sweep in a different process.** When `markExportReady` (below the write) returns `undefined` — the tenant was
+deleted in the narrow window between this handler's own re-check and the write call landing, finding 1's own
+(the earlier finding 1, above, this file's second rework section) residual window — the handler already
+reported `'abandoned'` but did not call `attachmentStorage.remove` itself, leaving the bytes it had just
+written for `routes/admin.ts`'s own delayed sweep to find, eventually, in a different process: `unref()`'d, so
+a deploy's own `process.exit(0)` on `SIGTERM` discards it outright if it lands within the sweep's own delay,
+and a write slow enough to approach `JOB_HANDLER_TIMEOUT_MS`'s own default can already outlive the one-shot
+sweep that ran before the write finished. Fixed with one `attachmentStorage.remove` call, in-process,
+synchronous with the rest of this handler, in that branch — the sweeps stay, as defence in depth for whatever
+this one call itself fails to clean up (a permissions error, a full disk on the remove itself), not the only
+mechanism this promise depends on. The existing test for this branch (`apps/worker/tests/handlers/
+transcripts.test.ts`, "writes no bytes, and reports abandoned...") spies `transcriptExports.getExport` and
+leaves the `jobs`/`transcript_exports` rows intact by construction, which proves the code path runs but not
+what an operator actually observes — a real deletion mid-write does not leave those rows for a retry to find;
+`@bloombot/jobs`' own claim/complete protocol reports the outcome as `'superseded'` (the claim's own row is
+gone) with this handler's own report discarded, and the operator sees the generic "this job may have run
+twice" warning that outcome already carries, not this handler's own more specific `'abandoned'` reason. A
+second test now performs a real `organizations.deleteOrganizationData` call as a side effect of the storage
+port's own `write`, mid-flight, and asserts the actual, observable outcome: `'superseded'`, and no bytes left
+under the export's own id.
+
+**Limits, unchanged from the round above; nothing here revisits them.**
+
+---
+
+### Rework — a second reviewer, challenged on the coordinator's own instruction, found the label wrong and the cost bigger than stated
+
+A fourth round. The coordinator asked the reviewer to challenge the third round's own de-identification call
+specifically, not merely re-check it — the reviewer agreed the reversal (identity fields out, content kept)
+was right in shape, and found two things wrong with what shipped: the file's own claim, and the coordinator's
+own stated cost. Both are corrected here; a third, unrelated finding closed a test flake whose real cause a
+prior guess (`docs/DECISIONS.md`, this file, third round, above) had missed.
+
+**Finding 1 — `deidentified: true` was not true.** Withholding `personId`/`personDisplayName` de-identifies a
+transcript only if nothing *else* in it identifies the student — and this platform's own `packages/openai/
+src/conversations.ts` opens every upstream conversation with "My name is ${displayName} (user id
+${personRef})", read from `answer.ts`, and stores the model's own reply verbatim, name and all: "Hi Sarah —
+the midterm is on 12 October" is designed behaviour, not an unlucky sample, and a real run against a
+Discord-only course named two real students in four lines. `deidentified` is a term of art an instructor
+relies on to decide whether a file may leave the tenant — a TA outside it, an IRB submission, a research
+corpus — and claiming a property the file does not have is worse than making no claim at all. Renamed to
+`identityFieldsOmitted: true`, which says only what is actually true, and a `notice` string next to it in the
+file (plus a line on-screen, next to the Export button, `Transcripts.tsx` — the same "said where a reader
+will see it, not left inside a field nobody but a script reads" correction this rework already drew from
+`omittedForUnverifiedAddress`'s own mistake) states plainly that the message text itself is not filtered and
+may still name someone. `apps/worker/src/handlers/transcripts.ts`'s own module comment carries the reasoning
+in full.
+
+**Finding 2 — the cost the coordinator recorded in the round above was smaller than the real one, and the
+coordinator's own correction is recorded here with the objection, not only the conclusion.** The round above
+framed stripping identity as "an instructor can no longer follow one student's own thread through an
+unfiltered export." The reviewer's own point, which the coordinator accepted as the stronger one: every
+reason an instructor actually exports — participation credit, a student stuck for three weeks, an integrity
+question, a wellbeing escalation — is per-student work, and none of it survives a file that names nobody, for
+exactly the Discord-only course this feature exists to serve. What survives an unfiltered export is
+corpus-level use only, and that is not the export's primary use.
+
+The fix: every entry now carries `participant: "P1"`, `"P2"`, ... — a pseudonym assigned fresh on every
+export, ordered by a hash salted with `randomBytes(16)` minted new on every call and never stored
+(`assignPseudonyms`, `apps/worker/src/handlers/transcripts.ts`) — stable across every entry *within* one
+export (so "does this keep coming from the same person" survives), but not correlated *across* two exports of
+the same course (a caller cannot line up one export's own `P1..Pn` against another's, a roster, or Discord to
+find the same student in both). `personId`/`personDisplayName` stay omitted; no name, no id, no display name,
+anywhere in an unfiltered export.
+
+The objection, recorded rather than only the conclusion it lost to: this partially reinstates the very shape
+round three's own finding 1 raised against round two — `jq 'select(.participant=="P1")'` still returns one
+person's whole history inside this one file, unnamed. The coordinator's own judgement, on the record: this
+does not cross what PPL-5 gates, because PPL-5 gates disclosure of a *named* person's history, and a
+per-export pseudonym names nobody — `P1` does not resolve against a second export of the same course, a
+roster, or Discord, the way `personId` would. A future reader who finds that distinction too thin should treat
+this paragraph as the place to reopen it, with the evidence (the two findings above, and D-35's own "a person
+connected only through Discord read `true`" precedent for how narrowly this platform has drawn "identified"
+elsewhere) already assembled. A student-filtered export is unchanged by any of this: it names exactly the one
+person it was asked for, deliberately, and stays gated on `hasVerifiedAddress`.
+
+**Finding 3 — the delayed-sweep test's own flake had a different cause than the guess recorded above, and the
+fix is in the test, not the route.** The round-three section above blamed a race between the test's own
+2-second poll and a 5-second production default, shortened in-test to `deletedTenantSweepDelayMs: 20`. The
+reviewer traced it further and found the real cause: `routes/admin.ts`'s own delayed `setTimeout` is scheduled
+*inside* `sweepStorage(...).then(...)`, before the response is sent — so the timer is already running, on the
+real clock, while the test's own code between `await request(app)...` resolving and its own `attachmentStorage.write`
+call runs. Parameterised proof reproduced the exact boundary: a simulated write landing immediately after the
+response removed cleanly; one landing 200ms after did not, ever, since the sweep is one-shot. Raising the poll
+or the delay only widens the same race; it does not close it — measured, before this fix, at roughly one
+failure in five even against a generous two-second poll, reproduced by hand for this round's own record.
+
+Fixed by making the ordering the test needs true by construction: `ServerDependencies` (`apps/api/src/
+server.ts`) gained an optional `attachmentStorage` override — a test-only seam, never set by `src/index.ts` —
+so `apps/api/tests/routes/admin.test.ts` can wrap the one call that matters (`remove`) rather than writing
+bytes itself on its own schedule. The wrapped `remove` performs the simulated worker write as a side effect
+*after* removing (a no-op, nothing is there yet), the first time it is called for the export's own id — which
+happens *during* the immediate sweep's own `Promise.all`, before that promise settles, before `.then()` ever
+schedules the delayed sweep's own timer. No wall-clock assumption is left for the test to lose; run twenty
+times after this fix, clean every time (measured for this round's own record).
+
+**Also.** Drizzle advances its own migration watermark from the journal's `when` value, not from a migration's
+own filename — a database that already applied `0013_loud_tigra` (the file this rework's own third round
+deleted and replaced with `0013_opposite_selene`) re-runs the replacement under its new tag and dies on
+`duplicate column name: sequence`, reproduced by the reviewer. No code change follows from this: neither
+`0013_loud_tigra` nor its own replacement had reached the integration branch before the third round's own fix
+landed, so only a local development database built directly from this branch, mid-rework, can be in that
+state — recorded here so the next person editing an unmerged migration edits it in place, under its original
+tag, rather than deleting and regenerating it the way this rework's own third round did.
+
+---
+
 ## D-49 — `packages/db`/`packages/core`: CONV-4 — a message is never silently lost, the retry versus `BEGIN IMMEDIATE`, and what surfacing the failure costs
 
 **Problem.** A reviewer chased `e2e/course-configuration.spec.ts`'s own ~1-in-8 flake to its cause rather

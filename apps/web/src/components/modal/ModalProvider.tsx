@@ -53,6 +53,8 @@ export interface PromptOptions {
   cancelLabel?: string
   /** Returns an error message to show (and keep the dialog open) when the current value is not acceptable — e.g. "type the course's title to confirm" not yet matching. */
   validate?: (value: string) => string | undefined
+  /** WEB-15, the same flag `ConfirmOptions` already carries: renders the submit button destructive (`Modal.tsx`'s own `variant={destructive ? 'destructive' : 'primary'}` already applies to a prompt's own button, not only a confirm's) — for a prompt severe enough to ask a typed name rather than a plain yes/no, e.g. ADMIN-5's own tenant deletion. */
+  destructive?: boolean
 }
 
 interface ModalContextValue {
@@ -185,6 +187,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
         ...(options.validate !== undefined
           ? { validate: options.validate }
           : {}),
+        destructive: options.destructive ?? false,
       }).then((result) => (typeof result === 'string' ? result : undefined)),
   }
 

@@ -113,7 +113,13 @@ was already using.
 
 ## Phase 10 — Knowledge files & instructions
 
-**In scope:** FILE-1..5
+**In scope:** FILE-1..5, WEB-18, MDL-8
+
+WEB-18 and MDL-8 were found in use, after the phase closed. FILE-1..5's backend, actions and
+provider round trip were all built and reviewed, and no screen was ever scoped to reach them — the
+same capability-without-a-surface shape as LINK-10. MDL-8 came out of the same look: a course with
+a stored prompt id silently ignores its own instructions, so FILE-4's versioning is dead there and
+nothing tells the instructor.
 
 ## Phase 11 — Cost ledger, usage caps & monitoring
 

@@ -1460,6 +1460,16 @@ running today behave exactly as they do now. A course without one is answered wi
 instructions held in its own record, which is what lets an instructor who has never seen
 the OpenAI dashboard write the assistant's persona in the control panel.
 
+#### MDL-8 Instructions are how a course is configured; a stored prompt id is only inherited
+
+MDL-2's stored prompt was a migration affordance for a tenant who already had one in a vendor
+dashboard, and it silently wins over everything an instructor types: a course with a `prompt_id`
+ignores its own instructions entirely, so FILE-4's versioning, authorship and restore are dead on
+exactly those courses and nothing says so. The platform stops offering it. A course that has one
+keeps working and keeps being answered through it — nothing is migrated behind an instructor's
+back — but the panel says plainly that the stored prompt is in force and that the instructions
+below it are not being used, and no new course can acquire one.
+
 #### MDL-3 Answers are grounded in the course's own material
 
 When a course has a vector store, every request enables file search against it, so answers
@@ -1697,6 +1707,16 @@ Archiving a term and deleting one must never look alike.
 Every field has a visible label, related fields are grouped, and a refusal names the field
 it concerns and appears next to it rather than only at the top. A form that reports "invalid
 input" for a course with fourteen fields has told the instructor nothing.
+
+#### WEB-18 A course's knowledge files are managed in the panel
+
+FILE-1 says an instructor attaches a course's notes, syllabus and schedule in the panel, and the
+action layer, the upload job and the provider round trip all exist — but no screen ever offered
+it, so the capability was reachable only by dispatching an action by hand. The course screen lists
+what a course is grounded in, takes an upload, shows each file as pending, ready or failed, and
+detaches one behind a confirmation, because detaching reaches the provider and cannot be undone.
+An instructor never sees a vector store id: the store is the platform's own bookkeeping, and
+showing it would be the vendor-dashboard workflow FILE-1 exists to replace.
 
 #### WEB-17 The panel is usable from the keyboard
 

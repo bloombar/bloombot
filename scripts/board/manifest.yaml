@@ -2127,6 +2127,39 @@
   phase: 10
   status: Done
   review: false
+- id: MDL-8
+  title: Instructions are how a course is configured; a stored prompt id is only
+    inherited
+  full: "MDL-2's stored prompt was a migration affordance for a tenant who already
+    had one in a vendor dashboard, and it silently wins over everything an
+    instructor types: a course with a prompt_id ignores its own instructions
+    entirely, so FILE-4's versioning, authorship and restore are dead on exactly
+    those courses and nothing says so. The platform stops offering it. A course
+    that has one keeps working and keeps being answered through it — nothing is
+    migrated behind an instructor's back — but the panel says plainly that the
+    stored prompt is in force and that the instructions below it are not being
+    used, and no new course can acquire one."
+  section: §31 Model Adapter
+  family: MDL
+  phase: 10
+  status: Backlog
+  review: false
+- id: WEB-18
+  title: A course's knowledge files are managed in the panel
+  full: "FILE-1 says an instructor attaches a course's notes, syllabus and
+    schedule in the panel, and the action layer, the upload job and the provider
+    round trip all exist — but no screen ever offered it, so the capability was
+    reachable only by dispatching an action by hand. The course screen lists
+    what a course is grounded in, takes an upload, shows each file as pending,
+    ready or failed, and detaches one behind a confirmation, because detaching
+    reaches the provider and cannot be undone. An instructor never sees a vector
+    store id: the store is the platform's own bookkeeping, and showing it would
+    be the vendor-dashboard workflow FILE-1 exists to replace."
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 10
+  status: Backlog
+  review: false
 - id: COST-1
   title: Every model call is recorded with what it cost
   full: A call records the course, the person, the model, the token counts the

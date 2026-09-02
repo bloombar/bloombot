@@ -99,3 +99,15 @@ export function consumeSignInToken(
   )
   return consumed ? { email: consumed.email } : undefined
 }
+
+/**
+ * Discard an issued sign-in token outright, without redeeming it — AUTH-5's
+ * must-fix 1: `sign-in.ts#requestSignInLink` calls this when the mail
+ * carrying the token fails to send, so the still-live row `issueSignInToken`
+ * just wrote does not sit there making `hasActiveSignInToken`
+ * (`@bloombot/db`'s `sign-in-tokens.ts`) refuse every retry for the rest of
+ * the token's own lifetime, on a link nobody ever received.
+ */
+export function discardSignInToken(token: string, db: Executor): void {
+  signInTokens.deleteSignInToken(hashSecret(token), db)
+}

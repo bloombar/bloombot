@@ -37,6 +37,12 @@ const BROWSER_FORBIDDEN_PACKAGES = [
   // (JOB-4); named explicitly so the boundary is enforced before a future
   // import needs it, not reviewed after one lands.
   '@bloombot/jobs',
+  // @bloombot/mail holds the SMTP adapter (AUTH-5) — a sign-in link's own
+  // relay credentials (MAIL_SMTP_USER/MAIL_SMTP_PASSWORD) flow through it,
+  // the same "the vendor adapter, named by name" reasoning
+  // @bloombot/discord-rest and @bloombot/openai already take above. Nothing
+  // in apps/web needs to send mail.
+  '@bloombot/mail',
 ]
 
 export default tseslint.config(

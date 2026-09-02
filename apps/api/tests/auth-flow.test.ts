@@ -275,6 +275,45 @@ describe('POST /auth/request-link — malformed address (AUTH-1)', () => {
   })
 })
 
+// AUTH-5's must-fix 1, proven through the HTTP surface a real deployment
+// actually sees: a mail port that throws must answer honestly (a 500, not
+// the ordinary 204) and must not lock the address out for the rest of the
+// token's own lifetime — the exact bug a reviewer reproduced against a
+// running production API (a relay blip, then every retry answering 204
+// with nothing ever sent).
+describe('POST /auth/request-link — the mail port fails to send (AUTH-5)', () => {
+  it('answers 500, not 204, and a retry with a working sender still succeeds', async () => {
+    testDb = createTestDatabase()
+    const failingSender = {
+      send: () => Promise.reject(new Error('relay unreachable')),
+    }
+    const failingApp = await buildTestApp(testDb.db, {
+      emailSender: failingSender,
+    })
+
+    const failed = await request(failingApp)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'victim@example.edu' })
+    expect(failed.status).toBe(500)
+
+    // The retry this whole fix exists for: a *different* app instance
+    // (same database, a working sender this time — standing in for the
+    // relay coming back) actually sends, rather than the address staying
+    // locked out for the token's own fifteen-minute lifetime.
+    const workingSender = new RecordingEmailSender()
+    const workingApp = await buildTestApp(testDb.db, {
+      emailSender: workingSender,
+    })
+    const retried = await request(workingApp)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'victim@example.edu' })
+    expect(retried.status).toBe(204)
+    expect(workingSender.sent).toHaveLength(1)
+  })
+})
+
 // Cheap-fix 8 of the API-1..6 rework: `packages/db`'s own `sessions.test.ts`
 // already proves `validateSession` refuses a disabled account's session —
 // this is the same property, but through the HTTP surface: nothing before

@@ -25,7 +25,11 @@ import {
 
 import type { EmailSender } from './email.js'
 import { decideLinkOutcome, type GoogleIdentity } from './link.js'
-import { issueSignInToken, consumeSignInToken } from './tokens.js'
+import {
+  issueSignInToken,
+  consumeSignInToken,
+  discardSignInToken,
+} from './tokens.js'
 import {
   createSession,
   revokeAllSessions,
@@ -315,6 +319,9 @@ export interface RequestSignInLinkDeps {
  * Returns nothing: the plaintext token's only destination is the outgoing
  * email, never a value this function hands back to its own caller to log,
  * cache, or otherwise let escape the mail port.
+ *
+ * @throws whatever `deps.emailSender.send` throws — see the `catch` below
+ *   for why this is not swallowed.
  */
 export async function requestSignInLink(
   email: string,
@@ -334,11 +341,34 @@ export async function requestSignInLink(
     return
   }
   const { token } = issueSignInToken(email, deps.db)
-  await deps.emailSender.send(
-    email,
-    'Sign in to Bloombot',
-    `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
-  )
+  try {
+    await deps.emailSender.send(
+      email,
+      'Sign in to Bloombot',
+      `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
+    )
+  } catch (error) {
+    // AUTH-5's must-fix 1: until this slice, the only senders in this
+    // codebase were a file writer and a logger, neither of which throws in
+    // practice, so a token this call issued but never actually delivered
+    // was not a case worth handling. A real transport routinely does throw
+    // — a relay blip, a rejected recipient — and without this, the token
+    // row above stays live: `hasActiveSignInToken` would then silently
+    // decline every retry for the rest of its fifteen-minute lifetime,
+    // this function returning cleanly and its caller (`routes/auth.ts`)
+    // answering `204` on every one of them, while nothing is ever sent —
+    // exactly what AUTH-5's own text forbids ("accepting a sign-in it will
+    // silently drop"). Discarding the token here — not consuming it, since
+    // it was never legitimately redeemed — reopens the address for an
+    // immediate retry instead of a fifteen-minute lockout, and the error
+    // still propagates (this function's own contract, and `email.ts`'s
+    // `EmailSender` doc comment: "implementations may throw; `sign-in.ts`
+    // does not catch on the caller's behalf") so `routes/auth.ts`'s
+    // `.catch(next)` still answers the caller honestly rather than a false
+    // `204`.
+    discardSignInToken(token, deps.db)
+    throw error
+  }
 }
 
 /**

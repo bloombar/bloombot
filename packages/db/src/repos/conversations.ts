@@ -40,6 +40,32 @@ function isUniqueConstraintError(error: unknown): boolean {
   )
 }
 
+/**
+ * CONV-4/D-49 — the two codes `appendMessage`'s own retry (below) treats as
+ * transient and worth another attempt; nothing else is. `SQLITE_BUSY` is an
+ * ordinary lock wait `client.ts`'s own `busy_timeout` already spends up to
+ * 5s retrying inside SQLite itself before it ever reaches here, so seeing
+ * it in JS means the wait was exhausted, not skipped — retrying the whole
+ * transaction gives it one more turn at the lock. `SQLITE_BUSY_SNAPSHOT` is
+ * the condition `busy_timeout` does *not* cover (this file's own
+ * `appendMessage` doc comment has the full mechanism): a transaction whose
+ * read snapshot went stale while it was open, thrown immediately rather
+ * than waited out. Both resolve by simply trying again — the conflicting
+ * writer has, by definition, already finished — which is exactly what
+ * "transient" means here; anything else (a constraint violation, a
+ * corrupt database) would fail identically on a second attempt and is
+ * rethrown immediately instead.
+ */
+function isTransientBusyError(error: unknown): boolean {
+  return (
+    error instanceof BetterSqlite3.SqliteError &&
+    (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_BUSY_SNAPSHOT')
+  )
+}
+
+/** CONV-4/D-49 — bounded so a genuinely stuck lock still fails loudly rather than retrying forever; see `appendMessage`'s own doc comment for why three is enough. */
+const MAX_APPEND_MESSAGE_ATTEMPTS = 3
+
 /** What `getOrCreateConversation` needs: the course, the person, and the surface the message arrived on. */
 export interface GetOrCreateConversationInput {
   courseId: string
@@ -335,6 +361,30 @@ export interface NewMessage {
  * `ORDER BY` column. Reading the previous max and writing the next value in
  * the same transaction is what keeps two concurrent appends to the same
  * conversation from computing the same `sequence`.
+ *
+ * CONV-4/D-49 — this transaction opens `immediate`, not `deferred` (Drizzle's
+ * own default): a deferred transaction takes no lock at `BEGIN`, only at its
+ * first write, so the `select` above establishes a read snapshot *before*
+ * the lock is acquired — if another connection commits a write to this same
+ * database in between (four processes, `ecosystem.config.cjs`, share one
+ * SQLite file), the `insert`'s attempt to upgrade that now-stale snapshot to
+ * a write lock fails outright as `SQLITE_BUSY_SNAPSHOT`. `client.ts`'s own
+ * `busy_timeout` does not cover this: it retries a lock that is *held*, and
+ * a stale snapshot is not that — SQLite reports it immediately, with
+ * nothing to wait out. Opening `immediate` takes the write lock at `BEGIN`,
+ * before the `select` ever runs, so this transaction's own snapshot cannot
+ * go stale out from under it — a concurrent writer now blocks behind
+ * `busy_timeout` (an ordinary, already-covered wait) instead of racing this
+ * one to a silent loss. The retry loop below is the second half of the same
+ * fix: `busy_timeout` exhausted (`SQLITE_BUSY`) and a stale snapshot
+ * (`SQLITE_BUSY_SNAPSHOT`, still possible from a plain `db.transaction` call
+ * elsewhere, or under contention this function's own lock wait does not
+ * fully absorb) are both genuinely transient — the conflicting writer has,
+ * by definition, already finished — so `isTransientBusyError` (above) is
+ * retried up to `MAX_APPEND_MESSAGE_ATTEMPTS` times before this function
+ * gives up and lets the error propagate. It used to be caught, logged and
+ * discarded by every caller instead (`packages/core/src/answer.ts`,
+ * pre-CONV-4) — losing exactly the message this function exists to keep.
  */
 export function appendMessage(
   organizationId: string,
@@ -345,60 +395,95 @@ export function appendMessage(
   const conversation = getConversation(organizationId, conversationId, db)
   if (!conversation) return undefined
 
-  return db.transaction((tx) => {
-    const createdAt = input.createdAt ?? Date.now()
-    const previous = tx
-      .select({ sequence: messages.sequence })
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(desc(messages.sequence))
-      .limit(1)
-      .get()
-    const sequence = (previous?.sequence ?? -1) + 1
-
-    const message = tx
-      .insert(messages)
-      .values({
-        id: input.id ?? crypto.randomUUID(),
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return runAppendMessageTransaction(
         organizationId,
         conversationId,
-        personId: conversation.personId,
-        courseId: conversation.courseId,
-        direction: input.direction,
-        content: input.content,
-        surface: input.surface ?? null,
-        channelRef: input.channelRef ?? null,
-        categoryRef: input.categoryRef ?? null,
-        sequence,
-        createdAt,
-      })
-      .returning()
-      .get()
-
-    // finding 6 (MIG-1 rework): `lastMessageAt` moves *forward* to the later
-    // of its current value and this message's `createdAt` — never
-    // backward. A plain unconditional set was correct for every caller that
-    // appends "now" (`input.createdAt` omitted), but `packages/legacy-import`
-    // (MIG-3) is the one caller that supplies an explicit, potentially
-    // backdated `createdAt` — importing a two-year-old transcript into a
-    // conversation the live bot has already written to must not rewind
-    // "last message" into the past. Computed in the same `UPDATE` (`max`),
-    // not read-then-written from the `conversation` fetched before this
-    // transaction started, so a concurrent append cannot race it stale.
-    tx.update(conversations)
-      .set({
-        lastMessageAt: sql`max(${conversations.lastMessageAt}, ${createdAt})`,
-      })
-      .where(
-        and(
-          eq(conversations.id, conversationId),
-          eq(conversations.organizationId, organizationId)
-        )
+        input,
+        conversation,
+        db
       )
-      .run()
+    } catch (error) {
+      if (
+        attempt >= MAX_APPEND_MESSAGE_ATTEMPTS ||
+        !isTransientBusyError(error)
+      ) {
+        throw error
+      }
+      // Falls through and tries again — see this function's own doc
+      // comment (CONV-4/D-49) for why a busy/stale-snapshot error is worth
+      // another attempt rather than being caught and discarded here.
+    }
+  }
+}
 
-    return message
-  })
+/** The transaction body `appendMessage` retries — split out so the retry loop above reads as the policy, and this reads as the write. */
+function runAppendMessageTransaction(
+  organizationId: string,
+  conversationId: string,
+  input: NewMessage,
+  conversation: Conversation,
+  db: Database
+): Message {
+  return db.transaction(
+    (tx) => {
+      const createdAt = input.createdAt ?? Date.now()
+      const previous = tx
+        .select({ sequence: messages.sequence })
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(desc(messages.sequence))
+        .limit(1)
+        .get()
+      const sequence = (previous?.sequence ?? -1) + 1
+
+      const message = tx
+        .insert(messages)
+        .values({
+          id: input.id ?? crypto.randomUUID(),
+          organizationId,
+          conversationId,
+          personId: conversation.personId,
+          courseId: conversation.courseId,
+          direction: input.direction,
+          content: input.content,
+          surface: input.surface ?? null,
+          channelRef: input.channelRef ?? null,
+          categoryRef: input.categoryRef ?? null,
+          sequence,
+          createdAt,
+        })
+        .returning()
+        .get()
+
+      // finding 6 (MIG-1 rework): `lastMessageAt` moves *forward* to the later
+      // of its current value and this message's `createdAt` — never
+      // backward. A plain unconditional set was correct for every caller that
+      // appends "now" (`input.createdAt` omitted), but `packages/legacy-import`
+      // (MIG-3) is the one caller that supplies an explicit, potentially
+      // backdated `createdAt` — importing a two-year-old transcript into a
+      // conversation the live bot has already written to must not rewind
+      // "last message" into the past. Computed in the same `UPDATE` (`max`),
+      // not read-then-written from the `conversation` fetched before this
+      // transaction started, so a concurrent append cannot race it stale.
+      tx.update(conversations)
+        .set({
+          lastMessageAt: sql`max(${conversations.lastMessageAt}, ${createdAt})`,
+        })
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.organizationId, organizationId)
+          )
+        )
+        .run()
+
+      return message
+    },
+    // CONV-4/D-49 — see this function's own doc comment above.
+    { behavior: 'immediate' }
+  )
 }
 
 /**

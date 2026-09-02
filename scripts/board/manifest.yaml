@@ -2588,6 +2588,21 @@
   phase: 14
   status: Backlog
   review: false
+- id: AUTH-5
+  title: A sign-in link actually reaches the person
+  full: "The platform sends mail in production through a real transport,
+    configured by environment like every other credential. This is what makes
+    AUTH-1 usable at all: a sign-in link is the primary way anybody reaches the
+    panel, so a deployment that cannot send one is a deployment nobody can log
+    into. The development stand-in that writes to a file stays refused in
+    production, and a process that is configured to send mail and cannot must
+    fail where an operator sees it rather than accepting a sign-in it will
+    silently drop."
+  section: §14 Accounts & Authentication
+  family: AUTH
+  phase: 15
+  status: Backlog
+  review: false
 - id: OPS-8
   title: The platform deploys as the processes it actually is
   full: The deployment runs the API, the bot, the worker and the static panel as

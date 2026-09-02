@@ -738,6 +738,15 @@ Administrators are identified by an email allowlist in the environment, read on 
 check rather than captured at startup, so adding or removing one takes effect without a
 deployment. It is never a self-granted role or a database flag.
 
+#### AUTH-5 A sign-in link actually reaches the person
+
+The platform sends mail in production through a real transport, configured by environment
+like every other credential. This is what makes AUTH-1 usable at all: a sign-in link is the
+primary way anybody reaches the panel, so a deployment that cannot send one is a deployment
+nobody can log into. The development stand-in that writes to a file stays refused in
+production, and a process that is configured to send mail and cannot must fail where an
+operator sees it rather than accepting a sign-in it will silently drop.
+
 ### 15. Tenancy & Server Registration
 
 #### TEN-1 The tenant is an organization

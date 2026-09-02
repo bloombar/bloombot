@@ -136,4 +136,9 @@ together. A build that has the gate and no connect surface answers nobody.
 
 ## Phase 15 — Production hardening
 
-**In scope:** OPS-8..14
+**In scope:** OPS-8..14, AUTH-5
+
+AUTH-5 lands here rather than with the rest of authentication because it was found here:
+production hardening is what surfaced that `apps/api` cannot start under `NODE_ENV=production`
+at all, since the only mail transport is a development stand-in that is refused there. A
+deployment nobody can sign in to is not a deployment.

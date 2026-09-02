@@ -10,6 +10,22 @@ import type { Logger } from '@bloombot/logger'
 import type { JobContext, JobHandler, HandlerRegistry } from './registry.js'
 import { backoffDelayMs, type RetryPolicy } from './retry.js'
 
+/**
+ * Whether a thrown value asked not to be retried.
+ *
+ * Structural rather than an `instanceof` check: the errors that know they are
+ * permanent live in vendor adapters (`@bloombot/discord-rest`'s own
+ * `DiscordRequestError`), and this package must not import one to recognise
+ * it. A plain boolean property is the whole contract.
+ */
+export function isPermanentFailure(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { permanent?: unknown }).permanent === true
+  )
+}
+
 export interface RunNextJobDependencies {
   db: Database
   logger: Logger
@@ -247,7 +263,14 @@ export async function runNextJob(
       '@bloombot/jobs: a job attempt failed'
     )
 
-    if (job.attempts >= job.maxAttempts) {
+    // JOB-2's retry schedule is for work that might succeed next time. An
+    // error that declares itself permanent — a Discord `403`, say, where the
+    // bot lacks a permission — will fail identically on every remaining
+    // attempt, so retrying it buys nothing and costs a log an operator has to
+    // read four more times before reaching the one line that mattered.
+    // Anything without the flag stays retryable, so this narrows nothing by
+    // default.
+    if (isPermanentFailure(error) || job.attempts >= job.maxAttempts) {
       const failed = jobs.markJobFailed(
         job.organizationId,
         job.id,

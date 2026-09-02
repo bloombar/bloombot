@@ -66,6 +66,9 @@ function slugifyChannelName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, '-')
 }
 
+/** The bot's own user id this fake reports from `/users/@me`, exported so a test can assert the overwrite the scaffold grants itself. */
+export const FAKE_BOT_USER_ID = 'fake-bot-user-id'
+
 export class FakeDiscordGuildServer {
   readonly requests: RecordedRequest[] = []
 
@@ -163,6 +166,13 @@ export class FakeDiscordGuildServer {
       headers: req.headers,
       body: parsedBody,
     })
+
+    // `/users/@me` — how a scaffold run learns the bot's own user id, so it
+    // can grant itself an overwrite on a category it closes to `@everyone`.
+    if (pathname === '/users/@me' && req.method === 'GET') {
+      this.respondJson(res, 200, { id: FAKE_BOT_USER_ID })
+      return
+    }
 
     const channelsMatch = /^\/guilds\/([^/]+)\/channels$/.exec(pathname ?? '')
     if (channelsMatch) {

@@ -303,6 +303,80 @@ describe('runNextJob: a payload that will not parse', () => {
     expect(row).toMatchObject({ status: 'failed' })
     expect(row?.lastError).toMatch(/could not parse job payload/)
   })
+
+  // Observed in the field: a scaffold run hit a Discord `403` — the bot
+  // lacked a permission — and the runner retried it four more times, each
+  // failing identically, burying the one line that mattered under five
+  // stack traces. A permission is not a transient condition.
+  it('fails a permanent error immediately, without spending the remaining attempts', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'noop', payload: {}, maxAttempts: 5 },
+      testDb.db
+    )
+
+    let calls = 0
+    const handlers = new HandlerRegistry()
+    handlers.register('noop', async () => {
+      calls++
+      // The shape `@bloombot/discord-rest`'s own `DiscordRequestError` has:
+      // a plain boolean property, so this package recognises it without
+      // importing a vendor adapter to do so.
+      const error = Object.assign(new Error('Discord refused: 403'), {
+        permanent: true,
+      })
+      throw error
+    })
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('failed')
+    expect(calls).toBe(1)
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(row?.lastError).toMatch(/403/)
+  })
+
+  // The complement, so the fix above cannot quietly stop retrying everything:
+  // an ordinary error carries no flag and keeps its full attempt budget.
+  it('still retries an ordinary error, which carries no permanence flag', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const handlers = new HandlerRegistry()
+    handlers.register('noop', async () => {
+      throw new Error('a transient upstream hiccup')
+    })
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('retried')
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'pending' })
+  })
 })
 
 describe('runNextJob: JOB-1, organization scoping through the claim', () => {

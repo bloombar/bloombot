@@ -17,6 +17,7 @@ export type { BuildDiscordAuthorizationUrlInput } from './authorize-url.js'
 export { administersGuild, type DiscordGuildSummary } from './permissions.js'
 
 export {
+  allowBotOverwrite,
   allowMemberOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,

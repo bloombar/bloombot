@@ -24,6 +24,7 @@
 
 const VIEW_CHANNEL_BIT = 0x400n
 const SEND_MESSAGES_BIT = 0x800n
+const MANAGE_CHANNELS_BIT = 0x10n
 
 /** Discord's own overwrite-target kind: `0` for a role, `1` for a guild member. */
 export type DiscordOverwriteType = 0 | 1
@@ -60,6 +61,41 @@ export function allowRoleOverwrite(roleId: string): DiscordPermissionOverwrite {
     id: roleId,
     type: 0,
     allow: (VIEW_CHANNEL_BIT | SEND_MESSAGES_BIT).toString(),
+    deny: '0',
+  }
+}
+
+/**
+ * Grant the bot itself access to a category it is about to lock down.
+ *
+ * Without this, scaffolding locks itself out. A course category denies
+ * `@everyone` view (`denyEveryoneOverwrite`) and allows only the admins and
+ * students roles, and Discord applies that denial to the bot as well unless
+ * the bot is an Administrator — so the very next call, creating a channel
+ * with `parent_id` set to that category, comes back `403`. The category is
+ * created, every channel inside it fails, and the run retries four more times
+ * against a permission that is never going to change.
+ *
+ * Granting `MANAGE_CHANNELS` alongside view and send is deliberate: the guild
+ * role carries it, but a category-level view denial is enough to refuse a
+ * channel create inside it, and an explicit allow here keeps the category's
+ * own overwrites self-sufficient rather than dependent on what the bot's role
+ * happens to hold.
+ *
+ * `type: 1` (member), because a bot's own user id is a member of the guild —
+ * the same shape `allowMemberOverwrite` uses for a student.
+ */
+export function allowBotOverwrite(
+  botUserId: string
+): DiscordPermissionOverwrite {
+  return {
+    id: botUserId,
+    type: 1,
+    allow: (
+      VIEW_CHANNEL_BIT |
+      SEND_MESSAGES_BIT |
+      MANAGE_CHANNELS_BIT
+    ).toString(),
     deny: '0',
   }
 }

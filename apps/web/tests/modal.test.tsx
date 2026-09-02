@@ -48,8 +48,10 @@ function ConfirmHarness({
 
 function PromptHarness({
   onResult,
+  destructive = false,
 }: {
   onResult: (result: string | undefined) => void
+  destructive?: boolean
 }) {
   const { prompt } = useModal()
   return (
@@ -59,6 +61,7 @@ function PromptHarness({
         void prompt({
           title: 'Type the course name',
           label: 'Course name',
+          destructive,
         }).then(onResult)
       }
     >
@@ -132,6 +135,22 @@ describe('Modal primitive (WEB-15/WEB-16/WEB-17)', () => {
     ).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'OK' }))
     await waitFor(() => expect(dialog).not.toBeVisible())
+  })
+
+  // ADMIN-5's own rework finding: `PromptOptions` carried no `destructive`
+  // flag, so a severe prompt (typing a tenant's own name to delete it)
+  // rendered its submit button primary, identically to an ordinary save —
+  // the same distinct styling `confirm`'s own `destructive` already gets.
+  it('a destructive prompt renders the confirm button in the destructive style', async () => {
+    render(
+      <ModalProvider>
+        <PromptHarness onResult={vi.fn()} destructive />
+      </ModalProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'trigger prompt' }))
+    await screen.findByRole('dialog')
+    const confirmButton = screen.getByRole('button', { name: 'Confirm' })
+    expect(confirmButton.className).toContain('danger')
   })
 
   it('prompt(): confirming resolves the typed value; cancelling resolves undefined', async () => {

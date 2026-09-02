@@ -138,6 +138,17 @@ export function buildTestApp(
     // variables, by design (`routes/discord-servers.ts`'s own doc comment).
     discordOauthBase: 'https://discord.test/oauth2',
     attachmentStorageDir: TEST_ATTACHMENT_STORAGE_DIR,
+    // ADMIN-4 — fixed, unreachable-by-default loopback URLs: no test in
+    // this package needs a real answer from any of the three processes
+    // unless it explicitly overrides `adminHealthFetch` with its own fake,
+    // the same "a test overrides only the one field its own scenario
+    // needs" convention this helper's own module comment already states.
+    // `checkPlatformHealth` itself treats a failed fetch as `{ reachable:
+    // false }`, never a thrown error (`packages/actions/src/monitoring.ts`'s
+    // own module comment), so leaving these genuinely unreachable is safe.
+    botHealthUrl: 'http://127.0.0.1:1/health',
+    workerHealthUrl: 'http://127.0.0.1:1/health',
+    apiHealthUrl: 'http://127.0.0.1:1/health',
     // WEB-10 — no network, a fixed answer, by default; a test that wants a
     // particular response (or to observe what `routes/chat.ts` actually
     // asked) overrides this directly with its own `new FakeModelClient(...)`

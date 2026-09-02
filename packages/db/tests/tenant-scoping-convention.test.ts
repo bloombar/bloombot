@@ -21,10 +21,19 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    `GET /auth/me` already knows exactly which account a valid,
 //    already-authenticated session proved, before any organization is in
 //    play, so scoping this lookup to one would ask the caller to supply
-//    something the session itself does not carry.
+//    something the session itself does not carry. Also what
+//    `routes/admin.ts`'s own `isRequestFromPlatformAdministrator` (ADMIN-4)
+//    resolves a session's account through: a platform administrator is not
+//    necessarily a member of the organization an admin-console read or an
+//    ADMIN-5 tenant deletion targets, so `getAccountInOrganization` cannot
+//    serve that caller either.
 //  - accounts.ts#disableAccount: `disabled_at` lives on `accounts`, not
 //    `memberships` — disabling is account-wide, not scoped to one
 //    organization (AUTH-1..4 rework, finding 3).
+//  - organizations.ts#listTenantDeletions: ADMIN-5's own audit trail, read
+//    by the platform-administrator console — spans every (former)
+//    organization by definition, the same class `cost-ledger.ts`'s own
+//    `listOrganizationTotals` already is for COST-4's platform-wide read.
 //  - discord-servers.ts#resolveDiscordServerBinding: this *is* the lookup
 //    that establishes which organization an incoming Discord message
 //    belongs to, so it cannot itself take an organization id as input.
@@ -84,6 +93,7 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
+  'organizations.ts': ['listTenantDeletions'],
   'course-join-links.ts': ['redeemJoinLink'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
   'discord-install-states.ts': [
@@ -183,7 +193,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the nineteen repo files this test is written against', () => {
+  it('found the twenty-one repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -206,6 +216,8 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'projects.ts',
         'sessions.ts',
         'sign-in-tokens.ts',
+        'transcript-access.ts',
+        'transcript-exports.ts',
         'usage.ts',
       ].sort()
     )

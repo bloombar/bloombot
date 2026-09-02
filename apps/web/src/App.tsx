@@ -1,7 +1,7 @@
 /**
- * The whole panel: four screens and no router library (the brief for this
- * slice is explicit that a shell this small does not need one) — `App`
- * reads `window.location.pathname` itself and switches on it.
+ * The whole panel: several screens and no router library (the brief for
+ * this slice is explicit that a shell this small does not need one) —
+ * `App` reads `window.location.pathname` itself and switches on it.
  *
  *  - `/sign-in/:token` — an emailed link lands here (`pages/RedeemLink.tsx`).
  *  - `/discord/callback` — Discord's own OAuth redirect lands here
@@ -12,6 +12,11 @@
  *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
  *    every other path below, since a Discord invitation cannot know which
  *    it will be.
+ *  - `/platform-admin` — ADMIN-4's console (`pages/Admin.tsx`); reachable
+ *    by any signed-in account (deliberately *not* `/admin`, `apps/api`'s
+ *    own mount for this screen's reads and writes — see this file's own
+ *    comment on that path, below), with `routes/admin.ts` the one place
+ *    AUTH-4 is actually enforced.
  *  - anything else — the signed-in shell (`pages/Shell.tsx`) or the
  *    sign-in screen (`pages/SignIn.tsx`), decided by `GET /auth/me`
  *    (WEB-2: the session itself, never anything this app stored).
@@ -27,6 +32,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
+import { Admin } from './pages/Admin.js'
 import { Connect, PENDING_CONNECT_ORG_KEY } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { RedeemLink } from './pages/RedeemLink.js'
@@ -185,6 +191,22 @@ export function App() {
   }
 
   if (session.kind === 'signed-in') {
+    // ADMIN-4 — reached at `/platform-admin`, deliberately outside `Shell`'s
+    // own organization-scoped nav (`Admin.tsx`'s own module comment has
+    // why) and deliberately *not* `/admin`: `apps/api`'s own
+    // `routes/admin.ts` is mounted at `/admin` (`vite.config.ts`'s own
+    // proxy list), and a page path and a proxied API path can never share
+    // one top-level segment — the same reason `/sign-in/:token` (a page)
+    // and `/auth/redeem` (the API it posts to) already do not. Any
+    // signed-in account may navigate here; `routes/admin.ts` is what
+    // actually enforces AUTH-4 on every request this screen makes, so a
+    // non-administrator who types the URL sees the same
+    // `not_platform_administrator` refusal `ErrorMessage` already knows
+    // how to say in words, not a client-side guess at who is allowed to
+    // even try.
+    if (path === '/platform-admin') {
+      return <Admin onBack={returnToShell} />
+    }
     return (
       <Shell
         account={session.account}

@@ -119,6 +119,10 @@ describe('ACT-6 — machine-readable catalog', () => {
         'enrolments.checkAccess',
         'enrolments.end',
         'memberships.grant',
+        'transcripts.read',
+        'transcripts.listStudents',
+        'transcripts.export',
+        'transcripts.listExports',
       ].sort()
     )
 

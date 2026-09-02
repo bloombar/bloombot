@@ -31,7 +31,9 @@ import {
   ChevronDown,
   Clock,
   Copy,
+  Download,
   ExternalLink,
+  FileText,
   Hammer,
   Home,
   Info,
@@ -81,6 +83,11 @@ export const ScaffoldIcon = Hammer
 export const ExternalLinkIcon = ExternalLink
 /** A collapsible section, or a select control, is closed and can be opened. */
 export const ExpandIcon = ChevronDown
+
+/** ADMIN-1: a course's transcript. */
+export const TranscriptIcon = FileText
+/** ADMIN-3: collect a produced export. */
+export const DownloadIcon = Download
 
 /** The chat surface itself (WEB-10) — a course's assistant. */
 export const ChatIcon = MessageSquare

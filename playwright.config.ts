@@ -21,6 +21,7 @@
 import { defineConfig } from '@playwright/test'
 
 import {
+  E2E_ADMIN_EMAIL,
   E2E_API_ORIGIN,
   E2E_API_PORT,
   E2E_PUBLIC_APP_URL,
@@ -51,6 +52,12 @@ export default defineConfig({
       env: {
         NODE_ENV: 'test',
         PUBLIC_APP_URL: E2E_PUBLIC_APP_URL,
+        // ADMIN-4/AUTH-4 — a fixed platform-administrator address this
+        // spec's own `admin-console.spec.ts` signs in as through the
+        // ordinary emailed-link flow, then reads live from this env var on
+        // every check (`@bloombot/config`'s `isAdminEmail`) — never a
+        // database flag.
+        ADMIN_EMAILS: E2E_ADMIN_EMAIL,
       },
     },
     {

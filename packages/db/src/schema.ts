@@ -1064,3 +1064,175 @@ export const personLinkChallenges = sqliteTable(
     ),
   ]
 )
+
+// ADMIN-1..3 — reading a course's transcript is a disclosure event, and
+// ADMIN-2 requires it to be written to an audit trail: who read whose
+// conversation, and when. One row per *request*, not per message —
+// `repos/transcript-access.ts#readCourseTranscript` is the single function
+// both `transcripts.read` (ADMIN-1) and `transcripts.export` (ADMIN-3) call
+// to actually fetch the messages, and it writes this row in the same call,
+// so a future third caller of that function is audited for free rather
+// than having to remember a separate "log it" step of its own — the design
+// ADMIN-2's own text asks for ("the recording should live where the read
+// happens, not in the one screen that happens to call it today").
+export const TRANSCRIPT_ACCESS_KINDS = ['read', 'export'] as const
+export type TranscriptAccessKind = (typeof TRANSCRIPT_ACCESS_KINDS)[number]
+
+export const transcriptAccessLog = sqliteTable(
+  'transcript_access_log',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    // The instructor (or other accountable staff member) who read or
+    // exported — never null: `repos/transcript-access.ts` refuses to log,
+    // or to run the read at all, without one (see that file's own module
+    // comment).
+    actorAccountId: text('actor_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    // Which student's conversation this access named, or `null` for an
+    // unfiltered read/export across the whole course — ADMIN-2's "who read
+    // whose conversation" for the common, single-student case, and an
+    // honest "nobody in particular, everybody in the course" for the other.
+    personId: text('person_id').references(() => people.id),
+    kind: text('kind', { enum: TRANSCRIPT_ACCESS_KINDS }).notNull(),
+    // The date filter actually applied, if any (ADMIN-1's own "filtered by
+    // ... date") — recorded alongside the access itself so the audit trail
+    // says not just *that* a read happened but what it covered.
+    startAt: integer('start_at'),
+    endAt: integer('end_at'),
+    // A real tiebreaker for `listAccessLogForCourse`'s "newest first" order
+    // — the same reason `messages.sequence`/`transcript_exports.sequence`
+    // exist (those tables' own comments): `createdAt` is millisecond
+    // precision, and two reads (an instructor's screen and a concurrent
+    // export job, say) can land within the same millisecond. Assigned by
+    // `repos/transcript-access.ts#readCourseTranscript` inside the same
+    // transaction as the read and the insert it accompanies, one more than
+    // the highest already recorded for this course.
+    //
+    // `.default(0)`, unlike its siblings on `messages`/`course_instruction_revisions`/
+    // `transcript_exports`: this column was added to an *already-shipped*
+    // table by a later migration (`0013_opposite_selene.sql`), which makes
+    // it the one `sequence` column in this file that a real, already-running
+    // deployment can have existing rows to violate `NOT NULL` against —
+    // every other one was part of its own table's original `CREATE TABLE`,
+    // so a fresh table with no rows yet closes the same gap structurally.
+    // A rework finding: this used to have no default at all — a plain
+    // `ALTER TABLE ... ADD sequence integer NOT NULL` — which SQLite
+    // accepts only on an empty table, and refuses (rolling the whole
+    // migration back, no partial effect) the moment a real deployment
+    // already has one `transcript_access_log` row, which any reviewer who
+    // ran ADMIN-1's own read even once already does; both `apps/api` and
+    // `apps/worker` call `runMigrations` at boot, so that migration
+    // refused every one of those processes' own startup. `0` is a safe
+    // backfill value precisely because it is wrong in the same direction
+    // reading a transcript already is: an old row backfilled to `0` sorts
+    // as if it happened first, which is the least-recent position
+    // `desc(sequence)` gives it anyway once a real `sequence` value exists
+    // for anything read after this migration runs.
+    sequence: integer('sequence').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('transcript_access_log_course_id_idx').on(table.courseId),
+    index('transcript_access_log_organization_id_idx').on(table.organizationId),
+    check(
+      'transcript_access_log_kind_check',
+      sql`${table.kind} in ('read', 'export')`
+    ),
+  ]
+)
+
+// ADMIN-3 — an export is a job (JOB-1): an instructor asks, a file is
+// produced, they collect it. `status` mirrors `course_attachments`' own
+// pending/ready/failed lifecycle (this file's own comment on
+// `ATTACHMENT_STATUSES`) for the same reason — a caller needs to tell
+// "still working" from "dead" rather than polling a job row whose own
+// `result` this table's `id` is merely named inside.
+export const TRANSCRIPT_EXPORT_STATUSES = [
+  'pending',
+  'ready',
+  'failed',
+] as const
+export type TranscriptExportStatus = (typeof TRANSCRIPT_EXPORT_STATUSES)[number]
+
+export const transcriptExports = sqliteTable(
+  'transcript_exports',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    // `null` — every student the course's transcript covers; set — one
+    // student's own history, the shape PPL-5's own `hasVerifiedAddress`
+    // gate applies to (see `packages/actions/src/actions/transcripts.ts`'s
+    // own module comment for the reasoning).
+    personId: text('person_id').references(() => people.id),
+    requestedByAccountId: text('requested_by_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    status: text('status', { enum: TRANSCRIPT_EXPORT_STATUSES }).notNull(),
+    startAt: integer('start_at'),
+    endAt: integer('end_at'),
+    // Set once the job produces the file — the bytes themselves live in
+    // FILE-5's own `AttachmentStorage`, addressed by this row's own `id`
+    // (`apps/worker`'s handler writes them there, never this table).
+    filename: text('filename'),
+    contentType: text('content_type'),
+    sizeBytes: integer('size_bytes'),
+    failureReason: text('failure_reason'),
+    // A real tiebreaker for `listExportsForCourse`'s "most recent first"
+    // order — the same reason `course_instruction_revisions.sequence`
+    // exists (that table's own comment): `createdAt` is millisecond
+    // precision, two exports can be requested within the same millisecond,
+    // and SQL defines no order among rows tied on the `ORDER BY` column.
+    // Assigned by `repos/transcript-exports.ts#createPendingExport` inside
+    // its own transaction, one more than the highest already recorded for
+    // this course.
+    sequence: integer('sequence').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('transcript_exports_course_id_idx').on(table.courseId),
+    index('transcript_exports_organization_id_idx').on(table.organizationId),
+    check(
+      'transcript_exports_status_check',
+      sql`${table.status} in ('pending', 'ready', 'failed')`
+    ),
+  ]
+)
+
+// ADMIN-5 — deleting a tenant's data is a platform-administrator operation,
+// separate from TEN-6's "removal preserves data" (removing a bot from a
+// server, which never deletes anything). This table is the audit record
+// that operation leaves behind, deliberately *not* scoped by — or
+// foreign-keyed to — `organizations.id` the way every other table in this
+// file is: the whole point of the row is to outlive the organization it
+// describes, so `organizationId` here is a plain value, not a reference
+// this platform's own deletion would immediately have to violate.
+export const tenantDeletions = sqliteTable('tenant_deletions', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id').notNull(),
+  // Captured before the delete, since the row it would otherwise be read
+  // from is gone immediately afterward — an audit entry that could only be
+  // read back as "(unknown organization)" once its own subject no longer
+  // exists would defeat the point of keeping it.
+  organizationName: text('organization_name').notNull(),
+  deletedByAccountId: text('deleted_by_account_id')
+    .notNull()
+    .references(() => accounts.id),
+  // What was actually removed, as `repos/organizations.ts#deleteOrganizationData`'s
+  // own summary reports it — opaque JSON here, the same "not this table's
+  // to interpret" discipline `jobs.result` (above) already holds itself to.
+  summary: text('summary').notNull(),
+  deletedAt: integer('deleted_at').notNull(),
+})

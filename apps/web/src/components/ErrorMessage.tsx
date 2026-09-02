@@ -61,6 +61,25 @@ export function describeApiError(error: ApiError): {
       }
     case 'not_signed_in':
       return { headline: 'You need to sign in first.', details: [] }
+    // ADMIN-4: distinct from `action_refused` — this is the admin console's
+    // own "you are not on the platform-administrator allowlist", never
+    // confused with "this record does not exist" (TEN-5's own shape,
+    // above), since AUTH-4's check is not organization-scoped at all.
+    case 'not_platform_administrator':
+      return {
+        headline: 'This requires platform-administrator access.',
+        details: [],
+      }
+    // ADMIN-5: the name typed to confirm a tenant deletion did not match —
+    // named plainly so an administrator can just try again, not folded
+    // into the generic `default` case below.
+    case 'confirmation_name_mismatch':
+      return {
+        headline: 'That name did not match — nothing was deleted.',
+        details: [],
+      }
+    case 'organization_not_found':
+      return { headline: 'That organization no longer exists.', details: [] }
     case 'invalid_token':
       return {
         headline: 'That link is no longer valid. Request a new one.',

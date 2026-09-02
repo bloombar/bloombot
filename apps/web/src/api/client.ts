@@ -23,6 +23,7 @@
  */
 
 import type {
+  AdminOrganizationsResponse,
   ApiErrorBody,
   ChatAnswerResult,
   ChatCourse,
@@ -36,9 +37,14 @@ import type {
   JobStatus,
   McpPersonLinkPreviewResponse,
   MeResponse,
+  OrganizationDeletionPreview,
   PersonLinkBeginResponse,
   Project,
   SignedInResponse,
+  TenantDeletion,
+  TranscriptExport,
+  TranscriptReadResult,
+  TranscriptStudent,
 } from './types.js'
 
 /**
@@ -428,4 +434,128 @@ export function postChatMessage(
     `/organizations/${organizationId}/chat/courses/${courseId}/messages`,
     { method: 'POST', body: { text } }
   ).then((response) => response.result)
+}
+
+/**
+ * ADMIN-1..3 — the transcript screen's own reads and writes, each a thin
+ * wrapper over `dispatchAction`, the same generic action route every
+ * other screen in this app already reaches through (no new route, no new
+ * action, `pages/Projects.tsx`'s own module comment already states this
+ * convention).
+ */
+
+export interface TranscriptFilters {
+  personId?: string
+  /** Inclusive bounds, epoch milliseconds — a date-only picker in `pages/Transcripts.tsx` converts a calendar day into these before calling through here. */
+  startAt?: number
+  endAt?: number
+}
+
+function filtersToInput(filters: TranscriptFilters): Record<string, unknown> {
+  return {
+    ...(filters.personId !== undefined ? { personId: filters.personId } : {}),
+    ...(filters.startAt !== undefined ? { startAt: filters.startAt } : {}),
+    ...(filters.endAt !== undefined ? { endAt: filters.endAt } : {}),
+  }
+}
+
+/** ADMIN-1: read a course's transcript, optionally filtered by student and by date. */
+export function readTranscript(
+  organizationId: string,
+  courseId: string,
+  filters: TranscriptFilters = {}
+): Promise<TranscriptReadResult> {
+  return dispatchAction<TranscriptReadResult>(
+    organizationId,
+    'transcripts.read',
+    {
+      courseId,
+      ...filtersToInput(filters),
+    }
+  )
+}
+
+/** ADMIN-1's own student filter. */
+export function listTranscriptStudents(
+  organizationId: string,
+  courseId: string
+): Promise<TranscriptStudent[]> {
+  return dispatchAction<TranscriptStudent[]>(
+    organizationId,
+    'transcripts.listStudents',
+    { courseId }
+  )
+}
+
+/** ADMIN-3: request an export, produced by a background job (JOB-1). */
+export function exportTranscript(
+  organizationId: string,
+  courseId: string,
+  filters: TranscriptFilters = {}
+): Promise<{ exportId: string; jobId: string }> {
+  return dispatchAction(organizationId, 'transcripts.export', {
+    courseId,
+    ...filtersToInput(filters),
+  })
+}
+
+/** ADMIN-3's own "collect the file when it is ready": every export a course has requested, with its current status. */
+export function listTranscriptExports(
+  organizationId: string,
+  courseId: string
+): Promise<TranscriptExport[]> {
+  return dispatchAction<TranscriptExport[]>(
+    organizationId,
+    'transcripts.listExports',
+    { courseId }
+  )
+}
+
+/** ADMIN-3 — the URL a "Download" link points at once an export's own status is `ready` (`routes/transcript-exports.ts`, not the generic action route: a download is a binary response, not a JSON envelope). */
+export function transcriptExportDownloadUrl(
+  organizationId: string,
+  exportId: string
+): string {
+  return `/organizations/${organizationId}/transcript-exports/${exportId}/download`
+}
+
+/**
+ * ADMIN-4/ADMIN-5 — the platform-administrator console's own reads and
+ * writes. Mounted at `/admin`, not under `/organizations/:organizationId/...`
+ * (`apps/api`'s own `routes/admin.ts` module comment has why) — these call
+ * `request` directly rather than `dispatchAction`, the same way
+ * `fetchMe`/`requestSignInLink` do for the same reason: neither is an
+ * action reached through one organization's own dispatch.
+ */
+
+/** ADMIN-4: every organization, its usage, and the platform's own health. Throws `ApiError` (403, `not_platform_administrator`) for a signed-in caller who is not one (AUTH-4) — this app shows that refusal plainly rather than hiding the screen, since hiding it would be the panel deciding on AUTH-4's behalf who may even attempt this. */
+export function fetchAdminOrganizations(): Promise<AdminOrganizationsResponse> {
+  return request<AdminOrganizationsResponse>('/admin/organizations')
+}
+
+/** ADMIN-5's own "names exactly what will be deleted before it happens". */
+export function fetchDeletionPreview(
+  organizationId: string
+): Promise<OrganizationDeletionPreview> {
+  return request<OrganizationDeletionPreview>(
+    `/admin/organizations/${organizationId}/deletion-preview`
+  )
+}
+
+/** ADMIN-5: delete a tenant's data — `confirmName` must equal the organization's own name exactly (checked server-side, `routes/admin.ts`'s own module comment on why this app must not be the only place that checks it). Throws `ApiError` (409, `confirmation_name_mismatch`) on a mismatch. */
+export function deleteTenant(
+  organizationId: string,
+  confirmName: string
+): Promise<{ deleted: true }> {
+  return request(`/admin/organizations/${organizationId}/delete`, {
+    method: 'POST',
+    body: { confirmName },
+  })
+}
+
+/** ADMIN-5's own audit trail, read back. */
+export function fetchTenantDeletions(): Promise<TenantDeletion[]> {
+  return request<{ deletions: TenantDeletion[] }>(
+    '/admin/tenant-deletions'
+  ).then((response) => response.deletions)
 }

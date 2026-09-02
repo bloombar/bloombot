@@ -132,6 +132,25 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // not the policy's — `policy.ts`'s own module comment on why a policy
   // cannot see the caller's account id at all.
   'memberships.grant': { resource: 'organization', access: 'write' },
+  // ADMIN-1: resolves the course whose transcript is being read, read —
+  // `execute` also writes an ADMIN-2 audit row, but that write happens
+  // inside `@bloombot/db`'s own `readCourseTranscript` regardless of who
+  // calls it (`transcripts.ts`'s own module comment), not gated by this
+  // descriptor.
+  'transcripts.read': { resource: 'course', access: 'read' },
+  // ADMIN-1: resolves the course a student list is scoped to, read — the
+  // same shape `courseAttachments.list`/`courseInstructions.list` use
+  // above.
+  'transcripts.listStudents': { resource: 'course', access: 'read' },
+  // ADMIN-3: resolves the course a transcript export is requested for,
+  // write — `execute` only enqueues the job (and, for a student-filtered
+  // export, checks PPL-5's own `hasVerifiedAddress` gate); it never
+  // produces the file itself, the same "the course it names is what a
+  // write grant already protects" shape `roster.import`/
+  // `discordServers.scaffold` both use above.
+  'transcripts.export': { resource: 'course', access: 'write' },
+  // ADMIN-3: resolves the course an export list is scoped to, read.
+  'transcripts.listExports': { resource: 'course', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

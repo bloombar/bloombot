@@ -56,6 +56,12 @@ import {
   listEnrolmentsForPersonAction,
 } from './enrolments.js'
 import { grantMembershipAction } from './memberships.js'
+import {
+  exportTranscriptAction,
+  listTranscriptExportsAction,
+  listTranscriptStudentsAction,
+  readTranscriptAction,
+} from './transcripts.js'
 
 export {
   archiveProjectAction,
@@ -104,6 +110,12 @@ export {
   listEnrolmentsForPersonAction,
 } from './enrolments.js'
 export { grantMembershipAction } from './memberships.js'
+export {
+  exportTranscriptAction,
+  listTranscriptExportsAction,
+  listTranscriptStudentsAction,
+  readTranscriptAction,
+} from './transcripts.js'
 
 /**
  * Every action this slice ports, registered once.
@@ -170,5 +182,9 @@ export function createPlatformRegistry(options?: {
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)
   registry.register(grantMembershipAction)
+  registry.register(readTranscriptAction)
+  registry.register(listTranscriptStudentsAction)
+  registry.register(exportTranscriptAction)
+  registry.register(listTranscriptExportsAction)
   return registry
 }

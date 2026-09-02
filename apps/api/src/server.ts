@@ -29,7 +29,11 @@ import express, { type Express } from 'express'
 import { createPlatformRegistry, type ActionRegistry } from '@bloombot/actions'
 import type { EmailSender, GoogleIdTokenVerifier } from '@bloombot/auth'
 import type { ModelClient, PricingTable } from '@bloombot/core'
-import type { Database } from '@bloombot/db'
+import {
+  createFilesystemAttachmentStorage,
+  type AttachmentStorage,
+  type Database,
+} from '@bloombot/db'
 import type { DiscordRestClient } from '@bloombot/discord-rest'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
@@ -42,6 +46,7 @@ import {
   ACTION_JSON_BODY_LIMIT_BYTES,
   buildActionsRouter,
 } from './routes/actions.js'
+import { buildAdminRouter } from './routes/admin.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
@@ -49,6 +54,7 @@ import {
   buildPersonLinkRouter,
   type PendingDiscordConnect,
 } from './routes/person-link.js'
+import { buildTranscriptExportsRouter } from './routes/transcript-exports.js'
 
 export interface ServerDependencies {
   db: Database
@@ -62,6 +68,8 @@ export interface ServerDependencies {
   registry?: ActionRegistry
   /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. `src/index.ts` always supplies `CONFIG.ATTACHMENT_STORAGE_DIR` explicitly, the same as every other `CONFIG` value it reads once and passes down — omitting this is only ever a test's own choice, and falls through to `createPlatformRegistry`'s own `'./tmp/attachments'` default (never `data/`, a rework finding — see `docs/DECISIONS.md` D-32). */
   attachmentStorageDir?: string
+  /** ADMIN-5 rework, round four — a test-only seam: the same port `attachmentStorageDir` above builds an instance of, but handed in already-constructed, so a test can wrap one call (typically `remove`) with an observable or a deterministic side effect without reaching inside this file's own closure. Ordinary callers (`src/index.ts`) never set this; `attachmentStorageDir` (or its own `'./tmp/attachments'` fallback) governs every real deployment. */
+  attachmentStorage?: AttachmentStorage
   /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
   discordRestClient: DiscordRestClient
   /** Discord's "client id"/"application id" — `BOT_APP_ID` in env.example. */
@@ -80,6 +88,14 @@ export interface ServerDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, threaded through the same way — omitted, `answerQuestion` prices every call at its own zero-rate default and logs a warning each time (see that file's own `NO_PRICING_CONFIGURED` comment). */
   pricing?: PricingTable
+  /** ADMIN-4/COST-5 — where `routes/admin.ts` reaches each process's own loopback health endpoint. `CONFIG.BOT_HEALTH_PORT`/`WORKER_HEALTH_PORT`/`API_PORT` on `127.0.0.1` in production (`src/index.ts`, mirroring `docs/DECISIONS.md` D-33's own accounting of who has to know these three ports). Required, the same way `discordOauthBase` is — a test supplies its own fixed (unreachable, or faked via `adminHealthFetch`) URLs rather than this file inventing a default port nothing configured. */
+  botHealthUrl: string
+  workerHealthUrl: string
+  apiHealthUrl: string
+  /** Overridable so a test can fake the three processes' health responses with no real network — `checkPlatformHealth`'s own `fetchFn` option, threaded through `routes/admin.ts`. */
+  adminHealthFetch?: typeof fetch
+  /** ADMIN-5's own race with `apps/worker`'s export handler — threaded through to `routes/admin.ts`'s own `AdminRouterDependencies.deletedTenantSweepDelayMs`, whose own doc comment has the full reasoning. Omitted, that router's own five-second default applies. */
+  deletedTenantSweepDelayMs?: number
   /** LINK-6/7 — `routes/person-link.ts`'s own in-memory record of an in-flight Discord connect attempt (D-44's own session-binding rework). Injectable so a test can seed or inspect one directly; ordinary callers (`src/index.ts`) never set this and get a fresh `Map` per `buildApp` call. */
   pendingDiscordConnects?: Map<string, PendingDiscordConnect>
 }
@@ -92,6 +108,21 @@ export function buildApp(deps: ServerDependencies): Express {
         ? { attachmentStorageDir: deps.attachmentStorageDir }
         : {}),
     })
+  // ADMIN-3/ADMIN-5 — a second `AttachmentStorage` instance over the same
+  // directory `createPlatformRegistry` above already builds one against:
+  // the port is stateless (a plain filesystem path, `attachment-storage.ts`'s
+  // own doc comment), so two instances pointed at the same root are
+  // functionally identical, and this file has no way to reach inside
+  // `registry`'s own closure to reuse the one it built. Never `data/` — the
+  // same `'./tmp/attachments'` fallback `createPlatformRegistry` itself
+  // uses (D-32). `deps.attachmentStorage`, when a test supplies one
+  // directly (`ServerDependencies`'s own doc comment), is used verbatim
+  // instead of building a fresh instance here.
+  const attachmentStorage =
+    deps.attachmentStorage ??
+    createFilesystemAttachmentStorage(
+      deps.attachmentStorageDir ?? './tmp/attachments'
+    )
 
   const app = express()
   // Not itself a SPEC requirement, but the header discloses this is an
@@ -156,6 +187,10 @@ export function buildApp(deps: ServerDependencies): Express {
     })
   )
   app.use(
+    '/organizations/:organizationId/transcript-exports',
+    buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
+  )
+  app.use(
     '/organizations/:organizationId/person-link',
     buildPersonLinkRouter({
       db: deps.db,
@@ -169,6 +204,24 @@ export function buildApp(deps: ServerDependencies): Express {
       discordOauthBase: deps.discordOauthBase,
       ...(deps.pendingDiscordConnects
         ? { pendingDiscordConnects: deps.pendingDiscordConnects }
+        : {}),
+    })
+  )
+  // ADMIN-4/ADMIN-5 — mounted at `/admin`, not under
+  // `/organizations/:organizationId/...` (`routes/admin.ts`'s own module
+  // comment has why).
+  app.use(
+    '/admin',
+    buildAdminRouter({
+      db: deps.db,
+      logger: deps.logger,
+      attachmentStorage,
+      botHealthUrl: deps.botHealthUrl,
+      workerHealthUrl: deps.workerHealthUrl,
+      apiHealthUrl: deps.apiHealthUrl,
+      ...(deps.adminHealthFetch ? { fetchFn: deps.adminHealthFetch } : {}),
+      ...(deps.deletedTenantSweepDelayMs !== undefined
+        ? { deletedTenantSweepDelayMs: deps.deletedTenantSweepDelayMs }
         : {}),
     })
   )

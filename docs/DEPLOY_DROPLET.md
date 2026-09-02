@@ -293,9 +293,17 @@ adapter exists.
 `VITE_GOOGLE_CLIENT_ID` was known) produces `apps/web/dist` — a static bundle with no server of
 its own (`apps/web/vite.config.ts`'s own module comment: "in production nginx puts the built
 bundle and the API behind one origin"). The only paths `apps/api` actually serves are `/health`,
-`/auth` and `/organizations` (and everything nested under them) — `apps/web/vite.config.ts`'s
-own dev-time proxy names exactly this list; everything else is the static bundle, with
-client-side routing falling back to `index.html`.
+`/auth`, `/organizations` and `/admin` (and everything nested under them) —
+`apps/web/vite.config.ts`'s own dev-time proxy names exactly this list; everything else is the
+static bundle, with client-side routing falling back to `index.html`. `/admin` is `apps/api`'s
+own mount for the platform-administrator console's reads and writes (`routes/admin.ts`) — a
+different path from the panel's own `/platform-admin` page (`App.tsx`), deliberately: a page path
+and a proxied API path can never share one top-level segment, or nginx cannot tell which of the
+two a request means (`docs/DECISIONS.md` D-48 has the collision this once already was, found and
+fixed the same way for `/sign-in/:token` versus `/auth/redeem`). Omitting `/admin` here does not
+fail loudly — the SPA still loads at `/platform-admin`, and every call it makes to `/admin/...`
+gets `index.html` back as a `200`, which `response.json()` cannot parse, so the console reports a
+generic failure with no indication the actual cause is this file.
 
 ### 5.1 DNS, before anything else
 
@@ -337,6 +345,12 @@ server {
         proxy_pass http://127.0.0.1:3000;
     }
     location /organizations/ {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    # ADMIN-4/ADMIN-5 — apps/api's own mount for the platform-administrator
+    # console (routes/admin.ts); the panel's own page for it is
+    # /platform-admin, served by the SPA fallback below like any other route.
+    location /admin/ {
         proxy_pass http://127.0.0.1:3000;
     }
 

@@ -53,10 +53,11 @@ import type { Server } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
-import { accounts, type Database } from '@bloombot/db'
+import { accounts, type AttachmentStorage, type Database } from '@bloombot/db'
 import { createPlatformRegistry } from '@bloombot/actions'
 
 import { buildDiscordServersRouter } from '../src/routes/discord-servers.js'
+import { buildTranscriptExportsRouter } from '../src/routes/transcript-exports.js'
 import { buildTestApp, TEST_PUBLIC_APP_URL } from './helpers/build-test-app.js'
 import { createFakeDiscordRestClient } from './helpers/fake-discord-rest-client.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
@@ -139,7 +140,38 @@ const BESPOKE_ROUTES: RouteCase[] = collectRouterRoutes(
   }))
 )
 
-const ALL_ROUTES = [...ACTION_ROUTES, ...BESPOKE_ROUTES]
+// ADMIN-3's own download route — the same "walked off the router it
+// actually returns, not hand-typed" discipline `BESPOKE_ROUTES` above
+// already follows for TEN-4's two. `{} as AttachmentStorage` is never
+// touched: this file's own three cases (a/b/c, below) are all refused
+// before this router's own `attachmentStorage.read` call is ever reached
+// (the membership check runs first, the same order every other bespoke
+// route in this file already holds itself to) — a placeholder `:exportId`
+// segment in the path is harmless for the same reason: none of (a)/(b)/(c)
+// ever expects a *successful* response, only a refusal shape.
+const TRANSCRIPT_EXPORTS_MOUNT =
+  '/organizations/:organizationId/transcript-exports'
+const transcriptExportsRouter = buildTranscriptExportsRouter({
+  db: {} as Database,
+  attachmentStorage: {} as AttachmentStorage,
+}) as unknown as { stack: ExpressLayer[] }
+
+const TRANSCRIPT_EXPORTS_ROUTES: RouteCase[] = collectRouterRoutes(
+  transcriptExportsRouter.stack
+).flatMap((route) =>
+  route.methods.map((method) => ({
+    routeName: `${method.toUpperCase()} ${TRANSCRIPT_EXPORTS_MOUNT}${route.path}`,
+    method,
+    path: (organizationId: string) =>
+      `/organizations/${organizationId}/transcript-exports${route.path}`,
+  }))
+)
+
+const ALL_ROUTES = [
+  ...ACTION_ROUTES,
+  ...BESPOKE_ROUTES,
+  ...TRANSCRIPT_EXPORTS_ROUTES,
+]
 
 let testDb: TestDatabase
 
@@ -180,8 +212,13 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/enrolments.checkAccess',
         'POST /organizations/:organizationId/actions/enrolments.end',
         'POST /organizations/:organizationId/actions/memberships.grant',
+        'POST /organizations/:organizationId/actions/transcripts.read',
+        'POST /organizations/:organizationId/actions/transcripts.listStudents',
+        'POST /organizations/:organizationId/actions/transcripts.export',
+        'POST /organizations/:organizationId/actions/transcripts.listExports',
         'POST /organizations/:organizationId/discord-servers/install/begin',
         'POST /organizations/:organizationId/discord-servers/install/callback',
+        'GET /organizations/:organizationId/transcript-exports/:exportId/download',
       ].sort()
     )
   })

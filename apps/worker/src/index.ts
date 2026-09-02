@@ -51,6 +51,10 @@ import {
   createRosterImportHandler,
   ROSTER_IMPORT_JOB_KIND,
 } from './handlers/roster-import.js'
+import {
+  createTranscriptExportHandler,
+  TRANSCRIPT_EXPORT_JOB_KIND,
+} from './handlers/transcripts.js'
 import { startHealthServer, workerHealthStatus } from './health.js'
 import { createWorkerLoop, runLoopOrExit } from './loop.js'
 import { createShutdown, InFlightJob } from './shutdown.js'
@@ -192,6 +196,13 @@ async function main(): Promise<void> {
       openaiHttpOptions,
       attachmentStorage,
     })
+  )
+  // ADMIN-3 — this process's fifth handler, sharing the same
+  // `attachmentStorage` FILE-1..3's own handlers already use (this file's
+  // own module comment on why deps are read once, in `main()`).
+  handlers.register(
+    TRANSCRIPT_EXPORT_JOB_KIND,
+    createTranscriptExportHandler({ attachmentStorage })
   )
 
   let shuttingDown = false

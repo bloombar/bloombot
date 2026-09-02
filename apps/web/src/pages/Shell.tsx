@@ -32,6 +32,7 @@ import {
 import { SignOutIcon } from '../icons.js'
 import { Chat } from './Chat.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
+import { Transcripts } from './Transcripts.js'
 
 export interface ShellProps {
   account: AccountSummary
@@ -97,9 +98,9 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // mocks, added there rather than left implicit by defaulting elsewhere).
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
-  const [activeTab, setActiveTab] = useState<'discord' | 'projects' | 'chat'>(
-    'projects'
-  )
+  const [activeTab, setActiveTab] = useState<
+    'discord' | 'projects' | 'chat' | 'transcripts'
+  >('projects')
 
   const installedServerId =
     justInstalled?.organizationId === activeOrganizationId &&
@@ -176,6 +177,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           onClick: () => guardedNavigate(() => setActiveTab('chat')),
           active: activeTab === 'chat',
         },
+        {
+          key: 'transcripts',
+          label: 'Transcripts',
+          onClick: () => guardedNavigate(() => setActiveTab('transcripts')),
+          active: activeTab === 'transcripts',
+        },
       ]}
       headerEnd={
         <>
@@ -223,6 +230,15 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         // already holds itself to — a course selected in the previous
         // organization must not linger once a different one is active.
         <Chat
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+        />
+      ) : activeTab === 'transcripts' ? (
+        // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning
+        // `Chat`/`ProjectsPanel` already hold themselves to: a project or
+        // course selected in the previous organization must not linger
+        // once a different one is active.
+        <Transcripts
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
         />

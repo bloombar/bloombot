@@ -2616,7 +2616,7 @@
   section: §14 Accounts & Authentication
   family: AUTH
   phase: 15
-  status: In review
+  status: Done
   review: false
 - id: OPS-8
   title: The platform deploys as the processes it actually is

@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
 import {
+  conversations,
   courses,
   enrolments,
   organizations,
@@ -324,6 +325,45 @@ describe('routes/chat.ts (WEB-10)', () => {
       'chat_not_connected'
     )
     expect(model.calls).toHaveLength(0)
+  })
+
+  // WEB-10 rework, finding 3 — this route must not write. Reproduced: a
+  // fresh course this connected person has never asked anything in yet had
+  // zero `conversations` rows before this GET, and (before the fix) one
+  // afterward — `getOrCreateConversation` called to *read* a transcript
+  // silently created one, breaking `middleware/origin.ts`'s own "a GET is
+  // not supposed to change anything in the first place" for this one
+  // route.
+  it('GET .../messages never creates a conversation — reading an empty transcript is a read, not a write', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+
+    expect(
+      conversations.listConversationsForCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+    ).toHaveLength(0)
+
+    const app = await buildTestApp(testDb.db)
+    const response = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(200)
+    expect((response.body as { messages: unknown[] }).messages).toEqual([])
+    expect(
+      conversations.listConversationsForCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+    ).toHaveLength(0)
   })
 
   it('asks a question through the exact same answerQuestion pipeline, and the reply is on the transcript afterward', async () => {

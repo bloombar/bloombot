@@ -22,17 +22,26 @@
  *    spec no longer creates one itself; it looks up the person
  *    `@bloombot/auth`'s real `sign-in.ts` already created and *connected*
  *    the moment sign-in created the account (`docs/DECISIONS.md`), the
- *    exact function `routes/chat.ts` itself resolves the caller with. What
- *    is still a harness stand-in is the *enrolment* — `enrolments.enrolViaRoster`
- *    is called directly on that same real person, the same "insert the one
- *    fact the browser has no screen to produce yet" device
- *    `course-configuration.spec.ts` uses for its own Discord server
- *    binding, standing in for a real roster import (`apps/worker`'s own
- *    `roster-import.ts`, unmodified but not run here). Reaching a course
- *    admitted through a *Discord role or a roster row* — as every real
- *    enrolment is — is what this spec proves end to end; the join-link
- *    "connect" screen that would let a student self-admit through the web
- *    alone is separately scoped and still out of this slice.
+ *    exact function `routes/chat.ts` itself resolves the caller with.
+ *  - **Still a harness stand-in, and read this part carefully — it does
+ *    not prove what an earlier version of this comment claimed**:
+ *    `enrolments.enrolViaRoster` is called directly on *that same web
+ *    person* (`:130`), not on a `discord`-surface one. That is not the
+ *    roster-admission path a real import takes — it enrols the very person
+ *    the route resolves, which is the identical tautology
+ *    `apps/api/tests/routes/chat.test.ts`'s own `connectCallerTo` helper
+ *    was written to escape (its own module comment explains why seeding
+ *    an enrolment against the caller's own web person proves nothing about
+ *    reachability). What this spec actually proves end to end is narrower:
+ *    a signed-in account, once *some* active enrolment exists for the
+ *    exact person its own web identity resolves to, can hold a real
+ *    conversation through `routes/chat.ts` and `answerQuestion`, rendered
+ *    safely. It does not prove a student enrolled through a Discord role or
+ *    a roster import — a `discord`-surface person in a *different*
+ *    organization than the account's own personal one — can reach that
+ *    conversation; nothing in this repository unites the two records yet.
+ *    `docs/DECISIONS.md` (D-36) has the fuller account of why that is
+ *    correctly deferred, and to which phase.
  */
 
 import { randomUUID } from 'node:crypto'

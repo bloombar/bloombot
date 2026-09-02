@@ -109,8 +109,8 @@ function toChatMessageView(message: conversations.Message): ChatMessageView {
  * handler's own type), so each handler below re-checks rather than
  * asserting with `!`. Unreachable in practice (the guard above already
  * ran first for every request that reaches these handlers) — guarded
- * rather than assumed regardless, the same discipline this file's own
- * `getOrCreateConversation` check just below already holds itself to.
+ * rather than assumed regardless, the same discipline this file's own GET
+ * transcript handler already holds its own `conversation` lookup to below.
  */
 function requireAccountId(req: Request): string | undefined {
   return req.session?.accountId
@@ -232,24 +232,28 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
         res.status(404).json({ error: 'chat_course_not_found' })
         return
       }
-      const conversation = conversations.getOrCreateConversation(
+      // Rework finding — this used to call `getOrCreateConversation`
+      // here, which meant *reading* a transcript that had never been
+      // asked anything yet silently created a `conversations` row: a
+      // `GET` that writes, breaking the invariant `middleware/origin.ts`
+      // exempts `GET` requests from the CSRF check on ("a GET is not
+      // supposed to change anything in the first place"). Read-only —
+      // `conversations.findExistingConversation` never inserts — and "no
+      // conversation yet" reads as an empty transcript, not a refusal: the
+      // enrolment check above already proved `courseId`/`personId` both
+      // belong to this organization, so `undefined` here can only mean
+      // exactly that, never a foreign or absent id (this file's own
+      // discipline throughout: guarded rather than assumed regardless).
+      // The `POST` handler below is the one place that ever creates a
+      // conversation, and only when a question is actually asked.
+      const conversation = conversations.findExistingConversation(
         organizationId,
         { courseId, personId: person.id, surface: 'web' },
         deps.db
       )
-      // Unreachable in practice — the enrolment above already proved this
-      // course and person both belong to this organization — but guarded
-      // rather than assumed, the same race `discord-servers.ts`'s own
-      // `removeDiscordServerAction` documents for a concurrent change.
-      if (!conversation) {
-        res.status(404).json({ error: 'chat_course_not_found' })
-        return
-      }
-      const transcript = conversations.getTranscript(
-        organizationId,
-        conversation.id,
-        deps.db
-      )
+      const transcript = conversation
+        ? conversations.getTranscript(organizationId, conversation.id, deps.db)
+        : []
       res.status(200).json({ messages: transcript.map(toChatMessageView) })
     }
   )

@@ -15,6 +15,7 @@ import BetterSqlite3 from 'better-sqlite3'
 
 import {
   accounts as accountsRepo,
+  memberships as membershipsRepo,
   organizations as organizationsRepo,
   people as peopleRepo,
   signInTokens as signInTokensRepo,
@@ -91,12 +92,85 @@ function createConnectedWebPerson(
   db: TransactingExecutor
 ): void {
   const person = peopleRepo.createPerson(organizationId, {}, db)
-  peopleRepo.connectIdentity(
+  // `connectIdentity` refuses (`undefined`) on exactly three conditions
+  // (its own doc comment): `personId` foreign or absent, `personId` already
+  // merged away, or the identity already belonging to a *different* person.
+  // None can fire here — `organizationId` and `person.id` were both just
+  // minted in this same transaction, and `{ surface: 'web', externalId:
+  // accountId }` cannot already belong to anyone else, because this
+  // function only ever runs once per account (the account-creation path,
+  // or `healWebPersonForReturningAccount` below, itself gated on
+  // `resolveIdentity` finding nothing first). Rework finding: this used to
+  // discard the return value, so a refusal here — unreachable today, but
+  // silently so — would have left a person with `connectedAt` still `null`
+  // and no identity at all, indistinguishable from working until the very
+  // next chat request refused it. A throw makes that unreachability
+  // structural rather than argued.
+  const connected = peopleRepo.connectIdentity(
     organizationId,
     person.id,
     { surface: 'web', externalId: accountId },
     db
   )
+  if (!connected) {
+    throw new Error(
+      `createConnectedWebPerson: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
+    )
+  }
+}
+
+/**
+ * LINK-9's own healing path. `createConnectedWebPerson` above only ever ran
+ * on the account-*creation* path — an account that signed up before this
+ * rework shipped has no web person at all, silently and permanently:
+ * `routes/chat.ts` finds nothing to resolve and refuses `chat_not_connected`
+ * forever, with no configuration and no later sign-in that fixes it, and
+ * nothing tells either the instructor or an operator why. Called on every
+ * *returning* sign-in (both `findOrCreateAccountForEmail`'s own "existing"
+ * branch and `signInWithGoogle`'s own "link" branch), inside the same
+ * transaction the caller already has: finds the account's own personal
+ * organization (TEN-1's own one — the only organization this function has
+ * any business creating a person in; any *other* organization's own connect
+ * step is LINK-3's proof, not this healing path's job) via
+ * `memberships.listMembershipsForAccount` and `organizations.getOrganizationById`,
+ * and creates+connects a person there only if `resolveIdentity` finds
+ * none — idempotent, so a returning account that already has one (every
+ * account created after this rework) pays one cheap indexed read and does
+ * nothing further.
+ */
+function healWebPersonForReturningAccount(
+  accountId: string,
+  db: TransactingExecutor
+): void {
+  const accountMemberships = membershipsRepo.listMembershipsForAccount(
+    accountId,
+    db
+  )
+  let personalOrganizationId: string | undefined
+  for (const membership of accountMemberships) {
+    const organization = organizationsRepo.getOrganizationById(
+      membership.organizationId,
+      db
+    )
+    if (organization?.isPersonal) {
+      personalOrganizationId = organization.id
+      break
+    }
+  }
+  // TEN-1 guarantees every account has exactly one personal organization,
+  // created atomically with it — unreachable in practice, but guarded
+  // rather than assumed, the same discipline this file already holds
+  // `createConnectedWebPerson`'s own `connectIdentity` check to just above.
+  if (!personalOrganizationId) return
+
+  const existing = peopleRepo.resolveIdentity(
+    personalOrganizationId,
+    { surface: 'web', externalId: accountId },
+    db
+  )
+  if (existing) return
+
+  createConnectedWebPerson(personalOrganizationId, accountId, db)
 }
 
 /**
@@ -215,7 +289,14 @@ export function redeemSignInLink(
     )
     if (account.disabledAt !== null) return undefined
 
-    if (!createdAccount) revokeAllSessions(account.id, tx)
+    if (!createdAccount) {
+      revokeAllSessions(account.id, tx)
+      // LINK-9's own healing path — a returning account created before
+      // this rework shipped otherwise has no web person at all, silently
+      // and permanently (`healWebPersonForReturningAccount`'s own doc
+      // comment has the full account).
+      healWebPersonForReturningAccount(account.id, tx)
+    }
 
     const session = createSession(account.id, tx)
     return { account, session, createdAccount }
@@ -264,6 +345,10 @@ export function signInWithGoogle(
       if (existing.disabledAt !== null) return undefined
       account = existing
       revokeAllSessions(account.id, tx)
+      // LINK-9's own healing path — the same "returning account, might
+      // pre-date this rework" case `redeemSignInLink`'s own comment
+      // describes.
+      healWebPersonForReturningAccount(account.id, tx)
     } else {
       const created = tryCreateAccountForEmail(identity.email, tx)
       if (!created) return undefined

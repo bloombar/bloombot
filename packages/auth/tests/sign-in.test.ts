@@ -116,6 +116,75 @@ describe('redeemSignInLink (AUTH-1, TEN-1)', () => {
     expect(person).toBeDefined()
   })
 
+  // LINK-9's own healing path — reproduced against an account shaped the
+  // way every account created before this rework shipped actually is:
+  // organization, account and membership, written directly (bypassing
+  // `sign-in.ts` entirely, the same way a pre-rework `createConnectedWebPerson`
+  // simply never ran for it), with no person at all. Left alone, this
+  // account is refused `chat_not_connected` permanently, with no
+  // configuration and no later sign-in that fixes it — this proves a later
+  // sign-in *does* fix it.
+  it('heals a pre-existing account with no web person at all, on its next sign-in', () => {
+    testDb = createTestDatabase()
+    const organizationId = crypto.randomUUID()
+    organizations.createOrganization(
+      organizationId,
+      { name: 'Pre-rework Org', isPersonal: true },
+      testDb.db
+    )
+    const preExisting = accounts.createAccount(
+      organizationId,
+      {
+        email: 'pre-rework@example.edu',
+        displayName: 'Pre Rework',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    // Exactly the state a reviewer reproduced: no person for this account
+    // in its own organization, at all.
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(0)
+
+    const { token } = issueSignInToken('pre-rework@example.edu', testDb.db)
+    const result = redeemSignInLink(token, testDb.db)
+
+    expect(result?.createdAccount).toBe(false)
+    expect(result?.account.id).toBe(preExisting.id)
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: preExisting.id },
+      testDb.db
+    )
+    expect(person).toBeDefined()
+    expect(person?.connectedAt).not.toBeNull()
+  })
+
+  it('a second sign-in for an already-healed account does not create a second person', () => {
+    testDb = createTestDatabase()
+    const organizationId = crypto.randomUUID()
+    organizations.createOrganization(
+      organizationId,
+      { name: 'Pre-rework Org', isPersonal: true },
+      testDb.db
+    )
+    accounts.createAccount(
+      organizationId,
+      {
+        email: 'heal-twice@example.edu',
+        displayName: 'Heal Twice',
+        role: 'owner',
+      },
+      testDb.db
+    )
+
+    const first = issueSignInToken('heal-twice@example.edu', testDb.db)
+    redeemSignInLink(first.token, testDb.db)
+    const second = issueSignInToken('heal-twice@example.edu', testDb.db)
+    redeemSignInLink(second.token, testDb.db)
+
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
   // Finding 2 of the AUTH-1..4 rework, belt-and-braces half: redeeming a
   // link is proof of control of the address, so a returning sign-in must
   // revoke whatever sessions the account already held — including one an

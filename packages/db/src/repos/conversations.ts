@@ -78,33 +78,28 @@ function findConversation(
     .get()
 }
 
+/** What `resolveConversationLookup` hands back: the scope surface a conversation for this input would use, and the existing row for it, if any. */
+interface ConversationLookup {
+  scopeSurface: Surface | null
+  existing: Conversation | undefined
+}
+
 /**
- * Get, or create, the conversation for one person's exchange with one
- * course (CONV-1) — honouring the course's `conversationScope`: `course`
- * (the default) stores `surface: null` and merges every surface into one
- * conversation; `course_surface` stores the arrival `surface` and keeps
- * each surface's conversation distinct. Which one applies is read from the
- * course itself, not passed by the caller, so a caller cannot accidentally
- * bypass the course's own setting.
- *
- * `undefined` when `courseId` or `personId` does not exist, or does not
- * belong to `organizationId` (TEN-2/TEN-5) — the foreign key on each column
- * only proves the row exists *somewhere*, not that it belongs to this
- * organization, the same gap `loadOwnedProject` (`repos/courses.ts`) closes
- * for a course's `projectId`.
- *
- * Changing a course's `conversationScope` after conversations already exist
- * does not touch them (see `docs/DECISIONS.md`): an existing `course`-scoped
- * row keeps `surface: null` forever, and a later call under
- * `course_surface` looks for a row with `surface` set, which that row is
- * not, so a *new* conversation is created rather than the old one being
- * split or reused. There is no merge or split path in this package.
+ * Shared by `findExistingConversation` and `getOrCreateConversation`,
+ * below: resolves the course's own `conversationScope` into the scope
+ * surface that actually keys a conversation row, and looks one up —
+ * `undefined` when `courseId`/`personId` is foreign or absent (TEN-2/TEN-5)
+ * — the same gap `loadOwnedProject` (`repos/courses.ts`) closes for a
+ * course's `projectId`. Read-only — inserting a conversation stays each
+ * public function's own decision, not this one's; `getOrCreateConversation`
+ * reuses `scopeSurface` from this one read rather than resolving it a
+ * second time.
  */
-export function getOrCreateConversation(
+function resolveConversationLookup(
   organizationId: string,
   input: GetOrCreateConversationInput,
   db: Database
-): Conversation | undefined {
+): ConversationLookup | undefined {
   const course = db
     .select({ conversationScope: courses.conversationScope })
     .from(courses)
@@ -139,7 +134,61 @@ export function getOrCreateConversation(
     scopeSurface,
     db
   )
-  if (existing) return existing
+
+  return { scopeSurface, existing }
+}
+
+/**
+ * The existing conversation for one person's exchange with one course, if
+ * any — read-only, deliberately never creating one (rework finding: WEB-10's
+ * own `routes/chat.ts` GET transcript route used to call
+ * `getOrCreateConversation` to *read* a transcript, which meant opening a
+ * chat thread that had never been asked anything yet silently wrote a
+ * `conversations` row — `middleware/origin.ts`'s own "a GET is not supposed
+ * to change anything in the first place" stopped being true for that one
+ * route). A caller reading a transcript uses this and treats "no
+ * conversation yet" as an empty one; `getOrCreateConversation`, below, is
+ * still the only function in this package that ever creates a
+ * conversation, and is only ever called from the code path that is
+ * actually about to record a question.
+ */
+export function findExistingConversation(
+  organizationId: string,
+  input: GetOrCreateConversationInput,
+  db: Database
+): Conversation | undefined {
+  return resolveConversationLookup(organizationId, input, db)?.existing
+}
+
+/**
+ * Get, or create, the conversation for one person's exchange with one
+ * course (CONV-1) — honouring the course's `conversationScope`: `course`
+ * (the default) stores `surface: null` and merges every surface into one
+ * conversation; `course_surface` stores the arrival `surface` and keeps
+ * each surface's conversation distinct. Which one applies is read from the
+ * course itself, not passed by the caller, so a caller cannot accidentally
+ * bypass the course's own setting.
+ *
+ * `undefined` when `courseId` or `personId` does not exist, or does not
+ * belong to `organizationId` (TEN-2/TEN-5) — `resolveConversationLookup`'s
+ * own check, shared with `findExistingConversation` above.
+ *
+ * Changing a course's `conversationScope` after conversations already exist
+ * does not touch them (see `docs/DECISIONS.md`): an existing `course`-scoped
+ * row keeps `surface: null` forever, and a later call under
+ * `course_surface` looks for a row with `surface` set, which that row is
+ * not, so a *new* conversation is created rather than the old one being
+ * split or reused. There is no merge or split path in this package.
+ */
+export function getOrCreateConversation(
+  organizationId: string,
+  input: GetOrCreateConversationInput,
+  db: Database
+): Conversation | undefined {
+  const lookup = resolveConversationLookup(organizationId, input, db)
+  if (!lookup) return undefined
+  if (lookup.existing) return lookup.existing
+  const { scopeSurface } = lookup
 
   try {
     return db

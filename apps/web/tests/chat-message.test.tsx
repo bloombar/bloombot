@@ -144,6 +144,20 @@ describe('ChatMessage (WEB-10)', () => {
     expect(message.querySelector('a')).not.toHaveAttribute('href')
   })
 
+  // The positive half of the assertion just above — narrowing the protocol
+  // allowlist is only a real fix if the two protocols a course's own
+  // content actually needs still work.
+  it('keeps a mailto: link — the narrowed schema still allows exactly what a course needs', () => {
+    render(
+      <ChatMessage
+        role="assistant"
+        text="[email the staff](mailto:staff@example.edu)"
+      />
+    )
+    const link = screen.getByRole('link', { name: 'email the staff' })
+    expect(link).toHaveAttribute('href', 'mailto:staff@example.edu')
+  })
+
   it('a fenced code block keeps its real language className', () => {
     render(<ChatMessage role="assistant" text={'```js\nconsole.log(1)\n```'} />)
     const message = screen.getByTestId('chat-message-assistant')

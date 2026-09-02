@@ -3182,6 +3182,55 @@ them. `4000` matches Discord's own outer bound on a single message (`packages/di
 Discord itself accepts up to 4,000 characters from a Nitro account) — this surface is bounded no more
 generously than the one it mirrors, not picked arbitrarily.
 
+**Rework finding — `GET .../chat/courses/:courseId/messages` was still a write.** Round two's own fix closed
+the write on `GET .../chat/courses`, but the transcript route still called `conversations.getOrCreateConversation`
+to *read* a transcript — measured, opening a course's chat for the first time (nothing asked yet) took
+`conversations` from `0` to `1` rows on a plain `GET`. `middleware/origin.ts` exempts `GET` from the CSRF check
+and states why: "a GET is not supposed to change anything in the first place" — a sentence this one route made
+false. `packages/db/src/repos/conversations.ts` now splits the lookup from the insert:
+`resolveConversationLookup` (private) resolves the course's own `conversationScope` and looks for an existing
+conversation once; `findExistingConversation` (new, exported, read-only) is that lookup on its own, and
+`getOrCreateConversation` — still the only function in this package that ever inserts a conversation — reuses
+the same lookup rather than repeating it. `routes/chat.ts`'s GET handler calls `findExistingConversation` and
+treats "no conversation yet" as an empty transcript (`{ messages: [] }`); the `POST` handler is the one place
+that still calls `getOrCreateConversation`, and only when a question is actually being asked.
+`apps/api/tests/routes/chat.test.ts` proves it by counting rows before and after a GET against a fresh course.
+
+**Rework finding — LINK-9's own healing path: an account that signed up before this shipped never got a web
+person at all, silently and permanently.** `createConnectedWebPerson` only ever ran on the account-*creation*
+branches of `findOrCreateAccountForEmail`/`tryCreateAccountForEmail`. Reproduced against an account shaped
+exactly like every already-deployed one — organization, account and membership, written directly, no person —
+`chat_not_connected` on every future sign-in, forever, with nothing telling the account holder or an operator
+why: an instructor who signed in the week before this deployed would be refused after it, a colleague who
+signs up the day after would not, and the difference would look like a bug report nobody could reproduce.
+`healWebPersonForReturningAccount` (`packages/auth/src/sign-in.ts`) closes it: called from every *returning*
+sign-in (`redeemSignInLink`'s own "not `createdAccount`" branch, and `signInWithGoogle`'s own `link` branch),
+inside the same transaction the caller already has, it finds the account's own personal organization —
+`memberships.listMembershipsForAccount` and `organizations.getOrganizationById`, both widened from `Database`
+to `Executor` for the same "called from inside another transaction" reason `createOrganization`'s and
+`createPerson`'s own doc comments already give — and creates+connects a person there only if
+`people.resolveIdentity` finds none, so a post-rework account (which already has one) pays one cheap indexed
+read on every sign-in and does nothing further. `createConnectedWebPerson` itself was also tightened in the
+same pass: it used to discard `connectIdentity`'s own return value, so a refusal there — unreachable today,
+since the organization and person id are both freshly minted in the same transaction — would have left a
+person with `connectedAt` still `null` and no identity at all, silently. It now throws instead, making that
+unreachability structural rather than merely argued.
+
+**For the record, so it is not re-litigated** — reachability cannot be closed inside this slice, and that is
+correct, not merely deferred for lack of time. `people` are organization-scoped (TEN-2): a student enrolled in
+a university's own organization needs a web person *in that organization*, but `sign-in.ts` (and its healing
+path above) can only ever create one in the account's *own* personal organization — the one organization known
+at sign-in time — and that student's roster enrolment belongs to a `discord`-surface person regardless, in the
+university's organization, admitted by roster import or a Discord role, never by anything this slice touches.
+Nothing unites the two records but LINK-3's own proof — the same connect step every other surface already
+requires, merging the two through `people.ts#mergePeople` the identical way a Discord or MCP identity merges
+into an existing person today. That proof, and the route that redeems it, is LINK-6..9 on the base branch —
+the phase that actually makes web chat reachable for a student admitted anywhere other than their own personal
+organization. `e2e/chat.spec.ts`'s own module comment says the same thing about what that spec does and does
+not prove, for the same reason: an earlier version of that comment claimed the spec proved reachability
+through a Discord role or a roster row, which it does not — it enrols the account's own web person directly,
+the identical tautology `apps/api/tests/routes/chat.test.ts`'s own `connectCallerTo` helper exists to escape.
+
 ## D-37 — `apps/web`: one modal primitive for alert/confirm/prompt, and the focus-restoration bug only a real browser caught
 
 **Problem.** WEB-15 requires every destructive action to confirm before it runs; WEB-16's unsaved-changes

@@ -2401,7 +2401,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-11
   title: One styling system, not several
@@ -2413,7 +2413,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-12
   title: One icon set, used to mean something
@@ -2425,7 +2425,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-13
   title: The panel works on the screen a person actually has
@@ -2437,7 +2437,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-14
   title: A conventional application shell
@@ -2450,7 +2450,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-15
   title: A primary action looks different from a secondary one
@@ -2461,7 +2461,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-16
   title: Forms say what they want and what went wrong
@@ -2472,7 +2472,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: WEB-17
   title: The panel is usable from the keyboard
@@ -2483,7 +2483,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 12
-  status: In review
+  status: Done
   review: false
 - id: MCP-1
   title: An assistant reaches the platform through the action layer

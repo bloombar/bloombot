@@ -3353,13 +3353,82 @@ connection, and one test's own teardown can never be mistaken for bleeding into 
 `client.close()` — `close()` alone does not send `DELETE` (this file's own D-36 finding, `MAX_SESSIONS_PER_ACCOUNT`),
 so the prior version left each test's own server-side session semantically "open" until the test's own server
 was discarded moments later; terminating it explicitly is strictly more correct regardless of whether it bears
-on the CI failure. None of this pinpoints the CI-only race with certainty — the two candidates found while
-reading the SDK's own client transport (`StreamableHTTPClientTransport`'s private `_reconnectionTimeout`/
-`_scheduleReconnection` fields: the standalone SSE stream used for server-to-client pushes reconnects on its
-own backoff schedule, and a reconnect racing a real `elicitation/create` push is a plausible way to lose one
-on a slower network path) and the general shape of insufficiently isolated test resources are both left as
-educated hypotheses, not confirmed causes. If CI is still flaky after this, that reconnection path is the next
-thing to instrument.
+on the CI failure.
+
+**Round two — confirmed, not merely hypothesized: the elicitation was going out on the wrong stream, and a
+destructive tool could fail closed in production because a confirmation was never delivered at all.** The CI
+report after the timeout fix (above) was unambiguous: `cancel` and the message-naming test both recorded an
+*empty* `elicitations` array — the client's own handler was never invoked. On the timeout test specifically
+that means the server correctly gave up and failed closed, but for the wrong reason: not "the client was asked
+and declined to answer" (MCP-4's own requirement) but "the request never reached the client at all" — a
+materially weaker property that the fake-`requestConfirmation` unit tests could not tell apart from the real
+one, and that this file's own tests, before this finding, did not either.
+
+Mechanism, read directly from the SDK's own source rather than inferred: in Streamable HTTP, an outgoing
+server-to-client request is written to a specific stream chosen by `options.relatedRequestId`
+(`shared/transport.js`'s own `TransportSendOptions`) — when set, `StreamableHTTPServerTransport#send`
+(`server/webStandardStreamableHttp.js`) writes onto *that* incoming request's own POST response stream; when
+absent, it treats the message as an unsolicited push and writes onto the *standalone* `GET /mcp` stream
+instead — and when that standalone stream has no controller registered yet, `send`'s own standalone branch
+does nothing at all: no error, no notification, the message is simply dropped (an event-store-backed replay
+is the only recovery path, and this server configures none). `requestElicitedConfirmation` called
+`mcpServer.server.elicitInput(...)` — the low-level `Server`'s own convenience method, which calls
+`Protocol#request()` with no `relatedRequestId` at all, because outside of a request handler's own context
+nothing tells it one exists. The one place the SDK *does* set `relatedRequestId` automatically is
+`RequestHandlerExtra.sendRequest` — the function handed to a tool's own callback as `extra`, which stamps
+`relatedRequestId: request.id` (`shared/protocol.js`'s own `fullExtra.sendRequest`) using the id of the
+`tools/call` currently being handled. `elicitInput`, called from outside that callback's own closure, has no
+access to it.
+
+That leaves the standalone stream as the only place the elicitation could go — and the client's own
+`StreamableHTTPClientTransport` does not open it synchronously. It is started fire-and-forget, from inside the
+handler for the client's *own* `notifications/initialized` send, only after a `202 Accepted` comes back
+(`client/streamableHttp.js`): `this._startOrAuthSse(...).catch(...)`, never awaited by anything —
+`client.connect()` resolves once `initialize` and `notifications/initialized` are sent, not once the
+standalone GET has actually connected server-side. A `tools/call` arriving before that GET registers loses its
+own elicitation with no error on either side — the exact race a slower CI runner hits more often than a fast
+local one, and the reason `cancel` and the `decline`-based test failed while the file's other tests, run in
+the same file moments apart, did not: which test loses the race is closer to arbitrary than tied to what the
+test is about.
+
+Confirmed by direct reproduction, not merely read from source: a standalone script built on this app's own
+`buildApp` and a real SDK `Client`, with `globalThis.fetch` patched to delay only the client's own GET to
+`/mcp`. Against the pre-fix code, a 300ms delay lost the elicitation on every run (`elicited: false`, the tool
+call itself still resolving — refused, not hung — from the server's own timeout); an undelayed run never lost
+it. Against the fix below, the same 300ms delay — and a 5-second delay, an order of magnitude past anything a
+real network hiccup would need — both still delivered the elicitation every time, because the fix no longer
+depends on the standalone stream at all.
+
+**Fix.** `requestElicitedConfirmation` now sends through `extra.sendRequest(...)` — the tool call's own
+`RequestHandlerExtra`, threaded from `registerTools`' own callback signature (`async (args, extra) => ...`,
+where `extra` previously went unused) down through `requestElicitedConfirmation`'s own new parameter — with
+`ElicitResultSchema` (imported from the SDK's own `types.js`) validating the response shape, the one piece of
+`elicitInput`'s own convenience this loses by going around it; this function's own check
+(`content?.['confirm'] === true`) only ever trusted that one field regardless, so nothing this code actually
+relied on is weaker for it. `tests/mcp-e2e.test.ts` gained a dedicated regression test —
+`setUp`'s own new `delayStandaloneGetMs` option, patching `globalThis.fetch` for the one GET request that
+matters — proving the confirmation reaches the client with that stream deliberately still unconnected;
+reverting the fix locally (`elicitInput` in place of `extra.sendRequest`) makes exactly that test fail with
+the same empty-array assertion CI reported, and no other test in the file.
+
+**What this means for a real assistant client that has not opened its own push stream yet.** Before this fix,
+any MCP client whose implementation delays, batches, or altogether skips proactively opening the standalone
+GET stream — which the specification itself describes as optional ("server may not support it" is the SDK's
+own comment on the *server* side of that same optionality, and nothing obliges a client to race it either) —
+could have a destructive tool's confirmation silently vanish, and see an unexplained refusal with no
+elicitation ever shown to the person operating it: fail-closed, so not a security hole, but a real reliability
+gap a production assistant could hit on every single destructive call if its own client implementation happens
+to defer that stream. The fix removes the dependency entirely rather than papering over the race (a longer
+client-side timeout, or making this server wait for the standalone stream before proceeding, were both
+considered and rejected — the correct fix is to stop needing that stream for a reply to a call already in
+flight, not to wait for it longer or delay dispatch on its account, discussed and set aside during this same
+round).
+
+**Limits.** This closes the one path this platform's own destructive tool (`courseAttachments.detach`) and
+its own confirmation flow use. Any future server-initiated request raised *outside* a tool call's own handler
+(a notification unrelated to any specific `tools/call`, say) still has nowhere to go but the standalone
+stream, correctly — that is what it is for, and nothing here removes it or the SDK's own optionality around a
+client ever opening it. Nothing in this platform raises one today.
 
 **Rebase.** This slice was rebased onto `origin/feat/PLAT-1-multi-surface-platform` directly rather than onto
 `feat/LINK-1-account-linking` (D-28's own linking branch, still in review) — this slice never depended on the

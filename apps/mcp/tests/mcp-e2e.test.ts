@@ -43,6 +43,28 @@
  * terminating it explicitly is the more correct order of operations
  * regardless, and removes one more way a still-registering session could
  * be visible to whatever runs next.
+ *
+ * The last test in this file (`delayStandaloneGetMs`, `setUp`'s own
+ * option) is the actual CI failure this round chased down: an empty
+ * `elicitations` array on `cancel` and on the message-naming test (which
+ * uses `decline`), in the same CI run, with the other tests in the file
+ * passing — a real product bug, not a flaky test. This server used to
+ * raise `elicitation/create` through `mcpServer.server.elicitInput(...)`,
+ * which sends with no `relatedRequestId` and so lands on the client's
+ * *standalone* SSE stream — a stream the SDK client opens lazily,
+ * fire-and-forget, only after its own `notifications/initialized` round
+ * trip, with nothing that makes `client.connect()` wait for it. A
+ * `tools/call` landing before that stream finishes connecting server-side
+ * lost its own elicitation silently (`webStandardStreamableHttp.js#send`'s
+ * own standalone-stream branch does nothing at all when no stream is
+ * registered — no error, no queue), so the server timed out waiting for
+ * an answer nobody was ever asked for, and failed closed *as if* declined.
+ * Confirmed by direct reproduction (delaying the client's own GET by
+ * 300ms against the pre-fix code lost the elicitation on every run) before
+ * fixing it, and confirmed fixed the same way — `server.ts`'s own
+ * `requestElicitedConfirmation` now sends through `extra.sendRequest`,
+ * tied to the `tools/call` that raised it, landing on that call's own
+ * already-open response stream instead.
  */
 
 import { createServer, type Server } from 'node:http'
@@ -144,6 +166,18 @@ interface TestContext {
 async function setUp(options: {
   answer: (() => ElicitResult) | undefined
   elicitationTimeoutMs?: number
+  /**
+   * Delays the client's own standalone `GET /mcp` stream (the one it opens
+   * fire-and-forget, after `notifications/initialized`, to receive
+   * unsolicited server pushes) by this many milliseconds — this file's own
+   * regression test for the race `requestElicitedConfirmation`'s own
+   * module comment (`server.ts`) describes: an `elicitation/create` raised
+   * during a `tools/call` must reach the client over that call's own POST
+   * response stream, never depending on this GET having connected yet.
+   * Patches `globalThis.fetch` for the duration of the scenario, restored
+   * in `dispose()`.
+   */
+  delayStandaloneGetMs?: number
 }): Promise<TestContext> {
   const testDb = createTestDatabase()
   const caller = seedSignedInAccount(testDb.db)
@@ -157,6 +191,23 @@ async function setUp(options: {
     elicitationTimeoutMs:
       options.elicitationTimeoutMs ?? ELICITATION_TIMEOUT_MS,
   })
+
+  const realFetch = globalThis.fetch
+  if (options.delayStandaloneGetMs) {
+    const delayMs = options.delayStandaloneGetMs
+    const mcpUrl = listening.url.toString()
+    globalThis.fetch = (async (input, init) => {
+      const method = (init?.method ?? 'GET').toUpperCase()
+      const href =
+        typeof input === 'string'
+          ? input
+          : ((input as { url?: string }).url ?? String(input))
+      if (method === 'GET' && href === mcpUrl) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
+      return realFetch(input, init)
+    }) as typeof fetch
+  }
 
   const built = buildTestClient(options.answer)
   const transport = new StreamableHTTPClientTransport(listening.url, {
@@ -180,6 +231,7 @@ async function setUp(options: {
     // those must not skip the others — every resource this scenario opened
     // gets a real attempt at closing, not just the first one that happens
     // to succeed.
+    globalThis.fetch = realFetch
     await transport.terminateSession().catch(() => undefined)
     await built.client.close().catch(() => undefined)
     await new Promise<void>((resolve) =>
@@ -340,6 +392,37 @@ describe('MCP-4 over a real connection — courseAttachments.detach', () => {
       })
 
       expect(ctx.elicitations[0]?.message).toContain('notes.pdf')
+    } finally {
+      await ctx.dispose()
+    }
+  })
+
+  it("the confirmation reaches the client even when its own standalone GET stream has not connected yet — a CI-only failure reproduced by delaying it, fixed by sending elicitation/create on the tools/call's own response stream rather than the standalone one", async () => {
+    // This delay (300ms) reliably reproduced an empty `elicitations` array
+    // against the pre-fix code that called `mcpServer.server.elicitInput(...)`
+    // directly (no `relatedRequestId`, so the message went out on the
+    // standalone stream, which had not registered server-side yet) — see
+    // `requestElicitedConfirmation`'s own module comment (`server.ts`) for
+    // the mechanism. Against the fix (`extra.sendRequest`, tied to the
+    // `tools/call` that raised it), this passes regardless of the delay —
+    // proven directly during this fix's own development at 5 full seconds,
+    // an order of magnitude past what any real network hiccup would need.
+    const ctx = await setUp({
+      answer: () => ({ action: 'accept', content: { confirm: true } }),
+      delayStandaloneGetMs: 300,
+    })
+    try {
+      const result = await ctx.client.callTool({
+        name: 'courseAttachments.detach',
+        arguments: {
+          organizationId: ctx.caller.organizationId,
+          attachmentId: ctx.attachmentId,
+        },
+      })
+
+      expect(ctx.elicitations).toHaveLength(1)
+      expect(result.isError).toBeFalsy()
+      expect(jobs.countQueuedJobs(ctx.testDb.db)).toBe(1)
     } finally {
       await ctx.dispose()
     }

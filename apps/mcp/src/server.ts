@@ -66,8 +66,16 @@ import { z, type ZodRawShape } from 'zod'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js'
+import type {
+  CallToolResult,
+  ServerNotification,
+  ServerRequest,
+} from '@modelcontextprotocol/sdk/types.js'
+import {
+  ElicitResultSchema,
+  isInitializeRequest,
+} from '@modelcontextprotocol/sdk/types.js'
 
 import { authenticateBearerToken, parseBearerToken } from './authenticate.js'
 import {
@@ -135,16 +143,52 @@ export const DEFAULT_ELICITATION_TIMEOUT_MS = 30_000
  * tool and a raw organization id could not be told apart from a
  * confirmation for any other record the same tool might ever touch.
  *
+ * Sent through `extra.sendRequest` — the tool call's own
+ * `RequestHandlerExtra`, not `mcpServer.server.elicitInput(...)` — and this
+ * is load-bearing, not a style choice. `extra.sendRequest` automatically
+ * associates the outgoing `elicitation/create` with the *incoming*
+ * `tools/call` request it was raised from (the SDK's own
+ * `relatedRequestId`, the SDK's own `shared/protocol.js#fullExtra.sendRequest`),
+ * which is what tells `StreamableHTTPServerTransport#send` to write the
+ * message onto that `tools/call`'s own POST response stream — a stream
+ * that, by definition, is already open, because it is the very request
+ * this handler is in the middle of answering. Calling `elicitInput`
+ * directly (a rework finding: this function used to) sends with no
+ * `relatedRequestId` at all, which the transport treats as an unsolicited
+ * push and routes onto the *standalone* `GET /mcp` stream instead — a
+ * stream the SDK client opens lazily, fire-and-forget, only after its own
+ * `notifications/initialized` round trip completes, with nothing that
+ * makes `client.connect()` wait for it. When a `tools/call` lands before
+ * that GET has finished connecting server-side,
+ * `webStandardStreamableHttp.js#send`'s own standalone-stream branch finds
+ * no stream registered and returns having done nothing at all — no error,
+ * no queue, the message is simply dropped — so the server's own
+ * `elicitInput` waits out its full timeout for an answer that was never
+ * delivered, and fails closed *as if* declined, with no confirmation ever
+ * having reached a human. Reproduced directly (delaying the client's own
+ * GET by 300ms against a real connection makes it reproduce on every run;
+ * an undelayed one never does — the race, not a logic error, that CI's own
+ * slower runner was hitting and this machine was not) before this fix, and
+ * confirmed gone after it, the same way.
+ *
  * Fails closed, not merely "skips the check", when the connected client
  * never declared form-elicitation support at all
- * (`getClientCapabilities().elicitation.form`, the exact capability the
+ * (`getClientCapabilities().elicitation.form`, the same capability the
  * SDK's own `elicitInput` checks for the default `mode: 'form'` this call
- * uses) — a client that cannot relay a question to a human cannot confirm a
- * destructive action on one's behalf either, so the tool is refused rather
- * than run unconfirmed.
+ * still uses) — a client that cannot relay a question to a human cannot
+ * confirm a destructive action on one's behalf either, so the tool is
+ * refused rather than run unconfirmed. `ElicitResultSchema` still
+ * validates the shape of whatever comes back, the one piece of
+ * `elicitInput`'s own convenience this loses by going around it —
+ * `elicitInput` additionally validates an *accepted* form response's
+ * `content` against the `requestedSchema` this call sent; this function's
+ * own check below (`content?.['confirm'] === true`) only ever trusts that
+ * one field regardless, so the narrower validation costs nothing this
+ * function actually relied on.
  */
 async function requestElicitedConfirmation(
   mcpServer: McpServer,
+  extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
   tool: McpToolDefinition,
   organizationId: string,
   targetLabel: string,
@@ -154,21 +198,26 @@ async function requestElicitedConfirmation(
     return false
   }
 
-  const result = await mcpServer.server.elicitInput(
+  const result = await extra.sendRequest(
     {
-      message: `Confirm ${tool.name}: ${targetLabel} (organization ${organizationId}). This cannot be undone by this assistant.`,
-      requestedSchema: {
-        type: 'object',
-        properties: {
-          confirm: {
-            type: 'boolean',
-            title: 'Confirm',
-            description: `Set to true only if you — the person using this assistant — want to proceed. The assistant cannot answer this for you.`,
+      method: 'elicitation/create',
+      params: {
+        mode: 'form',
+        message: `Confirm ${tool.name}: ${targetLabel} (organization ${organizationId}). This cannot be undone by this assistant.`,
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            confirm: {
+              type: 'boolean',
+              title: 'Confirm',
+              description: `Set to true only if you — the person using this assistant — want to proceed. The assistant cannot answer this for you.`,
+            },
           },
+          required: ['confirm'],
         },
-        required: ['confirm'],
       },
     },
+    ElicitResultSchema,
     { timeout: elicitationTimeoutMs }
   )
   return result.action === 'accept' && result.content?.['confirm'] === true
@@ -241,7 +290,10 @@ function registerTools(
           destructiveHint: tool.destructive,
         },
       },
-      async (args: Record<string, unknown>): Promise<CallToolResult> => {
+      async (
+        args: Record<string, unknown>,
+        extra: RequestHandlerExtra<ServerRequest, ServerNotification>
+      ): Promise<CallToolResult> => {
         try {
           const result = await callTool(tool.name, args, {
             toolDefinitions: deps.toolDefinitions,
@@ -254,6 +306,7 @@ function registerTools(
             ) =>
               requestElicitedConfirmation(
                 mcpServer,
+                extra,
                 confirmingTool,
                 organizationId,
                 targetLabel,

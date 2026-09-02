@@ -194,6 +194,13 @@ export interface AnswerDependencies {
  *    `instructions` to answer with; ignored rather than answered from the
  *    model's general knowledge or sent to the model unguarded (finding 3,
  *    matching `response_bot.py`'s own refusal at `response_bot.py:208`).
+ *  - `not-connected` — LINK-1: this person has no connected account yet
+ *    (`person.connectedAt` is `null`); invited to connect rather than
+ *    answered, before admission or the allowance are ever touched — no
+ *    model call, no allowance spent. Carries no text of its own: the
+ *    invitation's wording (the panel's address, and nothing else, LINK-2) is
+ *    the calling surface's job, the same split every other refusal kind
+ *    here already leaves to its caller.
  */
 export type AnswerResult =
   | { kind: 'answered'; conversationId: string; text: string }
@@ -209,6 +216,7 @@ export type AnswerResult =
     }
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
+  | { kind: 'not-connected' }
 
 /** CORE-5's apology, matching `response_bot.py`'s own wording — a plain statement, not a stack trace. */
 function apologyText(courseTitle: string): string {
@@ -222,13 +230,18 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
 
 /**
  * Answer one question. In order (CORE-1's brief, as reworked by findings 1,
- * 3 and 8, and by JOB-4 and COST-3):
+ * 3 and 8, and by JOB-4, COST-3 and LINK-1):
  *
  * 1. Guard the course itself — disabled, or not configured to answer at all
  *    — before anything else runs, matching `response_bot.py`'s own early
  *    return (`response_bot.py:208`).
- * 2. Wait for an admission slot (JOB-4), before the allowance is touched at
- *    all. Ordering this ahead of step 4, not around step 6's model call
+ * 2. Guard the person (LINK-1): a person the platform cannot attribute to a
+ *    connected account (`person.connectedAt` is `null`) is declined here,
+ *    before admission or the allowance are ever touched — cheaper even than
+ *    `declined-busy`/`declined-over-limit` below, since this needs no
+ *    admission slot at all.
+ * 3. Wait for an admission slot (JOB-4), before the allowance is touched at
+ *    all. Ordering this ahead of step 5, not around step 7's model call
  *    alone, is deliberate: the alternative — reserve the allowance first,
  *    then wait behind admission — lets a request spend a day's slot while
  *    it is still queued, and a caller that times out waiting (`declined-
@@ -242,30 +255,30 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
  *    each waiting its turn rather than one holding a reservation while the
  *    rest are refused outright. JOB-4's own text — "wait for a slot rather
  *    than failing" — is exactly that trade, made on purpose.
- * 3. Check the organization's own spending cap (COST-3), after admission but
+ * 4. Check the organization's own spending cap (COST-3), after admission but
  *    before the allowance — this file's own module comment has the full
- *    reasoning for the ordering, the same D-29 shape JOB-4's own step 2
+ *    reasoning for the ordering, the same D-29 shape JOB-4's own step 3
  *    already takes one step earlier.
- * 4. Reserve a slot against the allowance (CORE-3), atomically, before
+ * 5. Reserve a slot against the allowance (CORE-3), atomically, before
  *    anything else is read or written, so an over-limit request costs
  *    nothing and two requests racing the model call's own `await` cannot
  *    both be granted (finding 8 — see `packages/db/repos/usage.ts`'s
  *    `reserveUsageSlot`).
- * 5. Record the inbound message (CORE-6) — before the model is asked, so a
+ * 6. Record the inbound message (CORE-6) — before the model is asked, so a
  *    question the model never answers is still on the transcript (CORE-5).
- * 6. Ask the model, through the port (CORE-4), and — for a call that
+ * 7. Ask the model, through the port (CORE-4), and — for a call that
  *    actually landed a response — record its cost (COST-1/COST-2).
- * 7. Record the reply (CORE-6), and return a result.
+ * 8. Record the reply (CORE-6), and return a result.
  *
- * The admission slot step 2 acquired is released in a single `finally`
- * covering steps 3 through 7 as one unit, not the instant step 6's call
+ * The admission slot step 3 acquired is released in a single `finally`
+ * covering steps 4 through 8 as one unit, not the instant step 7's call
  * settles: releasing the moment `model.ask` resolves would mean every early
  * exit between here and there (an over-limit decline, a conversation that
  * fails to open) would also have to remember its own release, and "nothing
  * forgets to release" is worth more than shaving the hold time by the cost
  * of a few synchronous local database writes.
  *
- * A failure to record (step 5 or step 7), the cost ledger entry (step 6),
+ * A failure to record (step 6 or step 8), the cost ledger entry (step 7),
  * or to persist the model's own upstream thread id, is logged and never
  * stops the reply (CORE-6): every
  * write from here on is wrapped so a broken database write degrades to a
@@ -308,6 +321,40 @@ export async function answerQuestion(
       'answerQuestion: declined, course has neither a promptId nor instructions configured'
     )
     return { kind: 'not-configured' }
+  }
+
+  // Resolved once, here, rather than only later for the model's opening item
+  // (finding 1 of the MDL-1 rework, D-16) — `person` cannot come back empty:
+  // PPL-3 already created this person before `personId` ever reached this
+  // function, the same trust CORE-2/PPL-3 hold everywhere else in this file.
+  const person = people.getPerson(organizationId, personId, db)
+  if (!person) {
+    throw new Error(
+      `answerQuestion: person ${personId} does not exist in organization ${organizationId}`
+    )
+  }
+
+  // LINK-1/LINK-2 — an identity the platform cannot attribute to a connected
+  // account is invited to connect, not answered: no model call, no allowance
+  // spent (checked here, before admission and the allowance, the same
+  // "costs nothing" shape `declined-over-limit`/`declined-busy` below
+  // already take — cheaper still, since this needs no admission slot at
+  // all). `person.connectedAt` is set exactly once, by `@bloombot/db`'s
+  // `people.ts#markConnected` — reached from `connectIdentity` when a proof
+  // attaches a brand-new identity, and from `mergePeople` when that proof
+  // merges two records (LINK-3, LINK-4). Never by an address match (PPL-4),
+  // and never moved once written.
+  // The invitation's own wording (the panel's address, and nothing else) is
+  // the surface's job, not this pipeline's (`answerQuestion` returns kinds,
+  // never rendered text — the same split CORE-5/SURF-6's other refusals
+  // already use), so this returns a bare kind for whichever adapter called
+  // this to render.
+  if (person.connectedAt === null) {
+    logger.info(
+      { organizationId, courseId, personId },
+      'answerQuestion: declined, person is not yet connected to a verified account'
+    )
+    return { kind: 'not-connected' }
   }
 
   // JOB-4 — waits for a slot, up to the configured ceiling, before the
@@ -416,15 +463,13 @@ export async function answerQuestion(
       )
     }
 
-    // Finding 1 of the MDL-1 rework (D-16) — resolved once per turn so a new
-    // upstream conversation's opening item can say who is asking and which
-    // course they are in, the same information `response_bot.py` seeds with
-    // (`response_bot.py:262-269`). `getPerson` cannot come back empty here:
-    // PPL-3 already created this person before `personId` ever reached this
-    // function, the same trust CORE-2/PPL-3 hold everywhere else in this
-    // file — a display name simply not merged in yet reads as `null`, which
-    // the port's own contract already treats as "seed without one".
-    const person = people.getPerson(organizationId, personId, db)
+    // Finding 1 of the MDL-1 rework (D-16) — `person` was already resolved
+    // above (the LINK-1 gate needed it first); reused here so a new upstream
+    // conversation's opening item can say who is asking and which course
+    // they are in, the same information `response_bot.py` seeds with
+    // (`response_bot.py:262-269`) — a display name simply not merged in yet
+    // reads as `null`, which the port's own contract already treats as
+    // "seed without one".
     const identity = people.getPersonIdentity(
       organizationId,
       personId,

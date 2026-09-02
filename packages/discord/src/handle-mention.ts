@@ -7,6 +7,22 @@
  * (SURF-5, SURF-6). `apps/bot` itself holds none of this logic (CORE-1's
  * own "a surface adapter ... holds no answering logic of its own"); it only
  * builds an `InboundMention` and a `ReplyPort` and calls this.
+ *
+ * D-34's own "what the linking slice should change in routing" lands here
+ * too (LINK-5): once a message resolves to a person and a matched course,
+ * this now also ensures (`enrolments.enrolViaDiscordRole`) that a role
+ * holder has an explicit `enrolments` row for it before answering — turning
+ * "holds the role, so route it" into "holds the role, so admit them once,
+ * then route through the stored enrolment" (D-34's own words). `routeMessage`'s
+ * own category-or-role match is still the only thing that decides which
+ * course a message belongs to — unchanged. What *is* now gated (D-35
+ * rework, finding 5): a person who holds a course's own `studentsRole` but
+ * whose enrolment an instructor explicitly ended (ENRL-6) is refused, not
+ * silently re-admitted and answered — `enrolViaDiscordRole` no longer
+ * revives an ended row (`enrolments.ts`'s own doc comment), and this file
+ * is what turns "not (re-)admitted" into an actual refusal reaching the
+ * student rather than an enrolment row quietly staying out of step with
+ * whether the message was answered anyway. See `docs/DECISIONS.md` D-35.
  */
 
 import {
@@ -17,7 +33,13 @@ import {
   type PricingTable,
   type RoutableCourse,
 } from '@bloombot/core'
-import { courses, discordServers, people, type Database } from '@bloombot/db'
+import {
+  courses,
+  discordServers,
+  enrolments,
+  people,
+  type Database,
+} from '@bloombot/db'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
@@ -56,6 +78,18 @@ export interface HandleMentionDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, passed straight through to `answerQuestion`'s own `AnswerDependencies.pricing`. Optional, the same reason `admission` is optional above: `apps/bot`'s own `main()` builds the real, configured table once (from `@bloombot/config`'s `getModelPricingTable`) and passes it here; a caller that omits it gets `answerQuestion`'s own zero-rate default. */
   pricing?: PricingTable
+  /**
+   * LINK-2's own address: the control panel's URL, embedded verbatim (and
+   * alone — no token, see this file's own `connectInvitationText`) in the
+   * invitation an unconnected person is answered with. Required, not
+   * defaulted: unlike `botDisplayName`/`admission`/`pricing`, there is no
+   * safe placeholder for a URL a student would actually be told to visit —
+   * `apps/bot`'s own `main()` reads it from `CONFIG.PUBLIC_APP_URL`, the
+   * same "packages/core/packages/discord never read CONFIG" discipline
+   * (D-29) every other configured value already crosses this boundary
+   * under.
+   */
+  connectUrl: string
 }
 
 /**
@@ -78,6 +112,8 @@ export type HandleMentionResult =
     }
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
+  | { kind: 'invited-to-connect' }
+  | { kind: 'enrolment-ended' }
   | { kind: 'declined-over-limit' }
   | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
@@ -106,6 +142,23 @@ function busyRefusalText(): string {
 /** COST-3 — the same "reaches the student, not just the log" treatment `overLimitRefusalText` already gets: an organization at its own spending cap is a refusal that says so, not a silent drop or a generic apology. */
 function overSpendingCapRefusalText(courseTitle: string): string {
   return `Bloombot is unable to answer right now. See ${courseTitle} admins for help.`
+}
+
+/**
+ * LINK-1/LINK-2 — the invitation an unconnected identity's first message
+ * gets, instead of an answer: `connectUrl` and nothing else. No token, no
+ * course name, no student-specific detail of any kind — LINK-2's own
+ * reasoning is that a course channel is public, so anything more than a
+ * plain address here is something the first person to read it could spend
+ * on this student's behalf.
+ */
+function connectInvitationText(connectUrl: string): string {
+  return `I don't have you connected to an account yet, so I can't answer here. Connect your account at ${connectUrl}, then ask again.`
+}
+
+/** ENRL-6/D-35 rework finding 5 — the same "reaches the student, not a silent drop or a silent revival" treatment every other refusal in this file already gets: an instructor's own `enrolments.end` sticks, and the student is told plainly rather than left guessing why holding the role no longer answers them. */
+function enrolmentEndedRefusalText(courseTitle: string): string {
+  return `You are no longer enrolled in ${courseTitle}. See ${courseTitle} admins for help.`
 }
 
 /**
@@ -306,6 +359,60 @@ export async function handleMention(
   const courseId = routing.course.id
   const courseTitle = titleById.get(courseId) ?? courseId
 
+  // D-34/LINK-5 — a role holder is admitted (once) through the stored
+  // enrolment relation rather than only ever routed by re-checking their
+  // Discord role on every message. `enrolViaDiscordRole` is itself the
+  // no-op when the author does not hold `courseId`'s own `studentsRole`
+  // (`repos/enrolments.ts`'s own doc comment), or when they already hold an
+  // active enrolment for it, so this is safe to call on every matched
+  // message rather than only the first.
+  //
+  // D-35 rework, finding 5 — ENRL-6's "ended ... stops the person asking
+  // that course" now actually gates the answer, not merely the audit row:
+  // `holdsStudentsRole` is checked independently of *why* this message
+  // routed (category or role — CORE-2/`routeMessage`'s own decision is
+  // unchanged either way, this never overrides it) — a person who holds the
+  // course's own `studentsRole` is exactly who `enrolViaDiscordRole` would
+  // freely (re-)admit, so `enrolViaDiscordRole` returning nothing for them
+  // can only mean `reviveEnded: false` blocked a prior *ended* row
+  // (`enrolments.ts`'s own doc comment): the only other refusal that
+  // function has — not holding the role at all — is already ruled out by
+  // `holdsStudentsRole` being true, and a foreign/missing course cannot
+  // happen here (`routing.course` already resolved it). An instructor who
+  // holds no student role of their own (only `adminsRole`, ENRL-5's "a
+  // Discord role confers none of them") is untouched by this either way.
+  const holdsStudentsRole = input.authorRoleNames.includes(
+    routing.course.studentsRole
+  )
+  let enrolmentEnded = false
+  try {
+    const enrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      { courseId, personId: person.id, roleNames: input.authorRoleNames },
+      db
+    )
+    if (holdsStudentsRole && !enrolment) {
+      enrolmentEnded = true
+    }
+  } catch (error) {
+    logger.error(
+      { err: error, organizationId, courseId, personId: person.id },
+      'handleMention: failed to record a Discord-role enrolment'
+    )
+  }
+
+  if (enrolmentEnded) {
+    // ENRL-6 — no model call, no allowance spent: the same "costs nothing"
+    // shape `not-connected` below already takes, and this refusal reaches
+    // the student rather than answering around it (SURF-6).
+    await sendReply(reply, enrolmentEndedRefusalText(courseTitle))
+    logger.info(
+      { organizationId, courseId, personId: person.id },
+      'handleMention: declined, this enrolment was ended and holding the role does not revive it'
+    )
+    return { kind: 'enrolment-ended' }
+  }
+
   // BOT-6 — the raw mention token is rewritten to a readable name before
   // the model ever sees the question; `text` (unrewritten) is what the
   // transcript records via `answerQuestion`'s own `text`/`modelText` split.
@@ -395,6 +502,20 @@ export async function handleMention(
         'handleMention: dropped, course is not configured to answer'
       )
       return { kind: result.kind }
+    }
+    case 'not-connected': {
+      // LINK-1/LINK-2 — the invitation reaches the student (unlike
+      // `course-disabled`/`not-configured` above, this is not a
+      // configuration problem to log and drop silently; it is the ordinary
+      // first-message outcome for anyone not yet connected). No model call
+      // was made and no allowance was spent (`@bloombot/core`'s own
+      // `answer.ts` guarantees that, before this ever runs).
+      await sendReply(reply, connectInvitationText(deps.connectUrl))
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: declined, person is not yet connected to a verified account'
+      )
+      return { kind: 'invited-to-connect' }
     }
     case 'declined-busy': {
       // JOB-4/rework finding 1 — no admission slot became free within the

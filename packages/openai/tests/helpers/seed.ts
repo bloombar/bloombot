@@ -27,6 +27,8 @@ export interface SeedOptions {
   instructions?: string | null
   model?: string | null
   vectorStoreId?: string | null
+  /** LINK-1 — connect the seeded person by default (see below); `false` for a test that specifically wants an unconnected person. */
+  connect?: boolean
 }
 
 /** One organization, one project, one enabled course and one person — enough for `answerQuestion` to run against, this time against a real OpenAI-shaped adapter. */
@@ -79,6 +81,25 @@ export function seedCourseAndPerson(
     { displayName: 'Test Student' },
     db
   )
+
+  // LINK-1 — `answerQuestion` declines an unconnected person before it ever
+  // reaches the allowance or the model; this helper's whole reason to exist
+  // is exercising the real adapter's own request/response shape, not LINK-1
+  // itself, so the seeded person is connected by default the same way a
+  // real one would be after `people.ts#mergePeople` first attaches a second
+  // identity — via a real (throwaway) merge, not a raw column write.
+  if (options.connect ?? true) {
+    const throwaway = people.createPerson(organizationId, {}, db)
+    const merged = people.mergePeople(
+      organizationId,
+      person.id,
+      throwaway.id,
+      db
+    )
+    if (!merged) {
+      throw new Error('seedCourseAndPerson: failed to connect the test person')
+    }
+  }
 
   return {
     organizationId,

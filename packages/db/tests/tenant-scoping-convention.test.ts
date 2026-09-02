@@ -65,6 +65,17 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    `sign-in-tokens.ts` — a redeemer presents only the secret, not an
 //    organization id, so there is nothing to scope the lookup by until the
 //    hash itself resolves one (this file's own module comment).
+//  - person-link-challenges.ts: LINK-3, the same class as
+//    `discord-install-states.ts` one level up — a callback (Discord's own
+//    OAuth) or a token redemption (MCP) carries only the secret value, not
+//    an organization id, so `createChallenge`/`consumeChallenge`/`peekChallenge`
+//    are keyed on that secret's hash instead; `deleteExpiredChallenges` is
+//    the same sweep-on-write device `deleteExpiredInstallStates` already
+//    is, deliberately not scoped to one organization either.
+//    `repointOutstandingChallenges` is not listed here — it *is*
+//    organization-scoped, first parameter and all (`mergePeople`'s own
+//    caller already knows the organization; nothing about a merge needs to
+//    find a challenge by secret alone).
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
@@ -77,6 +88,12 @@ const ALLOWLIST: Record<string, string[]> = {
   ],
   'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
   'memberships.ts': ['listMembershipsForAccount'],
+  'person-link-challenges.ts': [
+    'createChallenge',
+    'consumeChallenge',
+    'peekChallenge',
+    'deleteExpiredChallenges',
+  ],
   'sign-in-tokens.ts': [
     'createSignInToken',
     'consumeSignInToken',
@@ -160,7 +177,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the eighteen repo files this test is written against', () => {
+  it('found the nineteen repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -179,6 +196,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'memberships.ts',
         'organizations.ts',
         'people.ts',
+        'person-link-challenges.ts',
         'projects.ts',
         'sessions.ts',
         'sign-in-tokens.ts',

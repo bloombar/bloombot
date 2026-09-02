@@ -9,7 +9,15 @@ import { randomUUID } from 'node:crypto'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { courses, people, projects, type Database } from '@bloombot/db'
+import {
+  conversations,
+  courses,
+  enrolments,
+  people,
+  projects,
+  usage,
+  type Database,
+} from '@bloombot/db'
 
 import {
   handleMention,
@@ -51,6 +59,9 @@ function makeDeps(
       logger,
       reply,
       day: '2026-01-01',
+      // LINK-2 — a plausible panel address; the exact value is only asserted
+      // by this file's own LINK-1/LINK-2 tests below.
+      connectUrl: 'https://app.bloombot.test',
       ...overrides,
     },
   }
@@ -222,7 +233,12 @@ describe('handleMention — SURF-3: a server not bound to an organization is ign
 describe('handleMention — SURF-4: a person is recognized by their Discord account', () => {
   it('creates a person and identity on the first message, and reuses them on the second', async () => {
     testDb = createTestDatabase()
-    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+    // `connectDefaultAuthor: false` — this test uses its own `authorId`s and
+    // asserts an exact `listPeople` count; the seed's own pre-connected
+    // default author (LINK-1) would otherwise add an unrelated extra person.
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
     const { deps: deps1 } = makeDeps(testDb)
     const { deps: deps2 } = makeDeps(testDb)
 
@@ -241,7 +257,9 @@ describe('handleMention — SURF-4: a person is recognized by their Discord acco
 
   it('keeps two different authors as two different people', async () => {
     testDb = createTestDatabase()
-    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
     const { deps: deps1 } = makeDeps(testDb)
     const { deps: deps2 } = makeDeps(testDb)
 
@@ -269,7 +287,9 @@ describe('handleMention — SURF-4: a person is recognized by their Discord acco
 describe('handleMention — D-31 rework: a roster-known person is reconciled with their first live message', () => {
   it("resolves a student's first message to the person a roster import already created under a handle:-keyed identity, rather than minting a second one", async () => {
     testDb = createTestDatabase()
-    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
 
     // Simulates `roster-import.ts`'s own ROST-10 fallback directly, rather
     // than depending on `apps/worker` (out of this rework's own scope):
@@ -310,7 +330,9 @@ describe('handleMention — D-31 rework: a roster-known person is reconciled wit
 
   it("still creates a new person when no handle:-keyed identity matches the author's own display name", async () => {
     testDb = createTestDatabase()
-    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db)
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
 
     people.resolvePersonByIdentity(
       organizationId,
@@ -332,6 +354,288 @@ describe('handleMention — D-31 rework: a roster-known person is reconciled wit
     // The pre-seeded `handle:someone-else` person, plus a genuinely new one
     // for Ada — no accidental match against an unrelated handle.
     expect(everyone).toHaveLength(2)
+  })
+})
+
+describe('handleMention — LINK-1/LINK-2: an unconnected identity is invited to connect, not answered', () => {
+  it('replies with the connect invitation, calls no model, and spends no allowance', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps, model, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test',
+    })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'invited-to-connect' })
+    // LINK-1: "no model call is made and no allowance is spent."
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain('https://app.bloombot.test')
+  })
+
+  // LINK-2: "the reply is the control panel's own address and nothing
+  // more" — no token, no secret of any kind travels in a public channel.
+  it('the invitation carries no token — just the address', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test',
+    })
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(reply.sent).toHaveLength(1)
+    const text = reply.sent[0] as string
+    // The address, verbatim, and nothing that looks like a query string or
+    // an appended secret (a `?`, `=` or `&` right after the URL, or the
+    // words a token/state parameter would be named).
+    expect(text).toContain('https://app.bloombot.test')
+    expect(text).not.toMatch(/https:\/\/app\.bloombot\.test[?=&]/)
+    expect(text).not.toMatch(/token|state|secret/i)
+  })
+
+  it('creates the person and identity even while declining to answer — PPL-3 still applies', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    const { deps } = makeDeps(testDb)
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
+  it('answers normally once the person is connected', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId } = seedBoundServerWithCourse(testDb.db, {
+      connectDefaultAuthor: false,
+    })
+    // Connect the default author the same way a real proof would
+    // (`@bloombot/auth`'s `person-link.ts`, once redeemed).
+    const discordPerson = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    const other = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'web', externalId: 'web-account-1' },
+      testDb.db
+    )
+    people.mergePeople(organizationId, discordPerson.id, other.id, testDb.db)
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+})
+
+describe('handleMention — LINK-5: one allowance and one conversation across surfaces, once connected', () => {
+  it('a second surface (simulated by asking again after connecting) continues the same conversation and the same count', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { connectDefaultAuthor: false }
+    )
+    // A person already reached the course from a second surface (web),
+    // before ever connecting Discord — its own conversation and usage exist
+    // under a different person entirely, the way PPL-3 would leave them.
+    const webPerson = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'web', externalId: 'web-account-1' },
+      testDb.db
+    )
+    usage.incrementUsage(
+      organizationId,
+      courseId,
+      webPerson.id,
+      '2026-01-01',
+      testDb.db
+    )
+    const webConversation = conversations.getOrCreateConversation(
+      organizationId,
+      { courseId, personId: webPerson.id, surface: 'web' },
+      testDb.db
+    )
+    if (!webConversation) throw new Error('setup failed')
+
+    // Now the same person's Discord identity connects — LINK-4's merge.
+    const discordPerson = people.resolvePersonByIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    people.mergePeople(
+      organizationId,
+      webPerson.id,
+      discordPerson.id,
+      testDb.db
+    )
+
+    const { deps } = makeDeps(testDb, { day: '2026-01-01' })
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    // LINK-5: the count already reflects the web surface's own request —
+    // this Discord message is the *second* of the day, not the first.
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        webPerson.id,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(2)
+    // This course's `conversationScope` defaults to `course` (CONV-1): one
+    // conversation per person per course across every surface — Discord's
+    // own message continues the *same* conversation the web surface
+    // already opened, not a second one.
+    if (result.kind !== 'answered') throw new Error('expected an answer')
+    expect(result.conversationId).toBe(webConversation.id)
+  })
+})
+
+describe('handleMention — D-34/LINK-5: a Discord role holder is admitted through the stored enrolment relation', () => {
+  it('records an enrolment the first time a role holder is routed, and does not duplicate it on a second message', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { studentsRole: 'students-tc' }
+    )
+    expect(
+      enrolments.listCoursesForPerson(
+        organizationId,
+        people.resolveIdentity(
+          organizationId,
+          { surface: 'discord', externalId: 'author-1' },
+          testDb.db
+        )?.id ?? '',
+        testDb.db
+      )
+    ).toHaveLength(0)
+
+    const { deps: deps1 } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['students-tc'] }),
+      deps1
+    )
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const afterFirst = enrolments.listCoursesForPerson(
+      organizationId,
+      person.id,
+      testDb.db
+    )
+    expect(afterFirst.map((c) => c.id)).toEqual([courseId])
+
+    const { deps: deps2 } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['students-tc'] }),
+      deps2
+    )
+
+    // Still exactly one enrolment for this course — `enrolViaDiscordRole`'s
+    // own idempotence (an existing active enrolment is left alone), not a
+    // second row per message.
+    const afterSecond = enrolments.listCoursesForPerson(
+      organizationId,
+      person.id,
+      testDb.db
+    )
+    expect(afterSecond).toHaveLength(1)
+  })
+
+  // D-35 rework, finding 5 — ENRL-6's "ended ... stops the person asking
+  // that course" now actually holds for a role holder, not merely for the
+  // audit row: before this fix, `enrolViaDiscordRole`'s own `reviveEnded: true`
+  // meant this student's very next `@bloombot` silently re-admitted them,
+  // with no record the removal had ever happened.
+  it('an instructor-ended enrolment stays ended, and the answer is refused, even though the student still holds the role', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { studentsRole: 'students-tc' }
+    )
+    const { deps: deps1, model: model1 } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['students-tc'] }),
+      deps1
+    )
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const [enrolment] = enrolments.listCoursesForPerson(
+      organizationId,
+      person.id,
+      testDb.db
+    )
+    expect(enrolment?.id).toBe(courseId)
+    const activeEnrolment = enrolments.getActiveEnrolment(
+      organizationId,
+      courseId,
+      person.id,
+      testDb.db
+    )
+    if (!activeEnrolment) throw new Error('setup failed')
+    enrolments.endEnrolment(organizationId, activeEnrolment.id, testDb.db)
+
+    const { deps: deps2, model: model2, reply } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['students-tc'] }),
+      deps2
+    )
+
+    expect(result).toEqual({ kind: 'enrolment-ended' })
+    expect(model1.calls).toHaveLength(1) // the first message was answered
+    expect(model2.calls).toHaveLength(0) // the second was not
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toMatch(/no longer enrolled/i)
+    // Still ended, not silently revived — no record of a removal being
+    // undone.
+    expect(
+      enrolments.getEnrolment(organizationId, activeEnrolment.id, testDb.db)
+        ?.endedAt
+    ).not.toBeNull()
+    expect(
+      enrolments.listCoursesForPerson(organizationId, person.id, testDb.db)
+    ).toHaveLength(0)
+  })
+
+  // A person who holds only the *admin* role (never `studentsRole`, ENRL-5's
+  // own "a Discord role confers none of them") is untouched by this gate —
+  // `enrolViaDiscordRole` never admits them in the first place, so there is
+  // no enrolment for this check to find missing.
+  it('does not gate an admin-role message that never held a student enrolment at all', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      adminsRole: 'admins-tc',
+    })
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['admins-tc'] }),
+      deps
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
   })
 })
 

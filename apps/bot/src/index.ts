@@ -83,6 +83,8 @@ interface MessageHandlerDeps {
   admission: AdmissionGate
   /** COST-1/COST-6's per-model rates — built once in `main()`, from `CONFIG.MODEL_PRICING_JSON`, and shared across every message this process handles. */
   pricing: PricingTable
+  /** LINK-2's own address — built once in `main()`, from `CONFIG.PUBLIC_APP_URL`, and shared across every message this process handles. */
+  connectUrl: string
 }
 
 /** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
@@ -107,6 +109,7 @@ async function onMessageCreate(
     botDisplayName: deps.botDisplayName,
     admission: deps.admission,
     pricing: deps.pricing,
+    connectUrl: deps.connectUrl,
   })
 
   deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
@@ -127,6 +130,10 @@ async function main(): Promise<void> {
   const healthPort = CONFIG.BOT_HEALTH_PORT
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // LINK-2 — the panel's own address, read once here (the same "read CONFIG
+  // once in main(), thread it through" discipline `admission`/`pricing`
+  // already follow below): `@bloombot/discord` itself never reads `CONFIG`.
+  const connectUrl = CONFIG.PUBLIC_APP_URL
   const botToken = requireEnv('BOT_TOKEN')
   const openaiApiKey = requireEnv('OPENAI_API_KEY')
 
@@ -221,6 +228,7 @@ async function main(): Promise<void> {
           logger,
           admission,
           pricing,
+          connectUrl,
         }).catch((error: unknown) => {
           logger.error(
             { err: error },

@@ -76,6 +76,24 @@ export default defineConfig({
     // above: claim, run, complete or fail, sleep, repeat around
     // `packages/jobs`'s own `runNextJob`, tested in `apps/worker/tests` but
     // not gated by a number here.
+    // Timeouts sized for a loaded developer machine, not for an idle one.
+    //
+    // Vitest's 5s test and 10s hook defaults are comfortable when the suite
+    // has the machine to itself, and far too tight when it does not. The
+    // tests that fail first are the ones that spawn something — the PLAT-5
+    // import-side-effect checks start a child Node process per module, and
+    // `google.test.ts` starts a fake HTTPS server in a `beforeEach` — so a
+    // busy machine produces a different random handful of failures each run.
+    // That flakiness is worse than useless: it costs real time to re-run and
+    // re-diagnose, and it teaches people to disbelieve a red suite.
+    //
+    // These are ceilings, not waits. A passing test still finishes in
+    // milliseconds; only a genuinely stuck one takes the full budget, and a
+    // real hang still fails rather than running forever. The `web` project
+    // below already carries its own 60s for the same reason — a real
+    // `vite build` — so this generalizes a call already made once.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: {
       provider: 'v8',
       include: [

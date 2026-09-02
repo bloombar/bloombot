@@ -3,6 +3,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -373,5 +374,120 @@ describe('runMigrations', () => {
       .prepare('select * from course_channels where id = ?')
       .get(channelId)
     expect(channel).toBeDefined()
+  })
+
+  // Must-fix 2 of the ADMIN-1..5 rework's third round — reproduced with
+  // the real migrator, the same "seed exactly what one write leaves,
+  // apply the next migration on top of it" shape the 0002 test above
+  // already uses. `0013`'s own `ALTER TABLE transcript_access_log ADD
+  // sequence` used to carry no default: SQLite accepts that shape only on
+  // an *empty* table, and refuses (rolling the whole migration back, no
+  // partial effect) the moment a real deployment already has a single row
+  // in it — which any reviewer who ran ADMIN-1's own read even once
+  // already does, since `readCourseTranscript` writes exactly one row per
+  // read. `apps/api` and `apps/worker` both call `runMigrations` at boot,
+  // so this was a process that refused to start on any database that had
+  // already seen the first rework round's own code.
+  it('applies 0013 to a database that already has a transcript_access_log row, backfilling sequence rather than refusing to start', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    // A migrations folder containing every migration through 0012 — the
+    // state a database is in before 0013 has ever run.
+    // The real journal's own entries, `when` and all — carried over
+    // unchanged, not reinvented with fresh timestamps: the migrator's own
+    // "is this migration newer than the last one I applied" check
+    // (`node_modules/drizzle-orm/sqlite-core/dialect.js`'s own `migrate`)
+    // compares each candidate's `folderMillis` (the journal's `when`)
+    // against the *watermark* this partial run leaves behind — inventing
+    // smaller `when` values here would leave that watermark behind the
+    // real journal's own later entries, and the second `runMigrations`
+    // call below would try to re-run 0001..0012 against a database that
+    // already has them, failing on `CREATE TABLE` for a table that
+    // already exists (a defect in an earlier draft of this very test,
+    // caught by running it rather than only reading it).
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0012 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 12
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0012) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0012,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    // Seed exactly what one `readCourseTranscript` call leaves — an
+    // organization, an account, a project, a course and one
+    // `transcript_access_log` row — with raw SQL, since `sequence` does
+    // not exist as a column yet at this point in the migration history.
+    const organizationId = randomUUID()
+    const accountId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const logId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into accounts (id, email, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(accountId, 'instructor@example.edu', 'Instructor', now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, file_prefix, enabled, admins_role, students_role, conversation_scope, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        'wd',
+        1,
+        'admins-wd',
+        'students-wd',
+        'course',
+        now
+      )
+    db.$client
+      .prepare(
+        `insert into transcript_access_log
+          (id, organization_id, course_id, actor_account_id, person_id, kind, start_at, end_at, created_at)
+         values (?, ?, ?, ?, null, 'read', null, null, ?)`
+      )
+      .run(logId, organizationId, courseId, accountId, now)
+
+    // The migration under test: 0013, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const row = db.$client
+      .prepare('select * from transcript_access_log where id = ?')
+      .get(logId) as { id: string; sequence: number } | undefined
+    expect(row).toMatchObject({ id: logId, sequence: 0 })
   })
 })

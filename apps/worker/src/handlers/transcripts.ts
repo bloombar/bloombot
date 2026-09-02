@@ -22,12 +22,19 @@
  * FILE-5's own `AttachmentStorage`, addressed by the export's own id — the
  * same port, and the same "bytes under an id nothing but the row that
  * names it can be reached without" reasoning, `courseAttachments.attach`'s
- * own handler already uses. Every entry is also checked individually
- * against PPL-5's own `hasVerifiedAddress` gate before it is written — see
- * this handler's own comment at the point that happens for the full
- * reasoning (a rework finding: the *request's* own `personId` filter alone
- * left an unfiltered, whole-course export carrying every student's own
- * identity regardless).
+ * own handler already uses.
+ *
+ * **PPL-5, applied by withholding identity, not content.** An unfiltered,
+ * whole-course export carries every entry's own `direction`/`content`/
+ * `createdAt` but never `personId`/`personDisplayName` — see this
+ * handler's own comment at the point that happens for the full reasoning
+ * (a rework finding, and the coordinator's own call: an earlier draft
+ * filtered *entries* by `hasVerifiedAddress`, which silently emptied the
+ * export for the ordinary, Discord-only course this platform is actually
+ * built for). A *student-filtered* export still carries the one student's
+ * own identity it was asked for — that disclosure is the export's whole
+ * point — gated on `hasVerifiedAddress` in `transcripts.export`'s own
+ * action, unchanged.
  *
  * **ADMIN-5's own race, closed the same way `courseAttachments.attach`
  * already closes it for FILE-1.** Producing the file — `JSON.stringify`
@@ -46,15 +53,28 @@
  * writes nothing and reports `'abandoned'` instead — the same outcome
  * `createAttachCourseAttachmentHandler`'s own `markAttachmentReady`-returns-
  * `undefined` branch already reports for the identical race on FILE-1's
- * own attachments. `routes/admin.ts`'s own best-effort disk cleanup is the
- * second, later layer, for the sliver of time between this re-check and
- * the write call itself that a re-check alone cannot close (see that
- * file's own module comment).
+ * own attachments.
+ *
+ * The residual window — deletion landing *during* the write itself, after
+ * the re-check already passed — is closed the same way, deterministically:
+ * when `markExportReady` (below) itself returns `undefined`, this handler
+ * knows, in-process, that the bytes it just wrote are now unreferenced,
+ * and removes them itself before returning, rather than leaving that to
+ * `routes/admin.ts`'s own delayed sweep alone (a rework finding — a
+ * `setTimeout` in a *different* process is not a substitute for a
+ * synchronous `remove` call in the one place that actually knows the
+ * bytes exist: it is `unref()`'d, so a deploy's own `process.exit(0)` on
+ * SIGTERM discards it outright if it lands within the sweep's own delay,
+ * and a write slow enough to approach `JOB_HANDLER_TIMEOUT_MS`'s own
+ * default can already outlive the one-shot sweep that ran before it
+ * finished). `routes/admin.ts`'s own sweeps stay, as defence in depth for
+ * whatever this handler's own `remove` call fails to clean up — not the
+ * only mechanism this platform's own "the tenant's data is deleted"
+ * promise depends on.
  */
 
 import {
   costLedger,
-  people,
   transcriptAccess,
   transcriptExports,
   type AttachmentStorage,
@@ -157,34 +177,42 @@ export function createTranscriptExportHandler(
       (course) => course.courseId === exportRow.courseId
     )
 
-    // Must-fix 3 of the ADMIN-1..5 rework — PPL-5, applied per entry, not
-    // only at the request's own `personId` filter. `transcripts.export`'s
-    // own action refuses outright when the *whole export* names one
-    // unverified student, but an *unfiltered*, whole-course export used to
-    // carry every entry's own `personId`/`personDisplayName` regardless —
-    // `jq '.transcript[] | select(.personId=="S")'` reconstructed exactly
-    // the disclosure the filtered path refuses, and for a one-student
-    // course the file simply *was* that student's history. Every entry
-    // this file actually writes is checked here, individually, against the
-    // same `hasVerifiedAddress` gate — cached per person, since a course's
-    // transcript is typically many messages from few people, not a fresh
-    // lookup per message.
-    const verifiedByPersonId = new Map<string, boolean>()
-    const verifiedEntries = transcript.entries.filter((entry) => {
-      let verified = verifiedByPersonId.get(entry.personId)
-      if (verified === undefined) {
-        verified =
-          people.hasVerifiedAddress(
-            context.organizationId,
-            entry.personId,
-            db
-          ) === true
-        verifiedByPersonId.set(entry.personId, verified)
-      }
-      return verified
-    })
-    const omittedForUnverifiedAddress =
-      transcript.entries.length - verifiedEntries.length
+    // PPL-5, applied at the level the disclosure actually happens at — a
+    // rework finding, and the coordinator's own call: the per-entry
+    // `hasVerifiedAddress` filter this used to run (round two's own first
+    // draft) made an *ordinary* course's export come back empty, silently
+    // — `omittedForUnverifiedAddress` said so, but only inside the JSON
+    // nobody but a script reads, while the panel showed a green tick and a
+    // Download link over a file with nothing in it. That defeats ADMIN-3's
+    // own text ("an instructor... collects the file when it is ready") for
+    // the ordinary case this platform is actually built for: a class that
+    // only ever meets students through Discord, where `hasVerifiedAddress`
+    // is false for everyone.
+    //
+    // What round two's own finding actually named was narrower than "an
+    // unverified person's content must never leave in a file" — it was
+    // that an unfiltered export could still *reconstruct one named
+    // person's history* (`jq 'select(.personId=="S")'`), which is PPL-5's
+    // own "a person's history", read literally: the *identity* is what
+    // makes a transcript a *person's*. So identity, not content, is what
+    // an unfiltered export withholds: every entry below carries its own
+    // `direction`/`content`/`createdAt` regardless of who sent it, but
+    // `personId`/`personDisplayName` are included only when this export
+    // names one student (`exportRow.personId` — already refused upstream,
+    // in `transcripts.export`'s own action, unless that student's own
+    // address is verified) — there is no line in an *unfiltered* file any
+    // caller, `jq` included, can attribute to a named student, because the
+    // name is not there to select on. A student-filtered export still
+    // names exactly the one person it was asked for, deliberately: that
+    // disclosure is the export's whole point, and it is already gated.
+    const deidentify = exportRow.personId === null
+    const transcriptEntries = deidentify
+      ? transcript.entries.map(({ direction, content, createdAt }) => ({
+          direction,
+          content,
+          createdAt,
+        }))
+      : transcript.entries
 
     const fileContent = JSON.stringify(
       {
@@ -196,13 +224,14 @@ export function createTranscriptExportHandler(
           endAt: exportRow.endAt,
         },
         usage: courseUsage ?? null,
-        // PPL-5 (this handler's own comment just above) — an entry from a
-        // person with no verified address is never written, whatever the
-        // filters this export was requested with; `omittedForUnverifiedAddress`
-        // says honestly that the file is not the whole transcript when that
-        // happened, rather than looking silently complete.
-        transcript: verifiedEntries,
-        omittedForUnverifiedAddress,
+        // De-identified for a whole-course export (this handler's own
+        // comment just above) — `deidentified: true` says so plainly in
+        // the file itself, the same "an instructor should be told, not
+        // left to notice a missing field" reasoning the removed
+        // `omittedForUnverifiedAddress` field used to serve for a
+        // different, wrong reason.
+        deidentified: deidentify,
+        transcript: transcriptEntries,
       },
       null,
       2
@@ -270,10 +299,36 @@ export function createTranscriptExportHandler(
     )
     if (!ready) {
       // The row vanished in the narrow window between the re-check above
-      // and this write actually landing — `routes/admin.ts`'s own delayed
-      // sweep (this file's own module comment) is what removes these
-      // bytes; this handler cannot un-write what it already wrote, but it
-      // must not claim a row that is not there to mark.
+      // and this write actually landing — this handler cannot un-write
+      // what it already wrote, but it is the one place in this platform
+      // that knows, deterministically and in-process, that those bytes
+      // are now unreferenced: it just wrote them, to this exact
+      // `organizationId`/`exportId`, and the row it would have been
+      // written under is gone. A rework finding — this used to return
+      // without calling `remove`, leaving `routes/admin.ts`'s own delayed
+      // sweep as the *only* thing that ever cleaned this up: a `setTimeout`
+      // in a different process, `unref()`'d (so it does not stop that
+      // process from exiting on its own), which a deploy's own
+      // `process.exit(0)` on SIGTERM discards outright if it lands within
+      // the sweep's own delay, and which `JOB_HANDLER_TIMEOUT_MS`'s own
+      // default (four minutes) can already outlive on a slow write, long
+      // before the one-shot sweep ever gets a second chance to run again.
+      // Removed here instead, synchronously, before this handler returns
+      // — closing the race deterministically rather than leaving it to a
+      // cross-process timer that a deploy can silently discard. The
+      // delayed sweep stays, as defence in depth for whatever this
+      // `remove` call itself fails to clean up (a transient filesystem
+      // error, this same await rejecting) — not the only thing keeping
+      // this platform's own promise that a deleted tenant's data is gone.
+      await deps.attachmentStorage
+        .remove(context.organizationId, exportId)
+        .catch(() => {
+          // Best-effort, the same as every other cleanup path in this
+          // platform (`routes/admin.ts`'s own sweep): a failure here is
+          // still caught by that delayed sweep, not a reason to throw out
+          // of a handler that has already done everything it correctly
+          // could.
+        })
       return {
         exportId,
         status: 'abandoned',

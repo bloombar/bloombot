@@ -35,11 +35,26 @@
  * student when `personId` is given, that leaves the panel's own
  * access-controlled screen and audit boundary entirely — the shape PPL-5's
  * own "exporting a person's history" names most literally. So a
- * *student-filtered* export refuses unless that student's own identity has
- * been verified (`hasVerifiedAddress`); an unfiltered, whole-course export
- * (transcripts and usage together, ADMIN-3's own text) carries no single
- * person's history to gate on and is not refused this way. Recorded in
- * `docs/DECISIONS.md` D-48.
+ * *student-filtered* export refuses here, in this action, unless that
+ * student's own identity has been verified (`hasVerifiedAddress`) —
+ * refused before a `transcript_exports` row is even created, since the
+ * export names exactly the one person's history PPL-5 gates.
+ *
+ * An **unfiltered, whole-course export** is not refused this way — it
+ * names no single person's history to gate on the way a filtered one does
+ * — but it is not ungated either: a rework finding, after an earlier draft
+ * of this gate dropped an unverified person's *content* from the file
+ * entirely, silently emptying an ordinary Discord-only course's export.
+ * The disclosure PPL-5 actually names is a *person's* history, and it is
+ * the identity that makes a transcript one — so `apps/worker/src/handlers/transcripts.ts`
+ * strips `personId`/`personDisplayName` from every entry in an unfiltered
+ * export instead of dropping content by verification: every message an
+ * instructor could already see on screen (ADMIN-1, unrestricted) still
+ * reaches the file, with nothing left in it to attribute a line to a named
+ * student. See that handler's own module comment for the reasoning in
+ * full, and `docs/DECISIONS.md` D-48 for what this trades away — an
+ * unfiltered export can no longer be used to follow one student's own
+ * thread.
  */
 
 import {

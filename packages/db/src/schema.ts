@@ -1114,7 +1114,28 @@ export const transcriptAccessLog = sqliteTable(
     // `repos/transcript-access.ts#readCourseTranscript` inside the same
     // transaction as the read and the insert it accompanies, one more than
     // the highest already recorded for this course.
-    sequence: integer('sequence').notNull(),
+    //
+    // `.default(0)`, unlike its siblings on `messages`/`course_instruction_revisions`/
+    // `transcript_exports`: this column was added to an *already-shipped*
+    // table by a later migration (`0013_opposite_selene.sql`), which makes
+    // it the one `sequence` column in this file that a real, already-running
+    // deployment can have existing rows to violate `NOT NULL` against —
+    // every other one was part of its own table's original `CREATE TABLE`,
+    // so a fresh table with no rows yet closes the same gap structurally.
+    // A rework finding: this used to have no default at all — a plain
+    // `ALTER TABLE ... ADD sequence integer NOT NULL` — which SQLite
+    // accepts only on an empty table, and refuses (rolling the whole
+    // migration back, no partial effect) the moment a real deployment
+    // already has one `transcript_access_log` row, which any reviewer who
+    // ran ADMIN-1's own read even once already does; both `apps/api` and
+    // `apps/worker` call `runMigrations` at boot, so that migration
+    // refused every one of those processes' own startup. `0` is a safe
+    // backfill value precisely because it is wrong in the same direction
+    // reading a transcript already is: an old row backfilled to `0` sorts
+    // as if it happened first, which is the least-recent position
+    // `desc(sequence)` gives it anyway once a real `sequence` value exists
+    // for anything read after this migration runs.
+    sequence: integer('sequence').notNull().default(0),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [

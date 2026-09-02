@@ -4846,3 +4846,95 @@ own re-check would still leave an orphaned byte an operator would have to notice
 an audit) — bounded by `handlerTimeoutMs` in practice (a handler this slow is already killed and retried), but
 not eliminated by construction the way the re-check itself closes the larger, originally-reported window.
 
+
+### Rework — a second reviewer, three must-fixes, one an explicit reversal of finding 3 above
+
+A third round, verified by a second reviewer against the code the round above actually shipped rather than
+its own description of itself. Two of the three findings are regressions the round above introduced without
+noticing (a migration that refuses to apply, and an orphaned file only a fragile cross-process sweep would
+ever remove); the third overturns finding 3 above by design, on the reviewer's own explicit authority, not by
+finding it factually wrong.
+
+**Finding 1 — the per-entry filter finding 3 (above) added makes an ordinary course's export come back empty,
+silently, defeating ADMIN-3 for the deployment shape this platform is actually built for.** A class that only
+ever meets students through Discord has `hasVerifiedAddress` false for every one of its students (D-35's own
+"a person connected only through Discord read `true`" is precisely the defect that function was built to
+close) — so finding 3's own per-entry filter dropped every entry from every such course's export, leaving a
+file with `transcript: []` behind a row that still read `ready`, a green tick, and a working Download link.
+Nothing about that state told an instructor their export was empty rather than the course being quiet; the
+`omittedForUnverifiedAddress` field that would have said so honestly lived inside the JSON itself, unread by
+anyone but a script. This is the reviewer's own explicit call, not a rediscovery of finding 3's own reasoning
+being wrong: what finding 3 actually demonstrated was narrower than "an unverified person's *content* must
+never leave in a file" — it was that an unfiltered export could still *reconstruct one named person's history*
+(`jq '.transcript[] | select(.personId=="S")'`), and PPL-5's own words are "exporting a **person's** history" —
+the *identity* is what makes a transcript a *person's* one, not the message text alone. So the fix moves the
+gate from content to identity: `apps/worker/src/handlers/transcripts.ts` now withholds `personId`/
+`personDisplayName` from every entry in an *unfiltered* export (`deidentified: true` in the file, said
+plainly, the same "an instructor should be told, not left to notice a missing field" reasoning
+`omittedForUnverifiedAddress` was reaching for, for a reason that turned out wrong) rather than withholding
+entries by verification status — every message an instructor could already see on screen (ADMIN-1,
+unrestricted, D-48's own reasoning above for why the read itself is not gated) still reaches the file, and
+there is no line in it any caller, `jq` included, can attribute to a named student, because the name is not
+there to select on. A *student-filtered* export is unchanged from finding 3/4 above: it still carries the one
+student's own identity it was asked for — that disclosure is the export's whole point — refused upstream, in
+`transcripts.export`'s own action, unless `hasVerifiedAddress` is `true` for that student, before a
+`transcript_exports` row is even created.
+
+*What this costs, and why it is the right trade.* An unfiltered, whole-course export can no longer be used to
+follow one particular student's own thread through a class discussion — every entry it carries is real and
+complete, but nothing left in the file says which student sent which message, so a caller who wants "what did
+this one student say all term" now has to ask for exactly that (`personId` set), which is the one shape PPL-5
+gates on `hasVerifiedAddress`. That is a real capability lost for the unverified-student case specifically:
+before this fix, an instructor could open an unfiltered export and read straight through to any one student's
+lines by eye; after it, they cannot, for a course where that student has never verified an address. The
+alternative was the empty file finding 3 actually produced for that same case — not a smaller version of the
+same capability, none of it, silently, behind a status that still read `ready`. Between "the export is real but
+anonymous for a student who has not verified" and "the export claims to be ready and is empty", the former is
+the one that keeps ADMIN-3's own promise ("an instructor... collects the file when it is ready" means a file
+with the course's own transcript in it) for the course shape this platform actually serves, and it is the one
+this round ships.
+
+**Finding 2 — migration `0013` refuses to apply to any database that has already run `0012`.**
+`ALTER TABLE transcript_access_log ADD sequence integer NOT NULL` (no `DEFAULT`) is accepted by SQLite only
+against an *empty* table — the moment a real deployment (or a reviewer's own checkout) has written even one
+`transcript_access_log` row, `0013` refuses and the whole migration rolls back, taking every process that
+migrates at boot (`apps/api` and `apps/worker` both do) down with it. `messages.sequence`,
+`course_instruction_revisions.sequence` and `transcript_exports.sequence` never hit this because each was
+added inside the same migration that created its own table — always empty at the point its own `ALTER TABLE`
+ran; `transcript_access_log.sequence` is the one column in this family added, later, to a table the platform
+had already been running with rows in. Fixed with `DEFAULT 0` on the column itself, in both the schema
+(`packages/db/src/schema.ts`) and the regenerated migration SQL — every pre-existing row backfills to `0`,
+which only matters as a tiebreaker against rows inserted before this migration ever ran, and those rows have
+no ordering guarantee to preserve in the first place (the column did not exist yet to give them one).
+`packages/db/tests/migrate.test.ts` gained a test that builds a real, partial migration history through
+`0012` (copying the *actual* migration files and the *actual* journal entries through that point — an earlier
+draft of this test reconstructed the journal with invented timestamps instead, and failed for the wrong
+reason: drizzle's own migration runner watermarks progress by the journal's own `when` value per migration,
+and a fabricated, lower one made it re-run migrations already applied against the real journal's real values),
+seeds one `transcript_access_log` row directly, then runs the rest of the migrations including `0013` and
+asserts it does not throw and the row survives with `sequence: 0`. Reverting the `DEFAULT` reproduces the
+reviewer's own reported failure exactly.
+
+**Finding 3 — the worker knows, in-process, that it just created an orphaned file, and left removing it to a
+sweep in a different process.** When `markExportReady` (below the write) returns `undefined` — the tenant was
+deleted in the narrow window between this handler's own re-check and the write call landing, finding 1's own
+(the earlier finding 1, above, this file's second rework section) residual window — the handler already
+reported `'abandoned'` but did not call `attachmentStorage.remove` itself, leaving the bytes it had just
+written for `routes/admin.ts`'s own delayed sweep to find, eventually, in a different process: `unref()`'d, so
+a deploy's own `process.exit(0)` on `SIGTERM` discards it outright if it lands within the sweep's own delay,
+and a write slow enough to approach `JOB_HANDLER_TIMEOUT_MS`'s own default can already outlive the one-shot
+sweep that ran before the write finished. Fixed with one `attachmentStorage.remove` call, in-process,
+synchronous with the rest of this handler, in that branch — the sweeps stay, as defence in depth for whatever
+this one call itself fails to clean up (a permissions error, a full disk on the remove itself), not the only
+mechanism this promise depends on. The existing test for this branch (`apps/worker/tests/handlers/
+transcripts.test.ts`, "writes no bytes, and reports abandoned...") spies `transcriptExports.getExport` and
+leaves the `jobs`/`transcript_exports` rows intact by construction, which proves the code path runs but not
+what an operator actually observes — a real deletion mid-write does not leave those rows for a retry to find;
+`@bloombot/jobs`' own claim/complete protocol reports the outcome as `'superseded'` (the claim's own row is
+gone) with this handler's own report discarded, and the operator sees the generic "this job may have run
+twice" warning that outcome already carries, not this handler's own more specific `'abandoned'` reason. A
+second test now performs a real `organizations.deleteOrganizationData` call as a side effect of the storage
+port's own `write`, mid-flight, and asserts the actual, observable outcome: `'superseded'`, and no bytes left
+under the export's own id.
+
+**Limits, unchanged from the round above; nothing here revisits them.**

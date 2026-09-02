@@ -2027,7 +2027,7 @@
   section: §21 Server Scaffolding on the Platform
   family: SRV
   phase: 8
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-9
   title: A roster is imported as a file, into a job

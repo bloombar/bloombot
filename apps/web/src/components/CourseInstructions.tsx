@@ -40,9 +40,21 @@
  * in this panel shares, and it is itself a new revision
  * (`courseInstructions.restore`'s own doc comment): the revision restored
  * from, and everything saved after it, is never deleted or rewritten.
+ *
+ * **Rework finding: a background load must never overwrite an edit already
+ * in progress.** The first version of this component set the textarea from
+ * every `refresh()`, unconditionally, including the mount effect's own
+ * initial load — an instructor who started typing before
+ * `courseInstructions.list` resolved (a slow link, or simply a fast typist
+ * on a brand-new course) had it silently replaced with whatever the list
+ * came back with, `Save instructions` left disabled because the wiped
+ * textarea now matched the freshly-set baseline. `hasPendingEditRef`
+ * (below) is what `refresh` checks before touching `text` — see its own
+ * comment for why a ref, not a `text === baseline` comparison, is what a
+ * memoized closure actually needs here.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -90,15 +102,39 @@ export function CourseInstructions({
   )
   const { confirm } = useModal()
 
+  // Rework finding: whether the textarea currently holds an edit `refresh`
+  // must not clobber — a ref, not a comparison against the `text`/`baseline`
+  // state read inside `refresh`'s own closure, because that closure is
+  // captured once (`useCallback`'s deps below never change after mount) and
+  // would otherwise always see the *initial* `text`/`baseline` ('', ''), not
+  // whatever a person has actually typed by the time a fetch resolves. Set
+  // `true` the moment the textarea changes; cleared only when `refresh`
+  // itself decides the textarea should show the server's own value (below).
+  const hasPendingEditRef = useRef(false)
+
   const refresh = useCallback(
-    () =>
+    // `force`: `handleSave`/`handleRestore` pass `true` — an explicit save
+    // or restore must always end with the textarea showing exactly what was
+    // just written, even over an edit typed mid-round-trip, because that is
+    // what each of their own confirmations already promises. The mount
+    // effect below passes `false` (the default): a *background* load must
+    // never overwrite an edit already in progress — the bug this rework
+    // fixes was exactly this call, unconditionally, wiping out whatever an
+    // instructor had already typed while `courseInstructions.list`'s own
+    // first response was still in flight (reproduced by
+    // `tests/course-instructions.test.tsx`'s own "a background load never
+    // overwrites an edit already in progress" case).
+    (options: { force?: boolean } = {}) =>
       listCourseInstructionRevisions(organizationId, courseId).then(
         (list) => {
           setRevisions(list)
           setLoadError(undefined)
           const current = list[0]?.instructions ?? ''
-          setText(current)
           setBaseline(current)
+          if (options.force || !hasPendingEditRef.current) {
+            setText(current)
+            hasPendingEditRef.current = false
+          }
           return list
         },
         (caught: unknown) => {
@@ -127,7 +163,7 @@ export function CourseInstructions({
     setSaving(true)
     try {
       await saveCourseInstructions(organizationId, courseId, text)
-      await refresh()
+      await refresh({ force: true })
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
@@ -155,7 +191,7 @@ export function CourseInstructions({
     setRestoringId(revision.id)
     try {
       await restoreCourseInstructionRevision(organizationId, revision.id)
-      await refresh()
+      await refresh({ force: true })
     } catch (caught) {
       if (caught instanceof ApiError) setRestoreError(caught)
       else throw caught
@@ -174,7 +210,10 @@ export function CourseInstructions({
         <textarea
           aria-label="Instructions"
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            hasPendingEditRef.current = true
+            setText(event.target.value)
+          }}
           rows={4}
           className={textInputClasses}
         />

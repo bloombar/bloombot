@@ -17,7 +17,7 @@ import {
   unarchiveProjectAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionConflictError } from '../src/errors.js'
+import { ActionConflictError, ActionInputError } from '../src/errors.js'
 import { seedOrganizationWithProject } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -315,30 +315,38 @@ describe('courses.save', () => {
     expect(course.promptId).toBeNull()
   })
 
-  // WEB-19/D-54: `instructions` has no key in `saveInputSchema` at all any
-  // more — every write to it has to go through `courseInstructions.save`
-  // (FILE-4), which is what records who changed it and when. `dispatch`'s
+  // WEB-19/D-54 (rework: refused, not silently stripped): `instructions` has
+  // no key in `saveInputSchema` at all any more — every write to it has to
+  // go through `courseInstructions.save` (FILE-4), which is what records
+  // who changed it and when. `saveInputSchema` is `z.strictObject`, not
+  // `z.object` (that schema's own comment on why): a plain `z.object` would
+  // silently strip an unrecognized key rather than refuse the call, which
+  // is exactly the shape that let an MCP agent (or any caller past this
+  // test suite's own typed `courseSaveInput` helper) believe an
+  // `instructions` it sent through `courses.save` had taken effect. `dispatch`'s
   // own `rawInput: unknown` (`dispatch.ts`) is what lets this test send the
-  // field anyway, past the static `SaveInput` type — the same "a hand-rolled
-  // HTTP body, not only this test suite's own typed helper, could still try
-  // this" a caller reaching the route directly would.
-  it('WEB-19: a create ignores an explicit instructions field — a new course starts with none', async () => {
+  // field at all, past the static `SaveInput` type — the same "a hand-rolled
+  // HTTP body" a caller reaching the route directly could send.
+  it('WEB-19: a create is refused outright for an explicit instructions field, not silently stripped', async () => {
     testDb = createTestDatabase()
     const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
 
-    const course = await dispatch(
+    const attempt = dispatch(
       saveCourseAction,
       {
         ...courseSaveInput(projectId),
-        instructions: 'Set through courses.save — must be ignored',
+        instructions: 'Set through courses.save — must be refused',
       },
       { organizationId, db: testDb.db }
     )
 
-    expect(course.instructions).toBeNull()
+    await expect(attempt).rejects.toThrow(ActionInputError)
+    // Refused before ever reaching `execute` — no course exists at all,
+    // not one silently created with `instructions` ignored.
+    expect(courses.listCourses(organizationId, testDb.db)).toHaveLength(0)
   })
 
-  it('WEB-19: an update ignores an explicit instructions field, preserving whatever courseInstructions.save last recorded', async () => {
+  it('WEB-19: an update is refused outright for an explicit instructions field, leaving the stored value untouched', async () => {
     testDb = createTestDatabase()
     const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
     const created = courses.createCourse(
@@ -348,19 +356,29 @@ describe('courses.save', () => {
     )
     if (!created.ok) throw new Error('setup failed: unexpected conflict')
 
-    const updated = await dispatch(
+    const attempt = dispatch(
       saveCourseAction,
       {
         ...courseSaveInput(projectId, {
           id: created.course.id,
           title: 'Web Design II',
         }),
-        instructions: 'Set through courses.save — must be ignored',
+        instructions: 'Set through courses.save — must be refused',
       },
       { organizationId, db: testDb.db }
     )
 
-    expect(updated.instructions).toBe('Be helpful.')
+    await expect(attempt).rejects.toThrow(ActionInputError)
+    // Refused before `execute` ever ran — title is still the original, and
+    // instructions is still exactly what `courseInstructions.save` would
+    // have recorded, not the value this call tried to smuggle through.
+    const untouched = courses.getCourse(
+      organizationId,
+      created.course.id,
+      testDb.db
+    )
+    expect(untouched?.title).toBe('Web Design')
+    expect(untouched?.instructions).toBe('Be helpful.')
   })
 
   it('updates an existing course when input carries its id', async () => {

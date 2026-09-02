@@ -5529,6 +5529,49 @@ already registered (`actions/index.ts`) and already proved a restore adds a new 
 history (`packages/actions/tests/course-instructions.test.ts`) — this slice added no behaviour to either, only
 the screen that finally calls them.
 
+**Rework finding 1 — a background load must never overwrite an edit already in progress.** The first version of
+`CourseInstructions` set the textarea from every `refresh()` unconditionally, including the mount effect's own
+initial load. An instructor who started typing before `courseInstructions.list` resolved — a slow connection, or
+simply a fast typist on a course just created — had it silently wiped the moment the list came back, and
+"Save instructions" stayed disabled because the wiped text now matched the freshly-set baseline. This was not
+theoretical: it failed `e2e/course-configuration.spec.ts` and `e2e/chat.spec.ts` roughly one run in three, both
+of which fill the textarea immediately after the course they just created finishes saving — exactly the window
+the race needs. Fixed with `hasPendingEditRef`, a ref rather than a `text === baseline` comparison read inside
+`refresh` itself: `refresh` is `useCallback`-memoized on `organizationId`/`courseId` alone, so its closure is
+captured once and would otherwise always see the *initial* `text`/`baseline` state, never whatever a person has
+actually typed by the time a fetch resolves — a stale-closure bug a ref sidesteps by being read fresh at call
+time regardless of when the closure itself was created. `refresh` now takes a `force` flag: `handleSave` and
+`handleRestore` pass `true`, because each already promises (in its own confirmation, for restore) that the
+textarea will show exactly what was just written, including over an edit typed mid-round-trip; the mount
+effect passes `false`, so a background load only moves the textarea when there is no pending edit to protect.
+`tests/course-instructions.test.tsx`'s own "a background load never overwrites an edit already in progress"
+reproduces the race deterministically (a held, unresolved promise) rather than depending on which of two timers
+happens to fire first.
+
+**Rework finding 2 — the dirty bridge (`mainFormDirty || instructionsDirty`) had no test, and deleting it passed
+the entire suite.** `e2e/keyboard.spec.ts` makes a *new* course dirty through Title, which never reaches
+`instructionsDirty` at all (offered only for an existing course), and the component-level test only asserted
+`onDirtyChange` was called — a mock-was-called assertion, not the behaviour it exists for. Removing
+`|| instructionsDirty` from `pages/CourseEditor.tsx` left 191 tests across 28 files green: an instructor could
+edit Instructions on a live course, click away without saving, and lose the edit with no "Discard unsaved
+changes?" prompt at all. `tests/course-editor.test.tsx` now has a case that edits *only* the Instructions
+textarea (the main form's own fields untouched) and asserts the prompt appears on Cancel — the one case that
+actually exercises the fold rather than `useFormDirty(baseline, form)` on its own — plus a case that a
+successful Instructions save clears it again.
+
+**Rework finding 3 — `courses.save` refuses an extra `instructions`, rather than silently stripping it.**
+`saveInputSchema` was a plain `z.object`, which drops a key it does not recognize instead of refusing the call —
+so an MCP agent asked to "update the course instructions" could still call `courses.save` with `instructions`,
+get back an ordinary successful course, and report success while nothing changed. The MCP tool surface already
+advertises `additionalProperties: false` in the JSON Schema it hands out (`apps/mcp/src/tool-surface.ts`'s own
+`z.toJSONSchema`), but that only protects a caller that actually validates against it — this is the same "the
+panel not offering a field is not itself enforcement" reasoning above, extended from `execute` to the schema
+itself. `saveInputSchema` is now `z.strictObject`, so an extra `instructions` (or any other unrecognized key) is
+refused outright (`action_input_invalid`, `ActionInputError`) before `execute` ever runs, for every caller —
+`packages/actions/tests/actions.test.ts`'s own two WEB-19 cases now assert the refusal itself, and that a
+refused *update* leaves both the title and the stored instructions untouched, rather than asserting the field
+was merely ignored.
+
 **Limits.** The history shows an account id, not a name (above) — a real usability gap for an organization with
 more than one instructor, left open pending a directory read this slice did not build. Restoring a revision
 while the textarea has an unsaved edit of its own discards that edit (the confirmation names this), which is

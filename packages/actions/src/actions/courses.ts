@@ -66,8 +66,24 @@ const categoryInputSchema = z.object({
  * already resolve to an existing course in this organization, so by the
  * time `execute` runs, `input.id` present always means
  * `entity.existingCourse` is set.
+ *
+ * `z.strictObject`, not `z.object` (WEB-19/D-54 rework): a plain `z.object`
+ * silently strips a key it does not recognize rather than refusing it, so
+ * `instructions` — deliberately not declared below, now that
+ * `courseInstructions.save` is the only versioned way to change it — would
+ * otherwise still round-trip through this action's own `dispatch` with no
+ * error at all: a caller (an MCP agent told to "update the course
+ * instructions," a stale client, a script) gets back an ordinary successful
+ * course, sees no refusal, and the instructions never actually changed. The
+ * MCP tool surface already advertises `additionalProperties: false`
+ * (`apps/mcp/src/tool-surface.ts`'s own `z.toJSONSchema`), which only
+ * protects a caller that validates against it — `z.strictObject` is what
+ * makes the *server* refuse the same thing outright
+ * (`action_input_invalid`), the same "the panel not offering a field is not
+ * itself enforcement" reasoning D-53/D-54 already apply to this action's
+ * `execute`, extended to its schema.
  */
-const saveInputSchema = z.object({
+const saveInputSchema = z.strictObject({
   id: z.string().min(1).optional(),
   projectId: z.string().min(1),
   title: z.string().min(1),
@@ -170,14 +186,15 @@ export const saveCourseAction: Action<
         ? keepOrClear(input.promptId, entity.existingCourse.promptId)
         : null,
       // WEB-19/D-54: `instructions` is never read off `input` at all — it
-      // has no key in `saveInputSchema` any more (below the schema's own
-      // comment for why) — so this always carries forward whatever a
-      // course already has, unchanged, and `null` for a course being
-      // created. The only way to actually change it is
-      // `courseInstructions.save` (FILE-4), which is what stamps an author
-      // and a time onto the change; this action writing the same column
-      // straight from a caller's input, unversioned, is exactly the gap
-      // WEB-19 closed.
+      // has no key in `saveInputSchema` any more, and an extra one is
+      // refused outright rather than silently accepted (`saveInputSchema`'s
+      // own comment above, on why `z.strictObject`) — so this always
+      // carries forward whatever a course already has, unchanged, and
+      // `null` for a course being created. The only way to actually change
+      // it is `courseInstructions.save` (FILE-4), which is what stamps an
+      // author and a time onto the change; this action writing the same
+      // column straight from a caller's input, unversioned, is exactly the
+      // gap WEB-19 closed.
       instructions: entity.existingCourse?.instructions ?? null,
       model: keepOrClear(input.model, entity.existingCourse?.model),
       vectorStoreId: keepOrClear(

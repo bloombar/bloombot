@@ -74,6 +74,59 @@ describe('CourseInstructions (WEB-19)', () => {
     expect(screen.getByLabelText('Instructions')).toHaveValue('')
   })
 
+  // Rework finding: the first version of this component set the textarea
+  // from every `refresh()` unconditionally — including the mount effect's
+  // own initial load — so an instructor who started typing before
+  // `courseInstructions.list` resolved had it silently wiped, and "Save
+  // instructions" stayed disabled because the wiped text now matched the
+  // freshly-set baseline. This is what failed `e2e/course-configuration.spec.ts`
+  // and `e2e/chat.spec.ts` one run in three: the browser filled the
+  // textarea before the list request — issued the moment this component
+  // mounts, right after the course was just created — had resolved.
+  // `resolveList` is held rather than using `mockResolvedValue` so this
+  // reproduces deterministically instead of depending on which of two
+  // promises a real network round trip happens to settle first.
+  it('a background load never overwrites an edit already in progress', async () => {
+    let resolveList!: (list: CourseInstructionRevisionSummary[]) => void
+    listCourseInstructionRevisions.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve
+      })
+    )
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+      />
+    )
+
+    // The textarea is already interactive while the first load is still in
+    // flight — typing here is exactly what a fast typist, or anyone on a
+    // slow connection, does in practice.
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Answer in French.' },
+    })
+    expect(screen.getByLabelText('Instructions')).toHaveValue(
+      'Answer in French.'
+    )
+
+    // The course has no saved instructions yet — resolving with an empty
+    // list is exactly the "brand-new course" case the failing e2e hit.
+    resolveList([])
+    await screen.findByText('No instructions saved yet.')
+
+    // The typed text survives, and Save is not left disabled by a baseline
+    // the background load just moved out from under it.
+    expect(screen.getByLabelText('Instructions')).toHaveValue(
+      'Answer in French.'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Save instructions' })
+    ).toBeEnabled()
+  })
+
   it('prefills the textarea from the newest revision, marks it Current, and offers no restore for it', async () => {
     listCourseInstructionRevisions.mockResolvedValue([
       revision({

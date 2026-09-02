@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+import BetterSqlite3 from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -389,6 +391,167 @@ describe('conversations repo', () => {
       'A function bundled with its lexical scope.',
       'Thanks!',
     ])
+  })
+
+  // --- CONV-4/D-49: a transient write failure is retried, not swallowed --
+
+  /**
+   * Makes `db.transaction` throw a `BetterSqlite3.SqliteError` with `code`
+   * on its first `failCount` invocations, then pass every call after that
+   * through unchanged — the same "intercept `db.transaction` itself" device
+   * `packages/core/tests/answer.test.ts#makeTransactionFailOnce` uses,
+   * extended with a real `SqliteError`'s `code` so `isTransientBusyError`
+   * (`repos/conversations.ts`) actually has something to key its retry
+   * decision on.
+   */
+  function makeTransactionFailWithCode(
+    db: TestDatabase['db'],
+    code: string,
+    failCount: number
+  ): void {
+    const original = db.transaction.bind(db)
+    let callCount = 0
+    // `db.transaction` is a real drizzle method with overloaded call
+    // signatures a test double cannot restate faithfully — cast rather
+    // than fight the overloads, the same allowance
+    // `answer.test.ts#makeTransactionFailOnce` already takes.
+
+    ;(db as any).transaction = (...args: any[]) => {
+      callCount += 1
+      if (callCount <= failCount) {
+        throw new BetterSqlite3.SqliteError('simulated', code)
+      }
+      return (original as any)(...args)
+    }
+  }
+
+  it('retries and succeeds after one SQLITE_BUSY_SNAPSHOT — the condition busy_timeout does not cover', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    // Fails once, as a genuinely transient conflict would — the retrying
+    // writer's *second* attempt lands against a database the conflicting
+    // writer has already finished with, so it succeeds.
+    makeTransactionFailWithCode(testDb.db, 'SQLITE_BUSY_SNAPSHOT', 1)
+
+    const message = conversations.appendMessage(
+      orgA,
+      conversation.id,
+      { direction: 'from_person', content: 'still recorded' },
+      testDb.db
+    )
+
+    expect(message?.content).toBe('still recorded')
+    expect(
+      conversations.getTranscript(orgA, conversation.id, testDb.db)
+    ).toHaveLength(1)
+  })
+
+  it('gives up and throws after SQLITE_BUSY persists past every retry, rather than dropping the message', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    // Fails every attempt — a stuck lock, not a transient conflict.
+    makeTransactionFailWithCode(testDb.db, 'SQLITE_BUSY', 10)
+
+    expect(() =>
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'never recorded' },
+        testDb.db
+      )
+    ).toThrow()
+
+    // Nothing silently landed on the transcript either — CONV-4's own
+    // point: a failure to write is a failure the caller sees, never a
+    // transcript with a hole in it and no error to explain it.
+    expect(
+      conversations.getTranscript(orgA, conversation.id, testDb.db)
+    ).toHaveLength(0)
+  })
+
+  it('does not retry an error that is not a busy/stale-snapshot conflict — it fails on the first attempt', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    // A constraint violation, say — retrying it would fail identically
+    // every time, so it is not treated as transient.
+    makeTransactionFailWithCode(testDb.db, 'SQLITE_CONSTRAINT_UNIQUE', 1)
+
+    expect(() =>
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'never recorded' },
+        testDb.db
+      )
+    ).toThrow()
+  })
+
+  // The three tests above intercept `db.transaction` itself, so none of
+  // them ever observe *which* transaction mode `appendMessage` actually
+  // opens with — a helper extracted across `packages/db/repos`, or a
+  // Drizzle upgrade that drops the option, would leave every one of them
+  // green while `appendMessage` silently returned to `BEGIN DEFERRED`,
+  // exactly the configuration CONV-4/D-49 exists to prevent (see
+  // `appendMessage`'s own doc comment). Pinned directly instead: a second,
+  // `verbose`-logging connection to the same file captures the literal SQL
+  // SQLite executes, and asserts `BEGIN IMMEDIATE` is in it.
+  it('opens its own transaction with BEGIN IMMEDIATE, not deferred — asserted directly against the emitted SQL (CONV-4/D-49)', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    const statements: string[] = []
+    // A second connection to the same file — `client.ts#openDatabase`'s own
+    // pragmas, plus `verbose`, which better-sqlite3 invokes with the exact
+    // text of every statement it runs, including the `BEGIN`/`COMMIT` a
+    // plain `db.transaction` call never surfaces as a value.
+    const client = new BetterSqlite3(testDb.path, {
+      verbose: (sql) => statements.push(String(sql)),
+    })
+    client.pragma('journal_mode = WAL')
+    client.pragma('busy_timeout = 5000')
+    client.pragma('foreign_keys = ON')
+    const verboseDb = drizzle(client, { schema })
+
+    try {
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'observed over verbose SQL' },
+        verboseDb
+      )
+
+      expect(statements).toContain('BEGIN IMMEDIATE')
+      expect(statements).not.toContain('BEGIN DEFERRED')
+    } finally {
+      client.close()
+    }
   })
 
   // Finding 3 of the CONV-1 rework: `createdAt` alone is not a determined

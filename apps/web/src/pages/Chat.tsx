@@ -146,10 +146,16 @@ export function Chat({ organizationId }: ChatProps) {
     setNotice(undefined)
     setMessagesError(undefined)
     setSending(true)
-    // Optimistic: the student's own message appears immediately — it is
-    // already recorded on the transcript the moment `answerQuestion`
-    // records it, whatever the outcome, so showing it before the reply
-    // arrives does not risk showing something that was not actually sent.
+    // Optimistic: the student's own message appears immediately, before
+    // `postChatMessage` below has even resolved. CONV-4/D-49 — this is no
+    // longer risk-free: `answerQuestion` now throws, rather than silently
+    // continuing, if the inbound write it records before asking the model
+    // itself fails past every retry, so this bubble can be shown for a
+    // message the platform never actually recorded. The `catch` below
+    // still surfaces that as a visible error (`ApiError` → `messagesError`,
+    // `ErrorMessage`), so the student is not misled about whether their
+    // question landed — only this optimistic bubble, which a refresh
+    // reloads from `getChatMessages` and drops, is briefly stale.
     const optimistic: ChatMessageEntry = {
       id: `pending-${crypto.randomUUID()}`,
       role: 'student',

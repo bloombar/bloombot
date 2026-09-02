@@ -17,17 +17,22 @@
  *    the course to.
  *  - **Not real**: the model (`e2e/support/fake-model-client.ts`, the same
  *    stand-in `course-configuration.spec.ts` uses — no OpenAI call happens
- *    anywhere in this run). **Not real**: the enrolment that lets this
- *    account ask the course at all — `enrolments.enrolViaRoster` is called
- *    directly, the same "insert the one fact the browser has no screen to
- *    produce yet" device `course-configuration.spec.ts` uses for its own
- *    Discord server binding. `routes/chat.ts`'s own module comment explains
- *    why: reaching this course via the web today requires an enrolment
- *    admitted through *some* existing path (a Discord role, a roster row)
- *    — the join-link/"connect" screen that would let a *student* redeem one
- *    themselves is out of this slice's scope, so this spec proves the chat
- *    surface itself works, seeding the one fact a future slice's own UI
- *    will eventually produce.
+ *    anywhere in this run).
+ *  - **Real, since the LINK-1 rework**: the account's own web person — this
+ *    spec no longer creates one itself; it looks up the person
+ *    `@bloombot/auth`'s real `sign-in.ts` already created and *connected*
+ *    the moment sign-in created the account (`docs/DECISIONS.md`), the
+ *    exact function `routes/chat.ts` itself resolves the caller with. What
+ *    is still a harness stand-in is the *enrolment* — `enrolments.enrolViaRoster`
+ *    is called directly on that same real person, the same "insert the one
+ *    fact the browser has no screen to produce yet" device
+ *    `course-configuration.spec.ts` uses for its own Discord server
+ *    binding, standing in for a real roster import (`apps/worker`'s own
+ *    `roster-import.ts`, unmodified but not run here). Reaching a course
+ *    admitted through a *Discord role or a roster row* — as every real
+ *    enrolment is — is what this spec proves end to end; the join-link
+ *    "connect" screen that would let a student self-admit through the web
+ *    alone is separately scoped and still out of this slice.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -106,16 +111,22 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
 
-    // The same `'web'`-surface identity `routes/chat.ts#resolveCallerPerson`
-    // itself resolves for this account — enrolling *that* person, not a
-    // freshly invented one, is what makes the browser's own chat request
+    // WEB-10 rework — `@bloombot/auth`'s `sign-in.ts` already created and
+    // *connected* this account's own web person the moment sign-in itself
+    // created the account (`docs/DECISIONS.md`'s own account of why); this
+    // looks that person up (`resolveIdentity`, read-only, the same function
+    // `routes/chat.ts#resolveConnectedCallerPerson` itself calls) rather
+    // than inventing a second one. Enrolling *that* connected person, not a
+    // freshly created one, is what makes the browser's own chat request
     // (about to authenticate as this same account) resolve to an active
     // enrolment.
-    const person = people.resolvePersonByIdentity(
+    const person = people.resolveIdentity(
       organizationId,
       { surface: 'web', externalId: account.id },
       db
     )
+    if (!person) throw new Error('setup failed: no connected web person')
+    expect(person.connectedAt).not.toBeNull()
     const enrolled = enrolments.enrolViaRoster(
       organizationId,
       { courseId: course.id, personId: person.id },

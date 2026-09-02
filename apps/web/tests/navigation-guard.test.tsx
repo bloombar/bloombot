@@ -5,9 +5,11 @@
  * control, and organization switcher, none of which know anything about
  * whatever nested form might currently be dirty) calls `guardedNavigate`,
  * which asks the registered guard first. The real, in-app "click the
- * hamburger menu while a form is dirty" case is `e2e/unsaved-changes.spec.ts`'s
- * own scenario, against a real browser — this file is the primitive
- * itself, isolated from any real page.
+ * hamburger menu while a form is dirty" case is `e2e/keyboard.spec.ts`'s
+ * own scenario (that spec covers both the keyboard path and the in-app
+ * navigation guard together — its own module comment explains why),
+ * against a real browser — this file is the primitive itself, isolated
+ * from any real page.
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'

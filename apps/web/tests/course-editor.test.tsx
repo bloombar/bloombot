@@ -6,7 +6,7 @@
  * (naming the other course and its project).
  */
 
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
@@ -207,6 +207,11 @@ describe('CourseEditor (WEB-8)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'maxRequestsPerDay'
     )
+    // WEB-16: the refusal also names the field and appears *next to it* —
+    // not only in the summary at the top of a fourteen-field form.
+    const field = screen.getByLabelText('Max requests per day')
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(field).toHaveAccessibleDescription(/whole number greater than zero/)
     // Never reaches the API at all — `Number('5O')` is `NaN`, which
     // `JSON.stringify` would have turned into `null` and cleared the
     // stored cap silently had this gone through.
@@ -298,6 +303,139 @@ describe('CourseEditor (WEB-8)', () => {
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
     expect(saveCourse).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * WEB-15: "removing a category"/"removing a channel" confirm before
+ * anything is actually removed from the list — this file's own module
+ * comment on `removeCategory`/`removeChannel` names "removing from a list"
+ * as one of this panel's own destructive intents. A reviewer proved this
+ * had no test at all: replacing `const confirmed = await confirm({...})`
+ * with `const confirmed = true` in `CourseEditor.tsx` left the entire
+ * suite green.
+ */
+describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', () => {
+  it('removing a category confirms first; cancelling keeps it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.change(screen.getByLabelText('Category name'), {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove category/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove Web Design - GLOBAL?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    // Cancelling kept the category — its own name field is still there.
+    expect(screen.getByLabelText('Category name')).toHaveValue(
+      'Web Design - GLOBAL'
+    )
+  })
+
+  it('removing a category, confirmed, actually removes it — and every channel inside it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.change(screen.getByLabelText('Category name'), {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove category/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove Web Design - GLOBAL?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Category name')).not.toBeInTheDocument()
+    )
+    // The channel inside it is gone too — never orphaned.
+    expect(screen.queryByLabelText('Channel name')).not.toBeInTheDocument()
+  })
+
+  it('removing a channel confirms first; cancelling keeps it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove channel/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove announcements?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    expect(screen.getByLabelText('Channel name')).toHaveValue('announcements')
+  })
+
+  it('removing a channel, confirmed, actually removes only that channel', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    const channelInputs = screen.getAllByLabelText('Channel name')
+    fireEvent.change(channelInputs[1]!, { target: { value: 'general' } })
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /Remove channel/ })[0]!
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove announcements?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() =>
+      expect(screen.getAllByLabelText('Channel name')).toHaveLength(1)
+    )
+    // The category itself, and its other channel, survive — only the
+    // confirmed one was removed.
+    expect(screen.getByLabelText('Category name')).toBeInTheDocument()
+    expect(screen.getByLabelText('Channel name')).toHaveValue('general')
   })
 })
 

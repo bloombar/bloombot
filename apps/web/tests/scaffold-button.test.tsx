@@ -93,6 +93,42 @@ describe('ScaffoldButton (SRV-6)', () => {
     )
   })
 
+  // Rework finding — the hint is gated on the job's own *current* status,
+  // not merely elapsed time: a job that took a while `pending` and then
+  // started `running` (scaffolding a dozen channels through Discord's own
+  // rate limit routinely takes longer than the hint threshold) must not
+  // keep showing "the worker might not be running" once the worker
+  // demonstrably is — the UI must not claim two contradictory states at
+  // once.
+  it('a job that transitions from pending to running before the hint threshold never shows the hint, even once elapsed time alone would cross it', async () => {
+    scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus
+      .mockResolvedValueOnce(job({ status: 'pending' }))
+      .mockResolvedValue(job({ status: 'running' }))
+
+    render(
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        pollIntervalMs={10}
+        stillQueuedHintAfterMs={20}
+      />
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create Discord channels' })
+    )
+    await screen.findByText('Queued…')
+    await screen.findByText('Running…')
+
+    // Give several poll intervals — comfortably past the hint threshold —
+    // a chance to run while the job stays `running`.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(
+      screen.queryByText(/make sure the background worker/)
+    ).not.toBeInTheDocument()
+  })
+
   it('polling stops and the hint clears once the job succeeds', async () => {
     scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus

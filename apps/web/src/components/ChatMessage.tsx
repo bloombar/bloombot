@@ -26,7 +26,8 @@
  * allowlist — nothing here reaches for a wider one for convenience.
  */
 
-import ReactMarkdown from 'react-markdown'
+import type { ComponentProps } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 
@@ -56,7 +57,41 @@ const PROSE_CLASSES =
   '[&_blockquote]:mt-2 [&_blockquote]:border-l-2 [&_blockquote]:border-neutral-300 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-600 ' +
   '[&_code]:rounded [&_code]:bg-neutral-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] ' +
   '[&_pre]:mt-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-neutral-900 [&_pre]:p-3 [&_pre]:text-neutral-50 [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 ' +
-  '[&_table]:mt-2 [&_table]:border-collapse [&_th]:border [&_th]:border-neutral-300 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-neutral-300 [&_td]:px-2 [&_td]:py-1'
+  '[&_table]:border-collapse [&_th]:border [&_th]:border-neutral-300 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-neutral-300 [&_td]:px-2 [&_td]:py-1'
+
+/**
+ * WEB-13 rework — a GFM table (`remark-gfm` is on, and `table` is in
+ * `CHAT_MARKDOWN_SCHEMA`'s own allowlist, so this is a shipped path, not a
+ * hypothetical one) has no bound on its own width, and the message bubble
+ * it renders inside does (`max-w-[85%]`, and `PROSE_CLASSES` gave the
+ * table borders but never a scroll container of its own). Measured in real
+ * Chromium at 390×844: a table wider than its bubble simply extended past
+ * the viewport, and the page did not become horizontally scrollable — the
+ * last columns were unreachable outright, exactly the case WEB-13's own
+ * text names ("no table becomes unusable by narrowing"). `TableWithScroll`
+ * wraps every rendered `<table>` in its own `overflow-x-auto` block, so a
+ * wide table scrolls *within its own bubble* — the standard responsive-table
+ * device — rather than the table (or the page) doing nothing at all.
+ */
+function TableWithScroll({
+  // react-markdown's own `Components['table']` always injects this (the
+  // underlying hast node) — destructured out and discarded rather than
+  // spread onto the real `<table>` below, which would otherwise warn about
+  // an unrecognized DOM attribute.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  node: _node,
+  ...props
+}: ComponentProps<'table'> & { node?: unknown }) {
+  return (
+    <div className="mt-2 max-w-full overflow-x-auto">
+      <table {...props} />
+    </div>
+  )
+}
+
+const MARKDOWN_COMPONENTS: Components = {
+  table: TableWithScroll,
+}
 
 export function ChatMessage({ role, text }: ChatMessageProps) {
   const isStudent = role === 'student'
@@ -75,6 +110,7 @@ export function ChatMessage({ role, text }: ChatMessageProps) {
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[[rehypeSanitize, CHAT_MARKDOWN_SCHEMA]]}
+          components={MARKDOWN_COMPONENTS}
         >
           {text}
         </ReactMarkdown>

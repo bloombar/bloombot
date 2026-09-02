@@ -61,24 +61,29 @@ export const CHAT_MARKDOWN_SCHEMA: Schema = {
     'hr',
   ],
   attributes: {
-    // `href` only, and only http(s)/mailto — never `javascript:` — the
-    // `defaultSchema`'s own `protocols.href` allowlist, unchanged: this
-    // schema narrows *which tags and attributes* survive, not the protocol
-    // check that already protects the one attribute (`href`) that could
-    // otherwise carry a `javascript:` URL.
+    // `href` only. `title` carries no URL, nothing to check.
     a: ['href', 'title'],
     // A fenced code block's own language, as GFM's own
-    // ```language convention encodes it — `className` is the one
-    // presentational attribute this schema allows through, and only the
-    // `language-*` shape rehype's own code-block handling emits, via
-    // `defaultSchema`'s own `clobberPrefix`-free `className` allowance
-    // pattern (kept from the default schema rather than reinvented).
-    code: ['className'],
+    // ```language convention encodes it — restricted to exactly the
+    // `language-*` shape rehype's own code-block handling emits, via a
+    // regex `PropertyDefinition` (`hast-util-sanitize`'s own array-with-pattern
+    // form), not merely an allowed attribute *name* with an unconstrained
+    // value — a rework finding: the previous `code: ['className']` allowed
+    // any `className` value at all through, wider than this comment always
+    // claimed it was.
+    code: [['className', /^language-[\w-]+$/]],
   },
   protocols: {
-    // Only `href` needs a protocol check at all — no other allowed
-    // attribute above ever carries a URL (no `src` survives — images are
-    // excluded entirely, this file's own module comment says why).
-    href: defaultSchema.protocols?.href ?? ['http', 'https', 'mailto'],
+    // Rework finding — `defaultSchema.protocols.href` is `['http', 'https',
+    // 'irc', 'ircs', 'mailto', 'xmpp']`; this file's own comment claimed
+    // "http(s)/mailto" while actually inheriting all six, so
+    // `[x](irc://evil.test)` kept its `href` (confirmed: harmless in
+    // practice — nothing in this app hands an `irc:`/`xmpp:` URL to an
+    // external protocol handler on click alone — but wider than "pin what
+    // the sanitizer allows" (this file's own module comment) should ever
+    // mean by accident). Spelled out explicitly instead of inherited, so
+    // the list here is exactly what a course's own content ever needs: a
+    // web link or a mail address.
+    href: ['http', 'https', 'mailto'],
   },
 }

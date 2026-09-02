@@ -200,6 +200,49 @@ describe('Shell (WEB-3, WEB-4)', () => {
     await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1))
   })
 
+  // WEB-16 rework — a reviewer's own finding: every other navigation this
+  // shell starts (the nav row, the home control, the organization switcher)
+  // already goes through `guardedNavigate`; Sign out did not, so half-filling
+  // a course and clicking Sign out lost it with no prompt at all, while
+  // clicking the Discord tab two inches away did prompt.
+  it('signing out with a dirty course form open prompts, the same as any other navigation this shell starts', async () => {
+    const projectOrg1: Project = {
+      id: 'project-1',
+      organizationId: 'org-1',
+      name: 'Fall 2026',
+      archivedAt: null,
+      createdAt: 0,
+    }
+    listProjects.mockResolvedValue([projectOrg1])
+    listCourses.mockResolvedValue([])
+    const onSignedOut = vi.fn()
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={onSignedOut} />
+    )
+    await screen.findByText('Fall 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))
+    await screen.findByRole('button', { name: 'New course' })
+    fireEvent.click(screen.getByRole('button', { name: 'New course' }))
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'A course I never saved' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Discard unsaved changes?',
+    })
+    // Blocked until confirmed — signOut has not run yet.
+    expect(signOut).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Discard changes' })
+    )
+    await vi.waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1))
+  })
+
   it('switching organizations resets the projects panel rather than stranding it on a refusal from the previous organization (finding 5)', async () => {
     const projectOrg1: Project = {
       id: 'project-1',

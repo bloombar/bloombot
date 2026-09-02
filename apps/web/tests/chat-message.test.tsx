@@ -127,4 +127,55 @@ describe('ChatMessage (WEB-10)', () => {
       'justify-end'
     )
   })
+
+  // Rework finding — the schema's own comment claimed "http(s)/mailto"
+  // while actually inheriting `defaultSchema`'s wider `irc`/`ircs`/`xmpp`
+  // allowance too; narrowed to exactly what a course's own content ever
+  // needs.
+  it("strips an irc: URL from a Markdown link — the schema is narrowed to http(s)/mailto only, not defaultSchema's wider allowance", () => {
+    render(
+      <ChatMessage
+        role="assistant"
+        text="[irc link](irc://evil.test/somechannel)"
+      />
+    )
+    const message = screen.getByTestId('chat-message-assistant')
+    expect(message).toHaveTextContent('irc link')
+    expect(message.querySelector('a')).not.toHaveAttribute('href')
+  })
+
+  it('a fenced code block keeps its real language className', () => {
+    render(<ChatMessage role="assistant" text={'```js\nconsole.log(1)\n```'} />)
+    const message = screen.getByTestId('chat-message-assistant')
+    expect(message.querySelector('code')).toHaveClass('language-js')
+  })
+
+  // WEB-13: a GFM table renders inside its own horizontal-scroll container,
+  // so a table wider than the message bubble scrolls within it rather than
+  // extending past the viewport with no way to reach the last columns
+  // (reproduced in a real browser at 390×844 before this fix — see
+  // `docs/DECISIONS.md`).
+  it('wraps a Markdown table in its own horizontal-scroll container', () => {
+    render(
+      <ChatMessage
+        role="assistant"
+        text={[
+          '| Week | Topic | Reading | Assignment |',
+          '|---|---|---|---|',
+          '| 1 | Intro | Ch. 1 | none |',
+          '| 2 | Loops | Ch. 2 | HW1 |',
+        ].join('\n')}
+      />
+    )
+    const message = screen.getByTestId('chat-message-assistant')
+    const table = message.querySelector('table')
+    expect(table).toBeInTheDocument()
+    const scrollContainer = table?.parentElement
+    // Its own dedicated wrapper — not the message bubble itself, whose own
+    // class list happens to contain the substring "overflow-x-auto" too
+    // (`[&_pre]:overflow-x-auto`, for fenced code blocks) and would make a
+    // plain `.toContain()` on the bubble's own className a false positive.
+    expect(scrollContainer).not.toBe(message)
+    expect(scrollContainer?.classList.contains('overflow-x-auto')).toBe(true)
+  })
 })

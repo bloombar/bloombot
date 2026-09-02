@@ -16,6 +16,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import {
   accounts as accountsRepo,
   organizations as organizationsRepo,
+  people as peopleRepo,
   signInTokens as signInTokensRepo,
   type Database,
   type TransactingExecutor,
@@ -63,13 +64,50 @@ function displayNameFromEmail(email: string): string {
 }
 
 /**
+ * WEB-10/LINK-1 rework — a signed-in web caller *is* the account: they
+ * proved control of it by signing in, which is exactly the proof LINK-3
+ * asks of every other surface's own connect step, so requiring a *second*,
+ * separate "connect your web account" action would be asking for proof
+ * this function already has. Creates the account's own person, in its own
+ * personal organization (the only organization this function's own caller
+ * has just created — `apps/web`'s chat surface resolves a person per
+ * organization, never creates one, so any *other* organization a future
+ * roster import or join-link admits this account into still needs its own
+ * connect step, same as any other surface), and connects it immediately
+ * through `people.ts#connectIdentity` — the real, merged LINK-3 path, not a
+ * raw `connectedAt` column write, so this person is indistinguishable from
+ * one connected by an actual proof (LINK-4's own merge and LINK-5's own
+ * shared allowance apply to it exactly the same way once a future connect
+ * flow attaches a Discord or MCP identity on top of it).
+ *
+ * Called only from each of this file's own account-*creation* branches
+ * (`findOrCreateAccountForEmail`'s and `tryCreateAccountForEmail`'s "new
+ * account" paths) — never on a returning sign-in, which already has its own
+ * person from the first time this ran.
+ */
+function createConnectedWebPerson(
+  organizationId: string,
+  accountId: string,
+  db: TransactingExecutor
+): void {
+  const person = peopleRepo.createPerson(organizationId, {}, db)
+  peopleRepo.connectIdentity(
+    organizationId,
+    person.id,
+    { surface: 'web', externalId: accountId },
+    db
+  )
+}
+
+/**
  * Find the account for `email`, or create one with a fresh personal
- * organization and an `owner` membership, atomically (TEN-1). Must be
- * called with `db` already inside the caller's own transaction — this
- * function does not open one of its own, so its two writes (organization,
- * then account+membership — `accountsRepo.createAccount` already wraps
- * those two atomically) commit or fail as part of whatever the caller is
- * doing.
+ * organization, an `owner` membership and a connected web person, atomically
+ * (TEN-1, and `createConnectedWebPerson`'s own doc comment for the person).
+ * Must be called with `db` already inside the caller's own transaction —
+ * this function does not open one of its own, so its writes (organization,
+ * account+membership — `accountsRepo.createAccount` already wraps those two
+ * atomically — then the person) commit or fail as part of whatever the
+ * caller is doing.
  */
 function findOrCreateAccountForEmail(
   email: string,
@@ -89,6 +127,7 @@ function findOrCreateAccountForEmail(
     { email, displayName: displayNameFromEmail(email), role: 'owner' },
     db
   )
+  createConnectedWebPerson(organizationId, account.id, db)
   return { account, createdAccount: true }
 }
 
@@ -268,11 +307,13 @@ function tryCreateAccountForEmail(
         { name: displayNameFromEmail(email), isPersonal: true },
         tx
       )
-      return accountsRepo.createAccount(
+      const account = accountsRepo.createAccount(
         organizationId,
         { email, displayName: displayNameFromEmail(email), role: 'owner' },
         tx
       )
+      createConnectedWebPerson(organizationId, account.id, tx)
+      return account
     })
   } catch (error) {
     if (isUniqueEmailViolation(error)) return undefined

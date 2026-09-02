@@ -212,3 +212,4 @@ export type ChatAnswerResult =
     }
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
+  | { kind: 'not-connected' }

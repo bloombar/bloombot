@@ -17,27 +17,41 @@
  * authorizes against exactly that — an active enrolment
  * (`enrolments.getActiveEnrolment`) — rather than a membership row.
  *
- * **Person resolution.** `people.resolvePersonByIdentity` is the same
- * "create on demand" function every other surface's first contact already
- * uses (PPL-3) — Discord's own `handle-mention.ts` resolves a person the
- * identical way, from the arriving Discord user id. Here the "identity" is
- * the caller's own already-authenticated account id, on the `'web'`
- * surface. This is deliberately *not* the account-linking machinery
- * `LINK-1..5` describes (a person proven to hold more than one surface
- * identity, merged into one so their allowance and transcript follow them
- * everywhere) — that is a distinct, larger feature landing separately (see
- * `docs/DECISIONS.md`), and nothing here reads or writes a `connectedAt`
- * column. What this router gives a signed-in account today is exactly
- * what PPL-3 already gives any other first-time identity: a person of
- * their own, in this organization, admitted into a course only through one
- * of ENRL-3's three ordinary paths (a Discord role, a roster row, or a
- * redeemed join link) — nothing here enrols anybody, so a fresh account
- * asking before an instructor has admitted them any of those three ways
- * sees an empty course list, the same "not found" ENRL-2 already gives a
- * course a person is not enrolled in.
+ * **Person resolution — rework, D-36.** This router used to resolve the
+ * caller with `people.resolvePersonByIdentity` — create on demand, PPL-3's
+ * own first-contact shape. That was wrong for this surface specifically,
+ * for three reasons a review round caught together: it minted a *second*,
+ * never-connected person for every visit (LINK-5's "one person, one
+ * allowance" broken in practice, and — now that LINK-1 has merged —
+ * `answerQuestion` declines every one of them outright, `connectedAt`
+ * always `null`); it could never find the enrolment a real student already
+ * has, because every real enrolment belongs to the *discord*-surface person
+ * a roster import or a Discord role admitted, never to a freshly-minted web
+ * one; and calling a *creating* function on a raw, unchecked
+ * `:organizationId` URL param let any signed-in caller write a `people` row
+ * into an organization they have no relationship to at all, before
+ * anything checked that they should be able to.
+ *
+ * The fix: a signed-in web caller *is* the account — they proved control of
+ * it by signing in, which is exactly the proof LINK-3 asks of every other
+ * surface's own connect step. `@bloombot/auth`'s `sign-in.ts` now creates
+ * and *connects* that account's own web person the moment the account
+ * itself is (`createConnectedWebPerson`, in the account's own personal
+ * organization) — through the real `people.ts#connectIdentity` path, not a
+ * raw `connectedAt` write, so it merges with a Discord or MCP identity
+ * later exactly the way any other connected person does. This router only
+ * ever *looks up* that person (`people.resolveIdentity` — read-only, no
+ * insert, so no way to write into an organization the caller merely named
+ * in a URL) and refuses with the same "invited to connect" shape LINK-1
+ * gives every other unconnected identity when there is none, or when
+ * `connectedAt` is somehow still `null`. See `docs/DECISIONS.md` for the
+ * fuller account, including what this does and does not make reachable
+ * today (a course admitted only through a Discord role or a roster import
+ * still needs the join-link/connect flow neither this router nor
+ * `sign-in.ts` builds).
  */
 
-import { Router, type Request } from 'express'
+import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 
 import {
@@ -45,7 +59,13 @@ import {
   type ModelClient,
   type PricingTable,
 } from '@bloombot/core'
-import { conversations, enrolments, people, type Database } from '@bloombot/db'
+import {
+  conversations,
+  enrolments,
+  organizations,
+  people,
+  type Database,
+} from '@bloombot/db'
 import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
@@ -97,21 +117,45 @@ function requireAccountId(req: Request): string | undefined {
 }
 
 /**
- * Resolve the caller's own person record for `organizationId` — every
- * route below needs one, and every one of them resolves it the same way
- * (this module's own comment on why `resolvePersonByIdentity` and not
- * something LINK-shaped).
+ * Resolve the caller's own, already-connected person for `organizationId` —
+ * every route below needs one, and every one of them resolves it the same
+ * way (this module's own comment on why `resolveIdentity`, read-only, and
+ * not `resolvePersonByIdentity`).
+ *
+ * Checks the organization exists *before* anything else — TEN-5's own
+ * "indistinguishable from absence": without this, a nonexistent
+ * `organizationId` reached `resolveIdentity`'s own query and (with the old
+ * `resolvePersonByIdentity`) an *insert* whose foreign key then failed,
+ * which answered `500` where every other foreign or absent id in this app
+ * answers `404` — an oracle a caller could use to tell "this organization
+ * exists but I have no relationship to it" apart from "this organization
+ * does not exist at all". Both now take the identical path: no person
+ * found, refused the identical way.
+ *
+ * `undefined` when the organization does not exist, when this account has
+ * no person here at all, or when it has one whose `connectedAt` is still
+ * `null` (defensive — nothing in this codebase can produce that state for
+ * a web identity today, since `connectIdentity` always sets it, but this
+ * router does not rely on that holding forever).
  */
-function resolveCallerPerson(
+function resolveConnectedCallerPerson(
   organizationId: string,
   accountId: string,
   db: Database
-) {
-  return people.resolvePersonByIdentity(
+): people.Person | undefined {
+  if (!organizations.getOrganizationById(organizationId, db)) return undefined
+  const person = people.resolveIdentity(
     organizationId,
     { surface: 'web', externalId: accountId },
     db
   )
+  if (!person || person.connectedAt === null) return undefined
+  return person
+}
+
+/** LINK-1's own refusal shape, reused here — a caller with no connected person in this organization gets the same "invited to connect" outcome `answerQuestion`'s own `not-connected` result gives a Discord or MCP identity that has never proven itself, not a misleading "you are not enrolled" (this account may never have been offered a way to enrol at all). */
+function sendNotConnected(res: Response): void {
+  res.status(404).json({ error: 'chat_not_connected' })
 }
 
 export function buildChatRouter(deps: ChatRouterDependencies): Router {
@@ -137,7 +181,15 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
       res.status(401).json({ error: 'not_signed_in' })
       return
     }
-    const person = resolveCallerPerson(organizationId, accountId, deps.db)
+    const person = resolveConnectedCallerPerson(
+      organizationId,
+      accountId,
+      deps.db
+    )
+    if (!person) {
+      sendNotConnected(res)
+      return
+    }
     const courses = enrolments.listCoursesForPerson(
       organizationId,
       person.id,
@@ -161,7 +213,15 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
         res.status(401).json({ error: 'not_signed_in' })
         return
       }
-      const person = resolveCallerPerson(organizationId, accountId, deps.db)
+      const person = resolveConnectedCallerPerson(
+        organizationId,
+        accountId,
+        deps.db
+      )
+      if (!person) {
+        sendNotConnected(res)
+        return
+      }
       const enrolment = enrolments.getActiveEnrolment(
         organizationId,
         courseId,
@@ -194,7 +254,20 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
     }
   )
 
-  const postMessageInputSchema = z.object({ text: z.string().min(1) })
+  // WEB-10 rework, finding 7 — bounded, not just non-empty. The allowance
+  // counts *requests* (CORE-3), never tokens or characters, so an unbounded
+  // `text` turns "ten questions a day" into no real spending bound at all;
+  // one 99 kB request (`express.json()`'s own 100 kB default is the only
+  // ceiling this had) reaches the model for the price of one ordinary
+  // question, and the spending cap it can run up is organization-wide
+  // (COST-3) — one student on the web can exhaust it and take every Discord
+  // student in the same tenant down with them. 4,000 characters matches
+  // Discord's own outer bound on a single message (`packages/discord/src/split.ts`'s
+  // own `DISCORD_MESSAGE_LIMIT`, 2,000, is this app's *reply*-splitting
+  // threshold, not the inbound ceiling; Discord itself accepts up to 4,000
+  // characters from a Nitro account) — this surface is bounded no more
+  // generously than the one it mirrors, not arbitrarily.
+  const postMessageInputSchema = z.object({ text: z.string().min(1).max(4000) })
 
   /** WEB-10: ask a question, through the same `answerQuestion` pipeline the Discord surface calls. */
   router.post<{ organizationId: string; courseId: string }>(
@@ -214,7 +287,15 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
         return
       }
 
-      const person = resolveCallerPerson(organizationId, accountId, deps.db)
+      const person = resolveConnectedCallerPerson(
+        organizationId,
+        accountId,
+        deps.db
+      )
+      if (!person) {
+        sendNotConnected(res)
+        return
+      }
       const enrolment = enrolments.getActiveEnrolment(
         organizationId,
         courseId,

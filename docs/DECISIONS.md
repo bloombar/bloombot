@@ -3907,10 +3907,17 @@ connect completed minted a fresh row, unbounded: reproduced directly, 200 calls 
 `person_link_challenges` rows in the same victim organization, nothing sweeping either. Fixed by extending the
 reuse check to the in-memory `pendingDiscordConnects` map itself (an attempt still live for the exact
 `(accountId, organizationId)` pair reuses its own survivor rather than minting a second one), and by sweeping
-expired entries at `/discord/begin` too, not only at `preview`/`confirm`. This bounds growth to roughly one row
-per account per organization per `DEFAULT_PERSON_LINK_TTL_MS` window (ten minutes), not one row per request —
-an account that waits out the TTL between attempts still adds a new bare row each time, a residual accepted and
-stated plainly rather than solved further (`apps/mcp`'s own session-eviction rework, D-36, bounds a comparable
+expired entries at `/discord/begin` too, not only at `preview`/`confirm`.
+
+This bounds the `people` rows and nothing else, which is worth stating exactly, because the first version of
+this paragraph claimed more than it delivered and a verification round re-measured it: 200 `/discord/begin`
+calls from one account against one foreign organization now leave **one** `people` row — the fix works — but
+still **200** `person_link_challenges` rows and **200** `pendingDiscordConnects` map entries, one per request
+each, held for the full `DEFAULT_PERSON_LINK_TTL_MS` window (ten minutes) and swept afterwards. The permanent
+row is the one that mattered, since nothing sweeps `people`; the challenge rows and map entries expire on their
+own. Growth of the bounded resource is therefore roughly one row per account per organization per TTL window,
+not one per request — an account that waits out the TTL between attempts still adds a new bare row each time, a
+residual accepted and stated plainly rather than solved further (`apps/mcp`'s own session-eviction rework, D-36, bounds a comparable
 resource the identical way, by TTL, not by eliminating repeat use).
 
 **Also fixed, this round.** A test titled "reuses the same survivor" asserted `toBeGreaterThanOrEqual(1)` —

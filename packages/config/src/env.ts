@@ -60,6 +60,11 @@ export const envSchema = z.object({
   // Port apps/worker's health endpoint listens on (JOB-5).
   WORKER_HEALTH_PORT: port(3002),
 
+  // Port the MCP server listens on (MCP-1..5) — both its `/mcp` endpoint
+  // and its `/health` one, the same "one port, both routes" shape
+  // `API_PORT` already gives `apps/api`.
+  MCP_PORT: port(3003),
+
   // Comma-separated platform administrator emails (AUTH-4). May be empty.
   // Read through `isAdminEmail`, never from here — see the note in admin.ts.
   ADMIN_EMAILS: z.string().default(''),

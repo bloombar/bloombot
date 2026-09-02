@@ -3037,3 +3037,404 @@ identity on the same surface. True per-message accuracy needs the calling surfac
 external id through rather than this function re-deriving one from `surface` alone, which would touch
 `answer.ts`'s own input shape and every surface adapter's — left out of this rework's own scope, and said here
 plainly rather than silently left half-fixed.
+
+---
+
+## D-36 — `apps/mcp`: the third surface — an assistant reaches the platform as an ordinary account, a destructive tool asks a human directly, and the tool surface is a curated subset of the catalog
+
+**Problem.** MCP-1..5 ask for a third surface — an MCP server exposing `packages/actions`' catalog to an AI
+assistant — with four properties the brief names directly and one it leaves to this slice to work out
+mechanically: the same dispatch pipeline the API uses (MCP-1), an explicit tool allowlist rather than the
+whole catalog (MCP-2), a connection that carries exactly one account's authority and nothing more (MCP-3), a
+destructive tool that asks for a confirmation the assistant itself cannot forge (MCP-4), and metering that
+draws on the same ledger, attributed to the authorizing account (MCP-5).
+
+**Choice — reuse AUTH-3's session tokens as the MCP credential, not a new credential type.** A connection
+authenticates by presenting an existing session token (`@bloombot/auth#validateSession`) as
+`Authorization: Bearer <token>` — the same opaque, hashed-at-rest token a cookie already carries for
+`apps/api`. `apps/mcp/src/authenticate.ts` does nothing else: no service credential, no organization-scoped
+API key, no separate account type for "an assistant." MCP-3's "no service identity that transcends tenancy"
+is true by construction here — there is exactly one kind of principal this surface can authenticate as, an
+`accounts` row, the same principal the web panel already authenticates. Minting a token specifically to hand
+to an assistant (a "connect an assistant" screen in the panel) is `apps/web`'s own future work, out of this
+slice's scope, the same way `packages/auth/src/person-link.ts`'s own module comment already draws that line
+for the MCP half of account *linking* — this slice's brief is explicit that a token mechanism already existing
+is not the same as a UI to hand one out.
+
+**Choice — a tool call's `organizationId` is checked live, against the database, on every call — never cached
+on the session.** `apps/mcp/src/call-tool.ts#callTool` calls `memberships.getMembership` fresh for every
+single tool call, the same "read the database, not a snapshot of it" discipline every policy in this platform
+already holds itself to, rather than resolving a caller's memberships once at connect time and consulting an
+in-memory list thereafter. A membership revoked mid-session stops granting access on the very next tool call,
+not merely the next reconnect — and the refusal is `ActionRefusedError`, byte-identical to every other refusal
+`dispatch.ts` produces (TEN-5): a connection probing organization ids cannot tell "you have no membership here"
+from "this organization does not exist" from "this record does not exist," the same guarantee ACT-3 already
+gives the API.
+
+**Choice — the transport is stateful (one `McpServer`/`StreamableHTTPServerTransport` pair per session,
+tracked by the SDK's own `Mcp-Session-Id`), not stateless.** A fresh server per HTTP request looked simpler at
+first — nothing to track between requests, the shape the SDK's own `simpleStatelessStreamableHttp.ts` example
+uses — but MCP-4's own confirmation depends on the client's capabilities negotiated during `initialize`
+(`Server#getClientCapabilities`) still being known by the time a later `tools/call` arrives. A fresh server per
+request throws that negotiation away the moment the `initialize` response is sent, so every later destructive
+call would see no capabilities at all and fail closed *unconditionally* — not the "fails closed when the
+client genuinely cannot elicit" MCP-4 asks for, but "fails closed no matter what the client can do." Stateful
+mode costs a session map (`apps/mcp/src/server.ts`'s own `sessions`, scoped per `buildApp` call) and the
+bookkeeping that goes with it (`onsessioninitialized`/`onsessionclosed`), but it is what makes MCP-4's own gate
+meaningful rather than a permanent refusal. Every request against an existing session — not only the one that
+creates it — re-validates the bearer token (a token that has since expired or been revoked stops working
+immediately, not merely at the next reconnect) and checks it still names the *same* account the session was
+created for (`server.ts`'s own `existing.accountId !== accountId` check) — a session is a connection's own
+state, not a bearer credential a second account's token can walk into.
+
+**Choice — MCP-4's confirmation is MCP's own `elicitation/create`, aimed at the client application, not a
+boolean tool argument.** The mechanical question the brief asks directly: what makes a confirmation something
+"the assistant cannot supply on the person's behalf"? A boolean argument in the tool call itself does not,
+however it is named or documented — every argument in a tool call is text the model itself generates, so a
+model that decides to proceed can simply set `confirm: true` itself, and a model that already read a
+"confirmation token" out of an earlier tool result can just as easily echo it back in a later call; neither
+requires a human in the loop at all. `elicitation/create` is a distinct request *from the server to the
+client*, not a value inside the tool call/result exchange the model drives — the MCP specification's own
+elicitation capability exists precisely so a server can ask the *client application* to put a question in
+front of the person using it, and the client's own job (not this server's, and not enforceable by this server)
+is to actually show it to a human rather than auto-answer it. `apps/mcp/src/server.ts#requestElicitedConfirmation`
+sends exactly this — a `mode: 'form'` request with one required boolean field, worded to say the assistant
+cannot answer it — before `call-tool.ts` will dispatch `courseAttachments.detach`, the one destructive action
+in today's catalog (`tool-surface.ts`'s own module comment has why it is the only one).
+
+**What this does not, and cannot, guarantee.** MCP is a protocol, not an enforcement boundary this server
+controls end to end — nothing stops a non-compliant client from auto-answering `elicitation/create` itself,
+the same way nothing stops a browser extension from auto-clicking a confirm button in a web UI. What this
+design does guarantee is that the *assistant* — the model generating tool-call arguments from the
+conversation — has no channel to supply this answer: it is not an argument the model wrote, and it is not a
+value the model could have read out of an earlier response and replayed, because `elicitInput`'s own request
+is answered by the client's transport layer, not by anything that becomes part of the model's own context
+unless the client chooses to show it there. A client that wants to defeat this has to be built to do so
+deliberately; an assistant cannot stumble into it by writing a plausible-looking argument.
+
+**Choice — fails closed, not merely "skips the check," when the client cannot elicit at all.**
+`requestElicitedConfirmation` checks `getClientCapabilities()?.elicitation?.form` — the exact capability the
+SDK's own `elicitInput` requires for the default form mode — before ever sending the request; a client that
+never declared it gets `false` back, and `call-tool.ts` treats that identically to an explicit decline
+(`ConfirmationRequiredError`). The alternative — silently running the destructive tool anyway when the client
+has no way to ask a human — would make MCP-4 optional for exactly the clients least equipped to honor it.
+Same fate for a `requestConfirmation` that throws or rejects outright (a connection that drops mid-elicitation):
+caught and treated as "not confirmed," never as an unhandled failure that could be mistaken for success.
+
+**Choice — the tool surface (MCP-2) is an explicit array of action names (`apps/mcp/src/tool-surface.ts`'s own
+`MCP_TOOL_SURFACE`), checked against a real registry at startup, not derived from `ActionRegistry#list()`.**
+`buildToolDefinitions` throws if the array names an action the registry does not have (a typo, a renamed
+action) — loud, because a silently shrunken tool list is a worse failure than a crash a reviewer notices
+immediately. It silently *omits* an action the registry has that the array does not name — the direction
+MCP-2 actually cares about: a new action registered into `createPlatformRegistry` by some other slice must not
+become agent-callable by default, and it does not, because nothing added its name to this array.
+`tests/tool-surface.test.ts`'s own leak-probe test is the proof this is true mechanically, not merely by
+convention: it registers a fresh action nothing has ever heard of into the real platform registry and asserts
+it never appears in `buildToolDefinitions`'s output — a test that fails immediately if that function is ever
+rewritten to derive the surface from the registry instead of the array (proven directly for this slice: swap
+`MCP_TOOL_SURFACE.map` for `registry.list().map` and four tests in that file fail).
+
+Today's array covers the read-only half of the catalog in full, plus the ordinary writes that are either
+reversible (`projects.archive`/`.unarchive`) or end/disable access without discarding the record itself
+(`courseJoinLinks.revoke`, `enrolments.end`) — deliberately smaller than "everything that would work." Left
+off, for a future slice to add explicitly rather than by default: `courseAttachments.attach` (an arbitrary
+base64 file upload — a large,
+unusual argument shape to hand a model with no size conversation this slice has had),
+`discordServers.remove`/`.scaffold` (operational actions against a live Discord server), `roster.import` (a
+bulk write of students' own names and emails), and `memberships.grant` (grants account-level authority within
+the organization — a privilege change that deserves its own confirmation design, not folded into MCP-4's
+"destructive" bucket as an afterthought since it neither deletes, exports, nor spends money by that
+requirement's own three named triggers).
+
+**Choice — MCP-5 is satisfied structurally, by routing every call through the same `dispatch()`, not by any
+new accounting code in this slice.** `apps/mcp/src/call-tool.ts#callTool`'s only call that actually does
+anything is `dispatch(tool.action, actionArgs, { organizationId, db, accountId })` — the same function, the
+same pipeline, `apps/api/src/routes/actions.ts` already calls. No action registered in today's catalog carries
+a real `meter` hook (`packages/actions/src/types.ts`'s own `Meter` type — every action in `packages/actions/src/actions`
+either omits it or the pipeline's own no-op default runs), so there is nothing for this slice to attribute a
+cost to yet; the guarantee this slice adds is structural, not a new number anywhere: any action that later
+gains a real meter is metered identically for an MCP caller, because `call-tool.ts` has no second write path
+that could fall out of sync with it the way `packages/core/src/pricing.ts`'s own `costMicros: 0` fallback once
+did for an unmetered model call (that file's own comment: "`0` there used to read as 'this call was free'").
+This slice deliberately computes no cost of its own and writes no ledger row of its own — there is no model
+call anywhere in this catalog's actions to attribute one to.
+
+**Limits.** The web panel's "connect an assistant" screen — the UI that actually hands an account a token to
+paste into an MCP client's configuration — is not built here; this slice's own brief is explicit that it is
+out of scope, the same "provides the token mechanism, not the flow that hands it out" shape
+`packages/auth/src/person-link.ts`'s own module comment already draws for LINK-3's MCP half.
+
+---
+
+### Rework round — what two independent reviewers reproduced, and what changed
+
+Two reviewers (one on conformance and test quality, one on security) went at `77caabd` independently and both
+returned "merge after fixes." Both attacked tenancy, ordering, the bearer credential, session pinning and
+metering directly and found nothing — those hold as designed, above. What follows is what they reproduced
+against a live listener and real mutations, not what they suspected.
+
+**Rework finding 1 — `courses.save` was on the surface unmarked, and it deletes.** `courses.ts#updateCourse`
+calls `deleteCourseCategories` and re-inserts from `input.categories` on every save; `saveInputSchema` makes
+`categories` required, so a model that resupplies a partial list (or never read the current one at all)
+silently discards the rest. Reproduced live: `courses.save` reported `isError: false`, raised no elicitation,
+and left `destructiveHint: false` in its own tool definition — a well-behaved client had nothing to warn a
+person on. Fixed by marking it `destructive: true` (`tool-surface.ts`) with its own `describeTarget`
+(`describeCourseSaveTarget`) rather than dropping it from the surface — the tool stays useful (renaming a
+course, toggling it on or off) while a human now sees what is about to be replaced before it happens. A
+partial-update input shape is the real fix and is not this slice's: `saveInputSchema`'s `categories: z.array(...)`
+(required, whole-list) is `packages/actions`' own schema, and narrowing it to an optional diff is a design
+change to an action every other surface (the web panel, once it exists) would also need to agree to, not
+something `apps/mcp` can decide unilaterally by itself.
+
+**Rework finding 2 — `jobs.get` hands a model whatever PII its own job's `payload` carries, unfiltered.**
+`roster.import`'s own job payload is `{ courseId, csvText }` — a raw CSV of students' names and emails — and
+`jobs.get` (`repos/jobs.ts#toJobStatus`) returns `payload` unparsed-but-unfiltered. `roster.import` itself is
+deliberately off the MCP surface for exactly this reason (its own module comment), but `jobs.get` being on the
+surface at all defeated that exclusion in one read — reproduced live by enqueueing a roster-import job and
+reading its payload straight back through `jobs.get`. The id being otherwise unguessable (`jobs.list` is also
+off the surface) was never a real guard and is not relied on as one. Fixed with `ToolSurfaceEntry.sanitizeOutput`
+— a per-tool output transform, applied in `call-tool.ts` after `dispatch` succeeds, before this file's own
+`callTool` returns.
+
+**Round two of the same finding — `payload` was not the only field carrying it, and denylisting one field at a
+time is what produced this in the first place.** The first version of this fix (previous paragraph) stripped
+`payload` and left every other field, reasoned about as "status, attempts, result, timestamps still reach the
+model, so the tool stays useful" — wrong, because `result` is exactly as capable of carrying PII as `payload`
+is, and a **succeeded** `roster.import` job's own `result` is a `RosterImportReport`
+(`apps/worker/src/handlers/roster-import.ts`) that carries a student's email or Discord handle in eight of its
+own array fields (`unresolvedHandles`, `channelsCreated`, `channelsAlreadyPresent`, `channelAccessGranted`,
+`channelsNotCreated`, `channelsFailed`, `channelNameCollisions`, `ambiguousHandles`, plus `peopleCreated`/
+`peopleMerged`/`rosterFieldsDeclined`). Reproduced live, one job-state later than the first finding: claim and
+complete a roster-import job with a real report, then `jobs.get` it back — four students' addresses and
+handles in the response. The existing test only ever exercised a *pending* job, whose `result` is always
+`null`, which is exactly why it stayed green through this. Fixed properly this time:
+`allowlistJobFields` (`tool-surface.ts`) returns exactly `{id, kind, status, attempts, maxAttempts, lastError,
+createdAt, updatedAt}` and nothing else — an allowlist, not a denylist, so the next handler that returns a
+richer report does not reopen this by default the way `result` just did. `lastError` stays on the list, but
+checked, not assumed: every `throw` in every handler this catalog registers today names a course, an
+organization, a job kind, or a malformed-payload shape, never a roster row — a per-row failure in
+`roster.import` is caught and pushed into the report (still excluded, as part of `result`), never re-thrown to
+become `lastError`. That is a property of today's handlers, not something this tool enforces mechanically; a
+future handler that threw a per-row error naming a student would reopen the same shape through the one field
+this tool still returns. Making that mechanical — asserting, in a shared place, that no handler's own thrown
+error text can embed request-specific data — is bigger than this tool and is not this round's fix. The test
+that exercises this now claims and *completes* a job with a real `RosterImportReport`
+(`seedCompletedRosterImportJob`) before reading it back, and asserts no email or handle appears anywhere in
+the serialized tool result — not that one particular key is absent, the same mistake the first version of this
+test made.
+
+**Rework finding 3 — the session map never released anything, and one account could exhaust the process.**
+`onsessionclosed` (the SDK's own hook) fires only for a client-driven `DELETE`; nothing closed a session this
+process itself decided to end, and nothing bounded how many sessions one account could hold open at once. Both
+reviewers measured it independently against a live listener: roughly 165–185 KB retained per abandoned
+session, 165 MB retained after 1,000 `initialize` POSTs and a forced GC, 380 MB after 2,000, with `/health`
+reporting `ready: true` throughout and the very first abandoned session still live at the end. Fixed three
+ways, all in `server.ts`: `transport.onclose` is now wired (using the transport's own `sessionId` getter,
+set before `connect`) so a session the SDK itself considers closed — for *any* reason, not only a client
+`DELETE` — is evicted the moment it happens; `MAX_SESSIONS_PER_ACCOUNT` (20) refuses a new session with `429`
+once one account already holds that many; and `sweepIdleSessions` — a pure function of a session map, a clock,
+and a timeout, tested directly with an injected `now` rather than a real timer — closes and evicts whatever
+has gone `SESSION_IDLE_TIMEOUT_MS` (30 minutes) without a request against it, run by `buildApp` on an
+`.unref()`'d interval so it never itself keeps the process alive. `/health` now also reports `sessions: <count>`,
+the same "surface an internal counter" idiom `apps/bot`'s own COST-5 model-stats field already uses — the
+specific symptom "healthy report, unbounded growth underneath it" is closed structurally by the bound, and the
+counter makes the bound's own effect visible to an operator going forward. The related report that "sign out
+everywhere" left a stale `Mcp-Session-Id` usable again after a fresh sign-in was a symptom of the same root
+cause (nothing ever closed the old session) rather than a distinct hole in the account-pinning check itself
+(unchanged, and still attacked and cleared by both reviewers) — bounding session lifetime is what keeps a
+stale session from surviving long enough for that sequence of events to matter.
+
+**Rework finding 4 — MCP-4 was structurally correct but unproven: two mutations survived the whole suite.**
+Treating any elicitation response (`decline`, `cancel`, anything) as consent, and deleting the `elicitInput`
+call entirely while still returning `true` (keeping only the capability gate), both left 36/36 `mcp` tests and
+1426/1426 overall green — the only transport-level test exercised the never-declared-capability path, which a
+bare `return false` stub also satisfies, so nothing pinned what a real client's real answer actually did. Fixed
+by `tests/mcp-e2e.test.ts`: a real `@modelcontextprotocol/sdk` `Client`, a real `StreamableHTTPClientTransport`,
+a real `node:http` server on an ephemeral port, exercising `courseAttachments.detach` end to end for
+`accept {confirm:true}`, `accept {confirm:false}`, `decline` and `cancel` — asserting the job queue, the
+attachment's own status, and the tool result for each. Both named mutations are killed by this file (verified
+directly: reintroducing either locally fails the relevant tests, reverting restores green). The reason this is
+possible at all despite the "cannot be tested without a lower-level HTTP client" limitation the first version
+of this decision recorded: a real client on a real socket can simply read a streamed SSE response as it
+arrives and answer the embedded `elicitation/create` request before that response finishes, which `supertest`'s
+own buffered model cannot do — the fix was to stop trying to do this through `supertest` at all, not to work
+around it.
+
+**Rework finding 5 — attribution had no test, and dropping it broke two allowlisted actions silently.**
+Deleting `accountId: context.accountId` from `call-tool.ts`'s own `dispatch` call left all 1426 tests green —
+`call-tool.test.ts`'s own attribution test asserted only that a `projects.create` call's output matched, which
+holds regardless of whether `accountId` was threaded through. The real breakage: `courseInstructions.save` and
+`.restore` are both allowlisted and both refuse outright (`ActionRefusedError`) with no `accountId`
+(`course-instructions.ts#requireAccountId`), so the mutation made both return the platform's generic
+not-found-shaped refusal for every MCP caller, silently. Fixed with a test that calls `courseInstructions.save`
+through `callTool` and reads the resulting revision's own `savedByAccountId` back through the repository
+directly — a passing test is only possible if `dispatch` actually received the calling account, not merely
+that the call happened not to throw (reintroducing the mutation locally fails exactly this test and no other).
+
+**Rework finding 6 — `buildToolDefinitions` ran lazily, per session, so a stale allowlist entry killed the
+first real session instead of this process's own startup.** A renamed or removed action on the surface used to
+surface as a `500` on whichever session happened to hit it first, with `/health` reporting `ready: true` the
+whole time — a supervisor (OPS-8) or a liveness probe would see a healthy process with a dead tool surface.
+Fixed by calling `buildToolDefinitions(registry)` once in `index.ts`, before `server.listen` — the same
+"throws at startup, not on the first request" discipline `apps/api`/`apps/bot` already hold themselves to for
+`CONFIG` validation. `ServerDependencies.toolDefinitions` replaces `registry` in `server.ts`'s own dependency
+shape; `call-tool.ts#CallToolContext.toolDefinitions` replaces its own `registry` field the same way, which
+also closed a separate, smaller finding (13 in the reviewers' own numbering) for free: resolving every
+action's own JSON Schema on every single tool call was measured waste, and building the list once removes it.
+
+**Rework finding 7 — the confirmation named the tool and a raw organization id, never the record.** "Confirm
+courseAttachments.detach in organization 8dc7bf86-…" reads identically whether the call is about to detach an
+old syllabus or a final exam key — the protocol binding was sound (concurrent detaches produced distinct
+elicitations; nothing was replayable), but the human's own consent was bound to a tool name, not a record.
+Fixed with `ToolSurfaceEntry.describeTarget` — required whenever `destructive` is `true`
+(`buildToolDefinitions` throws at build time otherwise, the same loud-failure discipline finding 6's own fix
+uses) — resolved in `call-tool.ts#resolveTargetLabel` by calling the action's own `policy.resolve` directly
+(the same read `dispatch` is about to make a moment later, never a second lookup that could drift from what
+`execute` actually acts on) before `requestConfirmation` is ever called. `courseAttachments.detach` now names
+the attachment's own filename; `courses.save` names the course's own title (or, on create, the title it is
+about to get). A target that does not resolve at all (a made-up id, or input that does not validate) skips the
+confirmation entirely — `dispatch` produces the real refusal instead, and asking a human to confirm deleting
+something that does not exist or is not theirs is not a question worth asking.
+
+**Choice — `courses.save`'s own `describeCourseSaveTarget` asks for confirmation on a pure create too, even
+though a brand-new course has no existing categories or channels for it to destroy.** `entity.existingCourse`
+is only set when `input.id` names a course that already exists (`courses.ts`'s own `CourseSaveEntity`); a
+create has nothing to replace, so the confirmation this round adds for it is not, strictly, guarding against
+data loss the way it is for an update. Left as-is, deliberately, rather than narrowing `resolveTargetLabel`
+(`call-tool.ts`) to skip the gate on a pure create: `courses.save` is one action for both create and update —
+the same call shape, told apart only by whether `input.id` is present — and a caller (or a model filling in
+arguments) getting that wrong is exactly the kind of mistake this file's own `describeTarget` mechanism exists
+to catch before it happens rather than after. This fails safe (one unnecessary confirmation on an ordinary
+create) rather than unsafe (a caller who meant to create ends up silently updating, or the reverse), which is
+the trade this repository's own idiom already prefers elsewhere (TEN-5's own refusal shape is the same kind of
+"say no when genuinely unsure" choice). Noted here rather than left for a future reader to wonder whether it
+was an oversight.
+
+**Also fixed, smaller.** `call-tool.ts`'s own module comment used to claim a missing or malformed
+`organizationId` "refuses the same way an organization the caller cannot see does" — true only inside
+`callTool` itself; over the real HTTP surface zod's own `-32602` shape wins first. Not an oracle either way
+(nothing about "malformed" leaks whether any organization exists), but the comment asserted a property the
+code did not actually hold everywhere — split into its own `InvalidToolArgumentsError`, distinct from
+`ActionRefusedError`, with the comment corrected to say so. `EXPECTED_DESTRUCTIVE`
+(`tests/tool-surface.test.ts`) applies ACT-5's own access-audit idiom to MCP-4 directly: an exhaustive table,
+one row per allowlisted action, that a reviewer edits by hand — catching a tool *losing* its `destructive`
+marker (finding 1's own shape) as well as one gaining one unasked, which `destructive: true` alone (with
+nothing cross-checking it) never could. `buildToolDefinitions(registry, surface = MCP_TOOL_SURFACE)` takes an
+injectable second parameter now, so a test can build definitions around a fake action (finding 5's own
+attribution coverage did not need this, but MCP-5 in general — a metered action this platform's real catalog
+does not have yet — has nowhere else to be tested against without it). `elicitInput` now passes an explicit
+30-second `timeout` (`DEFAULT_ELICITATION_TIMEOUT_MS`) rather than the SDK's own 60-second default — MCP-4
+already fails closed on a timeout the same as an explicit decline, so this is a latency fix, not a correctness
+one.
+`apps/mcp/src/shutdown.ts` splits this process's own signal handling into its own testable module, matching
+`apps/bot`/`apps/worker`'s own `createShutdown` rather than staying inlined the simpler way `apps/api`'s does.
+
+**CI-only flake in `tests/mcp-e2e.test.ts` — a hung elicitation and a vitest test timeout were
+indistinguishable.** Reported by CI, not reproducible locally (macOS, 15+ solo runs, a full-suite-loaded run,
+and a CPU-stressed run all passed): two of the file's five tests (`cancel`, and the message-naming test, which
+uses `decline`) failed at 30008ms/30006ms — `ELICITATION_TIMEOUT_MS`'s own then-value, 30 seconds, is exactly
+`vitest.config.ts`'s own root `testTimeout`, inherited three commits later in this same slice's own rebase,
+after the constant was already written with no reason to expect it would ever collide with anything. At that
+exact ceiling a genuine server-side timeout (the client never answers, `elicitInput` gives up, the tool call
+still resolves — correctly — as a fail-closed refusal) and vitest simply killing the test read identically:
+same elapsed time, no way to tell which end actually stalled from the report alone. Fixed structurally, the
+one change made regardless of ever pinning the exact CI-only cause: `ServerDependencies.elicitationTimeoutMs`
+is now injectable (defaulting to `DEFAULT_ELICITATION_TIMEOUT_MS`, still 30 seconds, in production —
+`index.ts` never overrides it), and `tests/mcp-e2e.test.ts` runs every one of its own tests at 2 seconds, with
+one dedicated test at 300ms proving the fail-closed-on-timeout path fires at all (nothing did before this
+round — the file's other tests all supply an answer). A real hang now fails in a couple of seconds with a
+message that says a confirmation was not given, not sixty times that with a message that says nothing.
+
+The file was also restructured so every test owns its entire scenario — `setUp()`/`ctx.dispose()`, called
+inside each test's own `try`/`finally` — rather than a shared module-level `let client/server` reassigned per
+test and torn down from one shared `afterEach`: no two tests share a server, a client, a port, or a database
+connection, and one test's own teardown can never be mistaken for bleeding into the next test's timing budget.
+`dispose()` also now calls the client transport's own `terminateSession()` (a real `DELETE /mcp`) before
+`client.close()` — `close()` alone does not send `DELETE` (this file's own D-36 finding, `MAX_SESSIONS_PER_ACCOUNT`),
+so the prior version left each test's own server-side session semantically "open" until the test's own server
+was discarded moments later; terminating it explicitly is strictly more correct regardless of whether it bears
+on the CI failure.
+
+**Round two — confirmed, not merely hypothesized: the elicitation was going out on the wrong stream, and a
+destructive tool could fail closed in production because a confirmation was never delivered at all.** The CI
+report after the timeout fix (above) was unambiguous: `cancel` and the message-naming test both recorded an
+*empty* `elicitations` array — the client's own handler was never invoked. On the timeout test specifically
+that means the server correctly gave up and failed closed, but for the wrong reason: not "the client was asked
+and declined to answer" (MCP-4's own requirement) but "the request never reached the client at all" — a
+materially weaker property that the fake-`requestConfirmation` unit tests could not tell apart from the real
+one, and that this file's own tests, before this finding, did not either.
+
+Mechanism, read directly from the SDK's own source rather than inferred: in Streamable HTTP, an outgoing
+server-to-client request is written to a specific stream chosen by `options.relatedRequestId`
+(`shared/transport.js`'s own `TransportSendOptions`) — when set, `StreamableHTTPServerTransport#send`
+(`server/webStandardStreamableHttp.js`) writes onto *that* incoming request's own POST response stream; when
+absent, it treats the message as an unsolicited push and writes onto the *standalone* `GET /mcp` stream
+instead — and when that standalone stream has no controller registered yet, `send`'s own standalone branch
+does nothing at all: no error, no notification, the message is simply dropped (an event-store-backed replay
+is the only recovery path, and this server configures none). `requestElicitedConfirmation` called
+`mcpServer.server.elicitInput(...)` — the low-level `Server`'s own convenience method, which calls
+`Protocol#request()` with no `relatedRequestId` at all, because outside of a request handler's own context
+nothing tells it one exists. The one place the SDK *does* set `relatedRequestId` automatically is
+`RequestHandlerExtra.sendRequest` — the function handed to a tool's own callback as `extra`, which stamps
+`relatedRequestId: request.id` (`shared/protocol.js`'s own `fullExtra.sendRequest`) using the id of the
+`tools/call` currently being handled. `elicitInput`, called from outside that callback's own closure, has no
+access to it.
+
+That leaves the standalone stream as the only place the elicitation could go — and the client's own
+`StreamableHTTPClientTransport` does not open it synchronously. It is started fire-and-forget, from inside the
+handler for the client's *own* `notifications/initialized` send, only after a `202 Accepted` comes back
+(`client/streamableHttp.js`): `this._startOrAuthSse(...).catch(...)`, never awaited by anything —
+`client.connect()` resolves once `initialize` and `notifications/initialized` are sent, not once the
+standalone GET has actually connected server-side. A `tools/call` arriving before that GET registers loses its
+own elicitation with no error on either side — the exact race a slower CI runner hits more often than a fast
+local one, and the reason `cancel` and the `decline`-based test failed while the file's other tests, run in
+the same file moments apart, did not: which test loses the race is closer to arbitrary than tied to what the
+test is about.
+
+Confirmed by direct reproduction, not merely read from source: a standalone script built on this app's own
+`buildApp` and a real SDK `Client`, with `globalThis.fetch` patched to delay only the client's own GET to
+`/mcp`. Against the pre-fix code, a 300ms delay lost the elicitation on every run (`elicited: false`, the tool
+call itself still resolving — refused, not hung — from the server's own timeout); an undelayed run never lost
+it. Against the fix below, the same 300ms delay — and a 5-second delay, an order of magnitude past anything a
+real network hiccup would need — both still delivered the elicitation every time, because the fix no longer
+depends on the standalone stream at all.
+
+**Fix.** `requestElicitedConfirmation` now sends through `extra.sendRequest(...)` — the tool call's own
+`RequestHandlerExtra`, threaded from `registerTools`' own callback signature (`async (args, extra) => ...`,
+where `extra` previously went unused) down through `requestElicitedConfirmation`'s own new parameter — with
+`ElicitResultSchema` (imported from the SDK's own `types.js`) validating the response shape, the one piece of
+`elicitInput`'s own convenience this loses by going around it; this function's own check
+(`content?.['confirm'] === true`) only ever trusted that one field regardless, so nothing this code actually
+relied on is weaker for it. `tests/mcp-e2e.test.ts` gained a dedicated regression test —
+`setUp`'s own new `delayStandaloneGetMs` option, patching `globalThis.fetch` for the one GET request that
+matters — proving the confirmation reaches the client with that stream deliberately still unconnected;
+reverting the fix locally (`elicitInput` in place of `extra.sendRequest`) makes exactly that test fail with
+the same empty-array assertion CI reported, and no other test in the file.
+
+**What this means for a real assistant client that has not opened its own push stream yet.** Before this fix,
+any MCP client whose implementation delays, batches, or altogether skips proactively opening the standalone
+GET stream — which the specification itself describes as optional ("server may not support it" is the SDK's
+own comment on the *server* side of that same optionality, and nothing obliges a client to race it either) —
+could have a destructive tool's confirmation silently vanish, and see an unexplained refusal with no
+elicitation ever shown to the person operating it: fail-closed, so not a security hole, but a real reliability
+gap a production assistant could hit on every single destructive call if its own client implementation happens
+to defer that stream. The fix removes the dependency entirely rather than papering over the race (a longer
+client-side timeout, or making this server wait for the standalone stream before proceeding, were both
+considered and rejected — the correct fix is to stop needing that stream for a reply to a call already in
+flight, not to wait for it longer or delay dispatch on its account, discussed and set aside during this same
+round).
+
+**Limits.** This closes the one path this platform's own destructive tool (`courseAttachments.detach`) and
+its own confirmation flow use. Any future server-initiated request raised *outside* a tool call's own handler
+(a notification unrelated to any specific `tools/call`, say) still has nowhere to go but the standalone
+stream, correctly — that is what it is for, and nothing here removes it or the SDK's own optionality around a
+client ever opening it. Nothing in this platform raises one today.
+
+**Rebase.** This slice was rebased onto `origin/feat/PLAT-1-multi-surface-platform` directly rather than onto
+`feat/LINK-1-account-linking` (D-28's own linking branch, still in review) — this slice never depended on the
+account-linking mechanism, so tracking that branch's own base was coupling with no payoff. `scripts/dev.mjs`
+(`b558b43`, the platform branch's own) exists on this new base; `apps/mcp` is added to its `PROCESSES` list
+with `requires: []` (MCP-3's own "a connection authenticates itself, at request time" — this process reads no
+credential of its own at startup, unlike the bot or the worker), and `scripts/dev.test.mjs` is updated to match
+— closing the one limitation the first version of this decision recorded that a rebase, not further code, was
+what could actually fix.

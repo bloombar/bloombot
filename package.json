@@ -26,6 +26,7 @@
     "dev": "node scripts/dev.mjs",
     "bot:dev": "tsx watch apps/bot/src/index.ts",
     "api:dev": "tsx watch apps/api/src/index.ts",
+    "mcp:dev": "tsx watch apps/mcp/src/index.ts",
     "worker:dev": "tsx watch apps/worker/src/index.ts",
     "web:dev": "npm run dev --workspace apps/web",
     "pree2e": "npm run build && npm run build --workspace apps/web",

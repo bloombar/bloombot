@@ -17,6 +17,7 @@
     { "path": "./packages/jobs" },
     { "path": "./apps/bot" },
     { "path": "./apps/api" },
+    { "path": "./apps/mcp" },
     { "path": "./apps/web" },
     { "path": "./apps/worker" },
     { "path": "./tsconfig.tests.json" }

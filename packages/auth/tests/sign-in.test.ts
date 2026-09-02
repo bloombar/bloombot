@@ -546,4 +546,48 @@ describe('requestSignInLink (AUTH-1)', () => {
 
     expect(emailSender.sent).toHaveLength(2)
   })
+
+  // AUTH-5's must-fix 1: until this slice, the only senders in this
+  // codebase were a file writer and a logger, neither of which throws in
+  // practice — this is the first sender that routinely does, and the first
+  // test to prove `requestSignInLink` does not leave a dead-but-active
+  // token behind when it does.
+  it('discards the token and rethrows when the mail port fails to send, so an immediate retry is not silently dropped', async () => {
+    testDb = createTestDatabase()
+    const failingSender = {
+      send: vi.fn().mockRejectedValue(new Error('relay unreachable')),
+    }
+    const deps = {
+      db: testDb.db,
+      emailSender: failingSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await expect(requestSignInLink('victim@example.edu', deps)).rejects.toThrow(
+      'relay unreachable'
+    )
+
+    // The whole point: the row `issueSignInToken` wrote is gone, not just
+    // unused — `hasActiveSignInToken` (the flooding guard exercised above)
+    // must not see it and refuse the next attempt.
+    expect(
+      testDb.db
+        .select()
+        .from(schema.signInTokens)
+        .all()
+        .filter((row) => row.email === 'victim@example.edu')
+    ).toHaveLength(0)
+
+    // The retry this whole fix exists for: a working sender, right after
+    // the failure, actually sends — proving the address is not locked out
+    // for the token's own fifteen-minute lifetime the way it would be if
+    // the failed attempt's token were still "active".
+    const workingSender = new RecordingEmailSender()
+    await requestSignInLink('victim@example.edu', {
+      ...deps,
+      emailSender: workingSender,
+    })
+    expect(workingSender.sent).toHaveLength(1)
+  })
 })

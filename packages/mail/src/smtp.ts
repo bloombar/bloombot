@@ -12,7 +12,7 @@
  * as a port: "send this to that address" is exactly what SMTP does, with
  * nothing provider-specific leaking into the interface the way a
  * transactional-email API's own delivery-tracking or template features
- * would tempt one to. `docs/DECISIONS.md`'s D-44 has the full reasoning.
+ * would tempt one to. `docs/DECISIONS.md`'s D-46 has the full reasoning.
  *
  * `createSmtpEmailSender` is a factory, not a module-level client (PLAT-5):
  * nothing here opens a connection until `send()` is actually called —
@@ -53,7 +53,43 @@ export interface CreateSmtpEmailSenderOptions {
    * adapter's own logic. Never set to `false` outside a test.
    */
   requireTLS?: boolean
+  /**
+   * A CA certificate (PEM) nodemailer should trust in addition to Node's
+   * own default trust store, for the STARTTLS handshake this adapter
+   * negotiates. Not read from configuration anywhere — `apps/api` never
+   * sets it, and there is no `MAIL_SMTP_CA` env var (must-fix 3 of the
+   * AUTH-5 rework documents `NODE_EXTRA_CA_CERTS` in `env.example` as the
+   * real deployment's own way to trust a private institutional CA instead,
+   * a Node runtime flag rather than something this package reads). This
+   * exists solely so `tests/smtp.test.ts` can prove a real STARTTLS
+   * handshake actually succeeds, against a self-signed certificate the test
+   * itself generates — the one thing `requireTLS: false` (above) cannot
+   * prove, since it skips TLS entirely rather than completing it.
+   */
+  tlsCaPem?: string
 }
+
+// "Also fix" of the AUTH-5 rework: nodemailer's own defaults left both
+// unbounded enough that a relay which accepts the TCP connection and then
+// never speaks — never sends its own greeting, the one case none of
+// `errors.ts`'s classified kinds above were reproduced against — held
+// `send()` open for tens of seconds. `/auth/request-link` is
+// unauthenticated (AUTH-1), so an unbounded hold on it is a resource-hold
+// vector, not merely a slow error message. Ten seconds is generous for a
+// relay actually listening (loopback and a real campus relay both resolve
+// in milliseconds) and short enough that a caller — and the request
+// admission this API otherwise has no other bound on for this route — is
+// not left hanging on a relay that never will.
+const CONNECTION_TIMEOUT_MS = 10_000
+// Deliberately shorter than CONNECTION_TIMEOUT_MS, not merely equal to it:
+// nodemailer treats the two as one continuous deadline when they match, so
+// a relay that accepts the TCP connection and then never greets reports the
+// generic "Timeout"/CONN rather than the specific "Greeting never
+// received" — reproduced while writing this, and the reason
+// `tests/smtp.test.ts`'s own greeting-timeout test needed this exact gap to
+// assert the more diagnostic message at all.
+const GREETING_TIMEOUT_MS = 8_000
+const SOCKET_TIMEOUT_MS = 10_000
 
 /**
  * Build an `EmailSender` backed by a real SMTP relay.
@@ -89,6 +125,10 @@ export function createSmtpEmailSender(
     // connection is not already implicit-TLS — see this option's own doc
     // comment on `CreateSmtpEmailSenderOptions` above.
     requireTLS: secure ? undefined : (options.requireTLS ?? true),
+    connectionTimeout: CONNECTION_TIMEOUT_MS,
+    greetingTimeout: GREETING_TIMEOUT_MS,
+    socketTimeout: SOCKET_TIMEOUT_MS,
+    ...(options.tlsCaPem ? { tls: { ca: options.tlsCaPem } } : {}),
     ...(options.auth ? { auth: options.auth } : {}),
   })
 
@@ -108,9 +148,11 @@ export function createSmtpEmailSender(
         options.logger.info({ to, subject }, 'apps/mail: sent')
       } catch (error) {
         const classified = classifySmtpError(error)
-        // `classified.message` is built entirely from bounded, protocol-level
-        // facts (`errors.ts`'s own module comment) — safe to log, unlike
-        // `error` itself, which this catch block never touches again.
+        // `classified.message` carries only what `errors.ts`'s own module
+        // comment says is safe for this `kind` — bounded protocol facts for
+        // most, plus a locally-generated message for `connection_failed`/
+        // `timed_out` only — never `error` itself, which this catch block
+        // never touches again.
         options.logger.error(
           {
             to,

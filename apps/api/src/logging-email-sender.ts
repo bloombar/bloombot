@@ -6,7 +6,7 @@
  *
  * `@bloombot/auth`'s `email.ts` ships the `EmailSender` port and a
  * `RecordingEmailSender` for tests (docs/DECISIONS.md D-19: "the real
- * implementation ... is a later slice's adapter package", D-44 for that
+ * implementation ... is a later slice's adapter package", D-46 for that
  * slice's own reasoning); this file is this process's own chooser, so
  * `src/index.ts` has something to hand `requestSignInLink` that is honest
  * about what it does. `LoggingEmailSender` below is that stand-in — a
@@ -19,11 +19,29 @@
  * previous version logged the whole body, link included).
  */
 
+import { z } from 'zod'
+
 import type { Logger } from '@bloombot/logger'
 import type { EmailSender } from '@bloombot/auth'
 import { createSmtpEmailSender } from '@bloombot/mail'
 
 import { FileEmailSender } from './file-email-sender.js'
+
+// "Also fix" of the AUTH-5 rework: `MAIL_FROM=Bloombot` (a plausible typo
+// for `MAIL_FROM=Bloombot <noreply@bloombot.example>`) parsed as a
+// non-empty string, so `buildSmtpEmailSender`'s own `!smtp.from` check
+// waved it through — this process started happily, and a real relay
+// rejected or spam-filed every sign-in with a 500 as the only symptom, no
+// different from any other rejected-recipient failure. The same `z.email()`
+// `routes/auth.ts` already validates a caller's own address with, applied
+// to whichever half of `MAIL_FROM` is actually the address.
+const fromAddressSchema = z.email()
+
+/** The address half of a `MAIL_FROM` value — either a bare `user@domain` or the display-name form `Name <user@domain>` (env.example documents both as accepted). */
+function extractFromAddress(from: string): string {
+  const match = /<([^>]+)>\s*$/.exec(from)
+  return match ? match[1]! : from
+}
 
 export class LoggingEmailSender implements EmailSender {
   constructor(private readonly logger: Logger) {}
@@ -113,6 +131,14 @@ function buildSmtpEmailSender(smtp: SmtpEnv, logger: Logger): EmailSender {
         'stand-in this process may fall back to there.'
     )
   }
+  if (!fromAddressSchema.safeParse(extractFromAddress(smtp.from)).success) {
+    // MAIL_FROM is not a credential (env.example, CFG-5) — safe to echo
+    // back in full, the same way a malformed request address is safe for
+    // `routes/auth.ts` to report in its own 400.
+    throw new Error(
+      `apps/api: MAIL_FROM does not parse to a valid address (see env.example): "${smtp.from}"`
+    )
+  }
   if ((smtp.user && !smtp.password) || (!smtp.user && smtp.password)) {
     // Named without repeating either value — this message itself ends up in
     // a startup failure an operator reads, never a place a credential
@@ -138,11 +164,24 @@ function buildSmtpEmailSender(smtp: SmtpEnv, logger: Logger): EmailSender {
  * In order:
  *
  * 1. **`NODE_ENV=production` — SMTP, or refuse to start.** Checked first and
- *    unconditionally, before `mailFile` is even read: a stray `MAIL_FILE` in
- *    a production environment must fail loudly, not quietly start writing
- *    credentials to disk (must-fix 1 of the API-1..6 rework — this ordering
- *    predates SMTP and stays exactly as strict now that a production
- *    deployment has somewhere real to send mail).
+ *    unconditionally, before `mailFile` is even read at all — this branch
+ *    never consults it, whether or not it is set (must-fix 1 of the
+ *    API-1..6 rework — this ordering predates SMTP and stays exactly as
+ *    strict now that a production deployment has somewhere real to send
+ *    mail). What that means for a stray `MAIL_FILE` in production depends
+ *    on whether SMTP is configured, and the two are different failures: if
+ *    it is not, this process refuses to start outright (`buildSmtpEmailSender`
+ *    below); if it is, `MAIL_FILE` is silently ignored — never the thing
+ *    that decides anything — rather than fatal. Either way it is not
+ *    honoured: must-fix 4 of the AUTH-5 rework closes the one dangerous
+ *    reading of "checked first" a reviewer found still open — moving the
+ *    `if (mailFile) return new FileEmailSender(mailFile)` branch itself
+ *    inside the production branch, ahead of the SMTP check, would leave
+ *    every test that predates that fix green while a production box with
+ *    SMTP configured *and* a stray `MAIL_FILE` started silently appending
+ *    fifteen-minute bearer credentials to a file on the host — see
+ *    `apps/api/tests/file-email-sender.test.ts`'s own test for exactly that
+ *    combination.
  * 2. **`MAIL_FILE` set, outside production.** Writes each message to that
  *    file so a developer can complete a local sign-in — the link is a
  *    credential and cannot be recovered any other way, since tokens are

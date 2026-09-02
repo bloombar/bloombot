@@ -34,6 +34,8 @@ export interface ReceivedMessage {
   to: string[]
   subject: string | undefined
   text: string | undefined
+  /** Whether this message arrived over a TLS-upgraded connection — `smtp-server`'s own `session.secure`, the server-side proof a handshake actually completed rather than merely being offered. */
+  secure: boolean
 }
 
 /**
@@ -61,6 +63,7 @@ function parseMessage(
     subject: subjectMatch?.[1],
     // Trailing CRLF the DATA terminator itself leaves behind.
     text: body.replace(/\r\n$/, '') || undefined,
+    secure: session.secure,
   }
 }
 
@@ -69,6 +72,14 @@ export interface FakeSmtpServerOptions {
   requireAuth?: { user: string; pass: string }
   /** Reject every `RCPT TO` with this SMTP response code — simulates a relay refusing a recipient. */
   rejectRecipientWith?: number
+  /**
+   * Offer STARTTLS with this key/cert pair instead of disabling it —
+   * `tests/helpers/self-signed-cert.ts` generates one. Every other fake
+   * this helper builds disables STARTTLS entirely (this file's own module
+   * comment); this is the one option that turns it back on, for the one
+   * test that needs to prove a real handshake completes.
+   */
+  tls?: { key: string; cert: string }
 }
 
 export class FakeSmtpServer {
@@ -88,8 +99,12 @@ export class FakeSmtpServer {
     const server = new SMTPServer({
       // No real deployment terminates STARTTLS with no certificate — this
       // fake never needs to, since `requireTLS: false` is how a test opts
-      // out of TLS instead (this file's own module comment).
-      disabledCommands: ['STARTTLS'],
+      // out of TLS instead (this file's own module comment) — except when
+      // `options.tls` is given, the one case that needs STARTTLS genuinely
+      // offered rather than disabled.
+      ...(options.tls
+        ? { key: options.tls.key, cert: options.tls.cert }
+        : { disabledCommands: ['STARTTLS'] }),
       authOptional: !options.requireAuth,
       onAuth(
         auth: SMTPServerAuthentication,

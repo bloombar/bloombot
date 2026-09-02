@@ -115,3 +115,18 @@ export function hasActiveSignInToken(
     .get()
   return row !== undefined
 }
+
+/**
+ * Delete a sign-in token row outright — AUTH-5's must-fix 1: when the mail
+ * carrying a freshly issued token fails to send, the row `createSignInToken`
+ * just wrote is still live and unused, so `hasActiveSignInToken` (above)
+ * would otherwise treat it as an outstanding link and silently decline
+ * every retry — answering `204`, sending nothing — for the rest of its
+ * fifteen-minute lifetime. Unlike `consumeSignInToken`, this is not "mark
+ * used": a token nobody ever received was never a legitimate single use to
+ * record, so the row is removed rather than left behind with a `usedAt` a
+ * later reader might mistake for a real redemption.
+ */
+export function deleteSignInToken(tokenHash: string, db: Executor): void {
+  db.delete(signInTokens).where(eq(signInTokens.tokenHash, tokenHash)).run()
+}

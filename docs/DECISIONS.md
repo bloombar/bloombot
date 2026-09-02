@@ -3728,7 +3728,7 @@ directly, no history entries pushed for in-panel navigation), so pressing Back f
 already a full page unload, covered by the same `beforeunload` handler as "leaving the page entirely" rather
 than a separate in-app case to intercept.
 
-## D-44 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
+## D-46 — `packages/mail`: a real mail transport (AUTH-5), why SMTP, and what "misconfigured" means
 
 **Problem.** `apps/api/src/logging-email-sender.ts#buildEmailSender` refused outright under
 `NODE_ENV=production` (must-fix 1 of the API-1..6 rework) because no real transport existed yet for it to
@@ -3745,7 +3745,8 @@ SDK to trust, and it keeps `EmailSender` (`packages/auth/src/email.ts`) honest a
 this subject and this body" is exactly what SMTP does, with nothing provider-specific (delivery tracking,
 templating) tempting the interface to grow past that. `packages/mail` is the adapter, following
 `packages/openai`'s own shape exactly: a factory (`createSmtpEmailSender`) that dials nothing until `send()`
-is called (PLAT-5), built on `nodemailer` (pinned, widely maintained, the de facto standard Node SMTP
+is called (PLAT-5), built on `nodemailer` (`^9.1.1` — a caret range, this repo's own convention for every
+workspace dependency, not literally pinned to one version; widely maintained, the de facto standard Node SMTP
 client) rather than a hand-rolled SMTP implementation — the same "do not reimplement the protocol" reasoning
 `jose` already got in D-19 for JWT verification.
 
@@ -3777,6 +3778,26 @@ failure happens identically whether or not the address has an account, since `re
 token and attempts to send *before* it could know the difference, so every caller sees the same `500` for the
 same underlying cause. The route's ordinary `204` (no account, or a healthy send) is unchanged.
 
+**Rework finding — a failed send used to leave the token it issued active, so a retry silently succeeded
+with nothing ever sent (must-fix 1).** `sign-in.ts#requestSignInLink` issues a token, then emails it — until
+this fix, in that order and nothing else: a `send()` that threw still left the freshly-created row live and
+unused. `hasActiveSignInToken` (the same function's own flooding guard, "also worth doing" of the API-1..6
+rework) then did exactly what it is supposed to for a legitimately outstanding link: refused to issue a
+second one, silently, for the rest of that token's fifteen-minute lifetime. Every sender in this codebase
+before this slice — a file writer, a logger — was, in practice, infallible, so this branch was reachable only
+in theory; a real transport reaches it routinely (a relay blip is exactly the ordinary case a retry exists
+for), and reproducing it against a running production API was how a reviewer found it: a ten-second relay
+outage answered `500` once (token written, nothing sent) and then `204` on every subsequent attempt for the
+rest of the fifteen minutes, sending nothing, while the caller was told a link was on its way — precisely what
+AUTH-5's own text forbids, "accepting a sign-in it will silently drop." The fix is `discardSignInToken`
+(`tokens.ts`): `requestSignInLink` now wraps the send in a `try`/`catch`, deletes the token row outright (not
+"mark used" — a token nobody received was never a legitimate single use to record) on any thrown error, and
+rethrows unchanged, so the caller still sees the ordinary `500` the choice above already describes and the
+address is
+immediately eligible for a fresh attempt rather than locked out. `packages/db/src/repos/sign-in-tokens.ts#deleteSignInToken`
+is the one new repository function this needed — a straight `DELETE`, not `consumeSignInToken`'s conditional
+`UPDATE`, since there is no "was this already used" race to resolve for a row nobody legitimately touched.
+
 **Choice — TLS is required, not merely offered, and a nodemailer error's own free-text `response` is never
 logged.** Both follow from the same fact this whole slice's brief states directly: a sign-in link is a
 bearer credential. `createSmtpEmailSender` treats port 465 as implicit TLS and sets `requireTLS: true` for
@@ -3791,6 +3812,27 @@ protocol-level facts a nodemailer error carries — `code`, `command`, `response
 `response` or the original error's own `message`, so whatever ends up inside `middleware/errors.ts`'s
 `logger.error({ err: error, ... })` carries nothing from the message that failed to send.
 
+**Choice — `connection_failed`/`timed_out` keep the underlying `error.message`; every other kind still
+discards it — and `NODE_EXTRA_CA_CERTS`, not a new `MAIL_SMTP_CA` option, is how a private-CA relay is
+trusted.** A rework finding this entry did not originally weigh: the sanitizing choice above (never touch
+`error.message`) was reasoned correctly for a *remote* server's own free-text reply, but applied too broadly
+— `ECONNREFUSED`, `ENOTFOUND`, `Connection timeout` and a TLS trust failure's own `"self-signed certificate;
+if the root CA is installed locally, try running Node.js with --use-system-ca"` are all generated locally, by
+Node's own `net`/`tls` stack, before any SMTP conversation with a remote server even begins — none of them
+can carry a fragment of the message being sent. Discarding them anyway meant a certificate a private
+institutional CA issued — the case this choice most needed to get right, since a university's own relay is
+exactly the deployment AUTH-5 targets — produced a log line byte-identical to a relay that is simply down:
+`{"kind":"connection_failed","code":"ESOCKET"}`, with nothing anywhere pointing an operator at the actual
+cause. `errors.ts#KINDS_WITH_SAFE_MESSAGE` names exactly the two kinds (`connection_failed`, `timed_out`)
+whose `error.message` is safe to keep, and keeps it. Trusting a private CA at all was the other half of the
+same gap: `createSmtpEmailSender` takes no `MAIL_SMTP_CA` option and `packages/config`'s schema has no
+matching variable — `env.example`'s own `MAIL_SMTP_HOST` comment documents `NODE_EXTRA_CA_CERTS` instead, a
+Node runtime flag/env var an operator sets when starting this process, read once by Node itself before this
+package's own code ever runs, needing no code here to honor it. `createSmtpEmailSender` does carry a
+`tlsCaPem` option, but it is test-only (its own doc comment says so explicitly) — `packages/mail/tests/smtp.test.ts`
+uses it to prove a real STARTTLS handshake against a self-signed certificate actually completes, which
+`NODE_EXTRA_CA_CERTS` cannot be set for mid-process, only at Node's own startup.
+
 **Not chosen.** A transactional-email API (SendGrid, Postmark, SES, ...): faster to integrate and often
 better deliverability tooling, but a second vendor account and SDK per institution, and a worse fit for
 `EmailSender`'s own minimal port — most of these APIs' value is in features (templates, analytics, suppression
@@ -3802,9 +3844,29 @@ host or bad credentials slightly earlier than the first real send, but costs eve
 trip to the mail relay and conflates "configured" (a property this slice can prove offline) with "currently
 reachable" (a transient property better left to the per-send path already described above).
 
+Moving the send itself onto `packages/jobs`' own queue — enqueue-and-return from `requestSignInLink`, let
+`apps/worker`'s existing runner (with its own retry/backoff, D-30) actually dial the relay — was not weighed
+at all when this entry was first written, and it should have been: `packages/jobs` already exists, already
+retries, and a rework finding (must-fix 1, above) turned out to hinge on exactly the gap between
+"issue a token" and "the mail carrying it might not arrive" that a queue's own at-least-once delivery would
+have narrowed considerably. Not chosen for this slice regardless, now that it has been weighed rather than
+merely missed: `requestSignInLink` is `@bloombot/auth`'s own synchronous API, called by `routes/auth.ts`
+inside one HTTP request/response cycle — moving the send onto a queue changes what `POST /auth/request-link`
+means (a `204` would then mean "queued," not "sent," which the discarded-token fix below still lets it mean
+today) and reaches into `apps/worker`/`packages/jobs` from a slice whose own brief scoped it to the transport
+alone. Worth revisiting if a real deployment's relay turns out to be flaky enough that must-fix 1's discard-
+and-let-the-caller-retry is not enough on its own — the queue's own retry/backoff would then be strictly
+better than leaving a human to click "resend."
+
 **Limits.** Auth is optional on the SMTP connection (some internal, IP-allowlisted relays need none), so a
 relay that silently accepts unauthenticated mail from this box is a relay-side policy this slice cannot see
 or enforce. `MAIL_SMTP_PORT` has no default derived from a "real" service the way `OPENAI_BASE_URL` does — a
 mail relay is always institution-specific — so `env.example` documents `587` (STARTTLS) as the common case
-rather than leaving it unset.
+rather than leaving it unset. `CONNECTION_TIMEOUT_MS`/`GREETING_TIMEOUT_MS`/`SOCKET_TIMEOUT_MS` (`smtp.ts`,
+ten/eight/ten seconds — a rework finding: nodemailer's own defaults left a relay that accepts a connection
+and never speaks holding `send()` open for tens of seconds, and `/auth/request-link` is unauthenticated, so
+an unbounded hold on it is a resource-hold vector, not merely a slow error) are this slice's own judgment
+call, not a number derived from anything AUTH-5 names — long enough for a real relay (loopback and a campus
+relay both resolve in milliseconds) and short enough that a relay which never will does not hold the request
+open indefinitely.
 

@@ -71,7 +71,21 @@ const FORBIDDEN_PACKAGES = [
  * `pino` signatures above (`@bloombot/openai` depends on `@bloombot/core`,
  * which depends on `@bloombot/db`), so it gets a signature of its own
  * rather than relying on a transitive edge that a future refactor of
- * `@bloombot/core` could remove.
+ * `@bloombot/core` could remove. `nodemailer` is `@bloombot/mail`'s own —
+ * and, unlike every package above, needs a signature of its own for real
+ * rather than for defense in depth: `@bloombot/mail`'s only *runtime*
+ * import is `nodemailer` itself; its `@bloombot/auth` and `@bloombot/logger`
+ * imports are both `import type`, erased entirely by the same TypeScript
+ * compilation this app's own build already does, so none of the signatures
+ * above (all reached through an ordinary, non-type import) fire for it. A
+ * reviewer of the AUTH-5 rework proved this the same way finding 1 above
+ * was proved: a real `vite build` with `@bloombot/mail` imported from
+ * `main.tsx` succeeded, all four assertion loops in this describe block
+ * reported zero failures, and the bundle contained `nodemailer`, `SMTP`,
+ * `STARTTLS` and this package's own `mail transport (SMTP) send failed`
+ * string. `FORBIDDEN_PACKAGES` alone blocks the static import at lint
+ * time; this is the check that exists for what ESLint cannot see — a
+ * disabled rule, or a dynamic import.
  */
 const BUNDLED_PACKAGE_SIGNATURES = [
   'better-sqlite3',
@@ -79,6 +93,7 @@ const BUNDLED_PACKAGE_SIGNATURES = [
   'pino',
   'discord.com/api',
   'gpt-4o',
+  'nodemailer',
 ]
 
 // Credential-shaped strings: the actual environment-variable names
@@ -90,6 +105,10 @@ const CREDENTIAL_NAMES = [
   'OPENAI_API_KEY',
   'DISCORD_CLIENT_SECRET',
   'BOT_PUBLIC_KEY',
+  // AUTH-5 — the SMTP relay's own credentials, read directly by apps/api
+  // (env.example, CFG-5), the same reason the four above are here.
+  'MAIL_SMTP_USER',
+  'MAIL_SMTP_PASSWORD',
 ]
 
 /** Every file under `dir`, recursively — `dist/` is small (a handful of bundled chunks), so no need for a streaming walk. */

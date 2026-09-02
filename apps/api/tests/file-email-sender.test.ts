@@ -18,13 +18,25 @@ import { FileEmailSender } from '../src/file-email-sender.js'
 import { buildEmailSender, type SmtpEnv } from '../src/logging-email-sender.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
 
-// An `SmtpEnv` with nothing set — `logging-email-sender.test.ts` covers the
+// An `SmtpEnv` with nothing set — `smtp-email-sender.test.ts` covers the
 // SMTP branch itself; this file's own concern is `MAIL_FILE` and the
 // logging stand-in, so every call here passes SMTP as unconfigured.
 const UNCONFIGURED_SMTP: SmtpEnv = {
   host: '',
   port: 587,
   from: '',
+  user: undefined,
+  password: undefined,
+}
+
+// AUTH-5's must-fix 4: a stray `MAIL_FILE` in production, with SMTP fully
+// configured, must never resolve to `FileEmailSender` — the one production
+// combination that would leak fifteen-minute bearer credentials to disk on
+// the box serving real students.
+const CONFIGURED_SMTP: SmtpEnv = {
+  host: '127.0.0.1',
+  port: 587,
+  from: 'noreply@bloombot.test',
   user: undefined,
   password: undefined,
 }
@@ -112,5 +124,22 @@ describe('buildEmailSender', () => {
         createFakeLogger()
       )
     ).toThrow(/no real mail transport/i)
+  })
+
+  // AUTH-5's must-fix 4: the 12-case selection matrix's own one dangerous
+  // combination. Before this test existed, moving the `MAIL_FILE` branch
+  // inside the production check (ahead of the SMTP one) would have left
+  // every other test in this file green while a production box with SMTP
+  // configured and a stray `MAIL_FILE` started silently appending
+  // fifteen-minute sign-in links to a file on the host.
+  it('never yields the file sender in production, even with MAIL_FILE set and SMTP configured', () => {
+    const path = scratchFile()
+    const sender = buildEmailSender(
+      'production',
+      path,
+      CONFIGURED_SMTP,
+      createFakeLogger()
+    )
+    expect(sender).not.toBeInstanceOf(FileEmailSender)
   })
 })

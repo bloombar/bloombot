@@ -15,7 +15,6 @@
  * proven against a real loopback server.
  */
 
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -60,6 +59,31 @@ describe('buildEmailSender — SMTP (AUTH-5)', () => {
     ).toThrow(/MAIL_FROM/)
   })
 
+  // "Also fix" of the AUTH-5 rework: `MAIL_FROM=Bloombot` — a plausible
+  // typo for `MAIL_FROM=Bloombot <noreply@bloombot.example>` — used to
+  // parse as a non-empty string and start happily, sending with an empty
+  // envelope sender until a real relay rejected every attempt.
+  it('refuses to start in production when MAIL_FROM does not parse to a valid address', () => {
+    const smtp: SmtpEnv = { ...CONFIGURED_SMTP, from: 'Bloombot' }
+    expect(() =>
+      buildEmailSender('production', undefined, smtp, createFakeLogger())
+    ).toThrow(/MAIL_FROM does not parse/)
+  })
+
+  it('accepts the display-name form of MAIL_FROM', () => {
+    const smtp: SmtpEnv = {
+      ...CONFIGURED_SMTP,
+      from: 'Bloombot <noreply@bloombot.test>',
+    }
+    const sender = buildEmailSender(
+      'production',
+      undefined,
+      smtp,
+      createFakeLogger()
+    )
+    expect(typeof sender.send).toBe('function')
+  })
+
   it('refuses when MAIL_SMTP_USER is set without MAIL_SMTP_PASSWORD, or the reverse', () => {
     const userOnly: SmtpEnv = { ...CONFIGURED_SMTP, user: 'bloombot' }
     const passwordOnly: SmtpEnv = {
@@ -91,10 +115,18 @@ describe('buildEmailSender — SMTP (AUTH-5)', () => {
   })
 
   it('prefers MAIL_FILE over SMTP outside production, when both are configured', () => {
-    // `FileEmailSender`'s constructor only `mkdirSync`s the parent directory
-    // (already present under the OS tmpdir) — nothing is ever written here,
-    // since `send()` is never called.
-    const path = join(tmpdir(), 'bloombot-smtp-vs-file-test.jsonl')
+    // `FileEmailSender`'s constructor only `mkdirSync`s the parent
+    // directory — nothing is ever written here, since `send()` is never
+    // called. Under this repo's own `tmp/` (gitignored), the same
+    // convention `packages/db/tests/helpers/test-db.ts` uses for a
+    // throwaway path, rather than the OS tmpdir every other helper in this
+    // suite avoids reaching outside the repo for.
+    const path = join(
+      process.cwd(),
+      'tmp',
+      'api-tests',
+      'smtp-vs-file-test.jsonl'
+    )
     const sender = buildEmailSender(
       'development',
       path,

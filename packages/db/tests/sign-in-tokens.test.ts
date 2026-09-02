@@ -65,6 +65,41 @@ describe('sign-in-tokens repo (AUTH-1)', () => {
     ).toBeUndefined()
   })
 
+  // AUTH-5's must-fix 1: `@bloombot/auth`'s `requestSignInLink` calls this
+  // when the mail carrying a freshly issued token fails to send, so the
+  // still-live row does not go on making `hasActiveSignInToken` refuse
+  // every retry for the rest of the token's own lifetime.
+  it('deletes an unused token row outright, unlike consuming it', () => {
+    testDb = createTestDatabase()
+    signInTokens.createSignInToken(
+      {
+        email: 'a@example.edu',
+        tokenHash: 'hash-1',
+        expiresAt: Date.now() + 60_000,
+      },
+      testDb.db
+    )
+
+    signInTokens.deleteSignInToken('hash-1', testDb.db)
+
+    // Gone, not merely marked used — `hasActiveSignInToken` must see no
+    // row at all, and a later `createSignInToken` for the same address
+    // must not collide with a leftover one.
+    expect(
+      signInTokens.hasActiveSignInToken('a@example.edu', Date.now(), testDb.db)
+    ).toBe(false)
+    expect(
+      signInTokens.consumeSignInToken('hash-1', Date.now(), testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('is a no-op for a hash that was never issued', () => {
+    testDb = createTestDatabase()
+    expect(() =>
+      signInTokens.deleteSignInToken('nonexistent', testDb.db)
+    ).not.toThrow()
+  })
+
   it('refuses an expired token', () => {
     testDb = createTestDatabase()
     const now = Date.now()

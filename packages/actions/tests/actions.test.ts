@@ -292,6 +292,23 @@ describe('courses.save', () => {
     expect(course.categories).toHaveLength(1)
   })
 
+  // MDL-8: a stored prompt id is only ever inherited from the Python era
+  // (D-3's escape hatch), never newly acquired — even a caller that
+  // supplies one explicitly on create (the panel itself no longer offers
+  // the field at all, `pages/CourseEditor.tsx`) gets a course with none.
+  it('MDL-8: a create ignores an explicit promptId — no new course may acquire one', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { promptId: 'prompt-from-the-python-era' }),
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.promptId).toBeNull()
+  })
+
   it('updates an existing course when input carries its id', async () => {
     testDb = createTestDatabase()
     const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)

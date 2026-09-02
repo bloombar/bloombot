@@ -29,6 +29,7 @@ import type {
   ChatCourse,
   ChatMessageEntry,
   Course,
+  CourseAttachmentSummary,
   CourseSummary,
   DiscordPersonLinkPreviewResponse,
   DuplicateProjectResult,
@@ -380,6 +381,61 @@ export function disableCourse(
   courseId: string
 ): Promise<{ disabled: boolean }> {
   return dispatchAction(organizationId, 'courses.disable', { courseId })
+}
+
+/**
+ * WEB-18/FILE-1..3 — a course's knowledge files: what it is grounded in
+ * (FILE-1), each one's own pending/ready/failed lifecycle (FILE-2), an
+ * upload, and a detach. Each a thin wrapper over `dispatchAction`, the same
+ * generic action route every other screen in this app already reaches
+ * through (`pages/Projects.tsx`'s own module comment already states this
+ * convention).
+ */
+
+/** FILE-1/FILE-2: a course's own attachments, each with its own status — what `components/CourseAttachments.tsx` reads and polls. */
+export function listCourseAttachments(
+  organizationId: string,
+  courseId: string
+): Promise<CourseAttachmentSummary[]> {
+  return dispatchAction<CourseAttachmentSummary[]>(
+    organizationId,
+    'courseAttachments.list',
+    { courseId }
+  )
+}
+
+/**
+ * FILE-1: attach a file to a course. The bytes are written and a `pending`
+ * row created synchronously by `courseAttachments.attach`'s own action
+ * (`packages/actions`'s own module comment) — the provider upload itself
+ * runs afterward, as a background job, so this resolves once the upload is
+ * *queued*, not once the file is actually grounding answers.
+ */
+export function attachCourseFile(
+  organizationId: string,
+  courseId: string,
+  input: { filename: string; contentType: string; contentBase64: string }
+): Promise<{ attachmentId: string; jobId: string }> {
+  return dispatchAction(organizationId, 'courseAttachments.attach', {
+    courseId,
+    ...input,
+  })
+}
+
+/**
+ * FILE-3: detach a file — reaching the provider and removing the local
+ * record both happen in a background job (`courseAttachments.detach`'s own
+ * action), so the attachment named here may still appear in
+ * `listCourseAttachments` for a moment after this resolves, until that job
+ * actually removes it.
+ */
+export function detachCourseAttachment(
+  organizationId: string,
+  attachmentId: string
+): Promise<{ jobId: string }> {
+  return dispatchAction(organizationId, 'courseAttachments.detach', {
+    attachmentId,
+  })
 }
 
 /** SRV-6: request that a course's declared categories and channels be created in its organization's bound Discord server — enqueues a background job and returns immediately; the job itself only runs once `apps/worker` claims it (`docs/RUNNING_LOCALLY.md`'s own "the worker is the one that is easy to forget"). */

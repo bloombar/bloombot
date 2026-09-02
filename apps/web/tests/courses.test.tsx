@@ -3,11 +3,12 @@
  * quick enable/disable toggle each row offers alongside the full editor.
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CourseSummary, Project } from '../src/api/types.js'
 import { Courses } from '../src/pages/Courses.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 const { listCourses, enableCourse, disableCourse } = vi.hoisted(() => ({
   listCourses: vi.fn(),
@@ -56,7 +57,7 @@ describe('Courses (WEB-8)', () => {
   it("lists the project's courses, scoped by projectId", async () => {
     listCourses.mockResolvedValue([COURSE])
 
-    render(
+    renderWithModal(
       <Courses
         organizationId="org-1"
         project={PROJECT}
@@ -73,7 +74,7 @@ describe('Courses (WEB-8)', () => {
     listCourses.mockResolvedValue([COURSE])
     disableCourse.mockResolvedValue({ disabled: true })
 
-    render(
+    renderWithModal(
       <Courses
         organizationId="org-1"
         project={PROJECT}
@@ -84,6 +85,9 @@ describe('Courses (WEB-8)', () => {
     await screen.findByText('Web Design')
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+    // WEB-15: destructive, so it confirms first (`components/modal/`).
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
 
     await waitFor(() =>
       expect(disableCourse).toHaveBeenCalledWith('org-1', 'course-1')
@@ -94,7 +98,7 @@ describe('Courses (WEB-8)', () => {
     listCourses.mockResolvedValue([{ ...COURSE, enabled: false }])
     enableCourse.mockResolvedValue({ enabled: true })
 
-    render(
+    renderWithModal(
       <Courses
         organizationId="org-1"
         project={PROJECT}
@@ -128,7 +132,7 @@ describe('Courses (WEB-8)', () => {
           })
       )
 
-    const { rerender } = render(
+    const { rerender } = renderWithModal(
       <Courses
         organizationId="org-1"
         project={PROJECT}
@@ -142,12 +146,14 @@ describe('Courses (WEB-8)', () => {
       name: 'Spring 2027',
     }
     rerender(
-      <Courses
-        organizationId="org-1"
-        project={otherProject}
-        onBack={vi.fn()}
-        onOpenCourse={vi.fn()}
-      />
+      withModal(
+        <Courses
+          organizationId="org-1"
+          project={otherProject}
+          onBack={vi.fn()}
+          onOpenCourse={vi.fn()}
+        />
+      )
     )
 
     // The *second* request (for the now-current project) resolves first,
@@ -168,7 +174,7 @@ describe('Courses (WEB-8)', () => {
     listCourses.mockResolvedValue([COURSE])
     const onOpenCourse = vi.fn()
 
-    render(
+    renderWithModal(
       <Courses
         organizationId="org-1"
         project={PROJECT}

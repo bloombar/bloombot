@@ -23,7 +23,10 @@ import {
 } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { Project } from '../api/types.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
+import { AddIcon, ArchiveIcon, DuplicateIcon, RestoreIcon } from '../icons.js'
 
 export interface ProjectsScreenProps {
   organizationId: string
@@ -165,81 +168,125 @@ export function Projects({
   }
 
   return (
-    <section aria-label="Projects" data-testid="projects-screen">
-      <h2>Projects</h2>
+    <section
+      aria-label="Projects"
+      data-testid="projects-screen"
+      className="flex flex-col gap-6"
+    >
+      <h1 className="text-page-title font-semibold text-neutral-900">
+        Projects
+      </h1>
 
-      <label>
+      <label className="flex items-center gap-2 text-sm text-neutral-700">
         <input
           type="checkbox"
           checked={includeArchived}
           onChange={(event) => setIncludeArchived(event.target.checked)}
-        />{' '}
+          className={checkboxClasses}
+        />
         Show archived
       </label>
 
-      <div>
+      <div className="flex flex-col gap-2 sm:flex-row">
         <input
           aria-label="New project name"
           value={newProjectName}
           onChange={(event) => setNewProjectName(event.target.value)}
           placeholder="e.g. Fall 2026"
+          className={`sm:max-w-xs ${textInputClasses}`}
         />
-        <button
-          type="button"
+        {/* WEB-15: the one primary action on this screen. */}
+        <Button
+          variant="primary"
+          icon={<AddIcon aria-hidden="true" className="size-4" />}
           onClick={() => void handleCreate()}
           disabled={creating || newProjectName.trim().length === 0}
         >
           {creating ? 'Creating…' : 'Create project'}
-        </button>
+        </Button>
       </div>
 
       {duplicateNotice && (
-        <p role="status" data-testid="duplicate-notice">
+        <p
+          role="status"
+          data-testid="duplicate-notice"
+          className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800"
+        >
           {duplicateNotice}
         </p>
       )}
       {error && <ErrorMessage error={error} />}
 
       {projects === undefined ? (
-        <p>Loading…</p>
+        <p role="status" className="text-sm text-neutral-500">
+          Loading…
+        </p>
       ) : projects.length === 0 ? (
-        <p>No projects yet.</p>
+        <p className="text-sm text-neutral-500">No projects yet.</p>
       ) : (
-        <ul>
+        // WEB-13: a card per project, stacked — never a wide table row a
+        // phone would have to scroll horizontally to read.
+        <ul className="flex flex-col gap-3">
           {projects.map((project) => (
-            <li key={project.id} data-testid={`project-${project.id}`}>
-              <button type="button" onClick={() => onOpenProject(project)}>
-                {project.name}
-              </button>
-              {project.archivedAt !== null && ' (archived)'}
-              <button
-                type="button"
-                onClick={() => void handleArchive(project)}
-                disabled={busyProjectId === project.id}
-              >
-                {project.archivedAt === null ? 'Archive' : 'Restore'}
-              </button>
-              <input
-                aria-label={`Duplicate "${project.name}" as`}
-                value={duplicateNames[project.id] ?? ''}
-                onChange={(event) =>
-                  setDuplicateNames((current) => ({
-                    ...current,
-                    [project.id]: event.target.value,
-                  }))
-                }
-                placeholder="new project name"
-              />
-              <button
-                type="button"
-                onClick={() => void handleDuplicate(project)}
-                disabled={
-                  duplicatingId === project.id ||
-                  (duplicateNames[project.id] ?? '').trim().length === 0
-                }
-              >
-                {duplicatingId === project.id ? 'Duplicating…' : 'Duplicate'}
-              </button>
+            <li
+              key={project.id}
+              data-testid={`project-${project.id}`}
+              className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenProject(project)}
+                  className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                >
+                  {project.name}
+                </button>
+                {project.archivedAt !== null && (
+                  <span className="text-xs text-neutral-500">(archived)</span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* WEB-15: archiving is not styled or confirmed as
+                    destructive — it is reversible (Restore, right there)
+                    and must never look like a deletion. */}
+                <Button
+                  variant="secondary"
+                  icon={
+                    project.archivedAt === null ? (
+                      <ArchiveIcon aria-hidden="true" className="size-4" />
+                    ) : (
+                      <RestoreIcon aria-hidden="true" className="size-4" />
+                    )
+                  }
+                  onClick={() => void handleArchive(project)}
+                  disabled={busyProjectId === project.id}
+                >
+                  {project.archivedAt === null ? 'Archive' : 'Restore'}
+                </Button>
+                <input
+                  aria-label={`Duplicate "${project.name}" as`}
+                  value={duplicateNames[project.id] ?? ''}
+                  onChange={(event) =>
+                    setDuplicateNames((current) => ({
+                      ...current,
+                      [project.id]: event.target.value,
+                    }))
+                  }
+                  placeholder="new project name"
+                  className={`w-40 ${textInputClasses}`}
+                />
+                <Button
+                  variant="secondary"
+                  icon={<DuplicateIcon aria-hidden="true" className="size-4" />}
+                  onClick={() => void handleDuplicate(project)}
+                  disabled={
+                    duplicatingId === project.id ||
+                    (duplicateNames[project.id] ?? '').trim().length === 0
+                  }
+                >
+                  {duplicatingId === project.id ? 'Duplicating…' : 'Duplicate'}
+                </Button>
+              </div>
             </li>
           ))}
         </ul>

@@ -8,12 +8,13 @@
  * means" to this component.
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { AccountSummary, Project } from '../src/api/types.js'
 import { Shell } from '../src/pages/Shell.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 // `listProjects`/`listCourses` are mocked here too, not just
 // `dispatchAction` — finding 10 of the WEB-7 rework changed `activeTab`'s
@@ -77,14 +78,16 @@ afterEach(() => {
 
 describe('Shell (WEB-3, WEB-4)', () => {
   it('with no install just completed, defaults to the first membership', () => {
-    render(<Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />)
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
     expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
       'org-1'
     )
   })
 
   it('an install that just completed for a *different* organization than the first membership opens the panel on that organization, not the first one (finding 2 of the WEB-1..6 rework)', () => {
-    render(
+    renderWithModal(
       <Shell
         account={MULTI_MEMBERSHIP_ACCOUNT}
         justInstalled={{ organizationId: 'org-2', serverId: 'guild-42' }}
@@ -107,7 +110,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   })
 
   it('a justInstalled organization the account is not actually a member of is ignored, defensively, in favour of the first membership', () => {
-    render(
+    renderWithModal(
       <Shell
         account={MULTI_MEMBERSHIP_ACCOUNT}
         justInstalled={{ organizationId: 'org-9', serverId: 'guild-42' }}
@@ -130,7 +133,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
       writable: true,
     })
 
-    render(<Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />)
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
     // Switch away from the organization this mounted with...
@@ -152,7 +157,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   it('removing an installed server dispatches against the actively selected organization', async () => {
     dispatchAction.mockResolvedValue({ result: undefined })
 
-    render(
+    renderWithModal(
       <Shell
         account={MULTI_MEMBERSHIP_ACCOUNT}
         justInstalled={{ organizationId: 'org-2', serverId: 'guild-42' }}
@@ -162,6 +167,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    // WEB-15: destructive, so it confirms first (`components/modal/`).
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
 
     await vi.waitFor(() =>
       expect(dispatchAction).toHaveBeenCalledWith(
@@ -180,7 +188,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     signOut.mockRejectedValue(new ApiError(0, { error: 'network_error' }))
     const onSignedOut = vi.fn()
 
-    render(
+    renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={onSignedOut} />
     )
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
@@ -210,7 +218,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    render(<Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />)
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
 
     await screen.findByText('Fall 2026')
     fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))

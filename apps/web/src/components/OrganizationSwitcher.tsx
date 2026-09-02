@@ -34,9 +34,14 @@ export function OrganizationSwitcher({
   // dropdown nobody needs to operate.
   if (memberships.length <= 1) {
     return (
-      <p className="organization-switcher" data-testid="organization-switcher">
+      <p
+        className="text-sm text-neutral-600"
+        data-testid="organization-switcher"
+      >
         Acting in{' '}
-        <strong>{active?.organizationName ?? activeOrganizationId}</strong>
+        <strong className="text-neutral-900">
+          {active?.organizationName ?? activeOrganizationId}
+        </strong>
         {active ? ` (${active.role})` : ''}
       </p>
     )
@@ -44,14 +49,15 @@ export function OrganizationSwitcher({
 
   return (
     <label
-      className="organization-switcher"
+      className="flex items-center gap-2 text-sm text-neutral-600"
       data-testid="organization-switcher"
     >
-      Acting in{' '}
+      Acting in
       <select
         aria-label="Organization"
         value={activeOrganizationId}
         onChange={(event) => onChange(event.target.value)}
+        className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm text-neutral-900 focus:border-brand-500"
       >
         {memberships.map((membership) => (
           <option

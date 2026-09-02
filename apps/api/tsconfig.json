@@ -9,8 +9,11 @@
     { "path": "../../packages/actions" },
     { "path": "../../packages/auth" },
     { "path": "../../packages/config" },
+    { "path": "../../packages/core" },
     { "path": "../../packages/db" },
     { "path": "../../packages/discord-rest" },
-    { "path": "../../packages/logger" }
+    { "path": "../../packages/jobs" },
+    { "path": "../../packages/logger" },
+    { "path": "../../packages/openai" }
   ]
 }

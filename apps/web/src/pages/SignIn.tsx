@@ -10,7 +10,10 @@ import { useState } from 'react'
 
 import { ApiError, requestSignInLink, signInWithGoogle } from '../api/client.js'
 import { loadGoogleIdentityServices } from '../api/google-identity.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { FormField } from '../components/FormField.js'
+import { textInputClasses } from '../components/fieldStyles.js'
 
 export interface SignInProps {
   /** `import.meta.env.VITE_GOOGLE_CLIENT_ID` by default — a prop so a test can supply, explicitly withhold (`undefined`, the "not configured" case), or omit it without stubbing Vite's env. */
@@ -72,35 +75,45 @@ export function SignIn({
 
   if (linkRequested) {
     return (
-      <p data-testid="link-requested">
+      <p
+        data-testid="link-requested"
+        role="status"
+        className="mx-auto mt-16 max-w-sm text-center text-sm text-neutral-700"
+      >
         If an account exists for {email}, a sign-in link is on its way.
       </p>
     )
   }
 
   return (
-    <div className="sign-in">
-      <h1>Sign in to Bloombot</h1>
-      <form onSubmit={(event) => void handleSubmit(event)}>
-        <label>
-          Email
+    <div className="mx-auto mt-16 flex max-w-sm flex-col gap-6">
+      <h1 className="text-page-title font-semibold text-neutral-900">
+        Sign in to Bloombot
+      </h1>
+      <form
+        onSubmit={(event) => void handleSubmit(event)}
+        className="flex flex-col gap-4"
+      >
+        <FormField label="Email">
           <input
             type="email"
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            className={textInputClasses}
           />
-        </label>
-        <button type="submit" disabled={submitting}>
+        </FormField>
+        {/* WEB-15: the one primary action on this screen. */}
+        <Button variant="primary" type="submit" disabled={submitting}>
           {submitting ? 'Sending…' : 'Email me a sign-in link'}
-        </button>
+        </Button>
       </form>
       {googleClientId ? (
-        <button type="button" onClick={() => void handleGoogle()}>
+        <Button variant="secondary" onClick={() => void handleGoogle()}>
           Sign in with Google
-        </button>
+        </Button>
       ) : (
-        <p className="google-unconfigured">
+        <p className="text-sm text-neutral-500">
           Google sign-in is not configured for this deployment.
         </p>
       )}

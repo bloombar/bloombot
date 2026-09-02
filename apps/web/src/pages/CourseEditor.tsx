@@ -32,7 +32,20 @@ import { ApiError, getCourse, saveCourse } from '../api/client.js'
 import { disableCourse, enableCourse } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
 import type { Course, Project } from '../api/types.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
+import { FormField } from '../components/FormField.js'
+import { useModal } from '../components/modal/ModalProvider.js'
+import { ScaffoldButton } from '../components/ScaffoldButton.js'
+import { useFormDirty } from '../hooks/useFormDirty.js'
+import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
+import {
+  AddIcon,
+  DisableIcon,
+  EnableIcon,
+  RemoveFromListIcon,
+} from '../icons.js'
 
 export interface CourseEditorProps {
   organizationId: string
@@ -137,6 +150,16 @@ export function CourseEditor({
   onCancel,
 }: CourseEditorProps) {
   const [form, setForm] = useState<FormState>(blankForm())
+  // WEB-16: the form's own last agreed-with-the-server state — set
+  // alongside `form` in the same three places `form` is ever set *from* a
+  // real record rather than an edit (a fresh blank form, a load, a save),
+  // never on a field-by-field edit. `useFormDirty` compares this against
+  // the live `form` below; see that hook's own module comment for why
+  // "dirty" is a value comparison, not a keystroke count.
+  const [baseline, setBaseline] = useState<FormState>(blankForm())
+  const isDirty = useFormDirty(baseline, form)
+  const { confirmDiscard } = useUnsavedChangesGuard(isDirty)
+  const { confirm } = useModal()
   const [loading, setLoading] = useState(courseId !== undefined)
   // Finding 3 (WEB-7 rework): a failed `courses.get` used to clear `loading`
   // and fall through to the same form a real, empty course renders — fillable
@@ -168,7 +191,9 @@ export function CourseEditor({
     // asked for.
     let stale = false
     if (courseId === undefined) {
-      setForm(blankForm())
+      const blank = blankForm()
+      setForm(blank)
+      setBaseline(blank)
       setLoadError(undefined)
       setConfirmedEnabled(false)
       setLoading(false)
@@ -179,7 +204,9 @@ export function CourseEditor({
     getCourse(organizationId, courseId).then(
       (course) => {
         if (stale) return
-        setForm(formFromCourse(course))
+        const loaded = formFromCourse(course)
+        setForm(loaded)
+        setBaseline(loaded)
         setConfirmedEnabled(course.enabled)
         setLoading(false)
       },
@@ -250,7 +277,12 @@ export function CourseEditor({
         categories,
       }
       const saved = await saveCourse(organizationId, input)
-      setForm(formFromCourse(saved))
+      const savedForm = formFromCourse(saved)
+      setForm(savedForm)
+      // WEB-16: a successful save clears the dirty state — the form now
+      // agrees with the server again, the same reason `setForm` above is
+      // set from `saved` rather than left as whatever was typed.
+      setBaseline(savedForm)
       setConfirmedEnabled(saved.enabled)
       onSaved(saved)
     } catch (caught) {
@@ -263,6 +295,21 @@ export function CourseEditor({
 
   const handleToggleEnabled = async () => {
     if (courseId === undefined) return
+    // WEB-15: disabling a live course is destructive — students stop
+    // being answered the moment this runs — so it confirms first, the
+    // same modal every other destructive control in this panel shares
+    // (`components/modal/`). Enabling is not: nothing is lost by turning a
+    // course back on, so it runs immediately, the same as before.
+    if (confirmedEnabled) {
+      const confirmed = await confirm({
+        title: 'Disable this course?',
+        description:
+          'Students stop being answered here until it is enabled again.',
+        confirmLabel: 'Disable',
+        destructive: true,
+      })
+      if (!confirmed) return
+    }
     setError(undefined)
     setTogglingEnabled(true)
     try {
@@ -275,10 +322,16 @@ export function CourseEditor({
         await disableCourse(organizationId, courseId)
         setConfirmedEnabled(false)
         setForm((current) => ({ ...current, enabled: false }))
+        // Already persisted (unlike the checkbox above, this button acts
+        // immediately, not on the next Save) — the baseline moves with it,
+        // the same reason `handleSave`'s own success path moves `baseline`
+        // to match what was just saved.
+        setBaseline((current) => ({ ...current, enabled: false }))
       } else {
         await enableCourse(organizationId, courseId)
         setConfirmedEnabled(true)
         setForm((current) => ({ ...current, enabled: true }))
+        setBaseline((current) => ({ ...current, enabled: true }))
       }
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
@@ -302,7 +355,20 @@ export function CourseEditor({
       categories: [...current.categories, emptyCategory()],
     }))
   }
-  const removeCategory = (key: string) => {
+  // WEB-15: removing a category (with it, every channel inside) or a
+  // channel from the list below confirms first — "removing from a list"
+  // is explicitly one of this panel's own destructive intents, the same
+  // modal every other one shares, even though nothing here is sent to the
+  // server until Save; the list itself is what a person sees change.
+  const removeCategory = async (key: string, name: string) => {
+    const confirmed = await confirm({
+      title: `Remove ${name || 'this category'}?`,
+      description:
+        'Every channel inside it is removed too. This takes effect once the form is saved.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (!confirmed) return
     setForm((current) => ({
       ...current,
       categories: current.categories.filter((category) => category.key !== key),
@@ -343,7 +409,18 @@ export function CourseEditor({
       ),
     }))
   }
-  const removeChannel = (categoryKey: string, channelKey: string) => {
+  const removeChannel = async (
+    categoryKey: string,
+    channelKey: string,
+    name: string
+  ) => {
+    const confirmed = await confirm({
+      title: `Remove ${name || 'this channel'}?`,
+      description: 'This takes effect once the form is saved.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (!confirmed) return
     setForm((current) => ({
       ...current,
       categories: current.categories.map((category) =>
@@ -359,8 +436,20 @@ export function CourseEditor({
     }))
   }
 
+  // WEB-16: Cancel goes through the same unsaved-changes confirmation a
+  // navigation started outside this form does (`useUnsavedChangesGuard`'s
+  // own module comment) — `confirmDiscard` resolves `true` immediately
+  // when the form is clean, so this never prompts over nothing.
+  const handleCancel = async () => {
+    if (await confirmDiscard()) onCancel()
+  }
+
   if (loading) {
-    return <p>Loading…</p>
+    return (
+      <p role="status" className="text-sm text-neutral-500">
+        Loading…
+      </p>
+    )
   }
 
   if (loadError) {
@@ -368,129 +457,187 @@ export function CourseEditor({
     // never the form, which for an existing `courseId` would otherwise be
     // an *editable, saveable* blank standing in for a real course.
     return (
-      <section aria-label="Course" data-testid="course-editor">
-        <button type="button" onClick={onCancel}>
+      <section
+        aria-label="Course"
+        data-testid="course-editor"
+        className="flex flex-col gap-4"
+      >
+        <Button variant="ghost" onClick={onCancel}>
           ← {project.name}
-        </button>
+        </Button>
         <ErrorMessage error={loadError} />
       </section>
     )
   }
 
   return (
-    <section aria-label="Course" data-testid="course-editor">
-      <button type="button" onClick={onCancel}>
+    <section
+      aria-label="Course"
+      data-testid="course-editor"
+      className="flex flex-col gap-6"
+    >
+      <Button variant="ghost" onClick={() => void handleCancel()}>
         ← {project.name}
-      </button>
-      <h2>{courseId === undefined ? 'New course' : form.title || 'Course'}</h2>
+      </Button>
+      <h1 className="text-page-title font-semibold text-neutral-900">
+        {courseId === undefined ? 'New course' : form.title || 'Course'}
+      </h1>
 
       {/* WEB-9: what decides routing, shown together and up front. */}
-      <section aria-label="What this course routes on">
-        <p>
+      <section
+        aria-label="What this course routes on"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-4"
+      >
+        <p className="text-sm text-neutral-600">
           A message reaches this course by the Discord category it arrived in,
           or by the author&apos;s role — these names have to match your Discord
           server exactly.
         </p>
-        <label>
-          Admins role
-          <input
-            aria-label="Admins role"
-            value={form.adminsRole}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                adminsRole: event.target.value,
-              }))
-            }
-          />
-        </label>
-        <label>
-          Students role
-          <input
-            aria-label="Students role"
-            value={form.studentsRole}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                studentsRole: event.target.value,
-              }))
-            }
-          />
-        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FormField label="Admins role">
+            <input
+              aria-label="Admins role"
+              value={form.adminsRole}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  adminsRole: event.target.value,
+                }))
+              }
+              className={textInputClasses}
+            />
+          </FormField>
+          <FormField label="Students role">
+            <input
+              aria-label="Students role"
+              value={form.studentsRole}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  studentsRole: event.target.value,
+                }))
+              }
+              className={textInputClasses}
+            />
+          </FormField>
+        </div>
       </section>
 
-      <label>
-        Title
-        <input
-          aria-label="Title"
-          value={form.title}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, title: event.target.value }))
-          }
-        />
-      </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField label="Title">
+          <input
+            aria-label="Title"
+            value={form.title}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, title: event.target.value }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
 
-      <label>
-        File prefix
-        <input
-          aria-label="File prefix"
-          value={form.filePrefix}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              filePrefix: event.target.value,
-            }))
-          }
-        />
-      </label>
+        <FormField label="File prefix">
+          <input
+            aria-label="File prefix"
+            value={form.filePrefix}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                filePrefix: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+      </div>
 
-      <label>
-        <input
-          type="checkbox"
-          aria-label="Enabled"
-          checked={form.enabled}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              enabled: event.target.checked,
-            }))
-          }
-        />{' '}
-        Enabled
-      </label>
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+          <input
+            type="checkbox"
+            aria-label="Enabled"
+            checked={form.enabled}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                enabled: event.target.checked,
+              }))
+            }
+            className={checkboxClasses}
+          />
+          Enabled
+        </label>
+        {courseId !== undefined && (
+          <Button
+            variant={confirmedEnabled ? 'destructive' : 'secondary'}
+            icon={
+              confirmedEnabled ? (
+                <DisableIcon aria-hidden="true" className="size-4" />
+              ) : (
+                <EnableIcon aria-hidden="true" className="size-4" />
+              )
+            }
+            onClick={() => void handleToggleEnabled()}
+            disabled={togglingEnabled}
+          >
+            {/* Reads `confirmedEnabled`, not `form.enabled` — see this
+                component's own comment on that state (finding 4). */}
+            {confirmedEnabled ? 'Disable' : 'Enable'}
+          </Button>
+        )}
+      </div>
+
+      {/* SRV-6: scaffolding needs a persisted course to name in the job
+          payload — offered only once this course actually has a `courseId`,
+          the same "existing record only" gate the enable/disable toggle
+          above already applies. */}
       {courseId !== undefined && (
-        <button
-          type="button"
-          onClick={() => void handleToggleEnabled()}
-          disabled={togglingEnabled}
-        >
-          {/* Reads `confirmedEnabled`, not `form.enabled` — see this
-              component's own comment on that state (finding 4). */}
-          {confirmedEnabled ? 'Disable' : 'Enable'}
-        </button>
+        <section aria-label="Discord channels" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            Discord channels
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Create this course&apos;s declared categories and channels in the
+            Discord server bound to this organization.
+          </p>
+          <ScaffoldButton organizationId={organizationId} courseId={courseId} />
+        </section>
       )}
 
-      <fieldset>
-        <legend>Categories</legend>
+      <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
+        <legend className="px-1 text-section-title font-semibold text-neutral-900">
+          Categories
+        </legend>
         {form.categories.map((category) => (
-          <fieldset key={category.key}>
-            <legend>
+          <fieldset
+            key={category.key}
+            className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
+          >
+            <legend className="sr-only">Category</legend>
+            <div className="flex items-center gap-2">
               <input
                 aria-label="Category name"
                 value={category.name}
                 onChange={(event) =>
                   updateCategory(category.key, event.target.value)
                 }
+                className={textInputClasses}
               />
-              <button
-                type="button"
-                onClick={() => removeCategory(category.key)}
+              <Button
+                variant="ghost"
+                aria-label={`Remove category ${category.name || ''}`.trim()}
+                icon={
+                  <RemoveFromListIcon aria-hidden="true" className="size-4" />
+                }
+                onClick={() => void removeCategory(category.key, category.name)}
               >
                 Remove category
-              </button>
-            </legend>
+              </Button>
+            </div>
             {category.channels.map((channel) => (
-              <div key={channel.key}>
+              <div
+                key={channel.key}
+                className="flex flex-wrap items-center gap-2 pl-4"
+              >
                 <input
                   aria-label="Channel name"
                   value={channel.name}
@@ -499,8 +646,9 @@ export function CourseEditor({
                       name: event.target.value,
                     })
                   }
+                  className={textInputClasses}
                 />
-                <label>
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
                   <input
                     type="checkbox"
                     aria-label="Admins only"
@@ -510,29 +658,43 @@ export function CourseEditor({
                         adminsOnly: event.target.checked,
                       })
                     }
-                  />{' '}
+                    className={checkboxClasses}
+                  />
                   Admins only
                 </label>
-                <button
-                  type="button"
-                  onClick={() => removeChannel(category.key, channel.key)}
+                <Button
+                  variant="ghost"
+                  aria-label={`Remove channel ${channel.name || ''}`.trim()}
+                  icon={
+                    <RemoveFromListIcon aria-hidden="true" className="size-4" />
+                  }
+                  onClick={() =>
+                    void removeChannel(category.key, channel.key, channel.name)
+                  }
                 >
                   Remove channel
-                </button>
+                </Button>
               </div>
             ))}
-            <button type="button" onClick={() => addChannel(category.key)}>
+            <Button
+              variant="secondary"
+              icon={<AddIcon aria-hidden="true" className="size-4" />}
+              onClick={() => addChannel(category.key)}
+            >
               Add channel
-            </button>
+            </Button>
           </fieldset>
         ))}
-        <button type="button" onClick={addCategory}>
+        <Button
+          variant="secondary"
+          icon={<AddIcon aria-hidden="true" className="size-4" />}
+          onClick={addCategory}
+        >
           Add category
-        </button>
+        </Button>
       </fieldset>
 
-      <label>
-        Instructions
+      <FormField label="Instructions">
         <textarea
           aria-label="Instructions"
           value={form.instructions}
@@ -542,67 +704,84 @@ export function CourseEditor({
               instructions: event.target.value,
             }))
           }
+          rows={4}
+          className={textInputClasses}
         />
-      </label>
+      </FormField>
 
-      <label>
-        Model
-        <input
-          aria-label="Model"
-          value={form.model}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, model: event.target.value }))
-          }
-        />
-      </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          label="Model"
+          help="Leave blank to use the platform default."
+        >
+          <input
+            aria-label="Model"
+            value={form.model}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, model: event.target.value }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
 
-      <label>
-        Prompt id
-        <input
-          aria-label="Prompt id"
-          value={form.promptId}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              promptId: event.target.value,
-            }))
-          }
-        />
-      </label>
+        <FormField label="Prompt id">
+          <input
+            aria-label="Prompt id"
+            value={form.promptId}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                promptId: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
 
-      <label>
-        Vector store id
-        <input
-          aria-label="Vector store id"
-          value={form.vectorStoreId}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              vectorStoreId: event.target.value,
-            }))
-          }
-        />
-      </label>
+        <FormField label="Vector store id">
+          <input
+            aria-label="Vector store id"
+            value={form.vectorStoreId}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                vectorStoreId: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
 
-      <label>
-        Max requests per day
-        <input
-          aria-label="Max requests per day"
-          value={form.maxRequestsPerDay}
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              maxRequestsPerDay: event.target.value,
-            }))
-          }
-        />
-      </label>
+        <FormField
+          label="Max requests per day"
+          help="A whole number greater than zero, or leave blank to use the platform default."
+        >
+          <input
+            aria-label="Max requests per day"
+            value={form.maxRequestsPerDay}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                maxRequestsPerDay: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+      </div>
 
       {error && <ErrorMessage error={error} />}
 
-      <button type="button" onClick={() => void handleSave()} disabled={saving}>
-        {saving ? 'Saving…' : 'Save course'}
-      </button>
+      {/* WEB-15: the one primary action this form offers. */}
+      <div>
+        <Button
+          variant="primary"
+          onClick={() => void handleSave()}
+          disabled={saving}
+        >
+          {saving ? 'Saving…' : 'Save course'}
+        </Button>
+      </div>
     </section>
   )
 }

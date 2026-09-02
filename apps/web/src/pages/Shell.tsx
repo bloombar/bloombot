@@ -20,9 +20,17 @@ import { useState } from 'react'
 
 import { ApiError, dispatchAction, signOut } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
+import { AppShell } from '../components/AppShell.js'
+import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
+import {
+  NavigationGuardProvider,
+  useNavigationGuard,
+} from '../hooks/navigation-guard.js'
+import { SignOutIcon } from '../icons.js'
+import { Chat } from './Chat.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 
 export interface ShellProps {
@@ -32,7 +40,26 @@ export interface ShellProps {
   onSignedOut: () => void
 }
 
-export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
+/**
+ * WEB-16: every navigation this shell itself initiates — the nav row, the
+ * home control, the organization switcher — routes through
+ * `useNavigationGuard()`'s own `guardedNavigate`, so a dirty form nested
+ * anywhere below (`pages/CourseEditor.tsx`, today's one example) gets a
+ * chance to confirm before it loses anything. `NavigationGuardProvider`
+ * wraps `ShellInner` rather than being read from within the same
+ * component that provides it — a context's own provider and its readers
+ * cannot be the same component.
+ */
+export function Shell(props: ShellProps) {
+  return (
+    <NavigationGuardProvider>
+      <ShellInner {...props} />
+    </NavigationGuardProvider>
+  )
+}
+
+function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
+  const { guardedNavigate } = useNavigationGuard()
   // WEB-3/WEB-4 — an install navigates the whole browser away to Discord and
   // back (`components/InstallButton.tsx`'s own module comment), so the
   // callback lands on a fresh mount of this component: `justInstalled` is a
@@ -68,7 +95,11 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
   // reasoning; `docs/DECISIONS.md` D-25 has the accounting of what that
   // default costs `tests/shell.test.tsx` (a handful of `listProjects`
   // mocks, added there rather than left implicit by defaulting elsewhere).
-  const [activeTab, setActiveTab] = useState<'discord' | 'projects'>('projects')
+  // WEB-14: also this shell's own "home" — the header's home control
+  // (`AppShell.tsx`) returns here.
+  const [activeTab, setActiveTab] = useState<'discord' | 'projects' | 'chat'>(
+    'projects'
+  )
 
   const installedServerId =
     justInstalled?.organizationId === activeOrganizationId &&
@@ -124,64 +155,85 @@ export function Shell({ account, justInstalled, onSignedOut }: ShellProps) {
   }
 
   return (
-    <div className="shell">
-      <header>
-        <OrganizationSwitcher
-          memberships={account.memberships}
-          activeOrganizationId={activeOrganizationId}
-          onChange={setActiveOrganizationId}
-        />
-        <button
-          type="button"
-          onClick={() => void handleSignOut()}
-          disabled={signingOut}
-        >
-          {signingOut ? 'Signing out…' : 'Sign out'}
-        </button>
-      </header>
-      <nav>
-        <button
-          type="button"
-          onClick={() => setActiveTab('discord')}
-          aria-current={activeTab === 'discord'}
-        >
-          Discord
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('projects')}
-          aria-current={activeTab === 'projects'}
-        >
-          Projects
-        </button>
-      </nav>
-      <main>
-        {activeTab === 'discord' ? (
-          <>
-            <InstallButton
-              organizationId={activeOrganizationId}
-              {...(installedServerId ? { installedServerId } : {})}
-              onRemove={() => void handleRemove()}
-              removing={removing}
-            />
-            {error && <ErrorMessage error={error} />}
-          </>
-        ) : (
-          // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a
-          // fresh `ProjectsPanel` — and its own internal `view` state — on
-          // every organization switch. Without it, a project (or course)
-          // selected in the previous organization stayed selected, and
-          // switching organizations re-issued `courses.list`/`courses.get`
-          // for a project id that no longer belongs to the newly active
-          // organization — a cross-tenant lookup TEN-2's own policy
-          // correctly refuses, stranding the instructor on that refusal
-          // with no way to clear it short of reloading the page.
-          <ProjectsPanel
-            key={activeOrganizationId}
-            organizationId={activeOrganizationId}
+    <AppShell
+      onHome={() => guardedNavigate(() => setActiveTab('projects'))}
+      navItems={[
+        {
+          key: 'discord',
+          label: 'Discord',
+          onClick: () => guardedNavigate(() => setActiveTab('discord')),
+          active: activeTab === 'discord',
+        },
+        {
+          key: 'projects',
+          label: 'Projects',
+          onClick: () => guardedNavigate(() => setActiveTab('projects')),
+          active: activeTab === 'projects',
+        },
+        {
+          key: 'chat',
+          label: 'Chat',
+          onClick: () => guardedNavigate(() => setActiveTab('chat')),
+          active: activeTab === 'chat',
+        },
+      ]}
+      headerEnd={
+        <>
+          <OrganizationSwitcher
+            memberships={account.memberships}
+            activeOrganizationId={activeOrganizationId}
+            onChange={(organizationId) =>
+              guardedNavigate(() => setActiveOrganizationId(organizationId))
+            }
           />
-        )}
-      </main>
-    </div>
+          <Button
+            variant="secondary"
+            icon={<SignOutIcon aria-hidden="true" className="size-4" />}
+            onClick={() => void handleSignOut()}
+            disabled={signingOut}
+          >
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </Button>
+        </>
+      }
+    >
+      {activeTab === 'discord' ? (
+        <div className="flex flex-col gap-4">
+          <h1 className="text-page-title font-semibold text-neutral-900">
+            Discord
+          </h1>
+          <InstallButton
+            organizationId={activeOrganizationId}
+            {...(installedServerId ? { installedServerId } : {})}
+            onRemove={() => void handleRemove()}
+            removing={removing}
+          />
+          {error && <ErrorMessage error={error} />}
+        </div>
+      ) : activeTab === 'chat' ? (
+        // WEB-10: a fresh `Chat` per organization switch, the same
+        // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
+        // already holds itself to — a course selected in the previous
+        // organization must not linger once a different one is active.
+        <Chat
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+        />
+      ) : (
+        // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a
+        // fresh `ProjectsPanel` — and its own internal `view` state — on
+        // every organization switch. Without it, a project (or course)
+        // selected in the previous organization stayed selected, and
+        // switching organizations re-issued `courses.list`/`courses.get`
+        // for a project id that no longer belongs to the newly active
+        // organization — a cross-tenant lookup TEN-2's own policy
+        // correctly refuses, stranding the instructor on that refusal
+        // with no way to clear it short of reloading the page.
+        <ProjectsPanel
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+        />
+      )}
+    </AppShell>
   )
 }

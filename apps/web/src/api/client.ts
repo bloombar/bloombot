@@ -24,11 +24,15 @@
 
 import type {
   ApiErrorBody,
+  ChatAnswerResult,
+  ChatCourse,
+  ChatMessageEntry,
   Course,
   CourseSummary,
   DuplicateProjectResult,
   InstallBeginResponse,
   InstallCallbackResponse,
+  JobStatus,
   MeResponse,
   Project,
   SignedInResponse,
@@ -313,4 +317,58 @@ export function disableCourse(
   courseId: string
 ): Promise<{ disabled: boolean }> {
   return dispatchAction(organizationId, 'courses.disable', { courseId })
+}
+
+/** SRV-6: request that a course's declared categories and channels be created in its organization's bound Discord server — enqueues a background job and returns immediately; the job itself only runs once `apps/worker` claims it (`docs/RUNNING_LOCALLY.md`'s own "the worker is the one that is easy to forget"). */
+export function scaffoldCourseDiscord(
+  organizationId: string,
+  courseId: string
+): Promise<{ jobId: string }> {
+  return dispatchAction(organizationId, 'discordServers.scaffold', {
+    courseId,
+  })
+}
+
+/** JOB-1..5: a job's current status and outcome — what a caller polls after dispatching a job-backed action such as `discordServers.scaffold`. */
+export function getJobStatus(
+  organizationId: string,
+  jobId: string
+): Promise<JobStatus> {
+  return dispatchAction<JobStatus>(organizationId, 'jobs.get', { jobId })
+}
+
+/**
+ * WEB-10: the web chat surface — `routes/chat.ts` in `apps/api`, mounted
+ * under `/organizations/:organizationId/chat`, not the generic action
+ * dispatcher (that route's own module comment says why: ENRL-2's
+ * enrolment, not a membership, is what authorizes each of these).
+ */
+
+/** The courses this signed-in account may currently ask, in `organizationId` — its own active enrolments (ENRL-1, ENRL-2), and no others. */
+export function listChatCourses(organizationId: string): Promise<ChatCourse[]> {
+  return request<{ courses: ChatCourse[] }>(
+    `/organizations/${organizationId}/chat/courses`
+  ).then((response) => response.courses)
+}
+
+/** This account's own transcript with one course. Throws `ApiError` (404, `chat_course_not_found`) exactly like any other unauthorized read when it is not enrolled (ENRL-2, TEN-5). */
+export function getChatMessages(
+  organizationId: string,
+  courseId: string
+): Promise<ChatMessageEntry[]> {
+  return request<{ messages: ChatMessageEntry[] }>(
+    `/organizations/${organizationId}/chat/courses/${courseId}/messages`
+  ).then((response) => response.messages)
+}
+
+/** Ask a question, through the exact same `answerQuestion` pipeline the Discord surface calls. */
+export function postChatMessage(
+  organizationId: string,
+  courseId: string,
+  text: string
+): Promise<ChatAnswerResult> {
+  return request<{ result: ChatAnswerResult }>(
+    `/organizations/${organizationId}/chat/courses/${courseId}/messages`,
+    { method: 'POST', body: { text } }
+  ).then((response) => response.result)
 }

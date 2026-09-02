@@ -113,7 +113,10 @@ was already using.
 
 ## Phase 10 — Knowledge files & instructions
 
-**In scope:** FILE-1..5, WEB-18, MDL-8
+**In scope:** FILE-1..5, WEB-18, MDL-8, WEB-19
+
+WEB-19 is the third instance of the same shape in this phase, found while building the second:
+the versioned-instruction actions were built and reviewed, and the panel never called them.
 
 WEB-18 and MDL-8 were found in use, after the phase closed. FILE-1..5's backend, actions and
 provider round trip were all built and reviewed, and no screen was ever scoped to reach them — the

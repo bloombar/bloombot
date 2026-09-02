@@ -1708,6 +1708,18 @@ Every field has a visible label, related fields are grouped, and a refusal names
 it concerns and appears next to it rather than only at the top. A form that reports "invalid
 input" for a course with fourteen fields has told the instructor nothing.
 
+#### WEB-19 A course's instructions are edited as revisions, and their history is visible
+
+FILE-4 says each save of a course's instructions is a revision with an author and a time, so an
+instructor can see what the assistant was told last week and restore it — and
+`courseInstructions.save` and `.restore` exist and do exactly that. The panel calls neither: the
+course form writes `instructions` as a plain field through `courses.save`, so every edit
+overwrites the last with no revision, no author and nothing to restore. Editing instructions on a
+live course is the operation FILE-4 was written to make safe, and it is the one the panel makes
+unsafe. The instructions editor saves through the versioned action, shows who changed what and
+when, and restores a previous revision — which is itself a new revision, because history that can
+be rewritten is not history.
+
 #### WEB-18 A course's knowledge files are managed in the panel
 
 FILE-1 says an instructor attaches a course's notes, syllabus and schedule in the panel, and the

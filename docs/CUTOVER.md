@@ -77,8 +77,12 @@ npm run dev
 Invite the **same bot application** the Python bot already uses into a **disposable test
 server** — never a course server a student is enrolled in. A bot token is not tied to one
 server; inviting it somewhere else needs no new credential and touches nothing in production.
-Recreate one course's categories/channels there (by hand, or by scaffolding it through the
-platform's own panel) so a mention has somewhere to land.
+**Bind that disposable test server to the rehearsal organization** through the platform's own
+panel (Discord → Install to Discord), then recreate one course's categories/channels there (by
+hand, or by scaffolding it through the panel) so a mention has somewhere to land. **Never bind
+a real course server — one a student is actually enrolled in — to the rehearsal organization.**
+That binding is what §1.3's own safety argument below depends on; see the warning at the end of
+this section for exactly why.
 
 Send a real message in the test server. Confirm:
 
@@ -89,13 +93,25 @@ Send a real message in the test server. Confirm:
   re-imported as many times as this step needs
 
 The Python bot is not stopped for this phase — it keeps answering in its own, real course
-servers throughout. Nothing in 1.1–1.3 is visible to it, and nothing here is visible to a
-real course server either, even though gateway events for the *same* bot token reach both
-processes regardless of which guild they came from: the rehearsal's `apps/bot` still only
-routes a message to a course its own (rehearsal) database knows about (CORE-2), and the only
-courses in `tmp/rehearsal-platform.db` are whatever `bot_config.yml` named — a real course
-category is simply unrecognized, the same as any other message nobody configured a course
-for, and answered by neither the rehearsal's own routing nor a change to anything it wrote.
+servers throughout. Nothing in 1.1–1.3 is visible to it, and nothing here is visible to a real
+course server either, even though gateway events for the *same* bot token reach both processes
+regardless of which guild they came from: the rehearsal's `apps/bot` never routes a message
+from a server the rehearsal organization has no binding for at all.
+`packages/discord/src/handle-mention.ts` resolves the Discord server binding (SURF-3,
+`resolveDiscordServerBinding`) **before** any course or category matching — an unbound server
+is dropped there, unconditionally, before `handleMention` ever looks at what the message says
+or which category it arrived in. `packages/legacy-import` never writes a server-binding row at
+all (there is nothing in `bot_config.yml` to derive one from), so the rehearsal organization
+starts with **no** Discord server bound to it — the disposable test server bound above is the
+*only* one it will ever answer in, until an operator binds another.
+
+**This is why the "never bind a real course server" instruction above is load-bearing, not
+merely careful.** The protection here is the *absence of a binding*, not that the rehearsal's
+own courses happen not to match a real category name (they can, and after §1.2 imports the real
+`bot_config.yml`, they do — the rehearsal database knows exactly the real course names). Binding
+a real course server to the rehearsal organization removes the one thing standing between this
+rehearsal and a second bot double-answering real students on the production token, spending real
+model cost, for the rest of the rehearsal.
 
 ### 1.4 Rehearse the rollback itself
 
@@ -120,6 +136,25 @@ before it could be the thing discovered at 9pm; see `scripts/deploy.sh`'s own
 ---
 
 ## Phase 2 — Cutover (OPS-10, OPS-11)
+
+> ### Before you start: does `apps/api` have a real email transport yet?
+>
+> `apps/api/src/logging-email-sender.ts#buildEmailSender` refuses to start this process at all
+> in `NODE_ENV=production` until a real `EmailSender` is configured — `packages/auth/src/email.ts`
+> ships only a port and a test fake (see `docs/DEPLOY_DROPLET.md`'s own lead callout). That gap
+> is tracked as **AUTH-5** and, as of this writing, is being built on the integration branch in
+> parallel with this document — check whether it has landed (`git log` for AUTH-5, or simply try
+> starting `api` against a `.env` with `NODE_ENV=production` and see whether it stays up) before
+> running §2.2 below.
+>
+> **If AUTH-5 has not landed yet:** §2.5 will start `bot`, `worker` and `mcp` successfully — none
+> of them depend on email — but `api` will crash-loop, so the panel and the web chat surface are
+> unreachable through the platform. §2.2 has already stopped the Python bot and §2.3 has already
+> reset the Discord token in the developer portal by that point, both irreversibly, so **do not
+> reach §2.2 without first deciding this is acceptable** (Discord answers still work; the panel
+> and any Google/email sign-in do not, until AUTH-5 lands and this cutover's own `api` is
+> restarted). §3's rollback still works regardless — it does not depend on `api` ever having come
+> up — but it is a worse position to roll back from than never having started.
 
 Do this once the rehearsal above has been run at least once successfully, including 1.4.
 Pick a low-traffic window — there is a real, if short, gap between stopping the Python bot
@@ -202,21 +237,26 @@ pm2 save
 
 (`scripts/deploy.sh` does this same sequence, plus the migration step, automatically on every
 future deploy once this one has run by hand — this manual sequence is only for the very first
-cutover.)
+cutover.) If AUTH-5 (see this Phase's own callout above) has not landed, `pm2 status` will show
+`api` crash-looping (`restart_time` climbing) while `bot`/`worker`/`mcp`/`ops-monitor` come up
+normally — expected, not a sign the other four are broken too.
 
 ### 2.6 Verify, then finish the rotation
 
 ```bash
-curl -s 127.0.0.1:3000/health   # api
+curl -s 127.0.0.1:3000/health   # api — will not answer at all if AUTH-5 has not landed; see §2.5
 curl -s 127.0.0.1:3001/health   # bot — gatewayConnected: true
 curl -s 127.0.0.1:3002/health   # worker
 curl -s 127.0.0.1:3003/health   # mcp
 ```
 
-Send a real message in a real course channel and confirm the platform answers it. Only once
-this has actually worked — not merely started — go back to the OpenAI dashboard and revoke
-the *old* key from §2.3. Revoking it earlier, before confirming the new one is actually
-wired up, would turn a rotation into a self-inflicted outage.
+Send a real message in a real course channel and confirm the platform answers it — this exercises
+`bot`, not `api`, so it is a real check of the cutover even while `api` is down. Only once `api`
+itself has actually come up (`curl` above returns `{"ready":true,"database":true}`, not a
+connection refusal) — not merely started — go back to the OpenAI dashboard and revoke the *old*
+key from §2.3. Revoking it earlier, before confirming the new one is actually wired up anywhere
+that reads it, would turn a rotation into a self-inflicted outage; if `api` cannot come up at
+all yet, hold off revoking the old key until it can.
 
 ### 2.7 Arm alerting (OPS-12)
 

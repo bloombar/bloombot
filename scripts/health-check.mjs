@@ -23,6 +23,8 @@
  *     a single point-in-time answer.
  */
 
+import { loadDotEnvOnce } from './load-dotenv.mjs'
+
 /** The port each process's health endpoint listens on, and the environment variable that overrides it — must track `packages/config/src/env.ts`. */
 export const DEFAULT_HEALTH_PORTS = {
   api: { envVar: 'API_PORT', port: 3000 },
@@ -101,8 +103,34 @@ export function describeResult(result) {
   return `${result.name}: unreachable (${result.error})`
 }
 
+/**
+ * Loads `.env` (a value already in `process.env` wins — `loadDotEnvOnce`'s
+ * own contract) and builds the endpoints to poll from whatever that leaves
+ * in the environment.
+ *
+ * Rework finding — this used to be inlined in `run()` below, reading
+ * `process.env` with no `.env` load at all: a `.env`-only port override
+ * (`API_PORT`, say) never reached this process when `scripts/deploy.sh` ran
+ * it, so the API would bind the overridden port, this script would still
+ * poll the default one, every request would `ECONNREFUSED`, and every
+ * deploy would roll back forever.
+ *
+ * Pulled into its own function, taking an explicit `.env` path, so
+ * `scripts/health-check.test.mjs` can prove the load actually happens — the
+ * same "test the composition directly, with an injectable path, never
+ * against a file literally named `.env`" shape `packages/config/src/dotenv.ts`'s
+ * own tests already use for `loadDotEnv` (a hook in this repository blocks
+ * writes to `.env*` on purpose). Called with no argument, `path` is
+ * `undefined`, and `loadDotEnvOnce`'s own default parameter resolves the
+ * real repository `.env` — exactly what `run()` needs.
+ */
+export function resolveEndpoints(path) {
+  loadDotEnvOnce(path)
+  return healthEndpoints()
+}
+
 async function run() {
-  const results = await checkAll(healthEndpoints())
+  const results = await checkAll(resolveEndpoints())
   for (const result of results) console.log(describeResult(result))
   const allOk = results.every((r) => r.ok)
   process.exitCode = allOk ? 0 : 1

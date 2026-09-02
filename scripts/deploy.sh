@@ -172,26 +172,53 @@ pm2_knows_app() { pm2_field "$1" status >/dev/null 2>&1; }
 # Reloads a named app if pm2 already knows it, or starts just that one app
 # from ecosystem.config.cjs — `--only` so bootstrapping the first app on a
 # fresh droplet never starts every app in the file at once, some of which
-# might not have credentials configured yet.
+# might not have credentials configured yet. Returns non-zero (never exits
+# directly) if pm2 itself reports failure, so a caller decides what "this
+# one app failed to (re)start" means at that point in the script.
+#
+# Rehearsal finding — this used to run `pm2 reload`/`pm2 start` as a bare
+# statement, so a failure there killed the whole script immediately under
+# `set -e`: no health check, no rollback, nothing beyond whatever pm2 itself
+# printed to stderr. Reproduced by making one `pm2 reload` fail mid-loop —
+# the result was some processes already reloaded onto the new commit and
+# others not, `pm2 save` never reached, and the operator-visible output was
+# one pm2 error line with no indication anything needed to be rolled back.
 start_or_reload() {
   local name="$1"
   if pm2_knows_app "$name"; then
-    pm2 reload "$name" --update-env
+    if ! pm2 reload "$name" --update-env; then
+      echo "ERROR: pm2 reload $name failed" >&2
+      return 1
+    fi
   else
     log "pm2 does not know $name yet; starting it from ecosystem.config.cjs"
-    pm2 start ecosystem.config.cjs --only "$name"
+    if ! pm2 start ecosystem.config.cjs --only "$name"; then
+      echo "ERROR: pm2 start $name failed" >&2
+      return 1
+    fi
   fi
 }
 
 # Reloads every supervised process — the Python bot plus OPS-8's Node
-# processes — and saves the pm2 process list once, after all of them. Used
-# both for the real deploy and for rolling every one of them back to the
-# previous commit.
+# processes — trying each one even if an earlier one failed, so a caller
+# sees every failure at once rather than stopping at the first (the same
+# "collect every unhealthy name" shape `check_pm2_health`'s own callers
+# already use below). Returns non-zero, never exits directly, if any
+# failed — both call sites (the forward path and the rollback path)
+# decide separately what a reload failure means at that point. `pm2 save`
+# only runs once every reload succeeded; saving a process list mid-failure
+# would persist pm2's own memory of a half-reloaded deploy across a
+# restart.
 reload_everything() {
-  start_or_reload "$PM2_APP"
+  local failed=()
+  start_or_reload "$PM2_APP" || failed+=("$PM2_APP")
   for name in "${NODE_APPS[@]}"; do
-    start_or_reload "$name"
+    start_or_reload "$name" || failed+=("$name")
   done
+  if [ ${#failed[@]} -gt 0 ]; then
+    echo "ERROR: failed to reload: ${failed[*]}" >&2
+    return 1
+  fi
   pm2 save
 }
 
@@ -293,6 +320,41 @@ check_pm2_health() {
   return 0
 }
 
+# Confirms every process actually came back up after a rollback's own
+# `reload_everything` call, before this script tells an operator the
+# rollback succeeded.
+#
+# Cheap-fix finding — the message at the bottom of this script used to say
+# "rolled back ...; every process is running the previous commit"
+# unconditionally, the moment `reload_everything` returned, with no check
+# at all — not even the `check_pm2_health` this file already has twenty
+# lines up. If the previous commit is itself broken (a bad dependency still
+# installed, an environment problem introduced before this deploy), the
+# operator is told the rollback worked while the stack crash-loops.
+#
+# A short, fixed wait (capped at 10s, not the full $HEALTH_WAIT) is enough
+# to catch a process that fails immediately; this is a final "did the
+# rollback itself work" check, not a second full health pass on a version
+# this script has typically already run once before.
+confirm_rolled_back_online() {
+  local wait_s=$HEALTH_WAIT
+  [ "$wait_s" -gt 10 ] && wait_s=10
+  log "confirming the previous commit is actually online (${wait_s}s)"
+  sleep "$wait_s"
+  local still_broken=()
+  local name status
+  for name in "$PM2_APP" "${NODE_APPS[@]}"; do
+    status="$(pm2_field "$name" status || true)"
+    [ "$status" = "online" ] || still_broken+=("$name (${status:-unknown})")
+  done
+  if [ ${#still_broken[@]} -gt 0 ]; then
+    fail "CRITICAL: rolled the checkout back to ${PREV_SHA:0:8} and reloaded
+every process, but pm2 still reports these as not online: ${still_broken[*]}.
+The rollback did not actually restore a working previous commit — this
+needs a human to look, not a re-run of this script."
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
@@ -375,7 +437,20 @@ Check the database before retrying."
 fi
 
 log "reloading every supervised process"
-reload_everything
+if ! reload_everything; then
+  echo "ERROR: one or more processes failed to reload — rolling back" >&2
+  restore_previous_checkout
+  if ! reload_everything; then
+    fail "CRITICAL: rolled the checkout back to ${PREV_SHA:0:8} but one or
+more processes failed to reload onto it too. Some processes may now be
+stopped, or still running the broken commit's own dist/ — check \`pm2
+status\` and each process's own log by hand; do not assume the previous
+commit is actually running anywhere until you have looked."
+  fi
+  confirm_rolled_back_online
+  fail "rolled back to ${PREV_SHA:0:8} after a reload failure; every process
+that could be confirmed online is running the previous commit"
+fi
 
 # ---------------------------------------------------------------------------
 # Health check
@@ -422,7 +497,13 @@ fi
 if [ ${#UNHEALTHY[@]} -gt 0 ]; then
   echo "ERROR: unhealthy after the reload: ${UNHEALTHY[*]}" >&2
   restore_previous_checkout
-  reload_everything
+  if ! reload_everything; then
+    fail "CRITICAL: rolled the checkout back to ${PREV_SHA:0:8} but one or
+more processes failed to reload onto it. Check \`pm2 status\` and each
+process's own log by hand; do not assume the previous commit is actually
+running anywhere until you have looked."
+  fi
+  confirm_rolled_back_online
   fail "rolled back to ${PREV_SHA:0:8}; every process is running the previous commit"
 fi
 

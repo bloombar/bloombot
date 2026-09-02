@@ -1,5 +1,16 @@
 # Deploying to DigitalOcean App Platform — an honest assessment, not a walkthrough
 
+> ## Read this first: there is no production email transport yet, on any host
+>
+> Before reading any further about App Platform specifically: `apps/api` refuses to start at
+> all in `NODE_ENV=production` today, on a droplet or here, because no real `EmailSender` has
+> been built yet (`packages/auth/src/email.ts`'s own module comment: "this package ships the
+> interface and a recording fake for tests, never a real mail transport"). This is tracked as
+> **AUTH-5** and is not specific to App Platform — [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md)'s
+> own lead callout has the full detail. It is repeated here, first, because someone deciding
+> between the two documents should not have to reach §4 of this one to learn it changes nothing
+> about which platform to pick.
+
 **This document is not a "how to deploy" in the same shape as
 [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md).** It is written the way the rest of this repository
 asks for a runbook to be written: correct, not merely correct in the abstract. The honest
@@ -45,15 +56,19 @@ share a filesystem with each other. Deployed as four separate App Platform compo
 their names (api/bot/worker/mcp) would suggest, none of them could open the file any of the
 others has open: this is not a permissions problem to fix, there is no file there to share.
 
-**A local disk is not durable storage.** Even collapsed into a single component (§2), a
-component's own local disk on App Platform is not guaranteed to survive a redeploy, a restart,
-or a scaling event — SQLite is a database of record here (real students' names, emails and
-transcripts), and losing it on every deploy is not an acceptable trade for anything App
-Platform offers. Whether App Platform currently offers an attachable persistent volume for a
-Service/Worker component, and on what terms, is exactly the kind of product detail that changes
-— check DigitalOcean's own current documentation before assuming either way, and do not deploy
-this platform's real data against local disk alone on the strength of this document's own
-recollection of that feature.
+**A local disk is not durable storage.** A Service or Worker component's own local disk on App
+Platform is ephemeral: it does not survive a redeploy, a restart, or App Platform rescheduling
+the container onto different underlying infrastructure — DigitalOcean's own answer for anything
+that needs to persist is a Managed Database or Spaces (object storage), not local disk on the
+component itself; App Platform does not offer an attachable persistent block volume for a
+Service/Worker component the way a Droplet offers an attached Volume. Even collapsed into a
+single component (§2), running this platform's current SQLite file on that component's own local
+disk means the database — real students' names, emails and transcripts — is destroyed on the
+*first* redeploy, restart, or reschedule, not a risk to weigh but a certainty to avoid. (Product
+surfaces do change; if DigitalOcean has since added a persistent-volume option App Platform did
+not have when this was written, that would change this section's own conclusion — verify against
+their current documentation before trusting this claim's own currency, not before trusting its
+substance.)
 
 **Course attachments have the same problem, independently.** `ATTACHMENT_STORAGE_DIR`
 (`packages/db/src/attachment-storage.ts`) is a local filesystem path, written by `apps/worker`
@@ -64,19 +79,24 @@ shape as the database, and the same failure on App Platform's component model.
 
 The only shape that avoids splitting the shared file across components no App Platform
 component model lets you rejoin: run **api, bot, worker and mcp inside one component**, as one
-container, and pin that component to **exactly one instance** (no autoscaling, no rolling
-deploy with two instances briefly live — verify App Platform's own deploy strategy options
-support a hard cutover rather than an overlap, since two instances holding the same SQLite file
-open is exactly the multi-writer scenario D-2 confines to a single host). This needs:
+container, pinned to **`instance_count: 1`**. That bounds *steady-state* replica count, but it
+does not make a deploy a hard cutover: App Platform's own deploys are rolling by design — it
+starts the new container, waits for it to become healthy, and only then stops the old one — so
+two instances of this one combined component, each holding the same SQLite file open, are both
+briefly live across every single deploy regardless of `instance_count`. That is exactly the
+multi-writer scenario D-2 confines to a single host, on every deploy, not an edge case to
+configure around. This needs:
 
 - **A combined entry point** that starts all four processes' own `main()` in one Node process
   (or as child processes of one small supervisor) — nothing in `apps/*` is built to do this
   today; each is its own `apps/*/dist/index.js`, deliberately (PLAT-1's own "apps/ holds the
   four processes"). Writing this combinator is a real, if small, engineering task, not a
   configuration choice — it is not built here.
-- **A persistent volume** mounted into that one component, if App Platform's current offering
-  supports one for this component type — see §1's own caveat. Without it, this option does not
-  meet the bar "does not risk data loss" and should not be used for real student data at all.
+- **A persistent volume mounted into that one component — which App Platform does not offer for
+  a Service/Worker component** (§1's own "a local disk is not durable storage"). Without one,
+  this option does not meet the bar "does not risk data loss" and must not be used for real
+  student data — and the rolling-deploy overlap above means even a persistent volume would not
+  be enough on its own, since two containers would still briefly share it as two writers.
 - **The static panel served separately** — App Platform's own **Static Site** component type
   is a reasonable fit for `apps/web/dist` (it is exactly what it is for), proxied to the
   combined component's own API routes (`/health`, `/auth`, `/organizations` —

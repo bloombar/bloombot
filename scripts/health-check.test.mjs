@@ -11,6 +11,9 @@
  */
 
 import { createServer } from 'node:http'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -22,6 +25,7 @@ import {
   DEFAULT_HEALTH_PORTS,
   describeResult,
   healthEndpoints,
+  resolveEndpoints,
 } from './health-check.mjs'
 
 /** Starts a throwaway HTTP server on an ephemeral port that always answers the same way, and returns its base URL plus a `close()`. */
@@ -158,4 +162,29 @@ test('healthEndpoints reads an override from the environment', () => {
   const endpoints = healthEndpoints({ API_PORT: '4100' })
   const api = endpoints.find((e) => e.name === 'api')
   assert.equal(api.url, 'http://127.0.0.1:4100/health')
+})
+
+// Rework finding — `resolveEndpoints` (called by `run()`, `scripts/deploy.sh`'s
+// own entry point) used to just call `healthEndpoints()` directly, with no
+// `.env` load at all: a port override that only existed in `.env` (the
+// documented place for one) never reached this script, so it kept polling
+// the *default* port regardless of what the API process actually bound —
+// every deploy with a non-default port would fail its own health check and
+// roll back forever. This proves the load actually happens, without ever
+// writing a file named `.env` (a hook in this repository blocks that, and
+// `packages/config/tests/dotenv.test.ts` takes the same precaution for the
+// same reason).
+test('resolveEndpoints loads a port override from a .env-shaped file, not only from process.env', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'health-check-test-'))
+  const path = join(dir, 'environment-fixture')
+  writeFileSync(path, 'API_PORT=4321\n', 'utf8')
+  delete process.env.API_PORT
+  try {
+    const endpoints = resolveEndpoints(path)
+    const api = endpoints.find((e) => e.name === 'api')
+    assert.equal(api.url, 'http://127.0.0.1:4321/health')
+  } finally {
+    delete process.env.API_PORT
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

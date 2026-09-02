@@ -3814,6 +3814,38 @@ the rest of this entry: the throwaway harness, re-run through both the happy pat
 reload rollback, confirming "building the control panel" (and, on rollback, "rebuilding the control panel for
 the previous commit") now appears in the log exactly once per path, in the right order.
 
+**Rework round — `reload_everything`/`start_or_reload` still died silently under `set -e`, a third instance
+of the same bug class this entry already fixed twice.** Both ran `pm2 reload`/`pm2 start` as bare statements;
+a review reproduced it by making one `pm2 reload` fail mid-loop, and the entire operator-visible output was
+one pm2 error line — no health check, no rollback, some processes already on the new commit and others not,
+`pm2 save` never reached. Fixed the same way the earlier findings in this entry were: `start_or_reload` now
+checks pm2's own exit status explicitly and returns non-zero rather than letting the failure propagate
+unguarded; `reload_everything` tries every app even after an earlier one fails, collecting failures instead
+of stopping at the first (skipping `pm2 save` if any failed); both call sites (the forward path and the
+already-rolled-back-once branch) check `reload_everything`'s own return value and escalate to a CRITICAL
+message — the same class this entry's own `restore_previous_checkout` findings already established — if the
+*rollback's* reload also fails, rather than claiming success. A further finding while fixing this: the final
+"rolled back ...; every process is running the previous commit" message used to print unconditionally the
+moment `reload_everything` returned, with no check that the rollback's own reload actually left every process
+online — `confirm_rolled_back_online` (a short, capped-at-10s wait, then a plain `pm2 status` read for every
+app) closes that gap, escalating to CRITICAL if the previous commit is not actually online either, rather
+than reassuring an operator who has not been told the truth.
+
+**A committed harness now exists for this: `scripts/deploy.test.mjs`.** The throwaway harness this entry's
+own earlier findings describe as "not kept as a checked-in test" was rebuilt as a real one, following a
+review that rebuilt roughly the same harness independently in under an hour and found the `reload_everything`
+bug immediately with it — evidence that the investment was worth keeping rather than re-paying per reviewer.
+It runs `scripts/deploy.sh` (the real, current file, piped over stdin the same way CI invokes it) against a
+throwaway git repository and stand-in `pm2`/`npm`/`node`/`python3`/`pipenv`, covering the happy path, a pm2
+reload failure that must roll back rather than die, and a control-panel build failure that must abort before
+reloading anything. Each `writeDefaultStubs({ failReload, failBuildWeb })` scenario fails only its *first*
+invocation (a marker file), not forever — failing forever silently conflated "the forward path failed" with
+"the rollback itself also failed," a different, already-covered CRITICAL case, and produced a false negative
+in this file's own early draft before that was noticed and fixed. `scripts/deploy.sh` is still not
+exhaustively rehearsed by this harness — it covers the scenarios worth a committed regression test, not
+every branch — but the one this rework round's own reload-guard fix needed is in it, and fails without that
+fix (verified by reverting the fix and confirming the test catches it, then restoring it).
+
 ---
 
 ## D-41 — `scripts/ops-monitor.mjs`: what counts as unhealthy beyond a bare HTTP status, one page per outage rather than one per poll, and why a webhook rather than email
@@ -3866,6 +3898,50 @@ Python bot. A crashed `ops-monitor` is itself invisible to the thing it exists t
 through; pm2 restarting it (the same supervision every other process here gets) is the mitigation, not a
 deeper one — a monitor that watches its own watcher was judged out of scope for this slice.
 
+**Rework round — three findings, reproduced against a real `.env`-shaped fixture, a real webhook response,
+and real math.**
+
+1. **This process never actually loaded `.env`.** `run()` read `process.env.OPS_ALERT_WEBHOOK_URL` directly;
+   pm2 does not load `.env` for a process on its own behalf (`ecosystem.config.cjs`'s own module comment
+   claims "every Node process here loads `.env` itself," which was true for the four apps and false for this
+   one), so a webhook configured exactly as `env.example` and every deployment doc in this slice instructed
+   silently never reached the running process — every page degraded to a log line nobody was watching, with
+   no error anywhere. The identical gap existed in `scripts/health-check.mjs`, with a worse blast radius: a
+   `.env`-only `API_PORT` override never reached it either, so `scripts/deploy.sh` would poll the *default*
+   port forever, `ECONNREFUSED` on every check, and roll back every single deploy regardless of whether
+   anything was actually wrong. Fixed with a shared `scripts/load-dotenv.mjs` (the same `loadDotEnvOnce`
+   contract `@bloombot/config`'s own `loadDotEnv` has — a value already in `process.env` wins, a missing file
+   is not an error), called from a new `resolveMonitorConfig`/`resolveEndpoints` seam in each script rather
+   than inline in `run()`, specifically so a regression test could exercise the composition with an injectable
+   `.env` path — never a file literally named `.env`, the same precaution `packages/config/tests/dotenv.test.ts`
+   already takes, for the same reason (a hook in this repository blocks writes to `.env*`, and a test exempted
+   from that guard would be a test worth distrusting). `scripts/load-dotenv.test.mjs`,
+   `scripts/health-check.test.mjs`'s own `resolveEndpoints` case and `scripts/ops-monitor.test.mjs`'s own
+   `resolveMonitorConfig` case all fail without the fix — verified by reverting the `loadDotEnvOnce` calls and
+   confirming the failure, then restoring them.
+
+2. **The model-error-rate limb read a lifetime average, not a running rate.** `createCountingModelClient`'s
+   own counters (`packages/core`) never reset; `evaluate` compared them straight against the threshold, so a
+   course server up a week with 400 calls and 8 errors (2%) would need roughly 384 *more* consecutive failures
+   — about 19 hours at 20 calls/hour — to ever trip 50%-of-5 once the provider actually went fully down. The
+   mirror case was as bad: the first five calls right after a deploy reset the counters could trip the
+   threshold on ordinary noise, and "recovered" would not fire again for hours while the lifetime average
+   slowly diluted back down. Fixed by windowing: `evaluate` now takes each process's own `{calls, errors}`
+   snapshot from the *previous* poll and evaluates the delta since then, returning the new snapshot for
+   `planNotifications` to carry forward (a `previousModel` map, parallel to the existing `previousHealthy`
+   one). A restart — the counters going backwards between polls — is detected and evaluated against the raw
+   post-restart totals rather than a nonsensical negative rate. `scripts/ops-monitor.test.mjs` now includes a
+   case with a low lifetime rate and a high windowed one (pages), the mirror (a high lifetime rate, a clean
+   window, does not page), and a three-tick simulation of a real outage windowed correctly tick by tick.
+
+3. **`notify` treated a webhook that answered as delivered, whether or not the answer said so.** Only a
+   thrown `fetch` (a network failure) was treated as a failure; a webhook that resolves normally but rejects
+   the message — Discord's own `404 Unknown Webhook` after someone recreates the alerting channel's own
+   integration, a Slack webhook someone revoked — logged the exact same "delivered" line as a page that
+   actually reached anyone. The tell was in this file's own pre-existing test: the fake `fetchFn` returned
+   `{ ok: true }`, a field the code never read. Fixed by checking `response.ok` and treating a non-`ok`
+   response the same as a thrown error — logged at `error`, not silently accepted.
+
 ---
 
 ## D-42 — `docs/CUTOVER.md`: rehearsal reuses the production bot token safely by construction, and rollback needs no credential un-rotated
@@ -3879,14 +3955,27 @@ causing its own outage; and the rollback has to actually work, using nothing the
 server, rather than provisioning a second bot application.** Gateway events for one bot token fan out to
 every active session across every guild that bot is in, regardless of which guild the event came from — so a
 rehearsal `apps/bot` connected with the production token technically receives events from real course servers
-too. This is safe by construction, not merely by care: CORE-2 attributes a message to a course the *routing
-process's own database* knows about, and the rehearsal's database (`tmp/rehearsal-platform.db`) only ever
-contains whatever `bot_config.yml` named for the rehearsal — a real course category is unrecognized, the same
-as any message nobody configured a course for, and CORE-2's own text is explicit that an unmatched message
-"is ignored rather than answered." `docs/RUNNING_LOCALLY.md`'s own reuse table already established reusing
-the real `BOT_TOKEN` for local development as this project's convention; the rehearsal does the same thing
-for the same reason, and the CORE-2 argument above is what makes it safe to also point at a disposable
-server rather than requiring a whole second Discord application just to rehearse safely.
+too. `docs/RUNNING_LOCALLY.md`'s own reuse table already established reusing the real `BOT_TOKEN` for local
+development as this project's convention; the rehearsal does the same thing for the same reason, and needs
+a real, separate safety argument for why a rehearsal process seeing real events is not a real risk.
+
+**Review finding — the first version of that argument was wrong, and named the wrong gate.** It claimed
+CORE-2's course matching was what kept a real course server's messages unanswered by the rehearsal (the
+rehearsal database "only ever contains whatever `bot_config.yml` named" for the rehearsal, so a real category
+would be "unrecognized"). That is false the moment §1.2 runs: the rehearsal import reads the *real*
+`bot_config.yml`, so the rehearsal database ends up knowing exactly the real course names — CORE-2 would
+match them. The actual gate is earlier and unconditional: `packages/discord/src/handle-mention.ts` resolves
+the Discord *server binding* (SURF-3, `resolveDiscordServerBinding`) before any course or category matching
+runs at all, and `packages/legacy-import` never writes a server-binding row — there is nothing in
+`bot_config.yml` to derive one from. The rehearsal organization therefore starts with no Discord server bound
+to it whatsoever; the disposable test server §1.3 has an operator bind by hand is the only one it will ever
+answer in. `docs/CUTOVER.md`'s own §1.3 now states this — the absence of a binding, not an accident of course
+naming — and adds the instruction that actually follows from it: never bind a real course server to the
+rehearsal organization, because doing so removes the one thing standing between the rehearsal and a second
+bot double-answering real students on the production token. The original, wrong version of this argument was
+the kind of thing an operator would have improvised past if they read it and trusted it — worse than no
+argument at all, because it pointed at a mechanism (CORE-2) that direction §1.2 of the same document
+independently disables (importing the real config).
 
 **Choice — rotate while both systems are stopped, not while either is live.** OPS-11's own text asks that
 rotation not itself cause an outage; sequencing it between "Python stopped" (§2.2) and "platform started"
@@ -3978,3 +4067,76 @@ with an explicit "verify against DigitalOcean's current documentation" note in
 `docs/DEPLOY_APP_PLATFORM.md` rather than presented with false certainty about a product surface
 that changes independently of this repository.
 
+
+**Rework round — a second review checked both documents against the code directly and found what
+reads plausibly but does not survive being followed literally.** In order of how much damage
+each would have caused an operator following the document at 9pm:
+
+- **`docs/CUTOVER.md`'s Phase 2 could not be executed as written, and said nothing about it.**
+  §2.2 stops the Python bot and §2.3 irreversibly resets the Discord bot token before §2.5 ever
+  tries to start `apps/api` — which, per this entry's own finding, does not start at all in
+  production. An operator following the document in order meets a crash-looping API with the old
+  system already stopped and the credential already rotated, with no warning it was coming.
+  Fixed with an explicit callout at the top of Phase 2 (referencing **AUTH-5**, the tracked,
+  in-progress fix, rather than asserting a permanent block) and corrected wording in §2.5/§2.6
+  naming exactly what still works (`bot`/`worker`/`mcp`, Discord answering) and what does not
+  (`api`, the panel, any sign-in) until it lands. The droplet document's own callout separately
+  overclaimed that Google sign-in specifically "does not depend on this and is unaffected" — false,
+  since `apps/api`'s own `main()` evaluates `buildEmailSender` before the whole process ever
+  starts listening, so every route it serves is unreachable, not only the email one; corrected in
+  both the callout and the `GOOGLE_CLIENT_ID` table row.
+
+- **The rehearsal's own safety argument named the wrong mechanism.** See D-42's own rework-round
+  addition above for the full finding — the fix belongs there since D-42 is the entry that made
+  the original (wrong) claim.
+
+- **`VITE_GOOGLE_CLIENT_ID` was undocumented anywhere, and it is the only sign-in path that could
+  actually work while AUTH-5 is outstanding.** `apps/web/src/pages/SignIn.tsx` reads it from
+  `import.meta.env` at Vite **build time**, from `apps/web`'s own `.env`/`.env.production` —
+  Vite's `envDir` defaults to the directory holding `vite.config.ts`, not the repository root, so
+  the root `.env` this document used for every other variable is invisible to this one build
+  step, and `scripts/deploy.sh` rebuilds the panel on every deploy in a non-interactive shell, so
+  a one-off exported shell variable would work once and silently regress on the first deploy
+  after. Fixed by moving the panel's own first build out of §3 (before any third-party setup) and
+  into §4.3, after `apps/web/.env.production` is written, with a new row in the env-var table
+  making the distinct mechanism (build-time, `apps/web`-scoped, not `packages/config`) explicit.
+
+- **The App Platform document buried its own headline finding 135 lines in, and hedged twice
+  where the answer does not depend on unverifiable specifics.** "There is no production email
+  transport" was a subordinate clause in §4's own text rather than a callout — lifted to the top
+  of the document, immediately after the title, on the reasoning that someone comparing the two
+  deployment documents should not have to reach §4 to learn it changes nothing about which one to
+  pick. Separately, "whether App Platform currently offers a persistent volume... is exactly the
+  kind of product detail that changes" and "verify App Platform's own deploy strategy options
+  support a hard cutover" both hedged a conclusion that does not actually depend on the hedge:
+  App Platform's Service/Worker components have no attachable persistent volume at all (Spaces
+  and Managed Databases are DigitalOcean's own answer for anything that must persist), and its
+  deploys are rolling by design — a new container is started and confirmed healthy before the old
+  one stops — so `instance_count: 1` bounds steady-state replicas without preventing two
+  containers holding the same SQLite file open across every single deploy. Both sections now
+  state the conclusion as a fact about the product's design, not a possibility to go check.
+
+- **`docs/DEPLOY_DROPLET.md` had a working-order bug (nginx referencing a certificate that does
+  not exist yet, with no DNS step to make certbot's own challenge succeed at all) and several
+  smaller ones**, closed in the same pass: DNS-first with a `dig` check (§5.1), an HTTP-only
+  nginx block before `certbot --nginx` writes its own TLS one rather than a hand-written `443`
+  block (§5.2–5.3), a dedicated-user creation step with the `chmod o+x` Ubuntu 24.04's own
+  `0750` home directories need for nginx to traverse into `apps/web/dist` at all (§2), one
+  consistent checkout path used throughout instead of two that disagreed, `pipenv install`
+  actually run once (§3), course attachments added to the backup alongside the database plus an
+  actual rehearsed restore procedure rather than a backup with no way back (§8.1), a worker
+  health-check command in the post-deploy checklist (§8.3), `ufw` alongside the cloud firewall
+  (§1), an explicit warning that `env.example`'s two non-empty placeholders
+  (`BOT_APP_ID=your_bot_app_id`, `BOT_PERMISSIONS=your_bot_permissions_integer`) pass every
+  truthiness check silently, the `PUBLIC_APP_URL` table row's trailing-slash reasoning corrected
+  (it is Discord's redirect URI that breaks, not the origin check, which normalizes a trailing
+  slash away), and "two redirect URIs" corrected to one — the connect-surface slice landing
+  concurrently reuses the install flow's own `discordRedirectUri` rather than registering a
+  second one.
+
+**Limits, updated.** The corrections above were checked against this repository's own source
+(`apps/web/vite.config.ts`, `apps/web/src/pages/SignIn.tsx`, `apps/api/src/middleware/origin.ts`,
+`packages/discord/src/handle-mention.ts`) rather than merely re-argued; the DigitalOcean-specific
+claims (App Platform's storage and deploy-strategy behavior) remain unverified against a live
+account, as this entry's own original "Limits" paragraph already disclosed, and still call for
+the same verify-before-relying discipline that paragraph asks for.

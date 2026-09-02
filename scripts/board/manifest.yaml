@@ -2324,7 +2324,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: Backlog
+  status: In progress
   review: false
 - id: LINK-7
   title: Connecting Discord is signing in with Discord
@@ -2336,7 +2336,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: Backlog
+  status: In progress
   review: false
 - id: LINK-8
   title: An assistant is handed its token where only it can read it
@@ -2348,7 +2348,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: Backlog
+  status: In progress
   review: false
 - id: LINK-9
   title: Nobody who could already ask is locked out by connecting
@@ -2361,7 +2361,7 @@
   section: §28 Account Linking Across Surfaces
   family: LINK
   phase: 12
-  status: Backlog
+  status: In progress
   review: false
 - id: PPL-4
   title: A surface is linked by proving it, never by matching an address
@@ -2597,7 +2597,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: In progress
   review: false
 - id: OPS-9
   title: Cutover is rehearsed against a copy before it is real
@@ -2607,7 +2607,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: In progress
   review: false
 - id: OPS-10
   title: The old system is retired deliberately, and can be returned to
@@ -2618,7 +2618,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: In progress
   review: false
 - id: OPS-11
   title: Secrets are rotated at cutover
@@ -2628,7 +2628,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: In progress
   review: false
 - id: OPS-12
   title: A student-facing failure pages somebody
@@ -2638,7 +2638,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: In progress
   review: false
 - id: OPS-13
   title: A server administrator can set the platform up from documentation alone

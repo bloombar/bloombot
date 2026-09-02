@@ -7,10 +7,22 @@
  * these scenarios proved which code.
  */
 
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createSmtpEmailSender } from '../src/smtp.js'
+import { createLogger } from '@bloombot/logger'
+
+import {
+  createSmtpEmailSender,
+  CONNECTION_TIMEOUT_MS,
+  GREETING_TIMEOUT_MS,
+  SOCKET_TIMEOUT_MS,
+} from '../src/smtp.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
+import { FakeDroppingRelay } from './helpers/fake-dropping-relay.js'
 import { FakeSmtpServer } from './helpers/fake-smtp-server.js'
 
 // The credential this whole slice's brief says may never reach a log line,
@@ -183,6 +195,87 @@ describe('createSmtpEmailSender (AUTH-5)', () => {
     })
   })
 
+  // Must-fix 1 of a second review round: `ECONNECTION` is one of
+  // `connection_failed`'s own codes, and `connection_failed` is one of the
+  // two kinds whose `message` this adapter keeps (must-fix 3, above) — but
+  // nodemailer sets `ECONNECTION` for more than a locally-generated
+  // failure. `FakeDroppingRelay` reproduces the one shape that disproved
+  // the "connection_failed is always local" assumption: a relay that
+  // answers the end of `DATA` with an *unterminated* reply quoting a
+  // fragment of the rejected body, then destroys the connection — the same
+  // scenario `errors.ts`'s own module comment now documents finding by
+  // hand. This is the test that would have failed against the version of
+  // `errors.ts` that kept every `connection_failed` message unconditionally
+  // (proven by patching and restoring — see the developer's own report).
+  it('withholds message, stack and any pino-serialized line when a dropped connection quotes the body back (must-fix 1)', async () => {
+    const link = 'https://app.example.test/sign-in?token=SUPERSECRETTOKEN12345'
+    const relay = await FakeDroppingRelay.start({
+      replyAtEndOfData: `550 message rejected: body contains a blocked link ${link}`,
+    })
+    server = await FakeSmtpServer.start() // afterEach needs something to stop
+
+    const logger = createFakeLogger()
+    const sender = createSmtpEmailSender({
+      host: '127.0.0.1',
+      port: relay.port,
+      from: 'noreply@bloombot.test',
+      logger,
+      requireTLS: false,
+    })
+
+    let caught: unknown
+    try {
+      await sender.send('student@example.com', 'Sign in to Bloombot', link)
+      throw new Error('unreachable: the dropping relay always fails the send')
+    } catch (error) {
+      caught = error
+    }
+    await relay.stop()
+
+    expect(caught).toMatchObject({
+      name: 'MailTransportError',
+      kind: 'connection_failed',
+      code: 'ECONNECTION',
+    })
+    const err = caught as Error
+    expect(err.message).not.toContain('SUPERSECRETTOKEN12345')
+    expect(err.message).not.toContain('blocked link')
+    expect(err.stack ?? '').not.toContain('SUPERSECRETTOKEN12345')
+    expect(JSON.stringify(err)).not.toContain('SUPERSECRETTOKEN12345')
+
+    // This adapter's own `send()` logs the same classified error at
+    // `error` level (`smtp.ts`) — checked directly against `createFakeLogger`
+    // above, and, here, against a *real* pino serialization, the same
+    // `logger.error({ err: error, ... })` shape `apps/api`'s own
+    // `middleware/errors.ts` uses, writing to the same kind of JSONL file
+    // `logs/*.log` is (a protected path in this repo for precisely this
+    // reason). `logger` (the fake) already proved nothing about the send
+    // failure reached it beyond `to`/`subject`/`kind`/`code`/`command`/
+    // `responseCode` — this proves the classified error itself is safe
+    // even through pino's own `err` serializer, not merely through this
+    // adapter's own choice of what to pass it.
+    const scratchDir = mkdtempSync(join(tmpdir(), 'bloombot-mail-pino-'))
+    try {
+      const pinoLogger = createLogger('mail-test', {
+        logsDir: scratchDir,
+        level: 'error',
+        pretty: false,
+      })
+      pinoLogger.error(
+        { err: caught },
+        'apps/api: unexpected error handling a request'
+      )
+      // pino's own destination is async; give it a turn to flush before
+      // reading the file back.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const written = readFileSync(join(scratchDir, 'mail-test.log'), 'utf8')
+      expect(written).not.toContain('SUPERSECRETTOKEN12345')
+      expect(written).not.toContain('blocked link')
+    } finally {
+      rmSync(scratchDir, { recursive: true, force: true })
+    }
+  })
+
   // Must-fix 3, the other half: `errors.ts`'s own module comment.
   // `smtp-server` does not exercise this shape (a server can only choose
   // when to respond, not never respond at all before its own handshake
@@ -275,8 +368,23 @@ describe('createSmtpEmailSender (AUTH-5)', () => {
         from: 'noreply@bloombot.test',
         logger: createFakeLogger(),
       })
+      // "Also worth doing" of a second review round: this test used to
+      // assert only `secure`/`requireTLS` — the port-465 branch's own
+      // reason for existing — leaving the connection/greeting/socket
+      // timeouts (`smtp.ts`'s own `CONNECTION_TIMEOUT_MS`/
+      // `GREETING_TIMEOUT_MS`/`SOCKET_TIMEOUT_MS`, the "also fix" a prior
+      // round added) proven only by the constants themselves, never by an
+      // assertion. Widened rather than split into a second test: this spy
+      // already captures the one `createTransport` call that carries every
+      // one of these options together.
       expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ secure: true, requireTLS: undefined })
+        expect.objectContaining({
+          secure: true,
+          requireTLS: undefined,
+          connectionTimeout: CONNECTION_TIMEOUT_MS,
+          greetingTimeout: GREETING_TIMEOUT_MS,
+          socketTimeout: SOCKET_TIMEOUT_MS,
+        })
       )
     } finally {
       spy.mockRestore()

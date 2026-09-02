@@ -80,7 +80,7 @@ export interface CreateSmtpEmailSenderOptions {
 // in milliseconds) and short enough that a caller — and the request
 // admission this API otherwise has no other bound on for this route — is
 // not left hanging on a relay that never will.
-const CONNECTION_TIMEOUT_MS = 10_000
+export const CONNECTION_TIMEOUT_MS = 10_000
 // Deliberately shorter than CONNECTION_TIMEOUT_MS, not merely equal to it:
 // nodemailer treats the two as one continuous deadline when they match, so
 // a relay that accepts the TCP connection and then never greets reports the
@@ -88,8 +88,8 @@ const CONNECTION_TIMEOUT_MS = 10_000
 // received" — reproduced while writing this, and the reason
 // `tests/smtp.test.ts`'s own greeting-timeout test needed this exact gap to
 // assert the more diagnostic message at all.
-const GREETING_TIMEOUT_MS = 8_000
-const SOCKET_TIMEOUT_MS = 10_000
+export const GREETING_TIMEOUT_MS = 8_000
+export const SOCKET_TIMEOUT_MS = 10_000
 
 /**
  * Build an `EmailSender` backed by a real SMTP relay.

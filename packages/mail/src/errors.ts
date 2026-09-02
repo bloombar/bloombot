@@ -20,22 +20,49 @@
  * `response` or the underlying `error.message` itself, either of which the
  * *remote server* controls the content of.
  *
- * `connection_failed` and `timed_out` are different, and a rework of this
- * file keeps their `error.message` rather than discarding it too: neither
- * kind ever reaches a remote server's own reply at all — `ECONNREFUSED`,
- * `ENOTFOUND`, `Connection timeout` and a TLS trust failure's own
+ * `connection_failed` and `timed_out` are different in the *ordinary*
+ * case, and a rework of this file kept their `error.message` on the
+ * reasoning that neither kind ever reaches a remote server's own reply at
+ * all — wrong, for one of `connection_failed`'s own codes, and corrected
+ * below.
+ *
+ * Rework finding (must-fix 1 of a second review round): `ECONNREFUSED`,
+ * `ENOTFOUND`, `Greeting never received` and a TLS trust failure's own
  * `"self-signed certificate; if the root CA is installed locally, try
- * running Node.js with --use-system-ca"` are generated locally, by Node's
- * own `net`/`tls` stack and nodemailer's own timeout logic, before any SMTP
- * conversation with the far end even begins — none of them can carry a
- * fragment of the message being sent, the same way `packages/openai`'s own
- * `errors.ts#timeoutError` needs no sanitizing either. Discarding them
- * anyway was itself a bug (D-46's rework): a certificate a private
- * institutional CA issued (the exact case D-46 targets — a university's own
- * relay) and a relay that is simply down produced the identical
- * `{"kind":"connection_failed","code":"ESOCKET"}` log line, with nothing
- * anywhere pointing an operator at the actual cause. Keeping the message
- * for these two kinds only is the fix.
+ * running Node.js with --use-system-ca"` are indeed generated locally, by
+ * Node's own `net`/`tls` stack and nodemailer's own timeout logic, before
+ * any SMTP conversation with the far end begins — none of them can carry a
+ * fragment of the message being sent. But nodemailer's own `ECONNECTION`
+ * (one of `classifyCode`'s own `connection_failed` codes, below) is not
+ * always one of those: `smtp-connection`'s `_formatError` appends the
+ * server's own trailing reply to `.message` (`': ' + response`) whenever
+ * the connection carried one, and `_onClose` raises exactly `ECONNECTION`
+ * for that case — reachable at *any point* in the conversation, including
+ * after `DATA`, so a content filter that rejects and drops the connection
+ * mid-`DATA` puts its own free-text reply (and, through it, a fragment of
+ * the body it was rejecting) straight into `.message` under a code this
+ * file used to treat as locally-generated and safe. Reproduced against a
+ * relay that answers the end of `DATA` with an unterminated `550 message
+ * rejected: ...` and closes: `kind` came back `connection_failed`,
+ * `code` `ECONNECTION`, and the sign-in link in the test body was in
+ * `.message` (and, through it, `stack`, and any serializer — pino's
+ * included — that reads either).
+ *
+ * The fix is not removing `connection_failed` from the safe set — most of
+ * what maps to it (`ECONNREFUSED`, `ENOTFOUND`, `ETLS`) is still exactly as
+ * locally-generated as the module comment above always said. It is reading
+ * the signal that tells the two apart: nodemailer sets `.response` on the
+ * same error object *exactly when* it appended a server reply to
+ * `.message` (the reviewer's own confirmation, checked against
+ * `smtp-connection`'s source directly, not merely inferred from the
+ * codes). `MailTransportError` below keeps `message` only when `.response`
+ * is absent — true for `ECONNREFUSED`/`ENOTFOUND`/`Greeting never
+ * received`/the certificate-trust message, false for the `ECONNECTION`
+ * case this finding reproduced. `errors.test.ts` proves this directly, not
+ * only through `classifyCode`'s codes: an `ECONNECTION` cause with no
+ * `.response` still keeps its message (an ordinary local connection
+ * failure nodemailer happened to code the same way), and one with a
+ * `.response` does not, regardless of what code it carries.
  */
 
 /** What kind of failure this was — informs whether a caller might reasonably retry, without this package making that call itself (`sign-in.ts` does not catch on the caller's behalf either). */
@@ -43,20 +70,22 @@ export type MailErrorKind =
   'auth_failed' | 'connection_failed' | 'timed_out' | 'rejected' | 'unknown'
 
 /**
- * Kinds whose underlying `error.message` is safe to keep — see this file's
- * own module comment for why exactly these two and no others.
+ * Kinds whose underlying `error.message` is *candidate* to keep — see this
+ * file's own module comment for why exactly these two, and for the second,
+ * per-error condition (`shape.response` absent) that decides it for real.
  */
 const KINDS_WITH_SAFE_MESSAGE = new Set<MailErrorKind>([
   'connection_failed',
   'timed_out',
 ])
 
-/** The bounded, protocol-level facts a nodemailer send failure can carry, plus its own `message` — kept only for the two kinds `KINDS_WITH_SAFE_MESSAGE` names; never `response`. */
+/** The bounded, protocol-level facts a nodemailer send failure can carry, plus its own `message` and `response` — `response`'s only job here is deciding whether `message` is safe (this file's own module comment); its own value is never read into anything this file returns. */
 interface SmtpErrorShape {
   code?: unknown
   command?: unknown
   responseCode?: unknown
   message?: unknown
+  response?: unknown
 }
 
 function isSmtpErrorShape(value: unknown): value is SmtpErrorShape {
@@ -85,7 +114,11 @@ function classifyCode(code: string | undefined): MailErrorKind {
       // disabled produces exactly this code, never a successful plaintext
       // send). ESOCKET also covers a TLS *trust* failure (a self-signed or
       // privately-issued certificate) — this file's own module comment on
-      // why its `message` is kept.
+      // why its `message` is kept. ECONNECTION is the one code in this
+      // group that is *not* always locally-generated — this file's own
+      // module comment has the full finding; `MailTransportError`'s own
+      // `.response` check is what actually decides its message, not this
+      // classification.
       return 'connection_failed'
     case 'ETIMEDOUT':
       return 'timed_out'
@@ -104,7 +137,10 @@ function classifyCode(code: string | undefined): MailErrorKind {
  * inside (`middleware/errors.ts`'s `logger.error({ err: error, ... })` in
  * `apps/api`, in particular) carries nothing from the message this was
  * trying to send. For `connection_failed`/`timed_out`, the underlying
- * `error.message` is appended too — see the module comment.
+ * `error.message` is appended too, but only when the underlying error
+ * carries no `.response` — see the module comment for why that is the
+ * signal that actually separates a locally-generated message from one a
+ * remote server contributed to.
  */
 export class MailTransportError extends Error {
   readonly kind: MailErrorKind
@@ -120,8 +156,15 @@ export class MailTransportError extends Error {
       typeof shape.command === 'string' ? shape.command : undefined
     const responseCode =
       typeof shape.responseCode === 'number' ? shape.responseCode : undefined
+    // The module comment's own finding: nodemailer sets `.response`
+    // exactly when it folded a server reply into `.message` (an
+    // `ECONNECTION` raised mid-conversation, in particular) — so a
+    // `.response` present at all, on *any* kind, is reason enough to
+    // withhold `message`, not merely a property of which `kind` this is.
     const localMessage =
-      KINDS_WITH_SAFE_MESSAGE.has(kind) && typeof shape.message === 'string'
+      KINDS_WITH_SAFE_MESSAGE.has(kind) &&
+      typeof shape.message === 'string' &&
+      shape.response === undefined
         ? shape.message
         : undefined
     const parts = [

@@ -2012,6 +2012,23 @@
   phase: 8
   status: Done
   review: false
+- id: SRV-9
+  title: Scaffolding repairs the bot's own access, wherever it is missing
+  full: "A course category denies @everyone, and Discord applies that denial to
+    the bot as well — so the platform has to grant itself an overwrite on the
+    structure it manages, or it cannot answer in it. That grant belongs on every
+    category and channel a course declares, not only on the ones this run
+    happens to create: a channel an instructor made by hand, or one that
+    predates the platform granting itself anything, is exactly where a student
+    will ask a question and get silence. This is the one exception to leaving an
+    existing channel's permissions alone (SRV-8's own discipline), and it is
+    deliberately the narrowest possible one: a single overwrite for the bot's
+    own id, replacing nothing else. Every…"
+  section: §21 Server Scaffolding on the Platform
+  family: SRV
+  phase: 8
+  status: Backlog
+  review: false
 - id: ROST-9
   title: A roster is imported as a file, into a job
   full: An instructor uploads the roster the registrar gave them and the import

@@ -1062,6 +1062,19 @@ Running it twice creates nothing twice: what exists is left alone, what is missi
 and the result names what changed. An instructor who is unsure whether it ran can run it again
 safely, which is the only way a provisioning tool is usable.
 
+#### SRV-9 Scaffolding repairs the bot's own access, wherever it is missing
+
+A course category denies `@everyone`, and Discord applies that denial to the bot as well — so the
+platform has to grant itself an overwrite on the structure it manages, or it cannot answer in it.
+That grant belongs on every category and channel a course declares, not only on the ones this run
+happens to create: a channel an instructor made by hand, or one that predates the platform
+granting itself anything, is exactly where a student will ask a question and get silence.
+
+This is the one exception to leaving an existing channel's permissions alone (SRV-8's own
+discipline), and it is deliberately the narrowest possible one: a single overwrite for the bot's
+own id, replacing nothing else. Every role grant, every per-member permission an instructor added,
+and the `@everyone` denial that makes the course private all survive it.
+
 #### SRV-8 Scaffolding never deletes
 
 Creating structure is not the same operation as removing it. A category or channel the

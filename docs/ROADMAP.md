@@ -100,7 +100,12 @@ repository.
 Background jobs, and the foreground admission layer that stops thirty students at the
 start of a lecture becoming thirty concurrent model calls.
 
-**In scope:** JOB-1..5, SRV-6..8
+**In scope:** JOB-1..5, SRV-6..9
+
+SRV-9 was found in use, not in review: scaffolding grants itself access to the categories it
+creates and to categories it adopts, but an instructor's own channels inside those categories
+keep whatever overwrites they had, so the bot stays locked out of exactly the channels a course
+was already using.
 
 ## Phase 9 — Roster import & student channels
 

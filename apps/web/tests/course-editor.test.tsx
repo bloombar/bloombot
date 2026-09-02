@@ -6,12 +6,13 @@
  * (naming the other course and its project).
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { Course, Project } from '../src/api/types.js'
 import { CourseEditor } from '../src/pages/CourseEditor.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 const { getCourse, saveCourse, enableCourse, disableCourse } = vi.hoisted(
   () => ({
@@ -68,7 +69,7 @@ afterEach(() => {
 
 describe('CourseEditor (WEB-8)', () => {
   it("a new course shows the routing-relevant fields prominently, and starts disabled (D-23's own default)", () => {
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -91,7 +92,7 @@ describe('CourseEditor (WEB-8)', () => {
   it('editing an existing course prefills the form from courses.get', async () => {
     getCourse.mockResolvedValue(COURSE)
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -111,7 +112,7 @@ describe('CourseEditor (WEB-8)', () => {
     getCourse.mockResolvedValue(COURSE)
     saveCourse.mockResolvedValue(COURSE)
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -163,7 +164,7 @@ describe('CourseEditor (WEB-8)', () => {
       })
     )
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -186,7 +187,7 @@ describe('CourseEditor (WEB-8)', () => {
   it('a non-numeric "Max requests per day" refuses the save rather than silently clearing the stored cap (finding 2)', async () => {
     getCourse.mockResolvedValue(COURSE)
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -206,6 +207,11 @@ describe('CourseEditor (WEB-8)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'maxRequestsPerDay'
     )
+    // WEB-16: the refusal also names the field and appears *next to it* —
+    // not only in the summary at the top of a fourteen-field form.
+    const field = screen.getByLabelText('Max requests per day')
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(field).toHaveAccessibleDescription(/whole number greater than zero/)
     // Never reaches the API at all — `Number('5O')` is `NaN`, which
     // `JSON.stringify` would have turned into `null` and cleared the
     // stored cap silently had this gone through.
@@ -215,7 +221,7 @@ describe('CourseEditor (WEB-8)', () => {
   it('a failed load renders only the failure, never an editable blank form over a real course (finding 3)', async () => {
     getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -248,7 +254,7 @@ describe('CourseEditor (WEB-8)', () => {
       })
     )
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -280,7 +286,7 @@ describe('CourseEditor (WEB-8)', () => {
     disableCourse.mockResolvedValue({ disabled: true })
     enableCourse.mockResolvedValue({ enabled: true })
 
-    render(
+    renderWithModal(
       <CourseEditor
         organizationId="org-1"
         project={PROJECT}
@@ -297,5 +303,266 @@ describe('CourseEditor (WEB-8)', () => {
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
     expect(saveCourse).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * WEB-15: "removing a category"/"removing a channel" confirm before
+ * anything is actually removed from the list — this file's own module
+ * comment on `removeCategory`/`removeChannel` names "removing from a list"
+ * as one of this panel's own destructive intents. A reviewer proved this
+ * had no test at all: replacing `const confirmed = await confirm({...})`
+ * with `const confirmed = true` in `CourseEditor.tsx` left the entire
+ * suite green.
+ */
+describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', () => {
+  it('removing a category confirms first; cancelling keeps it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.change(screen.getByLabelText('Category name'), {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove category/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove Web Design - GLOBAL?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    // Cancelling kept the category — its own name field is still there.
+    expect(screen.getByLabelText('Category name')).toHaveValue(
+      'Web Design - GLOBAL'
+    )
+  })
+
+  it('removing a category, confirmed, actually removes it — and every channel inside it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.change(screen.getByLabelText('Category name'), {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove category/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove Web Design - GLOBAL?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Category name')).not.toBeInTheDocument()
+    )
+    // The channel inside it is gone too — never orphaned.
+    expect(screen.queryByLabelText('Channel name')).not.toBeInTheDocument()
+  })
+
+  it('removing a channel confirms first; cancelling keeps it', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove channel/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove announcements?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(dialog).not.toBeVisible())
+
+    expect(screen.getByLabelText('Channel name')).toHaveValue('announcements')
+  })
+
+  it('removing a channel, confirmed, actually removes only that channel', async () => {
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    fireEvent.change(screen.getByLabelText('Channel name'), {
+      target: { value: 'announcements' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    const channelInputs = screen.getAllByLabelText('Channel name')
+    fireEvent.change(channelInputs[1]!, { target: { value: 'general' } })
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /Remove channel/ })[0]!
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove announcements?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() =>
+      expect(screen.getAllByLabelText('Channel name')).toHaveLength(1)
+    )
+    // The category itself, and its other channel, survive — only the
+    // confirmed one was removed.
+    expect(screen.getByLabelText('Category name')).toBeInTheDocument()
+    expect(screen.getByLabelText('Channel name')).toHaveValue('general')
+  })
+})
+
+/**
+ * WEB-16: the unsaved-changes guard on this form's own Cancel control —
+ * `useUnsavedChangesGuard`'s cross-component path (a navigation started
+ * outside the form, e.g. `pages/Shell.tsx`'s own nav) is
+ * `tests/navigation-guard.test.tsx`'s own scenario; this file's job is the
+ * form's own exit.
+ */
+describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
+  it('a clean Cancel leaves without prompting at all', async () => {
+    const onCancel = vi.fn()
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('a dirty Cancel prompts; cancelling the prompt keeps the values and does not leave', async () => {
+    const onCancel = vi.fn()
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Intro to Testing' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Discard unsaved changes?',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+
+    await waitFor(() => expect(dialog).not.toBeVisible())
+    expect(onCancel).not.toHaveBeenCalled()
+    // The typed value is still there — "keep editing" discards nothing.
+    expect(screen.getByLabelText('Title')).toHaveValue('Intro to Testing')
+  })
+
+  it('a dirty Cancel prompts; confirming discards and leaves', async () => {
+    const onCancel = vi.fn()
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Intro to Testing' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  it('a value typed and then reverted to its original counts as clean — no prompt', async () => {
+    const onCancel = vi.fn()
+    getCourse.mockResolvedValue(COURSE)
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Something else' },
+    })
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('a successful save clears the dirty state — Cancel right after does not prompt', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+    const onCancel = vi.fn()
+    const onSaved = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={onSaved}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })

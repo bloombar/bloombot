@@ -25,7 +25,7 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { memberships, type MembershipRole } from '../schema.js'
 
 export type Membership = typeof memberships.$inferSelect
@@ -96,9 +96,17 @@ export function listMembershipsForOrganization(
  * `POST /organizations/:organizationId/actions/:name`, so a signed-in
  * caller needs a way to discover which organization ids it may use there.
  */
+/**
+ * `db` accepts `Executor`, not just `Database` (rework, LINK-9's own
+ * healing path): `@bloombot/auth`'s `sign-in.ts` calls this from inside
+ * its own transaction to find a *returning* account's personal
+ * organization, the same "called from inside another transaction"
+ * widening `organizations.ts#createOrganization`'s own doc comment
+ * already explains for the identical reason.
+ */
 export function listMembershipsForAccount(
   accountId: string,
-  db: Database
+  db: Executor
 ): Membership[] {
   return db
     .select()

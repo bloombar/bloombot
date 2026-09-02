@@ -51,7 +51,18 @@ export function RedeemLink({ token, onRedeemed }: RedeemLinkProps) {
   }, [token])
 
   if (state.kind === 'error') {
-    return <ErrorMessage error={state.error} />
+    return (
+      <div className="mx-auto mt-16 max-w-sm">
+        <ErrorMessage error={state.error} />
+      </div>
+    )
   }
-  return <p>Signing you in…</p>
+  return (
+    <p
+      role="status"
+      className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+    >
+      Signing you in…
+    </p>
+  )
 }

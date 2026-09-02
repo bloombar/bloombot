@@ -15,7 +15,9 @@ import BetterSqlite3 from 'better-sqlite3'
 
 import {
   accounts as accountsRepo,
+  memberships as membershipsRepo,
   organizations as organizationsRepo,
+  people as peopleRepo,
   signInTokens as signInTokensRepo,
   type Database,
   type TransactingExecutor,
@@ -63,13 +65,123 @@ function displayNameFromEmail(email: string): string {
 }
 
 /**
+ * WEB-10/LINK-1 rework — a signed-in web caller *is* the account: they
+ * proved control of it by signing in, which is exactly the proof LINK-3
+ * asks of every other surface's own connect step, so requiring a *second*,
+ * separate "connect your web account" action would be asking for proof
+ * this function already has. Creates the account's own person, in its own
+ * personal organization (the only organization this function's own caller
+ * has just created — `apps/web`'s chat surface resolves a person per
+ * organization, never creates one, so any *other* organization a future
+ * roster import or join-link admits this account into still needs its own
+ * connect step, same as any other surface), and connects it immediately
+ * through `people.ts#connectIdentity` — the real, merged LINK-3 path, not a
+ * raw `connectedAt` column write, so this person is indistinguishable from
+ * one connected by an actual proof (LINK-4's own merge and LINK-5's own
+ * shared allowance apply to it exactly the same way once a future connect
+ * flow attaches a Discord or MCP identity on top of it).
+ *
+ * Called only from each of this file's own account-*creation* branches
+ * (`findOrCreateAccountForEmail`'s and `tryCreateAccountForEmail`'s "new
+ * account" paths) — never on a returning sign-in, which already has its own
+ * person from the first time this ran.
+ */
+function createConnectedWebPerson(
+  organizationId: string,
+  accountId: string,
+  db: TransactingExecutor
+): void {
+  const person = peopleRepo.createPerson(organizationId, {}, db)
+  // `connectIdentity` refuses (`undefined`) on exactly three conditions
+  // (its own doc comment): `personId` foreign or absent, `personId` already
+  // merged away, or the identity already belonging to a *different* person.
+  // None can fire here — `organizationId` and `person.id` were both just
+  // minted in this same transaction, and `{ surface: 'web', externalId:
+  // accountId }` cannot already belong to anyone else, because this
+  // function only ever runs once per account (the account-creation path,
+  // or `healWebPersonForReturningAccount` below, itself gated on
+  // `resolveIdentity` finding nothing first). Rework finding: this used to
+  // discard the return value, so a refusal here — unreachable today, but
+  // silently so — would have left a person with `connectedAt` still `null`
+  // and no identity at all, indistinguishable from working until the very
+  // next chat request refused it. A throw makes that unreachability
+  // structural rather than argued.
+  const connected = peopleRepo.connectIdentity(
+    organizationId,
+    person.id,
+    { surface: 'web', externalId: accountId },
+    db
+  )
+  if (!connected) {
+    throw new Error(
+      `createConnectedWebPerson: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
+    )
+  }
+}
+
+/**
+ * LINK-9's own healing path. `createConnectedWebPerson` above only ever ran
+ * on the account-*creation* path — an account that signed up before this
+ * rework shipped has no web person at all, silently and permanently:
+ * `routes/chat.ts` finds nothing to resolve and refuses `chat_not_connected`
+ * forever, with no configuration and no later sign-in that fixes it, and
+ * nothing tells either the instructor or an operator why. Called on every
+ * *returning* sign-in (both `findOrCreateAccountForEmail`'s own "existing"
+ * branch and `signInWithGoogle`'s own "link" branch), inside the same
+ * transaction the caller already has: finds the account's own personal
+ * organization (TEN-1's own one — the only organization this function has
+ * any business creating a person in; any *other* organization's own connect
+ * step is LINK-3's proof, not this healing path's job) via
+ * `memberships.listMembershipsForAccount` and `organizations.getOrganizationById`,
+ * and creates+connects a person there only if `resolveIdentity` finds
+ * none — idempotent, so a returning account that already has one (every
+ * account created after this rework) pays one cheap indexed read and does
+ * nothing further.
+ */
+function healWebPersonForReturningAccount(
+  accountId: string,
+  db: TransactingExecutor
+): void {
+  const accountMemberships = membershipsRepo.listMembershipsForAccount(
+    accountId,
+    db
+  )
+  let personalOrganizationId: string | undefined
+  for (const membership of accountMemberships) {
+    const organization = organizationsRepo.getOrganizationById(
+      membership.organizationId,
+      db
+    )
+    if (organization?.isPersonal) {
+      personalOrganizationId = organization.id
+      break
+    }
+  }
+  // TEN-1 guarantees every account has exactly one personal organization,
+  // created atomically with it — unreachable in practice, but guarded
+  // rather than assumed, the same discipline this file already holds
+  // `createConnectedWebPerson`'s own `connectIdentity` check to just above.
+  if (!personalOrganizationId) return
+
+  const existing = peopleRepo.resolveIdentity(
+    personalOrganizationId,
+    { surface: 'web', externalId: accountId },
+    db
+  )
+  if (existing) return
+
+  createConnectedWebPerson(personalOrganizationId, accountId, db)
+}
+
+/**
  * Find the account for `email`, or create one with a fresh personal
- * organization and an `owner` membership, atomically (TEN-1). Must be
- * called with `db` already inside the caller's own transaction — this
- * function does not open one of its own, so its two writes (organization,
- * then account+membership — `accountsRepo.createAccount` already wraps
- * those two atomically) commit or fail as part of whatever the caller is
- * doing.
+ * organization, an `owner` membership and a connected web person, atomically
+ * (TEN-1, and `createConnectedWebPerson`'s own doc comment for the person).
+ * Must be called with `db` already inside the caller's own transaction —
+ * this function does not open one of its own, so its writes (organization,
+ * account+membership — `accountsRepo.createAccount` already wraps those two
+ * atomically — then the person) commit or fail as part of whatever the
+ * caller is doing.
  */
 function findOrCreateAccountForEmail(
   email: string,
@@ -89,6 +201,7 @@ function findOrCreateAccountForEmail(
     { email, displayName: displayNameFromEmail(email), role: 'owner' },
     db
   )
+  createConnectedWebPerson(organizationId, account.id, db)
   return { account, createdAccount: true }
 }
 
@@ -176,7 +289,14 @@ export function redeemSignInLink(
     )
     if (account.disabledAt !== null) return undefined
 
-    if (!createdAccount) revokeAllSessions(account.id, tx)
+    if (!createdAccount) {
+      revokeAllSessions(account.id, tx)
+      // LINK-9's own healing path — a returning account created before
+      // this rework shipped otherwise has no web person at all, silently
+      // and permanently (`healWebPersonForReturningAccount`'s own doc
+      // comment has the full account).
+      healWebPersonForReturningAccount(account.id, tx)
+    }
 
     const session = createSession(account.id, tx)
     return { account, session, createdAccount }
@@ -225,6 +345,10 @@ export function signInWithGoogle(
       if (existing.disabledAt !== null) return undefined
       account = existing
       revokeAllSessions(account.id, tx)
+      // LINK-9's own healing path — the same "returning account, might
+      // pre-date this rework" case `redeemSignInLink`'s own comment
+      // describes.
+      healWebPersonForReturningAccount(account.id, tx)
     } else {
       const created = tryCreateAccountForEmail(identity.email, tx)
       if (!created) return undefined
@@ -268,11 +392,13 @@ function tryCreateAccountForEmail(
         { name: displayNameFromEmail(email), isPersonal: true },
         tx
       )
-      return accountsRepo.createAccount(
+      const account = accountsRepo.createAccount(
         organizationId,
         { email, displayName: displayNameFromEmail(email), role: 'owner' },
         tx
       )
+      createConnectedWebPerson(organizationId, account.id, tx)
+      return account
     })
   } catch (error) {
     if (isUniqueEmailViolation(error)) return undefined

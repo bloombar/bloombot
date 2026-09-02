@@ -9,10 +9,11 @@
  * and neither was `fetchMe()` rejecting outright (finding 3).
  */
 
-import { render, screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 
@@ -74,7 +75,7 @@ describe('App (WEB-1..4)', () => {
       '/discord/callback?code=abc&state=xyz&guild_id=guild-99'
     )
 
-    render(<App />)
+    renderWithModal(<App />)
 
     // The panel returns to the shell, acting in org-2 — the organization the
     // install actually bound the server to — before checking the install
@@ -94,7 +95,7 @@ describe('App (WEB-1..4)', () => {
     fetchMe.mockRejectedValueOnce(new ApiError(0, { error: 'network_error' }))
     fetchMe.mockResolvedValueOnce({ account: null })
 
-    render(<App />)
+    renderWithModal(<App />)
 
     expect(
       await screen.findByText(

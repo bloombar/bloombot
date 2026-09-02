@@ -157,3 +157,59 @@ export interface CourseSummary {
 export interface Course extends CourseSummary {
   categories: CourseCategory[]
 }
+
+/** WEB-10 — `GET /organizations/:organizationId/chat/courses`'s own entries: just enough to pick one, not `CourseSummary`'s full instructor-facing shape. */
+export interface ChatCourse {
+  id: string
+  title: string
+}
+
+/**
+ * SRV-6/JOB-1..5 — a job's status and outcome, as `jobs.get` (dispatched
+ * through the ordinary action route) hands it back. Mirrors
+ * `packages/actions/src/actions/jobs.ts`'s own `JobStatus` by hand, the
+ * same "this app does not import `@bloombot/actions`" boundary this
+ * file's own module comment already explains for every other shape here.
+ */
+export interface JobStatus {
+  id: string
+  kind: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  attempts: number
+  maxAttempts: number
+  lastError: string | null
+  result: unknown
+  createdAt: number
+  updatedAt: number
+}
+
+/** WEB-10 — one message on a chat transcript (`GET .../chat/courses/:courseId/messages`), and the shape `POST .../messages` appends locally once its own `ChatAnswerResult` confirms the reply. */
+export interface ChatMessageEntry {
+  id: string
+  role: 'student' | 'assistant'
+  text: string
+  createdAt: number
+}
+
+/**
+ * `@bloombot/core`'s own `AnswerResult` (`packages/core/src/answer.ts`),
+ * exactly as `routes/chat.ts` passes it through — mirrored by hand rather
+ * than imported, the same "this app does not import `@bloombot/core`"
+ * boundary (PLAT-2) this whole file's own module comment already explains
+ * for every other shape here.
+ */
+export type ChatAnswerResult =
+  | { kind: 'answered'; conversationId: string; text: string }
+  | { kind: 'answered-last-request'; conversationId: string; text: string }
+  | { kind: 'declined-over-limit' }
+  | { kind: 'declined-over-cap' }
+  | { kind: 'declined-busy' }
+  | {
+      kind: 'failed-with-apology'
+      conversationId: string
+      text: string
+      lastRequestOfDay: boolean
+    }
+  | { kind: 'course-disabled' }
+  | { kind: 'not-configured' }
+  | { kind: 'not-connected' }

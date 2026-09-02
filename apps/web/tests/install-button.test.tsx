@@ -8,7 +8,7 @@
  * component never sees that page.
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
@@ -16,6 +16,7 @@ import {
   InstallButton,
   PENDING_INSTALL_ORG_KEY,
 } from '../src/components/InstallButton.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 const { beginDiscordInstall } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
@@ -48,7 +49,7 @@ describe('InstallButton (WEB-4)', () => {
       writable: true,
     })
 
-    render(
+    renderWithModal(
       <InstallButton
         organizationId="org-1"
         onRemove={vi.fn()}
@@ -70,7 +71,7 @@ describe('InstallButton (WEB-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    render(
+    renderWithModal(
       <InstallButton
         organizationId="org-1"
         onRemove={vi.fn()}
@@ -84,9 +85,9 @@ describe('InstallButton (WEB-4)', () => {
     )
   })
 
-  it('already installed: shows the server id and offers remove', () => {
+  it('already installed: shows the server id and offers remove, behind a confirmation (WEB-15)', async () => {
     const onRemove = vi.fn()
-    render(
+    renderWithModal(
       <InstallButton
         organizationId="org-1"
         installedServerId="guild-42"
@@ -96,6 +97,13 @@ describe('InstallButton (WEB-4)', () => {
     )
     expect(screen.getByText(/guild-42/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    expect(onRemove).toHaveBeenCalled()
+    // WEB-15: a destructive action confirms — clicking "Remove" alone must
+    // not have called `onRemove` yet.
+    expect(onRemove).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove this Discord server?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(onRemove).toHaveBeenCalled())
   })
 })

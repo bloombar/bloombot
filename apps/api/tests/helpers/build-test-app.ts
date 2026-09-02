@@ -25,6 +25,7 @@ import { afterEach } from 'vitest'
 import { buildApp, type ServerDependencies } from '../../src/server.js'
 import { createFakeDiscordRestClient } from './fake-discord-rest-client.js'
 import { createFakeLogger } from './fake-logger.js'
+import { FakeModelClient } from './fake-model-client.js'
 
 /** The origin every origin-check test treats as "this site" — never a real host, since nothing here reaches the network. */
 export const TEST_PUBLIC_APP_URL = 'https://app.bloombot.test'
@@ -137,6 +138,12 @@ export function buildTestApp(
     // variables, by design (`routes/discord-servers.ts`'s own doc comment).
     discordOauthBase: 'https://discord.test/oauth2',
     attachmentStorageDir: TEST_ATTACHMENT_STORAGE_DIR,
+    // WEB-10 — no network, a fixed answer, by default; a test that wants a
+    // particular response (or to observe what `routes/chat.ts` actually
+    // asked) overrides this directly with its own `new FakeModelClient(...)`
+    // call, the same "a test overrides only the one field its own scenario
+    // needs" convention this helper's own module comment already states.
+    model: new FakeModelClient(),
     ...overrides,
   })
   return startTestServer(app)

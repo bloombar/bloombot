@@ -18,8 +18,8 @@
  *      request never reaches `sessionMiddleware`, let alone a route.
  *   3. `sessionMiddleware` (API-2) — attaches `req.session`, or not.
  *   4. The routes themselves (API-1) — `routes/auth.ts`, `routes/actions.ts`,
- *      `routes/discord-servers.ts` (TEN-4), and this process's own
- *      `GET /health` (API-6).
+ *      `routes/discord-servers.ts` (TEN-4), `routes/chat.ts` (WEB-10), and
+ *      this process's own `GET /health` (API-6).
  *   5. `errorMiddleware` (API-4 / ACT-4) — last, so every thrown error from
  *      every route above lands here and nowhere else.
  */
@@ -28,8 +28,10 @@ import express, { type Express } from 'express'
 
 import { createPlatformRegistry, type ActionRegistry } from '@bloombot/actions'
 import type { EmailSender, GoogleIdTokenVerifier } from '@bloombot/auth'
+import type { ModelClient, PricingTable } from '@bloombot/core'
 import type { Database } from '@bloombot/db'
 import type { DiscordRestClient } from '@bloombot/discord-rest'
+import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import { checkHealth } from './health.js'
@@ -41,6 +43,7 @@ import {
   buildActionsRouter,
 } from './routes/actions.js'
 import { buildAuthRouter } from './routes/auth.js'
+import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
 
 export interface ServerDependencies {
@@ -67,6 +70,12 @@ export interface ServerDependencies {
   discordRedirectUri: string
   /** `CONFIG.DISCORD_OAUTH_BASE`, read once in `src/index.ts` — see `routes/discord-servers.ts`'s own doc comment on why this is passed in rather than read lazily inside that router. */
   discordOauthBase: string
+  /** WEB-10 — the model port `routes/chat.ts` calls `answerQuestion` with, the same "dependency, not an import" seam `packages/core` itself already demands (CORE-4). The real OpenAI adapter in production (`src/index.ts`, mirroring `apps/bot`'s own `main()`); a `FakeModelClient` in every test. */
+  model: ModelClient
+  /** JOB-4's bound on concurrent model calls, threaded through to `routes/chat.ts` exactly the way `apps/bot`'s own `main()` threads it to `handleMention` — omitted, this app's chat route applies `answerQuestion`'s own no-bound default (see that file's module comment). */
+  admission?: AdmissionGate
+  /** COST-1/COST-6's per-model rates, threaded through the same way — omitted, `answerQuestion` prices every call at its own zero-rate default and logs a warning each time (see that file's own `NO_PRICING_CONFIGURED` comment). */
+  pricing?: PricingTable
 }
 
 export function buildApp(deps: ServerDependencies): Express {
@@ -114,6 +123,16 @@ export function buildApp(deps: ServerDependencies): Express {
   app.use(
     '/organizations/:organizationId/actions',
     buildActionsRouter(registry, deps.db)
+  )
+  app.use(
+    '/organizations/:organizationId/chat',
+    buildChatRouter({
+      db: deps.db,
+      logger: deps.logger,
+      model: deps.model,
+      ...(deps.admission ? { admission: deps.admission } : {}),
+      ...(deps.pricing ? { pricing: deps.pricing } : {}),
+    })
   )
   app.use(
     '/organizations/:organizationId/discord-servers',

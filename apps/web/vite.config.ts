@@ -18,6 +18,7 @@
 
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 const apiPort = process.env['API_PORT'] ?? '3000'
 const apiOrigin = `http://127.0.0.1:${apiPort}`
@@ -33,7 +34,10 @@ const proxy = {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  // WEB-11: Tailwind is the one styling system — `@tailwindcss/vite` builds
+  // `src/style.css`'s `@import "tailwindcss"` directly, no separate
+  // `postcss.config` or `tailwind.config` file to keep in sync with it.
+  plugins: [react(), tailwindcss()],
   server: { proxy },
   preview: { proxy },
 })

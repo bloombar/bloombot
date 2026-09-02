@@ -8,12 +8,13 @@
  * must not leave them to do.
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { Project } from '../src/api/types.js'
 import { Projects } from '../src/pages/Projects.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 const {
   listProjects,
@@ -59,7 +60,7 @@ describe('Projects (WEB-7)', () => {
   it("lists the organization's active projects, excluding archived by default", async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
 
     expect(await screen.findByText('Fall 2026')).toBeInTheDocument()
     expect(listProjects).toHaveBeenCalledWith('org-1', false)
@@ -68,7 +69,7 @@ describe('Projects (WEB-7)', () => {
   it('toggling "show archived" re-lists with includeArchived: true', async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('Fall 2026')
 
     fireEvent.click(screen.getByLabelText('Show archived'))
@@ -95,7 +96,7 @@ describe('Projects (WEB-7)', () => {
           })
       )
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     fireEvent.click(screen.getByLabelText('Show archived'))
 
     // The later request (includeArchived: true) resolves first, and the
@@ -122,7 +123,7 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([])
     createProject.mockResolvedValue(PROJECT)
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('No projects yet.')
 
     fireEvent.change(screen.getByLabelText('New project name'), {
@@ -143,7 +144,7 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([])
     createProject.mockResolvedValue(PROJECT)
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('No projects yet.')
 
     fireEvent.change(screen.getByLabelText('New project name'), {
@@ -159,7 +160,7 @@ describe('Projects (WEB-7)', () => {
   it('a whitespace-only duplicate name is rejected the same way Create rejects one (finding 7 of the WEB-7 rework)', async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('Fall 2026')
 
     fireEvent.change(screen.getByLabelText('Duplicate "Fall 2026" as'), {
@@ -174,14 +175,27 @@ describe('Projects (WEB-7)', () => {
     expect(duplicateProject).not.toHaveBeenCalled()
   })
 
-  it('archives an active project', async () => {
+  it('archives an active project, behind a (non-destructive) confirmation — WEB-15: archiving stops every course in it routing, more consequence than disabling one', async () => {
     listProjects.mockResolvedValue([PROJECT])
     archiveProject.mockResolvedValue({ archived: true })
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('Fall 2026')
 
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    // Not yet — confirms first.
+    expect(archiveProject).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Archive Fall 2026?',
+    })
+    // Non-destructive: the confirm button reads plainly, not the danger
+    // styling `variant="destructive"` renders — archiving must never look
+    // like deleting (PROJ-2, WEB-15).
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Archive',
+    })
+    expect(confirmButton.className).not.toContain('danger')
+    fireEvent.click(confirmButton)
 
     await waitFor(() =>
       expect(archiveProject).toHaveBeenCalledWith('org-1', 'project-1')
@@ -194,7 +208,7 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([archivedProject])
     unarchiveProject.mockResolvedValue({ archived: false })
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('Fall 2026')
 
     // The archived marker, and the button's label for an archived project —
@@ -221,7 +235,7 @@ describe('Projects (WEB-7)', () => {
       coursesDisabled: true,
     })
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('Fall 2026')
 
     fireEvent.change(screen.getByLabelText('Duplicate "Fall 2026" as'), {
@@ -254,7 +268,7 @@ describe('Projects (WEB-7)', () => {
       })
     )
 
-    render(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
     await screen.findByText('No projects yet.')
 
     fireEvent.change(screen.getByLabelText('New project name'), {
@@ -271,7 +285,9 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([PROJECT])
     const onOpenProject = vi.fn()
 
-    render(<Projects organizationId="org-1" onOpenProject={onOpenProject} />)
+    renderWithModal(
+      <Projects organizationId="org-1" onOpenProject={onOpenProject} />
+    )
     await screen.findByText('Fall 2026')
 
     fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))

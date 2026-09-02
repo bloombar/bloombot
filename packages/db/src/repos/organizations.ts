@@ -52,10 +52,17 @@ export function createOrganization(
     .get()
 }
 
-/** Look up an organization by its own id. `undefined` if it does not exist. */
+/**
+ * Look up an organization by its own id. `undefined` if it does not exist.
+ *
+ * `db` accepts `Executor`, not just `Database` (rework, LINK-9's own
+ * healing path): `@bloombot/auth`'s `sign-in.ts` calls this from inside
+ * its own transaction to find a returning account's personal organization,
+ * the same reason `createOrganization`'s own doc comment already gives.
+ */
 export function getOrganizationById(
   organizationId: string,
-  db: Database
+  db: Executor
 ): Organization | undefined {
   return db
     .select()

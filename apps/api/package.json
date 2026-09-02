@@ -14,9 +14,12 @@
     "@bloombot/actions": "*",
     "@bloombot/auth": "*",
     "@bloombot/config": "*",
+    "@bloombot/core": "*",
     "@bloombot/db": "*",
     "@bloombot/discord-rest": "*",
+    "@bloombot/jobs": "*",
     "@bloombot/logger": "*",
+    "@bloombot/openai": "*",
     "express": "^5.2.1",
     "zod": "^4.5.4"
   },

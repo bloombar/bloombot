@@ -22,6 +22,7 @@ import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createLogger } from '@bloombot/logger'
 
 import { buildApp } from '../../apps/api/src/server.js'
+import { FakeModelClient } from './fake-model-client.js'
 import { FileEmailSender } from './file-email-sender.js'
 import {
   E2E_API_PORT,
@@ -77,6 +78,12 @@ const app = buildApp({
   // falls through to `./data/attachments`, the repository's own protected
   // directory (`env.js`'s own comment on `E2E_ATTACHMENT_STORAGE_DIR`).
   attachmentStorageDir: E2E_ATTACHMENT_STORAGE_DIR,
+  // WEB-10 — `chat.spec.ts`'s own fixed, no-network answer, real Markdown
+  // syntax on purpose (a heading and bold text) so that spec can assert the
+  // browser actually rendered it rather than showing the literal
+  // characters; see `fake-model-client.ts`'s own module comment for what
+  // is and is not real in this harness.
+  model: new FakeModelClient('# Bloombot\n\nAnswering from a **fixture**.'),
 })
 
 const server = createServer(app)

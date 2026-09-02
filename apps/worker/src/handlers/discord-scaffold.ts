@@ -59,6 +59,7 @@
 import { courses, discordServers, type Database } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import {
+  allowBotOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
   overwriteAllowsView,
@@ -347,9 +348,10 @@ export function createDiscordScaffoldHandler(
     }
     const guildId = binding.serverId
 
-    const [existingChannels, roles] = await Promise.all([
+    const [existingChannels, roles, botUserId] = await Promise.all([
       deps.discordRestClient.listGuildChannels(deps.botToken, guildId),
       deps.discordRestClient.listGuildRoles(deps.botToken, guildId),
+      deps.discordRestClient.getBotUserId(deps.botToken),
     ])
 
     // SRV-2: a role named in the config but absent from the guild is
@@ -363,13 +365,22 @@ export function createDiscordScaffoldHandler(
     // Discord's own `@everyone` role shares its guild's id (`channel-overwrites.ts`'s
     // own doc comment) — nothing to resolve for it.
     const everyoneOverwrite = denyEveryoneOverwrite(guildId)
+    // The bot grants itself access to every category it closes to
+    // `@everyone`. Without this the run locks itself out: Discord applies the
+    // `@everyone` view denial to the bot too (unless it is an Administrator),
+    // so the category is created and then every `createGuildChannel` inside
+    // it comes back `403` — observed in the field, and the reason
+    // `allowBotOverwrite` exists.
+    const botOverwrite = allowBotOverwrite(botUserId)
     const categoryOverwrites: DiscordPermissionOverwrite[] = [
       everyoneOverwrite,
+      botOverwrite,
       ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
       ...(studentsRoleId ? [allowRoleOverwrite(studentsRoleId)] : []),
     ]
     const adminsOnlyOverwrites: DiscordPermissionOverwrite[] = [
       everyoneOverwrite,
+      botOverwrite,
       ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
     ]
 

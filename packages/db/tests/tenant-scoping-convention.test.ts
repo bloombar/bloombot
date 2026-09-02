@@ -42,6 +42,12 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    more than one organization, so this is how a caller (apps/api's
 //    `GET /auth/me`, API-1..6 rework must-fix 9) discovers which
 //    organization ids it may act within, before any one of them is known.
+//  - people.ts#listConnectedOrganizationsForAccount: the same class one
+//    level up again, for a *connected* person rather than a membership
+//    (LINK-10) — an account's connected identity is not scoped to one
+//    organization until this call names it, the same reason
+//    `listMembershipsForAccount` is unscoped for the membership side of
+//    the identical question.
 //  - sign-in-tokens.ts / sessions.ts: AUTH-1/AUTH-3. A sign-in token exists
 //    to find or create an account, and a session authenticates an account
 //    across every organization it belongs to — both sit one level above
@@ -103,6 +109,7 @@ const ALLOWLIST: Record<string, string[]> = {
   ],
   'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
   'memberships.ts': ['listMembershipsForAccount'],
+  'people.ts': ['listConnectedOrganizationsForAccount'],
   'person-link-challenges.ts': [
     'createChallenge',
     'consumeChallenge',

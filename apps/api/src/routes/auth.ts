@@ -24,6 +24,7 @@ import {
   accounts,
   memberships,
   organizations,
+  people,
   type Database,
 } from '@bloombot/db'
 
@@ -161,6 +162,19 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
    * `getAccountByEmail` already is (this file's own module comment), safe
    * here specifically because a valid session already proved this exact
    * account, not a value this route accepts from the caller.
+   *
+   * `connectedOrganizations` (LINK-10): a membership (TEN-1's
+   * administrative relationship) is not the same thing as a connected
+   * person (LINK-3's proof) — a student who connects through the Discord
+   * invitation is fully reachable *on Discord* the moment they do, but
+   * `memberships` alone never named the institution's own organization for
+   * them, so the panel's own switcher had nowhere to send them
+   * (`docs/DECISIONS.md` D-44's own "Limits", closed here). Sourced from
+   * `people.listConnectedOrganizationsForAccount` — the same "which
+   * organization ids may this account reach" question `memberships`
+   * already answers for the administrative side — and filtered to exclude
+   * any organization already present in `memberships`, so the two lists
+   * never overlap and the panel does not have to cross-check them itself.
    */
   router.get('/me', (req, res) => {
     if (!req.session) {
@@ -180,6 +194,30 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
       req.session.accountId,
       deps.db
     )
+    const membershipOrganizationIds = new Set(
+      accountMemberships.map((membership) => membership.organizationId)
+    )
+    // LINK-10 — the connected-but-not-a-member organizations, excluding any
+    // already reported above as a membership (this route's own doc comment
+    // on why the two lists never overlap).
+    const connectedOrganizations = people
+      .listConnectedOrganizationsForAccount(req.session.accountId, deps.db)
+      .filter(
+        (connection) =>
+          !membershipOrganizationIds.has(connection.organizationId)
+      )
+      .map((connection) => {
+        const organization = organizations.getOrganizationById(
+          connection.organizationId,
+          deps.db
+        )
+        return {
+          organizationId: connection.organizationId,
+          // Unreachable in practice — same fallback, same reason, as the
+          // membership mapping below.
+          organizationName: organization?.name ?? connection.organizationId,
+        }
+      })
     res.status(200).json({
       account: {
         id: req.session.accountId,
@@ -199,6 +237,7 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
             role: membership.role,
           }
         }),
+        connectedOrganizations,
       },
     })
   })

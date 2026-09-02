@@ -7,8 +7,10 @@
  * redemption for the same address ends the first session's token.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { RecordingEmailSender, validateSession } from '@bloombot/auth'
-import { accounts } from '@bloombot/db'
+import { accounts, organizations, people } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
@@ -353,5 +355,105 @@ describe('a disabled account (AUTH-3, API-2)', () => {
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ name: 'Should Not Be Created' })
     expect(dispatch.status).toBe(401)
+  })
+})
+
+// LINK-10: `GET /auth/me` also names every organization this account has a
+// *connected* person in but no membership — a student reaching the
+// institution's own organization, not an administrator there.
+// `apps/api/tests/routes/person-link.test.ts`'s own acceptance test proves
+// this end to end starting from a real, roster-admitted `discord`-surface
+// person connected through the real HTTP endpoints; this file's own test
+// proves the read surface's own shape directly — the exclusion of an
+// organization already reported as a membership in particular, which that
+// slower, full acceptance test does not happen to exercise (the account it
+// drives has no membership in the institution's organization at all).
+describe('GET /auth/me — connectedOrganizations (LINK-10)', () => {
+  it('names a connected-but-not-a-member organization, and never repeats one already reported as a membership', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, {
+      organizationName: "The student's own organization",
+    })
+    const app = await buildTestApp(testDb.db)
+
+    const institutionOrganizationId = randomUUID()
+    organizations.createOrganization(
+      institutionOrganizationId,
+      { name: 'A University', isPersonal: false },
+      testDb.db
+    )
+    // The real proof step (LINK-3) — `connectIdentity`, not a raw column
+    // write — standing in for what `/discord/confirm` does once Discord's
+    // OAuth round trip completes.
+    const survivor = people.createPerson(
+      institutionOrganizationId,
+      {},
+      testDb.db
+    )
+    const connected = people.connectIdentity(
+      institutionOrganizationId,
+      survivor.id,
+      { surface: 'web', externalId: caller.accountId },
+      testDb.db
+    )
+    expect(connected).toBeDefined()
+
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    expect(me.status).toBe(200)
+    const account = (
+      me.body as {
+        account: {
+          memberships: { organizationId: string }[]
+          connectedOrganizations: {
+            organizationId: string
+            organizationName: string
+          }[]
+        } | null
+      }
+    ).account
+    expect(account).not.toBeNull()
+    // Only the account's own organization is a membership...
+    expect(account!.memberships.map((m) => m.organizationId)).toEqual([
+      caller.organizationId,
+    ])
+    // ...and the institution's is reported as connected, named, never as a
+    // second membership.
+    expect(account!.connectedOrganizations).toEqual([
+      {
+        organizationId: institutionOrganizationId,
+        organizationName: 'A University',
+      },
+    ])
+  })
+
+  it('an organization with only an unconnected person (PPL-3s own "created on first sight" case) is not reported', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const otherOrganizationId = randomUUID()
+    organizations.createOrganization(
+      otherOrganizationId,
+      { name: 'Never Connected Here', isPersonal: false },
+      testDb.db
+    )
+    // Created, but never proven — `connectedAt` stays null.
+    people.resolvePersonByIdentity(
+      otherOrganizationId,
+      { surface: 'web', externalId: caller.accountId },
+      testDb.db
+    )
+
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', caller.cookieHeader)
+    const account = (
+      me.body as {
+        account: { connectedOrganizations: unknown[] } | null
+      }
+    ).account
+    expect(account!.connectedOrganizations).toEqual([])
   })
 })

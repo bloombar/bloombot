@@ -5184,3 +5184,91 @@ unlucky contention window, without turning a stuck lock into a long hang on top 
 message loss to "an operator's own database problem" (a corrupt file, a full disk, a lock genuinely stuck
 past every retry) — it does not, and cannot, make a write to a single SQLite file never fail; CONV-4's own
 bar is that a failure is never silent, not that it never happens.
+
+## D-50 — `packages/db`/`apps/api`/`apps/web`: LINK-10 — the organizations an account has a connected person in, and what a connected-but-not-a-member account is deliberately not shown
+
+**Problem.** LINK-1..9 (D-35, D-44, D-45) build the mechanism that proves a Discord (or MCP) identity belongs
+to a signed-in account and merges it with whatever a roster import or a Discord role already admitted — but
+D-44's own corrected framing named the gap plainly: connecting proves who somebody is, it does not make them
+a member of the institution running the course, and `apps/web/src/pages/Shell.tsx` builds its organization
+switcher from `account.memberships` alone. A student who connects through the Discord invitation is fully
+reachable *on Discord* the moment they do; the same student opening the web panel still sees only their own
+personal organization, because nothing told the browser the institution's organization exists for them at
+all. Discord worked and the web did not, for the same person, for the same course.
+
+**Choice — a new read surface, `people.ts#listConnectedOrganizationsForAccount`, the same TEN-2 exception
+class as `memberships.ts#listMembershipsForAccount`.** Keyed on `accountId`, not `organizationId` — an
+account's connected identity is not scoped to one organization until this call names it, the identical reason
+the membership version is unscoped. Implemented as a join from `person_identities` (`surface: 'web'`,
+`externalId: accountId`) to `people`, filtered to `connectedAt is not null` (PPL-3's own "created on first
+sight, unconnected" case excluded — the same gate `routes/chat.ts#resolveConnectedCallerPerson` already
+applies read-only). No `mergedIntoPersonId` filter is needed: `mergePeople` moves every identity to the
+survivor outright, so a `web`-surface identity row can never point at a merged-away tombstone — proven
+directly (`packages/db/tests/people.test.ts`'s own "follows a merge" test), not merely asserted, because this
+is exactly the shape the coordinator's brief warned against seeding around: a real student's own path is a
+`discord`-surface person a roster import admits, whose identity later *merges* into the account's own
+survivor, never a `web` identity created directly in the institution's organization.
+
+**Choice — `GET /auth/me` gets one additional field, `connectedOrganizations`, excluding anything already
+present in `memberships`.** Bundled into the existing "who am I" read rather than a second endpoint — the
+panel already treats this response as the one source of truth for which organizations an account may act
+within (must-fix 9 of the API-1..6 rework), and a second round trip would only reintroduce the "two lists that
+can disagree" problem the exclusion filter exists to avoid in the first place. `apps/web/src/api/types.ts`'s
+new `ConnectedOrganizationSummary` carries `organizationId`/`organizationName` and deliberately no `role` —
+connecting proves an identity (LINK-3), not administrative authority, so there is no role to report.
+
+**The judgment call the brief asked for, made deliberately and erring toward withholding: what a
+connected-but-not-a-member account sees once that organization is active.** Read `apps/api/src/routes/actions.ts`
+and `apps/api/src/routes/chat.ts` side by side and the boundary is already drawn at the server, not something
+this slice invents: `routes/actions.ts` resolves the caller's organization from `memberships.getMembership`
+*before it even looks up which action was requested* — every dispatched action (Discord's `discordServers.remove`,
+every `projects.*`/`courses.*` action `ProjectsPanel` calls, ADMIN-1..3's own `transcripts.*`) refuses
+unconditionally for a caller with no membership, no exception anywhere in the catalog. `routes/chat.ts` is the
+one screen deliberately built not to need a membership at all — it authorizes on an active enrolment instead
+(that file's own module comment: "the person asking a course a question is not necessarily any such thing").
+So `apps/web/src/pages/Shell.tsx`'s `isMember` mirrors that split: a connected-but-not-a-member organization
+offers **only** the Chat tab — Discord, Projects and Transcripts are withheld outright, not merely left to
+fail once clicked, because a control every click through it would 404 against is worse offered than absent.
+`effectiveTab` (`isMember ? activeTab : 'chat'`) is what every render branch actually reads, not `activeTab`
+directly — `activeTab` is this shell's own state and is deliberately *not* reset on an organization switch
+(unlike `ProjectsPanel`'s/`Chat`'s own `key={activeOrganizationId}` remount, which resets what is fetched
+*inside* a tab, not which tab is active), so a tab selected on a previous, membership organization (Discord,
+say) can never leak into a connected-only one where the server would refuse it. The home control and the
+`navItems` list are gated the identical way, so nothing in the panel's own chrome ever points at a withheld
+screen.
+
+**Not a second authorization path — the server's own refusal is what makes this safe, and it is tested
+directly, not assumed.** `apps/api/tests/routes/person-link.test.ts`'s own acceptance test (the "starts where
+a real student starts" test the coordinator's brief asked for: a `discord`-surface person admitted by
+`enrolViaRoster`, connected through the real `/discord/begin`→`/discord/preview`→`/discord/confirm` endpoints,
+never a shortcut) now also dispatches `discordServers.remove` against the institution's organization for that
+exact caller after connecting, and asserts `404 action_refused` — `routes/actions.ts`'s own membership gate,
+unchanged by this slice, still refuses regardless of what the panel offers. `apps/api/tests/auth-flow.test.ts`
+proves the read surface's own shape directly (exclusion of an organization already reported as a membership,
+in particular). `apps/web/tests/shell.test.tsx` proves the panel's withholding, including the one case a
+review round has been bitten by before on a different slice: a tab selected before switching organizations
+(Discord) does not leak into the connected-only one afterward.
+
+**The e2e gap this closes, and why the Discord OAuth half is still a documented stand-in.** Three prior
+slices in this project shipped a defect only a real browser caught — `e2e/link-10-connected-organization.spec.ts`
+is QA-7's own coverage for this one, and it is deliberately *not* a second, separately-seeded scenario: it
+seeds the identical real starting point the API acceptance test above does (a roster-admitted `discord`-surface
+person), then builds the same end-database-state a completed `/discord/confirm` leaves behind using the exact
+repository functions that route calls internally (`people.mergePeople`, then `people.connectIdentity` for the
+account's own `web` identity — never a raw `connectedAt` column write). Driving the browser through Discord's
+own OAuth consent screen itself remains out of reach the same way `e2e/connect.spec.ts`'s own module comment
+already states: this harness does not build a second, fake OAuth provider standing in for discord.com
+(`e2e/support/start-api.ts` points `apps/api`'s own Discord configuration at unreachable loopback addresses on
+purpose). Verified as a real regression test, not merely a passing one: reverting `effectiveTab`'s own gate
+locally fails this spec — a real Playwright browser lands on `ProjectsPanel`, not `Chat`, in the connected-only
+organization, while the nav row itself still (correctly) shows only a Chat button — a mismatch no mocked
+component test would have caught, since none of them render `Shell.tsx`'s own conditional content against a
+real DOM the way a browser does.
+
+**Limits.** `redeemJoinLink`/`course_join_links` (ENRL-3/ENRL-4) remain unwired from any route, unchanged by
+this slice (D-44's own "Limits" already named this) — a web-only student who has never touched Discord or MCP
+still has no way to reach a course through this slice; `connectedOrganizations` only ever reports an
+organization *something* has already connected an identity in. Nothing here changes what a membership grants,
+or introduces a second membership-like relationship — `connectedOrganizations` is read-only, and the one write
+path that could turn a connected person into a member (`memberships.ts#createMembership`/`grantMembershipRole`)
+is untouched.

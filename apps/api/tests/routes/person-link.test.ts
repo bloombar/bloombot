@@ -22,6 +22,19 @@
  * with *no membership in that organization*, connects through this
  * router's own real HTTP endpoints (not a direct `people.connectIdentity`
  * shortcut), then asks a question over the web chat and gets an answer.
+ *
+ * LINK-10 (D-50) extends that same acceptance test rather than adding a
+ * second, separately-seeded one — this student's own connect, real end to
+ * end through this router, is exactly the scenario `GET /auth/me`'s own
+ * `connectedOrganizations` and the panel's own withheld tabs exist for: the
+ * test asserts the institution's organization now shows up there (never as
+ * a second membership), and that a membership-only action against it —
+ * every tab `apps/web/src/pages/Shell.tsx` withholds from this account
+ * dispatches one — still refuses, over real HTTP, after connecting. The
+ * server's own refusal is what makes the panel's withholding safe rather
+ * than decorative; this is the test that proves it holds for the identical
+ * caller the rest of this file already drives through the real connect
+ * flow, not a caller shaped the way this test's own setup would resolve it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -963,5 +976,49 @@ describe('acceptance — a roster-admitted student who has never signed in conne
       'answered'
     )
     expect(model.calls).toHaveLength(1)
+
+    // LINK-10 — the panel's own read surface for the same, now-connected
+    // caller: the institution's organization shows up as connected, never
+    // as a second membership (`apps/web/src/pages/Shell.tsx` only offers
+    // Discord/Projects/Transcripts for a membership).
+    const me = await request(app)
+      .get('/auth/me')
+      .set('Cookie', student.cookieHeader)
+    expect(me.status).toBe(200)
+    const meAccount = (
+      me.body as {
+        account: {
+          memberships: { organizationId: string }[]
+          connectedOrganizations: { organizationId: string }[]
+        } | null
+      }
+    ).account
+    expect(
+      meAccount!.memberships.map((membership) => membership.organizationId)
+    ).not.toContain(roster.organizationId)
+    expect(
+      meAccount!.connectedOrganizations.map(
+        (connection) => connection.organizationId
+      )
+    ).toContain(roster.organizationId)
+
+    // The server-side proof LINK-10's own brief asks for directly: nothing
+    // about connecting grants membership, so a membership-only action —
+    // every tab this same connect made reachable on the *panel's* Chat tab
+    // withholds from this account (`pages/Shell.tsx`'s own `isMember`
+    // gate) — still refuses for this exact caller, over real HTTP, after a
+    // real connect. Not merely a UI check: `routes/actions.ts` resolves
+    // the caller's organization from `memberships.getMembership` before it
+    // even looks up which action was requested, so this would refuse
+    // identically whichever action name were dispatched.
+    const dispatch = await request(app)
+      .post(
+        `/organizations/${roster.organizationId}/actions/discordServers.remove`
+      )
+      .set('Cookie', student.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ serverId: 'some-server' })
+    expect(dispatch.status).toBe(404)
+    expect(dispatch.body).toMatchObject({ error: 'action_refused' })
   })
 })

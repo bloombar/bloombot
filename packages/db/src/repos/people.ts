@@ -16,7 +16,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3'
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
 import {
@@ -251,6 +251,63 @@ export function resolveIdentity(
       )
     )
     .get()
+}
+
+/** One organization `listConnectedOrganizationsForAccount` reports — enough for `GET /auth/me` to name it back, without this file reaching into `organizations` for a name it does not own (TEN-2's own "scoped to one table's concern", the same discipline `routes/auth.ts` already applies for a membership's own organization name). */
+export interface ConnectedOrganization {
+  organizationId: string
+  personId: string
+}
+
+/**
+ * LINK-10: every organization `accountId` has a *connected* person in — not
+ * a membership (TEN-1's administrative relationship), a proven identity
+ * (LINK-3) that a roster import or a Discord role already admitted, then
+ * merged with this account's own `web` identity through the real connect
+ * flow (LINK-4). Connecting proves who somebody is; it does not make them a
+ * member of the institution running the course (this file's own module
+ * comment) — `apps/web`'s organization switcher needs this to offer a
+ * student their institution's organization even though `memberships` never
+ * will (`docs/DECISIONS.md` D-44's own "Limits", D-50).
+ *
+ * TEN-2 exception, the same class as `memberships.ts#listMembershipsForAccount`:
+ * an account's connected identity is not scoped to one organization until
+ * this call names it, so it is keyed on `accountId` rather than
+ * `organizationId` — allowlisted in `tests/tenant-scoping-convention.test.ts`
+ * accordingly. `apps/api`'s `GET /auth/me` is the first caller, asking the
+ * same "which organization ids may this account reach" question that
+ * function already answers for memberships.
+ *
+ * Only a `connectedAt`-set person counts — PPL-3's own "created on first
+ * sight, unconnected" case is excluded, the same gate `resolveConnectedCallerPerson`
+ * (`routes/chat.ts`) already applies read-only. No `mergedIntoPersonId`
+ * filter is needed: `mergePeople` moves every identity to the survivor
+ * outright (that function's own comment), so a `person_identities` row for
+ * `(surface: 'web', externalId: accountId)` can never point at a
+ * merged-away tombstone — the same reason `resolveIdentity` needs none.
+ */
+export function listConnectedOrganizationsForAccount(
+  accountId: string,
+  db: Executor
+): ConnectedOrganization[] {
+  return db
+    .select({ organizationId: people.organizationId, personId: people.id })
+    .from(people)
+    .innerJoin(
+      personIdentities,
+      and(
+        eq(personIdentities.personId, people.id),
+        eq(personIdentities.organizationId, people.organizationId)
+      )
+    )
+    .where(
+      and(
+        eq(personIdentities.surface, 'web'),
+        eq(personIdentities.externalId, accountId),
+        isNotNull(people.connectedAt)
+      )
+    )
+    .all()
 }
 
 /**

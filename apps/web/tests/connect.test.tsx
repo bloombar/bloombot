@@ -43,6 +43,7 @@ const ACCOUNT: AccountSummary = {
       role: 'owner',
     },
   ],
+  connectedOrganizations: [],
 }
 
 afterEach(() => {

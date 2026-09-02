@@ -340,8 +340,10 @@ export async function answerQuestion(
   // "costs nothing" shape `declined-over-limit`/`declined-busy` below
   // already take — cheaper still, since this needs no admission slot at
   // all). `person.connectedAt` is set exactly once, by `@bloombot/db`'s
-  // `people.ts#mergePeople`, the moment a proof (LINK-3) first attaches a
-  // second identity onto this person — never by an address match (PPL-4).
+  // `people.ts#markConnected` — reached from `connectIdentity` when a proof
+  // attaches a brand-new identity, and from `mergePeople` when that proof
+  // merges two records (LINK-3, LINK-4). Never by an address match (PPL-4),
+  // and never moved once written.
   // The invitation's own wording (the panel's address, and nothing else) is
   // the surface's job, not this pipeline's (`answerQuestion` returns kinds,
   // never rendered text — the same split CORE-5/SURF-6's other refusals

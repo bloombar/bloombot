@@ -291,8 +291,10 @@ export type Surface = (typeof SURFACES)[number]
 // LINK-1/LINK-4 — `connectedAt` is the platform's own record of "this
 // identity is attributed to a connected account" (LINK-1's own phrase): null
 // for a person PPL-3 created on first sight and never proven since,
-// non-null from the moment `repos/people.ts#mergePeople` first merges
-// another identity into this person (LINK-3's proof, LINK-4's merge) — set
+// non-null from the moment a proof first attaches an identity to this
+// person, whether that attaches directly (`repos/people.ts#connectIdentity`)
+// or merges two records (`#mergePeople`) — both go through `#markConnected`
+// (LINK-3's proof, LINK-4's merge) — set
 // once and never moved backward on a later merge (`mergePeople`'s own
 // comment), so it always reads as "when this person first connected", not
 // "when they were last merged". `mergedIntoPersonId`/`mergedAt` are the

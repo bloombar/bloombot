@@ -146,10 +146,13 @@ export function consumeDiscordPersonLink(
     Date.now(),
     db
   )
-  // `surface`/`personId`/`codeVerifier` are guaranteed by `consumeChallenge`'s
-  // own `WHERE` (surface) and `schema.ts`'s own `CHECK` (a `discord` row
-  // always has both) — not re-checked here, since a row this query returns
-  // at all already satisfies them.
+  // `surface` is guaranteed by `consumeChallenge`'s own `WHERE`, and
+  // `personId` by `schema.ts`'s `CHECK` (a `discord` row always binds the
+  // survivor). `codeVerifier` is guaranteed by neither — the `CHECK`
+  // constrains `person_id` and `identity_external_id` only — but by
+  // `NewPersonLinkChallenge`'s discriminated union, which requires it for
+  // `discord`. Not re-checked here, since a row this query returns at all
+  // already satisfies all three.
   if (!consumed) return undefined
   return {
     organizationId: consumed.organizationId,

@@ -278,7 +278,7 @@ function withLastRequestNotice(courseTitle: string, answer: string): string {
  * forgets to release" is worth more than shaving the hold time by the cost
  * of a few synchronous local database writes.
  *
- * CONV-4/D-51 — step 6 and step 8 are no longer among the writes that
+ * CONV-4/D-49 — step 6 and step 8 are no longer among the writes that
  * degrade to a log line: recording the question and recording the reply
  * are what CONV-2's retention guarantee and ADMIN-1's transcript actually
  * rest on, so a failure to write either now propagates out of this
@@ -459,7 +459,7 @@ export async function answerQuestion(
     // Discord context travels with it, the same as the reply below (finding
     // 6) — both directions of one exchange carry the same context.
     //
-    // CONV-4/D-51 — deliberately not wrapped in a `try`/`catch` that
+    // CONV-4/D-49 — deliberately not wrapped in a `try`/`catch` that
     // continues: writing the question is part of answering it, not a side
     // effect of answering it. A write `appendMessage`'s own retry cannot
     // recover throws straight out of `answerQuestion`, before the model is
@@ -601,7 +601,7 @@ export async function answerQuestion(
     // here still degrades to a log line rather than losing the answer the
     // model already produced — the allowance was already reserved above,
     // so nothing here can cost more than an un-resumable next turn.
-    // CONV-4/D-51 — unlike the two `appendMessage` calls this used to sit
+    // CONV-4/D-49 — unlike the two `appendMessage` calls this used to sit
     // between (this function's own module comment explains the split): the
     // upstream thread id is a resumption pointer, not retention data
     // CONV-2/ADMIN-1 require, so losing it costs a fresh upstream
@@ -627,7 +627,7 @@ export async function answerQuestion(
     // entry — CORE-5). DATA-4's Discord context travels with the reply
     // too (finding 6), not just the question.
     //
-    // CONV-4/D-51 — not wrapped, for the same reason the question's own
+    // CONV-4/D-49 — not wrapped, for the same reason the question's own
     // `appendMessage` above is not (this function's own module comment has
     // the full reasoning): the model has already answered by the time this
     // runs, so a write that still fails after `appendMessage`'s own retry

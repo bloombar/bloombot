@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import BetterSqlite3 from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -392,7 +393,7 @@ describe('conversations repo', () => {
     ])
   })
 
-  // --- CONV-4/D-51: a transient write failure is retried, not swallowed --
+  // --- CONV-4/D-49: a transient write failure is retried, not swallowed --
 
   /**
    * Makes `db.transaction` throw a `BetterSqlite3.SqliteError` with `code`
@@ -504,6 +505,53 @@ describe('conversations repo', () => {
         testDb.db
       )
     ).toThrow()
+  })
+
+  // The three tests above intercept `db.transaction` itself, so none of
+  // them ever observe *which* transaction mode `appendMessage` actually
+  // opens with — a helper extracted across `packages/db/repos`, or a
+  // Drizzle upgrade that drops the option, would leave every one of them
+  // green while `appendMessage` silently returned to `BEGIN DEFERRED`,
+  // exactly the configuration CONV-4/D-49 exists to prevent (see
+  // `appendMessage`'s own doc comment). Pinned directly instead: a second,
+  // `verbose`-logging connection to the same file captures the literal SQL
+  // SQLite executes, and asserts `BEGIN IMMEDIATE` is in it.
+  it('opens its own transaction with BEGIN IMMEDIATE, not deferred — asserted directly against the emitted SQL (CONV-4/D-49)', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    const conversation = conversations.getOrCreateConversation(
+      orgA,
+      { courseId: courseA.id, personId: personA.id, surface: 'discord' },
+      testDb.db
+    )
+    if (!conversation) throw new Error('seed conversation creation failed')
+
+    const statements: string[] = []
+    // A second connection to the same file — `client.ts#openDatabase`'s own
+    // pragmas, plus `verbose`, which better-sqlite3 invokes with the exact
+    // text of every statement it runs, including the `BEGIN`/`COMMIT` a
+    // plain `db.transaction` call never surfaces as a value.
+    const client = new BetterSqlite3(testDb.path, {
+      verbose: (sql) => statements.push(String(sql)),
+    })
+    client.pragma('journal_mode = WAL')
+    client.pragma('busy_timeout = 5000')
+    client.pragma('foreign_keys = ON')
+    const verboseDb = drizzle(client, { schema })
+
+    try {
+      conversations.appendMessage(
+        orgA,
+        conversation.id,
+        { direction: 'from_person', content: 'observed over verbose SQL' },
+        verboseDb
+      )
+
+      expect(statements).toContain('BEGIN IMMEDIATE')
+      expect(statements).not.toContain('BEGIN DEFERRED')
+    } finally {
+      client.close()
+    }
   })
 
   // Finding 3 of the CONV-1 rework: `createdAt` alone is not a determined

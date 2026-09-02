@@ -59,7 +59,7 @@ describe('closeDatabase', () => {
 })
 
 /**
- * CONV-4/D-51 — the condition this pair of `openDatabase` connections
+ * CONV-4/D-49 — the condition this pair of `openDatabase` connections
  * reproduces here for real, against the exact pragmas `openDatabase` itself
  * sets, is what `repos/conversations.ts#appendMessage`'s own doc comment
  * describes: a deferred transaction (Drizzle's own default, before this
@@ -72,7 +72,7 @@ describe('closeDatabase', () => {
  * sequential JS statements are enough to force the exact interleaving that
  * produces it, deterministically, every run.
  */
-describe('SQLITE_BUSY_SNAPSHOT (CONV-4/D-51): what busy_timeout does not cover', () => {
+describe('SQLITE_BUSY_SNAPSHOT (CONV-4/D-49): what busy_timeout does not cover', () => {
   it('a deferred transaction that reads before another connection commits cannot upgrade to write, and busy_timeout does not wait it out', () => {
     dir = mkdtempSync(join(tmpdir(), 'bloombot-db-client-'))
     const path = join(dir, 'test.db')
@@ -146,14 +146,24 @@ describe('SQLITE_BUSY_SNAPSHOT (CONV-4/D-51): what busy_timeout does not cover',
       // snapshot — an ordinary contended write, exactly what `busy_timeout`
       // exists to cover, so it is `SQLITE_BUSY` (a lock that is *held*),
       // never `SQLITE_BUSY_SNAPSHOT`.
+      const start = Date.now()
       let caught: unknown
       try {
         connB.$client.exec('BEGIN IMMEDIATE')
       } catch (error) {
         caught = error
       }
+      const elapsedMs = Date.now() - start
 
       expect(caught).toMatchObject({ code: 'SQLITE_BUSY' })
+      // The symmetric assertion to the previous test's own `toBeLessThan`:
+      // without this, a `BEGIN IMMEDIATE` that failed *instantly*, without
+      // ever consulting `busy_timeout` at all, would pass identically —
+      // and would falsify the fix's own premise, that this case is an
+      // ordinary, already-covered lock wait rather than another
+      // uncoverable immediate failure. `connB`'s own `busy_timeout = 200`
+      // above is what this proves was actually spent.
+      expect(elapsedMs).toBeGreaterThanOrEqual(200)
 
       connA.$client.exec('ROLLBACK')
     } finally {

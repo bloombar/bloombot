@@ -928,7 +928,7 @@ describe('answerQuestion (CORE-6): both directions are recorded, and a failed wr
     expect(logger.errorCalls.length).toBeGreaterThan(0)
   })
 
-  // CONV-4/D-51 rework: a write that `appendMessage`'s own retry cannot
+  // CONV-4/D-49 rework: a write that `appendMessage`'s own retry cannot
   // recover used to be caught here, logged, and continued past — an
   // answered student with a hole in their transcript, exactly the bug this
   // slice fixes (see `answer.ts`'s own module comment). The two tests

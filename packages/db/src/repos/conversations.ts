@@ -41,7 +41,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 }
 
 /**
- * CONV-4/D-51 — the two codes `appendMessage`'s own retry (below) treats as
+ * CONV-4/D-49 — the two codes `appendMessage`'s own retry (below) treats as
  * transient and worth another attempt; nothing else is. `SQLITE_BUSY` is an
  * ordinary lock wait `client.ts`'s own `busy_timeout` already spends up to
  * 5s retrying inside SQLite itself before it ever reaches here, so seeing
@@ -63,7 +63,7 @@ function isTransientBusyError(error: unknown): boolean {
   )
 }
 
-/** CONV-4/D-51 — bounded so a genuinely stuck lock still fails loudly rather than retrying forever; see `appendMessage`'s own doc comment for why three is enough. */
+/** CONV-4/D-49 — bounded so a genuinely stuck lock still fails loudly rather than retrying forever; see `appendMessage`'s own doc comment for why three is enough. */
 const MAX_APPEND_MESSAGE_ATTEMPTS = 3
 
 /** What `getOrCreateConversation` needs: the course, the person, and the surface the message arrived on. */
@@ -362,7 +362,7 @@ export interface NewMessage {
  * the same transaction is what keeps two concurrent appends to the same
  * conversation from computing the same `sequence`.
  *
- * CONV-4/D-51 — this transaction opens `immediate`, not `deferred` (Drizzle's
+ * CONV-4/D-49 — this transaction opens `immediate`, not `deferred` (Drizzle's
  * own default): a deferred transaction takes no lock at `BEGIN`, only at its
  * first write, so the `select` above establishes a read snapshot *before*
  * the lock is acquired — if another connection commits a write to this same
@@ -412,7 +412,7 @@ export function appendMessage(
         throw error
       }
       // Falls through and tries again — see this function's own doc
-      // comment (CONV-4/D-51) for why a busy/stale-snapshot error is worth
+      // comment (CONV-4/D-49) for why a busy/stale-snapshot error is worth
       // another attempt rather than being caught and discarded here.
     }
   }
@@ -481,7 +481,7 @@ function runAppendMessageTransaction(
 
       return message
     },
-    // CONV-4/D-51 — see this function's own doc comment above.
+    // CONV-4/D-49 — see this function's own doc comment above.
     { behavior: 'immediate' }
   )
 }

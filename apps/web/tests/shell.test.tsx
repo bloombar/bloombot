@@ -38,6 +38,7 @@ const {
   listCourses,
   listChatCourses,
   listDiscordServers,
+  fetchOrganizationUsage,
 } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
   dispatchAction: vi.fn(),
@@ -46,6 +47,7 @@ const {
   listCourses: vi.fn(),
   listChatCourses: vi.fn(),
   listDiscordServers: vi.fn(),
+  fetchOrganizationUsage: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -61,6 +63,7 @@ vi.mock('../src/api/client.js', async () => {
     listCourses,
     listChatCourses,
     listDiscordServers,
+    fetchOrganizationUsage,
   }
 })
 
@@ -383,6 +386,61 @@ describe('Shell (WEB-3, WEB-4)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Transcripts' })
     ).toBeInTheDocument()
+  })
+
+  // COST-3/COST-4: a fifth tab, the same shape Discord/Projects/Chat/
+  // Transcripts already take — switching to it renders `pages/Usage.tsx`,
+  // and the caller's own owner role in org-1 (`MULTI_MEMBERSHIP_ACCOUNT`)
+  // reaches it as `isOwner`, so the cap-setting form renders too.
+  it("switches to the Usage tab, and passes the caller's own owner role through as isOwner", async () => {
+    fetchOrganizationUsage.mockResolvedValue({
+      organizationId: 'org-1',
+      spendingCapMicros: null,
+      totalCostMicros: 0,
+      totalEstimatedCostMicros: 0,
+      courses: [],
+      studentsNearLimit: [],
+    })
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
+
+    expect(
+      await screen.findByRole('heading', { name: 'Usage' })
+    ).toBeInTheDocument()
+    expect(fetchOrganizationUsage).toHaveBeenCalledWith(
+      'org-1',
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
+    )
+    // org-1's own membership is 'owner' — the cap-setting form is offered.
+    expect(await screen.findByLabelText('Spending cap ($)')).toBeInTheDocument()
+  })
+
+  // The second membership in `MULTI_MEMBERSHIP_ACCOUNT` is 'assistant', not
+  // 'owner' — the same tab renders, but withholds the form
+  // (`pages/Usage.tsx`'s own module comment on why).
+  it('the Usage tab withholds the cap-setting form for a non-owner membership', async () => {
+    fetchOrganizationUsage.mockResolvedValue({
+      organizationId: 'org-2',
+      spendingCapMicros: null,
+      totalCostMicros: 0,
+      totalEstimatedCostMicros: 0,
+      courses: [],
+      studentsNearLimit: [],
+    })
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+      target: { value: 'org-2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
+
+    await screen.findByRole('heading', { name: 'Usage' })
+    expect(screen.queryByLabelText('Spending cap ($)')).not.toBeInTheDocument()
   })
 
   // --- LINK-10: a connected-but-not-a-member organization -------------------

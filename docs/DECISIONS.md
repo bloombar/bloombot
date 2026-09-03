@@ -6570,3 +6570,93 @@ rather than once per mount, for no offsetting benefit.
 **What this does not touch.** The OAuth+PKCE install flow itself, `apps/api/src/routes/discord-servers.ts`, and
 `discordServers.remove`'s own behaviour are all unchanged — this slice makes Remove *reachable* whenever a
 binding exists, it does not change what removing one does.
+
+## D-66 — `packages/actions`/`packages/db`/`apps/web`/`e2e`: COST-3/COST-4 — a spending cap that can actually be set, and an instructor's own usage screen
+
+**Problem.** The same audit that produced D-65 (`docs/ROADMAP.md`'s "Audit — surfaces that were never built")
+found two more requirements marked Done that were not, both in the cost ledger. COST-3: `organizations.setSpendingCap`
+(`@bloombot/db`) had zero non-test callers anywhere in the monorepo, and `spendingCapMicros` carried no
+column default, so `hasReachedSpendingCap`'s real, correctly-placed enforcement (`@bloombot/core#answer.ts`)
+could never actually fire in production — there was no way to set a cap outside a test. COST-4:
+`costLedger.organizationUsage` (`@bloombot/actions`) existed and was correctly tenant-scoped, but its only
+caller was `apps/mcp`'s own tool surface; nothing in the panel — where an instructor does everything else —
+ever called it, and `pages/Admin.tsx` covers only COST-4's *other* half (a platform administrator's own read).
+
+**Choice, restricted to an owner, not any membership.** `routes/actions.ts` admits any membership regardless of
+role, and `policy.ts`'s own module comment is explicit that a descriptor documents access, it does not enforce
+it — so nothing stops an `assistant` or `instructor` membership from calling `costLedger.setSpendingCap`
+unless something checks. Measured, not assumed: a spending cap is the one control in this slice that can stop
+the assistant answering for *every course in the organization at once* the moment it is set below what has
+already been spent — a blast radius closer to `memberships.grant`'s own "grants organization-wide authority"
+than to an ordinary per-course write like `courses.save`. `setSpendingCapAction#execute` reads `accountId` and
+checks `memberships.getMembership(...).role === 'owner'`, the identical shape `memberships.grant` already
+uses and for the identical reason its own doc comment gives: `PolicyContext` carries no caller identity at
+all, so *who* may call this can only ever be `execute`'s own job, not the policy's.
+
+**Choice, a currency amount converted to micros, not micros typed by hand, and `Math.round` once, at the
+end.** COST-3's own text and every existing money surface (`pages/Admin.tsx#formatMicros`,
+`packages/core/src/pricing.ts#computeCost`) treat micros as an internal accounting unit, never something a
+person types or reads directly. `costLedger.setSpendingCap`'s own input schema takes `capAmount: number |
+null` (dollars — `$12.50` is `12.5`) and converts with `Math.round(capAmount * 1_000_000)`, the same "round
+once, at the very end, not on every intermediate step" discipline `pricing.ts#computeCost`'s own doc comment
+holds itself to for D-2's "money as INTEGER micros": `10.1 * 1_000_000` is `10099999.999999998` in IEEE 754
+double precision, and `Math.round` is what turns that back into the exact `10100000` a decimal input actually
+meant, rather than trusting a caller to send an already-integer value or letting the drift reach storage
+unrounded.
+
+**Choice, `null` clears, `0` blocks — the same tri-state `hasReachedSpendingCap` already reads.**
+`setSpendingCapInputSchema`'s `capAmount` is `z.number().nonnegative().nullable()`, not merely optional: an
+instructor's blank field sends `null` (clears the cap, `organizations.spendingCapMicros` becomes `null` again,
+`hasReachedSpendingCap` reads that as "no cap at all" — its own doc comment already gives this reading), while
+typing `0` and saving sends `0` explicitly (`hasReachedSpendingCap`'s `spent >= cap` is `0 >= 0`, true the
+instant anything at all has been spent). The panel additionally offers an explicit "Clear cap" button
+alongside "Save cap", rather than requiring an instructor to discover that blanking the field and saving is
+the way to clear it — the two are genuinely different actions with different consequences, and one control
+per action reads more honestly than one overloaded field.
+
+**Choice, `setSpendingCap`'s own doc comment corrected, not merely left.** The brief named this directly: the
+function's doc comment used to state, as fact, "there is no action layer wired to this in this slice ... it
+exists so a test, or a future admin action, can configure a cap" — true when written, never revisited once an
+action existed to call it. `docs/ROADMAP.md`'s audit and D-65 both record this project's own recurring
+finding — a comment asserting the opposite of the code is what a reviewer eventually catches, but had not
+been yet — so the comment is rewritten here to point at the action that now wires it, rather than left as
+one more example of the same defect.
+
+**Choice, the cap-setting form withheld for a non-owner, not merely disabled.** `pages/Shell.tsx` computes
+`isOwner` (the caller's own membership role in the active organization) and threads it to `pages/Usage.tsx`,
+which renders the whole "Spending cap" form only when it is `true` — the same `isMember`/tab-withholding shape
+`Shell.tsx` already uses for LINK-10 (its own module comment: "the server's own refusal ... is what actually
+makes any of this safe ... this only decides what the panel offers"). The read (`costLedger.organizationUsage`)
+stays open to any membership, matching that action's own unrestricted policy — only the write is gated.
+
+**Choice, "cap reached" derived client-side, not a fourth field the read has to carry.** COST-3's UI
+requirement is that a cap that is set, a cap with no cap at all, and "cap reached" (the state that stops the
+assistant answering) must all be visually distinct. `getOrganizationUsageSummary`'s own report already carries
+both `spendingCapMicros` and `totalCostMicros` — `pages/Usage.tsx` compares them with the identical `spent >=
+cap` `@bloombot/db#hasReachedSpendingCap` itself uses, rather than adding a `capReached: boolean` field to the
+action's own return that would only ever restate a comparison the caller already has both halves of.
+
+**Choice, `personDisplayName ?? personId`, never email, for a near-limit student.** Matches
+`components/CoursePeople.tsx#label`'s own precedent exactly, for the same reason its own doc comment gives: a
+`null` display name is already told apart from another by a distinct id, and these are real students'
+addresses — shown only where a screen genuinely cannot tell two people apart without one, which this screen
+is not.
+
+**Finding — `e2e/support/start-api.ts` never wired a pricing table through to `buildApp` at all.** Writing
+`usage-panel.spec.ts` (COST-4's own e2e proof that a real conversation's cost shows up on the instructor's own
+screen) surfaced a pre-existing gap in the shared e2e harness, not introduced by this slice: `deps.pricing`
+(`@bloombot/core#answer.ts`) was left `undefined`, so every chat conversation in the *entire* e2e suite — not
+only this slice's own new specs — has been priced at `0` since the harness was written, logging
+`answerQuestion`'s own "no pricing table configured" warning every time, unnoticed because nothing before this
+slice ever asserted a nonzero cost end to end. Fixed in place, one line
+(`pricing: getModelPricingTable()`, `@bloombot/config`'s own documented default table, the same one
+`apps/api/src/index.ts` builds in production from `CONFIG.MODEL_PRICING_JSON`) rather than worked around by
+seeding a ledger row directly — an e2e spec's own point is that a real pipeline actually did the thing, and a
+pipeline that has silently never priced anything in this harness is a defect the next COST-anything e2e spec
+would have hit regardless of who wrote it first.
+
+**Out of scope, deliberately.** `hasReachedSpendingCap` and the enforcement path in `answer.ts` — this slice
+makes the cap settable, it does not change what a cap does once reached. `spendingCapMicros`'s own missing
+column default (every organization is created with `NULL`, not some documented ceiling) is reported, not
+fixed — changing it changes behaviour for every existing row, a decision this slice's brief explicitly reserved
+for whoever owns that call.

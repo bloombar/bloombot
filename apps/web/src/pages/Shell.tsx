@@ -40,6 +40,17 @@
  * on mount and on every organization switch, and — once it resolves — is
  * the only thing either `installedServerId` or `handleRemove` below trust;
  * `justInstalled` is consulted only while that fetch is still `'loading'`.
+ *
+ * COST-3/COST-4: a fifth tab, Usage (`pages/Usage.tsx`) — an audit found
+ * neither an instructor's own read of their courses' spend nor a way to
+ * set the organization's spending cap ever reached this panel
+ * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built"), the same
+ * class of gap TEN-8/WEB-4 above were found to have. `isOwner`, computed
+ * once below from `account.memberships`, is what `Usage.tsx` uses to
+ * decide whether it renders the cap-setting form at all — the server's own
+ * check (`costLedger.setSpendingCap`, restricted to an owner) is what
+ * actually enforces this; this only decides what the panel offers, the
+ * same division `isMember` already draws for the other four tabs.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -67,6 +78,7 @@ import { SignOutIcon } from '../icons.js'
 import { Chat } from './Chat.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
+import { Usage } from './Usage.js'
 
 export interface ShellProps {
   account: AccountSummary
@@ -156,7 +168,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
   const [activeTab, setActiveTab] = useState<
-    'discord' | 'projects' | 'chat' | 'transcripts'
+    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage'
   >('projects')
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
@@ -174,6 +186,15 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // D-50) — this only decides what the panel *offers*.
   const isMember = account.memberships.some(
     (membership) => membership.organizationId === activeOrganizationId
+  )
+  // COST-3: whether the caller's own membership *here* is `'owner'` — this
+  // file's own module comment has why `Usage.tsx` uses this to decide
+  // whether it offers the cap-setting form at all, rather than only the
+  // read.
+  const isOwner = account.memberships.some(
+    (membership) =>
+      membership.organizationId === activeOrganizationId &&
+      membership.role === 'owner'
   )
   // Chat is the only screen a connected-but-not-a-member account can reach
   // in this organization — forced here, rather than merely left out of
@@ -325,6 +346,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
                   guardedNavigate(() => setActiveTab('transcripts')),
                 active: effectiveTab === 'transcripts',
               },
+              {
+                key: 'usage',
+                label: 'Usage',
+                onClick: () => guardedNavigate(() => setActiveTab('usage')),
+                active: effectiveTab === 'usage',
+              },
             ]
           : [chatNavItem]
       }
@@ -404,6 +431,16 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         <Transcripts
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+        />
+      ) : effectiveTab === 'usage' ? (
+        // COST-3/COST-4 — the same `key={activeOrganizationId}` reasoning
+        // every other tab above already holds itself to, plus `isOwner`
+        // (this file's own module comment) so `Usage.tsx` knows whether to
+        // offer the cap-setting form at all.
+        <Usage
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          isOwner={isOwner}
         />
       ) : (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

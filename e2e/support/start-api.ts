@@ -17,6 +17,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 
 import { createGoogleIdTokenVerifier } from '@bloombot/auth'
+import { getModelPricingTable } from '@bloombot/config'
 import { closeDatabase, openDatabase, runMigrations } from '@bloombot/db'
 import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createLogger } from '@bloombot/logger'
@@ -85,6 +86,19 @@ const app = buildApp({
   // characters; see `fake-model-client.ts`'s own module comment for what
   // is and is not real in this harness.
   model: new FakeModelClient('# Bloombot\n\nAnswering from a **fixture**.'),
+  // COST-1..6 — without this, `deps.pricing` (`@bloombot/core#answer.ts`)
+  // is `undefined`, and `answerQuestion` prices every call in this harness
+  // at `0` (its own `NO_PRICING_CONFIGURED` fallback, logged as a warning
+  // every time it fires) — a gap this harness had already, found while
+  // writing `usage-panel.spec.ts` (COST-4): a real conversation's own cost
+  // never reached the ledger for *any* spec in this suite, silently. The
+  // documented default rates (`@bloombot/config#getModelPricingTable`, no
+  // argument), the same table `apps/api/src/index.ts` builds in
+  // production from `CONFIG.MODEL_PRICING_JSON` — real pricing, not a
+  // fixture, since `FakeModelClient` reports no token usage either way and
+  // `computeCost` estimates from the request/answer text's own length
+  // regardless of which table prices that estimate.
+  pricing: getModelPricingTable(),
   // ADMIN-4 — no bot/worker process runs in this harness (this file's own
   // module comment: one Playwright project at a time, `apps/web` and this
   // process only), so these are loopback, unreachable placeholders, the

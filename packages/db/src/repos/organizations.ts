@@ -97,11 +97,19 @@ export function getOrganizationById(
 }
 
 /**
- * Set (or clear, with `null`) COST-3's spending cap. There is no action
- * layer wired to this in this slice (the brief for COST-1..6 excludes the
- * admin console this would eventually be set from) — it exists so a test,
- * or a future admin action, can configure a cap without reaching for raw
- * SQL. `undefined` when `organizationId` does not exist, the same
+ * Set (or clear, with `null`) COST-3's spending cap. An audit
+ * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found this
+ * doc comment used to claim "there is no action layer wired to this in this
+ * slice ... it exists so a test, or a future admin action, can configure a
+ * cap" — true when it was written, and never revisited once it stopped
+ * being true. It is wired now: `packages/actions/src/actions/cost-ledger.ts`'s
+ * `costLedger.setSpendingCap`, restricted to an organization's own owner,
+ * is what an instructor actually calls, converting a currency amount they
+ * type into the integer micros this column stores. This function itself
+ * still does no conversion and no authorization — the same "policies and
+ * roles are the action layer's own job, a repo function only reads and
+ * writes the database" split every other repo in this directory holds
+ * itself to. `undefined` when `organizationId` does not exist, the same
  * "cannot tell you" refusal every other lookup in this file gives.
  */
 export function setSpendingCap(

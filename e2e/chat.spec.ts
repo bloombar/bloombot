@@ -182,19 +182,30 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   // no script tag survived into the DOM.
   expect(await thread.locator('script').count()).toBe(0)
 
-  // CORE-7/CORE-8, end to end — the reported defect (`docs/SPEC.md`'s own
-  // CORE-7): a student asking through the panel used to be answered with
-  // Discord's own mention token wrapped around this exact account id. The
-  // model here is `e2e/support/fake-model-client.ts`'s own static fixture
-  // (this file's own module comment: "not real"), so this cannot exercise
-  // the mechanism that actually produced the bug — a real model echoing
-  // back what it was seeded with; that proof is
-  // `packages/core/tests/answer.test.ts`'s own CORE-7/CORE-8 block, against
-  // an `EchoingModelClient` that does. What this assertion adds on top: the
-  // real browser render of a real reply, through the real API, never shows
-  // this account's own id or a Discord-shaped token — a regression in
-  // rendering or serialization, not only in `answerQuestion` itself, would
-  // still be caught here.
+  // CORE-7/CORE-8 — read this before trusting what it proves (found in
+  // review, and worth being blunt about): **this assertion passes with the
+  // reported defect fully present.** Confirmed directly — reverting
+  // `answer.ts`'s `addressAs` computation to Discord's own mention token
+  // for every surface, rebuilding, and rerunning this spec still passes,
+  // because `e2e/support/fake-model-client.ts`'s own answer text is a fixed
+  // string (this file's own module comment: "not real") that never reads
+  // `request.addressAs` at all — nothing a real course's prompt would echo
+  // ever reaches this fixture, so a Discord-shaped token genuinely cannot
+  // appear here regardless of what `answerQuestion` did. It is *not* a
+  // regression test for CORE-7/CORE-8, and must not be read as one.
+  //
+  // What this assertion actually is: a sanity check that this account's own
+  // id, and a literal mention token, are not otherwise leaked somewhere in
+  // rendering or serialization independent of the model's answer (a stray
+  // debug attribute, an error payload, a log line rendered into the DOM).
+  // The genuine, failing-with-the-defect proof lives two layers down, where
+  // an echoing model is cheap to build with no shared-fixture collision
+  // risk: `packages/core/tests/answer.test.ts`'s own CORE-7/CORE-8 block
+  // (`answerQuestion`'s own return value) and
+  // `apps/api/tests/routes/chat.test.ts`'s own matching case (the HTTP
+  // response body this app actually sends the browser) — both use an
+  // `EchoingModelClient` that behaves the way a Discord-tuned course prompt
+  // does, and both fail loudly with the defect restored.
   const threadText = await thread.innerText()
   expect(threadText).not.toContain('<@')
   expect(threadText).not.toContain(accountId)

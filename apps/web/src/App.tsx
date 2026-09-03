@@ -43,7 +43,7 @@ import { Button } from './components/Button.js'
 import { Admin } from './pages/Admin.js'
 import { Connect } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
-import { Invitation, PENDING_INVITATION_KEY } from './pages/Invitation.js'
+import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -135,27 +135,36 @@ export function App() {
     refreshSession()
   }, [refreshSession])
 
-  // AUTH-6 rework: a sign-in redemption (an emailed link, `RedeemLink`'s own
+  // AUTH-6: a sign-in redemption (an emailed link, `RedeemLink`'s own
   // `onRedeemed`) used to always return to the shell unless a visitor who
-  // arrived signed out at `/connect/:organizationId` or `/join/:secret` had
-  // stashed a `sessionStorage` marker for this function to read back
-  // (`PENDING_CONNECT_ORG_KEY`/`PENDING_JOIN_LINK_KEY`) — which only ever
-  // worked while the whole round trip stayed in the one browsing context
-  // that set it. Both pages now carry their own destination on the sign-in
-  // token itself instead (`pages/SignIn.tsx`'s own `destination` prop), so
+  // arrived signed out at `/connect/:organizationId`, `/join/:secret` or
+  // `/invitations/:secret` had stashed a `sessionStorage` marker for this
+  // function to read back (`PENDING_CONNECT_ORG_KEY`/`PENDING_JOIN_LINK_KEY`/
+  // `PENDING_INVITATION_KEY`) — which only ever worked while the whole round
+  // trip stayed in the one browsing context that set it, and a sign-in link
+  // arrives by email, which a mail client typically opens in a fresh one.
+  // All three pages now carry their own destination on the sign-in token
+  // itself instead (`pages/SignIn.tsx`'s own `destination` prop), so
   // `RedeemLink`'s `onRedeemed` hands it to this function directly — the
-  // token's own answer, valid in whichever tab actually redeems it, tried
-  // first, before either `sessionStorage` marker is even read. Re-validated
-  // here regardless of the server's own check: `apps/api` already refuses a
-  // non-same-origin `destination` at request time (`routes/auth.ts`), but
-  // "before anything navigates" is this app's own last checkpoint before it
-  // does (`docs/DECISIONS.md` has this slice's own record of the choice).
+  // token's own answer, valid in whichever tab actually redeems it. No
+  // `sessionStorage` fallback is read here any more: every path that once
+  // needed one now carries its own destination on the token (rework, found
+  // in review — `Invitation.tsx`'s own `PENDING_INVITATION_KEY` was the one
+  // of the three this app's own AUTH-6 slice left behind; `docs/DECISIONS.md`
+  // has the fuller account). Re-validated here regardless of the server's
+  // own check: `apps/api` already refuses a non-same-origin `destination` at
+  // request time (`routes/auth.ts`), but "before anything navigates" is this
+  // app's own last checkpoint before it does (`docs/DECISIONS.md` has this
+  // slice's own record of the choice).
   //
-  // ENRL-10's `/invitations/:secret` (`Invitation.tsx`'s own
-  // `PENDING_INVITATION_KEY`) is untouched by this rework — out of scope for
-  // this slice's brief — so it keeps the original `sessionStorage` device,
-  // and the identical same-tab-only limitation `docs/SPEC.md`'s AUTH-6 named
-  // for the two that were fixed.
+  // `PENDING_CONNECT_ORG_KEY` (`Connect.tsx`) keeps its one remaining job —
+  // the Discord OAuth round trip, a same-tab redirect this app itself
+  // initiates (`window.location.assign`), never an emailed link a mail
+  // client might open elsewhere — and is not read here at all: `onConnected`
+  // (below) navigates on the argument `DiscordCallback` already hands it,
+  // the same "stop reading state that might be gone by the time this fires"
+  // fix that callback's own history already needed once (see this file's own
+  // comment on it, below).
   const returnToShell = useCallback(
     (destination?: string) => {
       if (destination && isSameOriginPath(destination)) {
@@ -165,17 +174,8 @@ export function App() {
         return
       }
 
-      const pendingInvitationSecret = sessionStorage.getItem(
-        PENDING_INVITATION_KEY
-      )
-      if (pendingInvitationSecret) {
-        const target = `/invitations/${pendingInvitationSecret}`
-        window.history.replaceState(null, '', target)
-        setPath(target)
-      } else {
-        goToRoot()
-        setPath('/')
-      }
+      goToRoot()
+      setPath('/')
       refreshSession()
     },
     [refreshSession]

@@ -60,13 +60,23 @@ export interface ModelRequest {
    *
    * `personIdentifier` is the genuinely opaque half — `person_identities.
    * externalId` on this request's surface, embedded only in the upstream
-   * conversation's own metadata (`{"user_id": ...}`, matching
-   * `response_bot.py`'s own field, MDL-4), never in content a later turn's
-   * model call reads back. Nothing in this platform (or the model)
-   * interprets it; it exists so a later transcript read — an operator on
-   * the provider's own dashboard, not a person this platform answers — can
-   * trace a stored conversation back to the identity that opened it. `null`
-   * when the person has no identity on this request's surface.
+   * conversation's own metadata (`{"user_id": ...}`, MDL-4), never in
+   * content a later turn's model call reads back. Nothing in this platform
+   * (or the model) interprets it; it exists so a later transcript read — an
+   * operator on the provider's own dashboard, not a person this platform
+   * answers — can trace a stored conversation back to the identity that
+   * opened it. `null` when the person has no identity on this request's
+   * surface.
+   *
+   * The *field* matches `response_bot.py`'s own `metadata={"user_id": ...}`;
+   * the *value* deliberately no longer does (D-70, docs/DECISIONS.md).
+   * `response_bot.py:269` sent Discord's own mention token, angle brackets
+   * and all, as that value; this sends the bare identity, unwrapped, on
+   * every surface including Discord — the raw form is the more useful
+   * metadata value (it is never rendered to anyone, so there is nothing
+   * wrapping it for), but it is a real discontinuity: an operator filtering
+   * the provider's own dashboard by a legacy, mention-shaped `user_id` will
+   * not match a conversation created from this slice on.
    */
   personIdentifier: string | null
   /**

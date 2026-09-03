@@ -17,7 +17,6 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
-import { PENDING_INVITATION_KEY } from '../src/pages/Invitation.js'
 
 // `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
 // — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
@@ -410,7 +409,6 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeInTheDocument()
-    expect(sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe('secret-abc')
   })
 
   it('signed in, redeems the invitation rather than rendering the ordinary shell', async () => {
@@ -444,14 +442,23 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // ENRL-10, the same LINK-6 rework reasoning `/join/:secret`'s own
-  // identical case gives, above: a visitor who arrived at
-  // `/invitations/:secret` signed out (`Invitation.tsx`'s own
-  // `PENDING_INVITATION_KEY`) must return to that same invitation, not the
-  // shell, once a sign-in redemption completes.
-  it('a sign-in redemption returns to the pending invitation, not straight to the shell', async () => {
-    sessionStorage.setItem(PENDING_INVITATION_KEY, 'secret-abc')
-    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+  // AUTH-6, rework — found in review: this used to be the one entry point
+  // AUTH-6 left behind, still returning through a same-tab-only
+  // `sessionStorage` marker (`PENDING_INVITATION_KEY`) this test used to
+  // stash itself before rendering. Rewritten to the identical shape
+  // `/connect/:organizationId` and `/join/:secret` above already prove
+  // AUTH-6 by: no `sessionStorage` write happens anywhere in this test at
+  // all — `destination` comes only from the redeemed token
+  // (`redeemSignInLink`'s own mocked response), which is exactly what
+  // proves this no longer depends on anything this same browsing context
+  // wrote earlier (this file's own stand-in for AUTH-6's cross-tab case;
+  // the real thing is `e2e/membership-invitation-panel.spec.ts`'s own
+  // two-tab scenario, below).
+  it('a sign-in redemption returns to the invitation the token itself named, not straight to the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/invitations/secret-abc',
+    })
     redeemMembershipInvitation.mockReturnValue(new Promise(() => undefined))
     fetchMe.mockResolvedValue({
       account: {

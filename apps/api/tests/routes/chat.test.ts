@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
+import type { ModelAnswer, ModelClient, ModelRequest } from '@bloombot/core'
 import {
   conversations,
   courses,
@@ -481,6 +482,54 @@ describe('routes/chat.ts (WEB-10)', () => {
       .send({ text: 'When is the midterm?' })
     expect(model.calls[2]?.addressAs).toBeNull()
     expect(model.calls[2]?.addressAs).not.toBe(discordPersonId)
+  })
+
+  /**
+   * CORE-7/CORE-8, over HTTP — the reported defect, reproduced and proven
+   * fixed against the exact response body a browser reads, not an
+   * intermediate value. Rework, found in review: `e2e/chat.spec.ts`'s own
+   * two assertions on this look like they pin the fix but do not —
+   * `e2e/support/fake-model-client.ts` is a static fixture that ignores
+   * `request.addressAs` entirely, so those assertions pass with the defect
+   * fully present (confirmed: reverting `answer.ts`'s `addressAs`
+   * computation and rerunning that spec still passes). This test is the
+   * cheaper, genuine proof at the HTTP layer this app's own test suite can
+   * give — an `EchoingModelClient` that behaves the way a course prompt
+   * written for Discord actually does (addresses the reader at the front of
+   * its own reply, the same mechanism `packages/core/tests/answer.test.ts`'s
+   * own CORE-7/CORE-8 block uses one layer down).
+   */
+  class EchoingModelClient implements ModelClient {
+    calls: ModelRequest[] = []
+    async ask(request: ModelRequest): Promise<ModelAnswer> {
+      this.calls.push(request)
+      const prefix = request.addressAs ? `${request.addressAs} - ` : ''
+      return { text: `${prefix}Hello`, upstreamThreadId: null, model: 'echo' }
+    }
+  }
+
+  it('a web reply contains no mention token and no raw account id, in the HTTP response body a student actually receives (CORE-7, CORE-8)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new EchoingModelClient()
+
+    const app = await buildTestApp(testDb.db, { model })
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+
+    expect(response.status).toBe(200)
+    const body = response.body as { result: { text: string } }
+    expect(body.result.text).toBe('Hello')
+    expect(body.result.text).not.toContain('<@')
+    expect(body.result.text).not.toContain(caller.accountId)
+    expect(body.result.text).not.toContain(discordPersonId)
   })
 
   it('an empty question is refused as invalid input before it ever reaches the model', async () => {

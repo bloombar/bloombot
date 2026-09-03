@@ -8,13 +8,27 @@
  * actually names what went wrong for the link they hold.
  *
  * Signed out, this page asks the visitor to sign in first — the same
- * `SignIn` screen every other entry point uses — and stashes the secret
- * (`PENDING_INVITATION_KEY`, `sessionStorage`) so a returning sign-in lands
- * back on this exact invitation rather than the ordinary shell (`App.tsx`'s
- * own `returnToShell`), the identical `sessionStorage`-marker device
- * `JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY` already uses (that page's own
- * module comment has the full reasoning, including why a `sessionStorage`
- * marker and not a `?next=` URL parameter).
+ * `SignIn` screen every other entry point uses — passing this exact page's
+ * own path as `SignIn`'s `destination` prop (AUTH-6), so a returning sign-in
+ * lands back on this exact invitation rather than the ordinary shell
+ * (`App.tsx`'s own `returnToShell`), **regardless of which browsing context
+ * redeems it**: the destination is carried on the sign-in token itself
+ * (`@bloombot/auth`'s `tokens.ts`/`sign-in.ts`), not in `sessionStorage`.
+ *
+ * Rework, found in review — this page used to be the one entry point AUTH-6
+ * left behind: it stashed a `PENDING_INVITATION_KEY` `sessionStorage`
+ * marker instead, the exact same-tab-only device AUTH-6 retired
+ * `PENDING_JOIN_LINK_KEY` for (that page's own module comment has the full
+ * "a sign-in link arrives by email, and a mail client typically opens it in
+ * a fresh tab, which has no marker to read" reasoning) — an invitation is
+ * emailed the identical way a join link is, so it carried the identical
+ * defect: an owner invites a colleague, the colleague opens the invitation
+ * email in a new tab, signs in there, and lands on the plain shell with no
+ * membership and no explanation, because the tab that set the marker was
+ * never the one the sign-in link redeemed in. Moved onto the same
+ * token-carried mechanism `JoinLink.tsx`/`Connect.tsx` already use, rather
+ * than inventing a second fix for one defect — `docs/DECISIONS.md` has this
+ * rework's own record.
  *
  * Signed in, it redeems once, on mount — the same "opening the link is the
  * action" shape `JoinLink.tsx`/`RedeemLink.tsx` both already use, including
@@ -37,9 +51,6 @@ import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { SignIn } from './SignIn.js'
 
-/** Set the moment this page mounts signed out, and read back by `App.tsx`'s own `returnToShell` — the same round-trip-surviving device `pages/JoinLink.tsx`'s `PENDING_JOIN_LINK_KEY` already uses. */
-export const PENDING_INVITATION_KEY = 'bloombot:pendingInvitationSecret'
-
 export interface InvitationProps {
   secret: string
   account: AccountSummary | null
@@ -60,11 +71,10 @@ export function Invitation({
   const redeemedSecretRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    if (!account) {
-      sessionStorage.setItem(PENDING_INVITATION_KEY, secret)
-      return
-    }
-    sessionStorage.removeItem(PENDING_INVITATION_KEY)
+    // Signed out: `SignIn` (below) takes over — nothing is redeemed until
+    // an account actually exists to bind it to (the same split
+    // `JoinLink.tsx`'s own identical effect draws).
+    if (!account) return
 
     if (redeemedSecretRef.current === secret) return
     redeemedSecretRef.current = secret
@@ -76,7 +86,9 @@ export function Invitation({
   }, [account, secret])
 
   if (!account) {
-    return <SignIn onSignedIn={onSignedIn} />
+    return (
+      <SignIn onSignedIn={onSignedIn} destination={`/invitations/${secret}`} />
+    )
   }
 
   if (state.kind === 'error') {

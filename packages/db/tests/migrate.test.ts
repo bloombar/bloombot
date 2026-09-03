@@ -114,6 +114,22 @@ describe('runMigrations', () => {
       'revoked_by_account_id',
       'role',
     ])
+    // ENRL-12 — `secret_ciphertext`/`secret_nonce`/`secret_auth_tag` added by
+    // this slice, all three nullable together (this schema's own doc
+    // comment above `courseJoinLinks`).
+    expect(schema.course_join_links).toEqual([
+      'course_id',
+      'created_at',
+      'created_by_account_id',
+      'expires_at',
+      'id',
+      'organization_id',
+      'revoked_at',
+      'secret_auth_tag',
+      'secret_ciphertext',
+      'secret_hash',
+      'secret_nonce',
+    ])
     expect(schema.discord_server_bindings).toEqual([
       'installed_at',
       'installed_by_account_id',

@@ -154,6 +154,34 @@ describe('membershipInvitations.create (ENRL-10)', () => {
       )
     ).rejects.toThrow(ActionInputError)
   })
+
+  // Carried-over cheap-fix: `createInputSchema`'s own `expiresAt` doc
+  // comment already claims this "mirrors `courseJoinLinks.create`'s own
+  // `expiresAt` exactly, including its own 'must be strictly in the future'
+  // refinement," but nothing pinned it here — `course-join-links.test.ts`'s
+  // own "refuses creating a join link whose expiresAt is already in the
+  // past" had no counterpart in this file. Without the `.refine`, this call
+  // succeeds and returns a plaintext secret that can never be redeemed
+  // (`redeemMembershipInvitation`'s own expiry check refuses anything at or
+  // before `now`) — a confusing way to fail an owner never sees the reason
+  // for, the same trap `courseJoinLinks.create`'s own rework finding 7
+  // closed.
+  it('refuses creating an invitation whose expiresAt is already in the past', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId } = seedOwner(testDb.db)
+
+    await expect(
+      dispatch(
+        createMembershipInvitationAction,
+        {
+          email: 'colleague@example.edu',
+          role: 'instructor',
+          expiresAt: 1,
+        },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionInputError)
+  })
 })
 
 describe('membershipInvitations.list (ENRL-10)', () => {

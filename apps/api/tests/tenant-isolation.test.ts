@@ -211,6 +211,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/courseJoinLinks.create',
         'POST /organizations/:organizationId/actions/courseJoinLinks.list',
         'POST /organizations/:organizationId/actions/courseJoinLinks.revoke',
+        // ENRL-12 — added by this slice.
+        'POST /organizations/:organizationId/actions/courseJoinLinks.reveal',
         'POST /organizations/:organizationId/actions/enrolments.listForPerson',
         'POST /organizations/:organizationId/actions/enrolments.checkAccess',
         'POST /organizations/:organizationId/actions/enrolments.end',

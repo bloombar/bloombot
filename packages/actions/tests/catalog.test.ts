@@ -118,6 +118,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courseJoinLinks.create',
         'courseJoinLinks.list',
         'courseJoinLinks.revoke',
+        // ENRL-12 — added by this slice.
+        'courseJoinLinks.reveal',
         'enrolments.listForPerson',
         'enrolments.checkAccess',
         'enrolments.end',

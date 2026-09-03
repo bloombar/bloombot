@@ -1004,10 +1004,20 @@ export const enrolments = sqliteTable(
 )
 
 // ENRL-3/ENRL-4 — a course join link: an instructor-issued admission
-// decision a student redeems. `secretHash` only, never the plaintext value —
+// decision a student redeems. `secretHash` is what redemption looks up —
 // the same "returned once, stored only as a hash" shape `sign_in_tokens`
 // already uses (AUTH-1), for the same reason: a claim link is a bearer
-// secret, and a stolen database row must not be able to replay it.
+// secret, and a stolen database row must not be able to replay it. Hashing
+// is not searchable, so it cannot also be *shown back* to an instructor who
+// lost the link — ENRL-12 adds a second, independent copy for exactly that:
+// `secretCiphertext`/`secretNonce`/`secretAuthTag`, an AES-256-GCM
+// encryption of the same secret under a key that lives in the environment,
+// never this database (`@bloombot/actions`' `course-join-links.ts` is where
+// both the hash and the ciphertext are computed — this table only stores
+// what it is given). All three are nullable together, never independently:
+// null on every row created before this shipped (nothing to reveal, ENRL-12's
+// own deployment-compatibility promise) and on any row created while no key
+// was configured, regardless of how many rows *do* carry one.
 // `revokedAt` is nullable and never un-set — ENRL-4's "revoking does not
 // un-enrol anybody" is a fact about `repos/enrolments.ts` (it never reads
 // this table at all), not something this column has to express by itself;
@@ -1023,6 +1033,14 @@ export const courseJoinLinks = sqliteTable('course_join_links', {
     .notNull()
     .references(() => courses.id),
   secretHash: text('secret_hash').notNull().unique(),
+  // ENRL-12 — base64: ciphertext, the 12-byte GCM nonce, and the 16-byte
+  // auth tag, each stored alongside rather than derived, since a nonce must
+  // never be regenerated (it would no longer match what encrypted the
+  // ciphertext) and the tag is what makes a tampered ciphertext fail to
+  // decrypt rather than silently return garbage.
+  secretCiphertext: text('secret_ciphertext'),
+  secretNonce: text('secret_nonce'),
+  secretAuthTag: text('secret_auth_tag'),
   // Nullable — a link with no expiry is valid until revoked, the same
   // "nullable means not configured" reading `courses.maxRequestsPerDay`'s
   // own comment gives a nullable column elsewhere in this schema.

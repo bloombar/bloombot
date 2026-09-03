@@ -134,6 +134,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // organization id in advance, which every dispatched action here is
   // given.
   'courseJoinLinks.revoke': { resource: 'courseJoinLink', access: 'write' },
+  // ENRL-12: resolves the link itself, write — literally `.revoke`'s own
+  // policy object (`actions/course-join-links.ts`'s own doc comment on
+  // `createRevealCourseJoinLinkAction`), reused rather than duplicated so
+  // the two gates cannot drift apart under a future edit to either alone.
+  'courseJoinLinks.reveal': { resource: 'courseJoinLink', access: 'write' },
   // ENRL-2: resolves the person whose enrolments are being listed, read.
   'enrolments.listForPerson': { resource: 'person', access: 'read' },
   // ENRL-2: the policy *is* the check — it resolves the active enrolment

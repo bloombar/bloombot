@@ -31,7 +31,7 @@
  * already resolved; this file makes no Discord call of its own.
  */
 
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import * as courses from './courses.js'
@@ -87,6 +87,51 @@ export function getEnrolment(
       )
     )
     .get()
+}
+
+/**
+ * ENRL-6/ENRL-8 rework: does `personId` hold an *ended* enrolment for
+ * `courseId` — distinct from `getActiveEnrolment` (which only ever finds a
+ * live one) and from `admit`'s own module-private `priorEnded` check (which
+ * is keyed on the exact `personId` a caller is about to admit, not any
+ * other person who might be the same human under a different identity).
+ *
+ * `repos/course-join-links.ts#redeemJoinLinkForWebAccount` calls this before
+ * minting a *second* person for a signed-in web account that has no
+ * identity in the link's own organization yet: `reviveEnded: false` on
+ * `enrolViaJoinLink` (above) only ever protects a `(course, person)` pairing
+ * that already exists, so a person who was ended under a *different*
+ * identity (their Discord person, say) is invisible to it — the fresh
+ * person that function is about to create has never been enrolled in
+ * anything, ended or otherwise. This lets that caller check the *other*
+ * person the same human's verified email already names, before deciding
+ * whether to mint a new one at all.
+ *
+ * `db` accepts `Executor`, not just `Database`, for the same reason
+ * `getPerson`'s own doc comment gives: a caller inside its own
+ * `db.transaction(...)` callback has a `tx` that does not satisfy
+ * `Database` itself.
+ */
+export function hasEndedEnrolment(
+  organizationId: string,
+  courseId: string,
+  personId: string,
+  db: Executor
+): boolean {
+  return (
+    db
+      .select({ id: enrolments.id })
+      .from(enrolments)
+      .where(
+        and(
+          eq(enrolments.organizationId, organizationId),
+          eq(enrolments.courseId, courseId),
+          eq(enrolments.personId, personId),
+          isNotNull(enrolments.endedAt)
+        )
+      )
+      .get() !== undefined
+  )
 }
 
 /**
@@ -287,17 +332,35 @@ function admit(
 
 /**
  * ENRL-3: enrol via a redeemed course join link — called by
- * `repos/course-join-links.ts#redeemJoinLink`, once it has already validated
- * the link itself, inside the same transaction (rework finding 6).
+ * `repos/course-join-links.ts#redeemJoinLink` and
+ * `#redeemJoinLinkForWebAccount`, once either has already validated the link
+ * itself, inside the same transaction (rework finding 6).
  *
- * `reviveEnded: true` — redeeming a link is a deliberate, caller-initiated
- * admission (the redeemer presented a secret somebody handed them), not this
- * platform's own idempotent housekeeping the way a roster re-import is
- * (`enrolViaRoster`, below) — an instructor handing the same link back to a
- * student they had previously ended is exactly the "a caller actually means
- * to re-admit this person" case ENRL-6's "ended, not deleted" was written to
- * allow back in, so a prior ended enrolment for this course does not block a
- * fresh one here.
+ * `reviveEnded: false` (ENRL-6/ENRL-8 rework, reversed from `true`) — this
+ * function's own prior reasoning was "redeeming a link is a deliberate,
+ * caller-initiated admission… an instructor handing the same link back to a
+ * student they had previously ended is exactly the case ENRL-6 was written
+ * to allow back in." That premise held only while `redeemJoinLink` had no
+ * live caller (D-55's own "correct and tested, but nothing outside a test
+ * ever called it"): once ENRL-8 wired a real route to it, the caller
+ * redeeming is never the instructor — it is whoever holds the secret, which
+ * ENRL-3 deliberately shares with an entire class. An instructor ending one
+ * student's enrolment (ENRL-6) does not revoke the link, so that same
+ * student re-submitting the identical, still-live secret they already had
+ * is not a new instructor decision at all; it is the removed person
+ * undoing ENRL-6 by themselves, with the class's shared secret standing in
+ * for a re-admission nobody actually made. This is the identical shape D-35
+ * rework finding 5 already fixed for `enrolViaDiscordRole` below — an
+ * ambient credential the person already holds (there, a Discord role; here,
+ * a shared link) must not undo an instructor's decision on its own — so
+ * this function now makes the same choice, for the same reason: a person an
+ * instructor has explicitly ended stays ended until an instructor
+ * re-admits them through a caller that actually means to (see
+ * `docs/DECISIONS.md` for this rework's own record, and this file's
+ * "Limits": nothing in this package currently exposes that
+ * instructor-initiated re-admission action — a future one should call
+ * `admit` with `reviveEnded: true` explicitly, the same way every choice in
+ * this file is stated, not assumed).
  */
 export function enrolViaJoinLink(
   organizationId: string,
@@ -309,7 +372,7 @@ export function enrolViaJoinLink(
     input.courseId,
     input.personId,
     'join_link',
-    true,
+    false,
     db
   )
 }

@@ -711,3 +711,335 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
     expect(people.listPeople(organizationId, testDb.db)).toHaveLength(0)
   })
 })
+
+// ENRL-6/ENRL-8 rework — a join link redeemed by the same person a second
+// time, after an instructor has ended their enrolment, must not un-end it.
+// Reproduced originally over HTTP: instructor issues a link, a student
+// redeems it, the instructor ends that enrolment, and the student re-POSTs
+// the same unchanged secret — see `docs/DECISIONS.md` for the full
+// reproduction and this rework's own record.
+describe('course-join-links repo — an ended enrolment is not self-revivable (ENRL-6/ENRL-8 rework)', () => {
+  // Path 1: the redeemer's own identity in the link's organization did not
+  // change between the two redemptions (`redeemJoinLink`'s own
+  // `callerAssertedPersonId`, unchanged). Fails without the fix: before
+  // `enrolViaJoinLink` was reversed to `reviveEnded: false`, the second
+  // redemption produced a fresh active enrolment for `person`.
+  it('redeemJoinLink does not revive an ended enrolment for the same person on a second redemption', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const first = courseJoinLinks.redeemJoinLink(
+      'hash-1',
+      person.id,
+      Date.now(),
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: first redemption should succeed')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = courseJoinLinks.redeemJoinLink(
+      'hash-1',
+      person.id,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // Path 1, over the web-account entry point (ENRL-8's own live caller, and
+  // the exact HTTP reproduction this rework's brief names): the same
+  // account redeems, is removed, and re-POSTs the identical secret. Fails
+  // without the fix for the identical reason as the test above —
+  // `enrolViaJoinLink`'s own `reviveEnded`.
+  it('redeemJoinLinkForWebAccount does not revive an ended enrolment for the same account on a second redemption', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const first = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: first redemption should succeed')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person?.id ?? '',
+        testDb.db
+      )
+    ).toBeUndefined()
+    // Still exactly the one person this account was ever connected to —
+    // the second redemption did not mint another.
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
+  // Path 2 — the case a fix to `enrolViaJoinLink` alone does not catch: the
+  // ended enrolment belongs to a *Discord* person (no web identity in this
+  // organization yet, so `resolveIdentity` misses), and the redeemer is a
+  // signed-in web account whose verified email matches that person's own
+  // roster-supplied address. Fails without Part 2 of this rework: before
+  // `redeemJoinLinkForWebAccount` checked `findPeopleByEmail`/
+  // `hasEndedEnrolment`, this sequence minted a *second* person for the same
+  // human and admitted it freely — `admit`'s own prior-ended lookup is keyed
+  // on `personId`, and the fresh person it was about to create had never
+  // been enrolled in anything.
+  it("redeemJoinLinkForWebAccount refuses when the account's verified email matches an ended Discord person, rather than minting a second person", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+
+    // The Discord person an instructor already removed — roster-supplied
+    // email in a different case than the account below will use, to prove
+    // the comparison is case-insensitive.
+    const discordPerson = people.createPerson(
+      organizationId,
+      { email: 'Student@Example.edu' },
+      testDb.db
+    )
+    people.connectIdentity(
+      organizationId,
+      discordPerson.id,
+      { surface: 'discord', externalId: 'snowflake-1' },
+      testDb.db
+    )
+    const originalEnrolment = enrolments.enrolViaJoinLink(
+      organizationId,
+      { courseId: course.id, personId: discordPerson.id },
+      testDb.db
+    )
+    if (!originalEnrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, originalEnrolment.id, testDb.db)
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    // A different organization, the same shape a real account's own
+    // personal organization has (TEN-1) — this account has never been a
+    // member of `organizationId` at all.
+    const personalOrgId = randomUUID()
+    organizations.createOrganization(
+      personalOrgId,
+      { name: 'Personal', isPersonal: true },
+      testDb.db
+    )
+    const account = accounts.createAccount(
+      personalOrgId,
+      {
+        email: 'student@example.edu',
+        displayName: 'Student',
+        role: 'owner',
+      },
+      testDb.db
+    )
+
+    const result = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      account.id,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    // No second person was minted for this human, and the original,
+    // removed person's enrolment stays exactly as ended as it was.
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        discordPerson.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // The fix must not cost the ordinary case anything: a person with no
+  // prior enrolment at all — the common case, not the exception — is still
+  // admitted freely, whether or not their email happens to match nobody.
+  it('still admits freely a person with no prior enrolment for this course', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const personalOrgId = randomUUID()
+    organizations.createOrganization(
+      personalOrgId,
+      { name: 'Personal', isPersonal: true },
+      testDb.db
+    )
+    const account = accounts.createAccount(
+      personalOrgId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'New Student',
+        role: 'owner',
+      },
+      testDb.db
+    )
+
+    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      account.id,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('join_link')
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
+  // Unchanged: `enrolViaRoster` is not part of this rework's scope, and a
+  // roster re-import still leaves an ended enrolment exactly as ended as
+  // `packages/db/tests/enrolments.test.ts`'s own "enrolViaRoster does not
+  // revive an ended enrolment" already proves at the repo layer — nothing
+  // here duplicates that; this test only pins down that redeeming a join
+  // link a second time (this rework's actual subject) does not regress it.
+
+  // --- Atomicity: redeemJoinLinkForWebAccount's own resolve-or-create ----
+
+  // Fails without atomicity: the reviewer who found this hoisted the
+  // liveness read out of `redeemJoinLinkForWebAccount`'s own
+  // `db.transaction(...)` — the exact defect `redeemJoinLink`'s own rework
+  // finding 6 test (above) exists to catch — and every other test in this
+  // suite still passed, because none of them race a concurrent revoke
+  // against an in-flight redemption. Spies on `people.createPerson`, not
+  // `people.getPerson`: this function's own "person missing" branch never
+  // calls `getPerson` (only `resolveIdentity`, a raw query, and
+  // `createPerson`), so `redeemJoinLink`'s own `getPerson`-spy device does
+  // not transfer here.
+  it('web-account redemption is atomic: a revoke racing with an in-flight redemption cannot let one more person join', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    const link = courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const secondConnection = openDatabase(testDb.path)
+    const realCreatePerson = people.createPerson
+    const spy = vi
+      .spyOn(people, 'createPerson')
+      .mockImplementationOnce((...args) => {
+        // Fires from inside `redeemJoinLinkForWebAccount`'s own
+        // transaction, after its link-liveness read and before its
+        // enrolment write — exactly the race window an un-transacted
+        // redemption left open.
+        courseJoinLinks.revokeJoinLink(
+          organizationId,
+          link.id,
+          secondConnection
+        )
+        return realCreatePerson(...args)
+      })
+
+    try {
+      courseJoinLinks.redeemJoinLinkForWebAccount(
+        'hash-1',
+        accountId,
+        Date.now(),
+        testDb.db
+      )
+    } catch {
+      // Either outcome — a thrown write-conflict, or a clean `undefined` —
+      // is acceptable here; what this test actually pins down is the
+      // assertion below, which holds either way.
+    } finally {
+      spy.mockRestore()
+      closeDatabase(secondConnection)
+    }
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    expect(
+      person === undefined
+        ? undefined
+        : enrolments.getActiveEnrolment(
+            organizationId,
+            course.id,
+            person.id,
+            testDb.db
+          )
+    ).toBeUndefined()
+    expect(
+      courseJoinLinks.getJoinLink(organizationId, link.id, testDb.db)
+    ).toMatchObject({ revokedAt: expect.any(Number) })
+  })
+})

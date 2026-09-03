@@ -48,12 +48,15 @@ import { importRosterAction } from './roster.js'
 import { organizationUsageAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
+  listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
 } from './course-join-links.js'
 import {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
+  listEnrolmentsForCourseAction,
   listEnrolmentsForPersonAction,
+  reinstateEnrolmentAction,
 } from './enrolments.js'
 import { grantMembershipAction } from './memberships.js'
 import {
@@ -100,14 +103,19 @@ export {
 } from './cost-ledger.js'
 export {
   createCourseJoinLinkAction,
+  listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
   redeemCourseJoinLink,
+  redeemCourseJoinLinkForWebAccount,
   type CreatedCourseJoinLink,
+  type CourseJoinLinkSummary,
 } from './course-join-links.js'
 export {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
+  listEnrolmentsForCourseAction,
   listEnrolmentsForPersonAction,
+  reinstateEnrolmentAction,
 } from './enrolments.js'
 export { grantMembershipAction } from './memberships.js'
 export {
@@ -177,10 +185,13 @@ export function createPlatformRegistry(options?: {
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
   registry.register(createCourseJoinLinkAction)
+  registry.register(listCourseJoinLinksAction)
   registry.register(revokeCourseJoinLinkAction)
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)
+  registry.register(reinstateEnrolmentAction)
+  registry.register(listEnrolmentsForCourseAction)
   registry.register(grantMembershipAction)
   registry.register(readTranscriptAction)
   registry.register(listTranscriptStudentsAction)

@@ -85,6 +85,28 @@ export function describeApiError(error: ApiError): {
         headline: 'That link is no longer valid. Request a new one.',
         details: [],
       }
+    // ENRL-8: `routes/join-links.ts` answers this identically for a secret
+    // that was never issued, one that is revoked, and one that has expired
+    // (ENRL-4's own "no oracle" shape) — this app says the same one thing
+    // for all three, rather than guessing which.
+    case 'join_link_not_found':
+      return {
+        headline: 'That join link is no longer valid. Ask for a new one.',
+        details: [],
+      }
+    // WEB-20 — `components/JoinLinks.tsx`'s own `handleCopy`: not a status
+    // `apps/api` ever sent (no request was made at all), but constructed
+    // the same `ApiError` shape so this one join-link secret — the value
+    // the requirement names as never recoverable if lost — gets the same
+    // visible, worded failure every other refusal in this app already
+    // gets, rather than a silent no-op or an unhandled rejection on a
+    // non-secure origin where `navigator.clipboard` is `undefined`.
+    case 'clipboard_unavailable':
+      return {
+        headline:
+          'Could not copy the link — copy it from the text above by hand.',
+        details: [],
+      }
     case 'origin_refused':
       return { headline: 'That request was refused.', details: [] }
     case 'network_error':

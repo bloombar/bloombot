@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accounts,
   conversations,
   courses,
   enrolments,
@@ -209,10 +210,39 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toBeUndefined()
   })
 
-  // Holding the course's own *admins* role must never admit anyone — ENRL-5's
-  // "a Discord role confers none of them" also means the admin role has no
-  // bearing on enrolment eligibility, only the student one does.
-  it("enrolViaDiscordRole does not admit someone holding only the course's admin role", () => {
+  // ENRL-7: "anyone a course is taught through is enrolled by asking it" —
+  // an admins-role holder (an instructor or TA) is admitted exactly like a
+  // students-role holder, so the web surface (which authorizes on this
+  // table, not a membership) does not refuse the same person Discord just
+  // answered. Fails without the fix: before ENRL-7, `enrolViaDiscordRole`
+  // checked `studentsRole` only, and this call returned `undefined`.
+  it("enrolViaDiscordRole admits someone holding only the course's admin role", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const enrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('discord_role')
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeDefined()
+  })
+
+  it("enrolViaDiscordRole refuses a person holding neither of the course's two roles", () => {
     testDb = createTestDatabase()
     const { organizationId, course } = seedOrganizationWithCourse(testDb)
     const person = people.createPerson(organizationId, {}, testDb.db)
@@ -223,8 +253,49 @@ describe('enrolments repo (ENRL-1..6)', () => {
         {
           courseId: course.id,
           personId: person.id,
-          roleNames: [course.adminsRole],
+          roleNames: ['some-other-role'],
         },
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // ENRL-7's widening never reversed ENRL-6: an admins-role holder an
+  // instructor has explicitly ended stays ended, exactly like a
+  // students-role holder (`enrolViaDiscordRole`'s own `reviveEnded: false`).
+  it("enrolViaDiscordRole does not revive an admin-role holder's ended enrolment", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
         testDb.db
       )
     ).toBeUndefined()
@@ -239,10 +310,13 @@ describe('enrolments repo (ENRL-1..6)', () => {
         'enrolViaJoinLink',
         'enrolViaRoster',
         'endEnrolment',
+        'reinstateEnrolment',
         'getActiveEnrolment',
         'getEnrolment',
+        'hasEndedEnrolment',
         'listCoursesForPerson',
         'listPeopleForCourse',
+        'listEnrolmentsForCourse',
       ].sort()
     )
   })
@@ -311,14 +385,18 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toHaveLength(0)
   })
 
-  // --- Rework finding 3 / cheap-fix 9: reviving an ended enrolment -------
+  // --- Rework finding 3 / cheap-fix 9, and the ENRL-6/ENRL-8 rework -------
 
-  // The load-bearing consequence of the partial unique index
-  // (`enrolments_org_course_person_active_unique`, `schema.ts`'s own
-  // comment): a person who holds an *ended* enrolment can still be admitted
-  // again, as a genuinely new row, through a path that means to revive
-  // them — `enrolViaJoinLink`'s own `reviveEnded: true`.
-  it('re-enrolling through a path that means to revive creates a new, distinct row and leaves the ended one intact', () => {
+  // ENRL-6/ENRL-8 rework — this test used to prove the opposite: that
+  // `enrolViaJoinLink`'s own `reviveEnded: true` created a genuinely new row
+  // for a person an instructor had already ended. That premise held only
+  // while `redeemJoinLink` had no live caller (see `docs/DECISIONS.md`);
+  // once ENRL-8 wired a real, student-initiated redemption route to it, the
+  // same behaviour let the removed person undo their own removal by
+  // re-submitting the class's shared secret. Fails without the fix: before
+  // `enrolViaJoinLink` was reversed to `reviveEnded: false`, redeeming the
+  // same link again after `endEnrolment` produced a brand-new active row.
+  it("enrolViaJoinLink does not revive an ended enrolment — a link redeemed again must not undo an instructor's ENRL-6 decision", () => {
     testDb = createTestDatabase()
     const { organizationId, course } = seedOrganizationWithCourse(testDb)
     const person = people.createPerson(organizationId, {}, testDb.db)
@@ -337,11 +415,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       testDb.db
     )
 
-    expect(second?.id).toBeDefined()
-    expect(second?.id).not.toBe(first.id)
-    expect(
-      enrolments.getEnrolment(organizationId, first.id, testDb.db)
-    ).toMatchObject({ endedAt: expect.any(Number) })
+    expect(second).toBeUndefined()
     expect(
       enrolments.getActiveEnrolment(
         organizationId,
@@ -349,11 +423,17 @@ describe('enrolments repo (ENRL-1..6)', () => {
         person.id,
         testDb.db
       )
-    ).toMatchObject({ id: second?.id })
+    ).toBeUndefined()
+    // The original row is still there, still ended — not deleted, not
+    // reactivated.
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })
   })
 
-  // A roster re-import must not do what the test above proves
-  // `enrolViaJoinLink` deliberately does — reviving an ended enrolment.
+  // A roster re-import does not revive an ended enrolment either —
+  // `enrolViaRoster`'s own `reviveEnded: false` is unchanged by this
+  // rework (the brief for it explicitly leaves this function alone).
   // Fails without the fix: before `admit` gained `reviveEnded`, this same
   // call sequence produced a brand-new active row here too, silently
   // undoing the `endEnrolment` call an instructor made on purpose (ENRL-6).
@@ -481,6 +561,374 @@ describe('enrolments repo (ENRL-1..6)', () => {
     expect(
       enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
     ).toBe(0)
+  })
+
+  // --- ENRL-9: reinstating an ended enrolment -----------------------------
+
+  it('reinstates an ended enrolment, restoring active access and recording who and when', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      enrolment.id,
+      { reinstatedByAccountId: instructor.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(1)
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeDefined()
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: null,
+      reinstatedByAccountId: instructor.id,
+      reinstatedAt: expect.any(Number),
+    })
+  })
+
+  it('reinstating an enrolment that is not ended is an idempotent no-op — nothing changes', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor2@example.edu',
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      enrolment.id,
+      { reinstatedByAccountId: instructor.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(0)
+    // Never-ended, never-reinstated — this call left it exactly as it was.
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: null,
+      reinstatedByAccountId: null,
+      reinstatedAt: null,
+    })
+  })
+
+  it("reinstateEnrolment refuses another organization's enrolment (TEN-5)", () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(orgA, {}, testDb.db)
+    const outsider = accounts.createAccount(
+      orgB,
+      { email: 'outsider@example.edu', displayName: 'Outsider', role: 'owner' },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(orgA, enrolment.id, testDb.db)
+
+    const changed = enrolments.reinstateEnrolment(
+      orgB,
+      enrolment.id,
+      { reinstatedByAccountId: outsider.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(0)
+    expect(
+      enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // Must-fix (rework): `reinstateEnrolment`'s own doc comment used to claim
+  // "there is never more than one row for a given pairing once any
+  // `enrolVia*` has run" — false. `people.mergePeople` reaches exactly the
+  // opposite shape whenever a loser's own enrolment for a course is
+  // *already ended* before the merge: that branch moves the row's
+  // `personId` onto the survivor outright, with no check for whether the
+  // survivor already holds an *active* row for the same course
+  // (`people.ts#mergePeople`'s own "no unique constraint to collide with"
+  // reasoning — true for the move itself, since the partial unique index
+  // only restricts active rows, but it leaves the survivor holding both an
+  // active row and this newly-moved ended row for the identical
+  // `(organizationId, courseId, personId)`). Reinstating that moved row
+  // then collides with the survivor's own active one on
+  // `enrolments_org_course_person_active_unique`. Before the fix, this
+  // reached the caller as an unhandled `SQLITE_CONSTRAINT_UNIQUE`.
+  it('reinstating an ended enrolment that collides with an active one after a merge is a clean no-op, not a thrown constraint error', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const account = accounts.createAccount(
+      organizationId,
+      { email: 'merge-owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    // The loser: enrolled, then ended, *before* the merge — the branch
+    // `mergePeople` moves outright with no collision check.
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const loserEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: loser.id },
+      testDb.db
+    )
+    if (!loserEnrolment) throw new Error('setup failed: no loser enrolment')
+    enrolments.endEnrolment(organizationId, loserEnrolment.id, testDb.db)
+
+    // The survivor: already actively enrolled in the same course.
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const survivorEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: survivor.id },
+      testDb.db
+    )
+    if (!survivorEnrolment)
+      throw new Error('setup failed: no survivor enrolment')
+
+    const merge = people.mergePeople(
+      organizationId,
+      survivor.id,
+      loser.id,
+      testDb.db
+    )
+    if (!merge) throw new Error('setup failed: merge refused')
+
+    // The moved row now shares (organizationId, courseId, personId) with
+    // the survivor's own still-active enrolment.
+    const movedLoserEnrolment = enrolments.getEnrolment(
+      organizationId,
+      loserEnrolment.id,
+      testDb.db
+    )
+    expect(movedLoserEnrolment).toMatchObject({
+      personId: survivor.id,
+      courseId: course.id,
+      endedAt: expect.any(Number),
+    })
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        survivor.id,
+        testDb.db
+      )?.id
+    ).toBe(survivorEnrolment.id)
+
+    // Reinstating the moved, now-colliding row is a clean no-op — not a
+    // thrown `SQLITE_CONSTRAINT_UNIQUE`.
+    expect(() =>
+      enrolments.reinstateEnrolment(
+        organizationId,
+        loserEnrolment.id,
+        { reinstatedByAccountId: account.id },
+        testDb.db
+      )
+    ).not.toThrow()
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      loserEnrolment.id,
+      { reinstatedByAccountId: account.id },
+      testDb.db
+    )
+    expect(changed).toBe(0)
+
+    // Nothing changed: the moved row is still ended, still unreinstated,
+    // and the survivor's original active row is still the only active one.
+    expect(
+      enrolments.getEnrolment(organizationId, loserEnrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: expect.any(Number),
+      reinstatedByAccountId: null,
+    })
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        survivor.id,
+        testDb.db
+      )?.id
+    ).toBe(survivorEnrolment.id)
+  })
+
+  // --- WEB-22: the panel's own listing, active and ended alike -----------
+
+  it('listEnrolmentsForCourse includes both an active and an ended enrolment, with source and endedAt', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const active = people.createPerson(
+      organizationId,
+      { displayName: 'Ada Lovelace' },
+      testDb.db
+    )
+    const ended = people.createPerson(
+      organizationId,
+      { displayName: 'Bob Babbage' },
+      testDb.db
+    )
+    const activeEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: active.id },
+      testDb.db
+    )
+    const endedEnrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: ended.id,
+        roleNames: [course.studentsRole],
+      },
+      testDb.db
+    )
+    if (!activeEnrolment || !endedEnrolment) {
+      throw new Error('setup failed: no enrolment')
+    }
+    enrolments.endEnrolment(organizationId, endedEnrolment.id, testDb.db)
+
+    const listed = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(listed).toHaveLength(2)
+    const activeRow = listed.find((row) => row.personId === active.id)
+    const endedRow = listed.find((row) => row.personId === ended.id)
+    expect(activeRow).toMatchObject({
+      source: 'roster',
+      endedAt: null,
+    })
+    expect(endedRow).toMatchObject({
+      source: 'discord_role',
+      endedAt: expect.any(Number),
+    })
+  })
+
+  // Cheap-fix (rework): without deduping by person, the merge shape above
+  // (a survivor holding both an active row and a stray, moved-in ended row
+  // for the same course) listed the survivor twice — once per row — with a
+  // "Reinstate" offered on the stray row that could only ever no-op.
+  it('listEnrolmentsForCourse lists a person at most once, even when a merge leaves them with two rows for the same course', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+
+    const loser = people.createPerson(
+      organizationId,
+      { displayName: 'Loser' },
+      testDb.db
+    )
+    const loserEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: loser.id },
+      testDb.db
+    )
+    if (!loserEnrolment) throw new Error('setup failed: no loser enrolment')
+    enrolments.endEnrolment(organizationId, loserEnrolment.id, testDb.db)
+
+    const survivor = people.createPerson(
+      organizationId,
+      { displayName: 'Survivor' },
+      testDb.db
+    )
+    const survivorEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: survivor.id },
+      testDb.db
+    )
+    if (!survivorEnrolment) {
+      throw new Error('setup failed: no survivor enrolment')
+    }
+
+    const merge = people.mergePeople(
+      organizationId,
+      survivor.id,
+      loser.id,
+      testDb.db
+    )
+    if (!merge) throw new Error('setup failed: merge refused')
+
+    const listed = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    // Exactly one row for the survivor — the active one, not the stray
+    // ended row the merge moved onto them.
+    const survivorRows = listed.filter((row) => row.personId === survivor.id)
+    expect(survivorRows).toHaveLength(1)
+    expect(survivorRows[0]).toMatchObject({
+      id: survivorEnrolment.id,
+      endedAt: null,
+    })
+  })
+
+  it("listEnrolmentsForCourse is scoped to this organization's course — a foreign organization sees none of it", () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(orgA, {}, testDb.db)
+    enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(
+      enrolments.listEnrolmentsForCourse(orgB, courseA.id, testDb.db)
+    ).toEqual([])
+    expect(
+      enrolments.listEnrolmentsForCourse(orgA, courseA.id, testDb.db)
+    ).toHaveLength(1)
   })
 
   // --- Tenant scoping (TEN-2/TEN-5) ---------------------------------------

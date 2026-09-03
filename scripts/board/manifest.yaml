@@ -2781,3 +2781,105 @@
   phase: 15
   status: Done
   review: false
+- id: ENRL-7
+  title: Anyone a course is taught through is enrolled by asking it
+  full: CORE-2 routes a message to a course when its author holds either of that
+    course's two Discord roles — its admins role or its students role — but only
+    a students-role holder is ever admitted to the enrolment relation. An
+    instructor or teaching assistant therefore holds a conversation on Discord
+    that the platform has no enrolment record of, and the web surface, which
+    authorizes on an active enrolment rather than a membership (WEB-10), refuses
+    the same person the Discord surface just answered. Asking a course through a
+    channel it is taught in enrols the asker, whichever of the two roles carried
+    them there, so that one person's access does not depend on which surface
+    they happened to use first.…
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 16
+  status: In review
+  review: false
+- id: ENRL-8
+  title: A join link enrols whoever redeems it, and only them
+  full: "ENRL-3 gives an instructor a shareable course join link and
+    redeemJoinLink to spend it, but nothing calls that function: there is no
+    route, no screen, and no way for a student to redeem one. The function takes
+    the person to enrol as an argument it cannot verify, and its own
+    documentation names the trap — a link is deliberately shared with a whole
+    class, so presenting the secret proves nothing about who is presenting it,
+    and a route that took a person id from the request body would let anyone
+    holding the link enrol anybody in the tenant. Redemption binds to the
+    caller's own authenticated identity and never to a name they supply. A
+    visitor who is not signed in is asked to sign in first and…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 16
+  status: In review
+  review: false
+- id: ENRL-9
+  title: An enrolment an instructor ended can be reinstated by an instructor
+  full: "ENRL-6 lets an instructor stop a person asking a course, and closing
+    ENRL-8's self-service bypass made that decision genuinely stick: no
+    admission path revives an ended enrolment any more — not a join link, not a
+    roster row, not a Discord role. That is correct, and it leaves an instructor
+    who ended the wrong enrolment, or ended one a student has since appealed,
+    with no way to undo it. A decision that can be made and never unmade is not
+    an access control, it is a trap. Reinstating is an instructor-initiated act,
+    recorded the way granting a membership already is (ENRL-5): who did it and
+    when. It is deliberately not something the reinstated person can trigger,
+    which is the whole distinction…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 16
+  status: In review
+  review: false
+- id: WEB-20
+  title: A course's join links are issued and copied from the panel
+  full: "ENRL-3 and ENRL-4 give a course shareable join links that are revocable
+    and optionally expiring, and the actions to create and revoke them exist,
+    but no screen ever offered either — so the one way to admit a student who is
+    not already carrying a Discord role does not exist in practice. The course
+    screen issues a join link, shows its full URL once at creation with a
+    control that copies it, and lists the links a course currently has with when
+    each expires and whether it is revoked. The secret is shown once and never
+    again, because it is stored only as a hash and the panel cannot recover what
+    it did not keep. Revoking is behind a confirmation and says plainly what it
+    does and does not do: it…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 16
+  status: In review
+  review: false
+- id: WEB-21
+  title: A roster is imported from the panel, with its format stated on the screen
+  full: "ROST-9 through ROST-12 parse an instructor's roster CSV, enrol each row
+    and report what could not be done, and roster.import enqueues that job — but
+    no screen ever offered it, so the capability was reachable only by
+    dispatching an action by hand. The course screen takes a roster through a
+    large drop zone that also accepts a click, and states the file's required
+    format on the screen rather than in documentation the instructor does not
+    have open: the five columns it reads, which are required and which may be
+    blank, and a worked example row. The screen shows the import's progress
+    while it runs and its report when it finishes, including every row that
+    could not be parsed with the line number it…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 16
+  status: In review
+  review: false
+- id: WEB-22
+  title: A course's people are visible in the panel, and admission is reversible there
+  full: "ENRL-2's enrolment relation decides who may ask a course, ENRL-6 ends an
+    enrolment and ENRL-9 reinstates one — and no screen shows any of it.
+    enrolments.end has existed as an action with no surface, so removing a
+    student has only ever been possible by dispatching an action by hand, and
+    the repo cannot even list the people an instructor would be choosing
+    between: listPeopleForCourse returns active enrolments only, so a person who
+    was ended is invisible to every query the panel could make. The course
+    screen lists the people enrolled in that course and the ones whose enrolment
+    has ended, says how each was admitted — a join link, a roster row, or a
+    Discord role — and lets an instructor end an…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 16
+  status: In review
+  review: false

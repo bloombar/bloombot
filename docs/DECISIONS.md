@@ -5577,3 +5577,519 @@ more than one instructor, left open pending a directory read this slice did not 
 while the textarea has an unsaved edit of its own discards that edit (the confirmation names this), which is
 the same trade-off `components/CourseAttachments.tsx`'s own detach confirmation makes for a destructive action
 that replaces what is currently on screen.
+
+---
+
+## D-55 — `packages/db`/`packages/discord`/`apps/api`/`apps/web`: ENRL-7 widens Discord-role enrolment to either role, and ENRL-8 finally wires a join link's redemption to a route and a screen
+
+**Problem.** ENRL-7: `routing.ts#routeMessage` already routes a message to a course for either an admins-role or
+a students-role holder, but `enrolments.ts#enrolViaDiscordRole` only ever admitted the students role
+(D-34/D-35's own explicit, at-the-time-correct scope) — an instructor or TA held a real Discord conversation
+this table had no record of, and `routes/chat.ts`, which authorizes on this table rather than a membership,
+refused the same person Discord had just answered. ENRL-8: `redeemJoinLink` existed, correct and tested
+(D-34's rework finding 4/6), but nothing outside a test ever called it — no route, no screen — and its own doc
+comment names exactly the trap a careless wiring would fall into (a body-supplied `personId` lets anyone
+holding a shared secret enrol anybody in the tenant).
+
+**Choice — ENRL-7 widens the check, not the write.** `enrolViaDiscordRole` now admits a caller holding either
+`course.studentsRole` or `course.adminsRole`; `reviveEnded: false` is untouched, and its own doc comment now
+says explicitly why that reasoning never turned on *which* role was held — an admins-role holder's enrolment is
+just as ambient a re-checked fact as a students-role holder's, so ENRL-6 has to gate both identically.
+`packages/discord/src/handle-mention.ts`'s own `holdsStudentsRole` local (which decided whether a *missing*
+enrolment after the call means "never held the role" or "was ended") is renamed `holdsTeachingRole` and checks
+both roles — otherwise an admins-role-only holder's ended enrolment would silently stop being enforced the
+moment ENRL-7 landed, since `holdsStudentsRole` would stay `false` for them forever. `routeMessage` itself is
+untouched, as the brief for this slice required — it already treated the two roles identically; only admission
+had not caught up.
+
+**Choice — ENRL-8's redemption route lives at `/join-links`, unscoped by `:organizationId`, the same reason
+`/auth` is** (`repos/course-join-links.ts`'s own module comment: a redeemer presents only the secret, not an
+organization id). `POST /join-links/redeem` takes `z.strictObject({ secret })` — never a `personId` — and reads
+the enrolling identity from `req.session.accountId`, the caller's own already-proven session, the same "a
+signed-in web caller *is* the account" reasoning D-37 already established for `routes/chat.ts`.
+`redeemCourseJoinLinkForWebAccount` (`packages/actions`) composes `hashSecret` with a new
+`repos/course-join-links.ts#redeemJoinLinkForWebAccount`, which is not part of `@bloombot/actions`' public
+surface as a dispatched `Action` for the identical reason `redeemCourseJoinLink` is not (D-34): dispatch needs
+an organization id before it runs a single line, and a redeemer has not proven one yet.
+
+**Choice — a person the link's organization has never seen is created and connected inline, in
+`packages/db`, not by calling into `@bloombot/auth`.** `createConnectedWebPerson`/`ensureWebPersonForAccount`
+(`@bloombot/auth`'s `sign-in.ts`) already do exactly this create-then-connect sequence, but `@bloombot/auth`
+depends on `@bloombot/db`, not the other way around — `packages/db`'s own repo layer cannot import it without
+introducing a cycle. `redeemJoinLinkForWebAccount` instead composes the same underlying primitives
+(`people.ts#resolveIdentity`/`createPerson`/`connectIdentity`) directly, inside the identical
+`db.transaction(...)` `redeemJoinLink` already opens (a nested savepoint when called from inside one, per
+`client.ts`'s own `TransactingExecutor`) — the real `connectIdentity` path, never a raw `connectedAt` write,
+and atomic with the link's own liveness check and the enrolment write, so a concurrent revoke cannot land
+between "a person now exists for this account here" and "that person is enrolled." This is the identical
+"small, deliberate duplication over a new cross-package dependency" trade D-34 already chose for this same
+file's own `hashSecret` (a SHA-256 helper duplicated from `@bloombot/auth`'s `secrets.ts` rather than adding a
+dependency for ten lines) — see `repos/course-join-links.ts#redeemJoinLinkForWebAccount`'s own doc comment for
+the full reasoning, and `findLiveJoinLinkByHash` (factored out of `redeemJoinLink`, module-private) for why the
+refusal path costs no extra work, and so no extra timing signal, for a never-issued secret versus a revoked or
+expired one that happens to resolve an organization before failing.
+
+**Choice — the sign-in return path is a `sessionStorage` marker, not a `?next=` URL parameter.** The brief
+named a `redirectTo`/`next` query parameter through the sign-in flow as "the obvious route," which would have
+needed same-origin path validation against `PUBLIC_APP_URL` to avoid becoming an open redirect. This app
+already has a working, established device for the identical problem — `pages/Connect.tsx`'s
+`PENDING_CONNECT_ORG_KEY`, read back by `App.tsx#returnToShell` once a sign-in redemption completes.
+`pages/JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY` is the same device for a join link's own secret:
+`returnToShell` checks it right alongside `PENDING_CONNECT_ORG_KEY` and navigates back to `/join/:secret`
+before falling back to the shell. A second, differently-shaped redirect mechanism for the same problem would
+have been the inconsistency, not an improvement, and it sidesteps the open-redirect risk entirely — nothing
+here ever reads a redirect target out of a URL a caller controls; the target is always this same page's own
+already-trusted `secret` prop. Not overloading `pages/RedeemLink.tsx` (AUTH-1's own sign-in-link page) was a
+hard constraint the brief stated directly, for the same reason: a course join link and a sign-in link are
+different things, and a visitor who followed the wrong one must get a message that actually names what they
+are looking at.
+
+**Rework finding — the front end's own proxy allowlist silently 404'd the new route.**
+`apps/web/vite.config.ts`'s `proxy` object is an explicit allowlist of the top-level path segments `apps/api`
+actually serves (its own comment: "only the paths apps/api actually serves are proxied") — `/join-links` was
+missing from it, so `vite preview`/`vite dev` never forwarded the request to `apps/api` at all, and returned
+its own empty `404` instead of `apps/api`'s `join_link_not_found` JSON body. Every unit and route-level test
+(`supertest` against `apps/api` directly) passed regardless, because none of them go through Vite's proxy —
+only the Playwright e2e spec, which drives a real built `vite preview` in front of a real `apps/api`
+(`playwright.config.ts`'s own module comment), caught it, exactly the class of bug QA-7's "a real front end,
+not a mock" exists to catch. Fixed by adding `/join-links` to the proxy map, with the same "a proxied API path
+and a page path must never share one top-level segment" comment `/admin`/`/platform-admin` already state for
+themselves — `/join-links` (API) and `/join/:secret` (page) do not collide.
+
+**Limits.** The panel's own join-link issuing/copying UI (WEB-20) and the roster import UI (WEB-21) are a
+later slice on this same branch, per this slice's own brief — `e2e/join-link.spec.ts` therefore seeds its join
+link directly against the database rather than driving the panel to create one, the same "seed the one fact
+the screen does not expose yet" device `chat.spec.ts`/`link-10-connected-organization.spec.ts` already use for
+their own out-of-scope admission paths. A Discord-side join-link redemption (`redeemJoinLink`'s own doc comment
+names it as a plausible future caller, resolving `callerAssertedPersonId` from a message's own identity rather
+than a session) is still unwired from any live surface — nothing in this slice's brief asked for it, and
+`redeemJoinLinkForWebAccount`'s own account-based shape would not fit it directly regardless (a Discord
+identity is not a web account id).
+
+---
+
+## D-56 — `packages/db`/`packages/actions`/`apps/web`: WEB-20/WEB-21 — the panel issues and lists join links, and imports a roster, reusing the job-polling shape and the drop zone rather than inventing either a second time
+
+**Problem.** D-55 wired ENRL-8's redemption to a route and a screen but left issuing and listing join links
+(WEB-20) and running a roster import (WEB-21) unreachable from the panel — `courseJoinLinks.create`/`.revoke`
+and `roster.import` already existed as actions, but nothing before this slice ever called `courseJoinLinks.list`
+(it did not exist) or offered any of the three, or the roster import, through a screen.
+
+**Choice — `listJoinLinks` (`repos/course-join-links.ts`) returns the row as stored, `secretHash` included; the
+projection that drops it lives in `@bloombot/actions`' `courseJoinLinks.list` instead, as a `CourseJoinLinkSummary`
+built by a `toSummary` mapper the action's own `execute` always runs before returning.** The repo layer is a
+plain read, the same as every other `list*` function in this package — it is not the boundary that decides
+what a browser may see, and `packages/db`'s own tests (`course-join-links.test.ts`) already assert the row it
+returns unfiltered. `courseJoinLinks.list`'s own action-level test asserts the opposite property structurally
+(`JSON.stringify(listed)` never contains `secretHash`/`secret_hash`), which is the guarantee that actually
+matters: a caller of the action, not the repo, is what ends up serialized to a browser.
+
+**Choice — ordering is "newest first" by `createdAt`, with no `sequence` column to break a same-millisecond
+tie.** `course_instruction_revisions`/`messages`/`transcript_exports` all carry a monotonic `sequence` column
+for exactly this reason (`conversations.test.ts`'s own "orders a transcript by append order even when every
+message shares the same millisecond"), but adding one to `course_join_links` is a schema migration this
+slice's own brief puts explicitly out of scope ("If you think a schema migration is required, stop and report
+rather than writing one"). Two links minted in the same real millisecond — not a scenario ordinary,
+human-paced link creation produces — sort in whatever order SQLite happens to return them; `listJoinLinks`'s
+own doc comment states this rather than silently promising an ordering the column cannot back. The unit test
+that pins down the intended "newest first" behavior freezes the clock and steps it by hand (`vi.useFakeTimers`),
+the same device `conversations.test.ts` already uses, rather than asserting anything about a genuine tie.
+
+**Choice — the roster CSV's required format is written directly into `components/RosterImport.tsx`'s own JSX,
+kept in sync with `packages/schemas/src/roster.ts` by hand, rather than importing a shared constant for the
+header list.** `packages/schemas`' own `REQUIRED_HEADERS` is not exported from its public surface today, and
+exporting it would touch the roster _parser_ file this slice's own brief names out of scope ("You are building
+the screen that starts the job and reads its report, not changing what the job does"). The five-column
+description, the required-vs-blank rules and the worked example row are all read from that file directly (by a
+person, while writing this screen) rather than guessed at — the brief's own "if you find the screen and the
+schema disagreeing, the schema wins and you fix the screen" is honored by keeping this static text a faithful,
+literal transcription of `rosterRowSchema`'s own rules, not by a code-level import that would have required
+widening a file this slice was told not to touch.
+
+**Choice — the roster import's own job-status polling is a straight reuse of `ScaffoldButton.tsx`'s shape (poll
+`jobs.get`, show a "still queued" hint past a threshold), and its report is read off `JobStatus.result` with no
+change to that action at all.** The brief asked to "extend it minimally" only if the shape could not carry a
+per-row report; it already can (`result: unknown`, `JobStatus`'s own doc comment: "`null` until the job
+succeeds… `undefined` would be indistinguishable from `not yet read`"), since `apps/worker`'s own
+`RosterImportReport` is exactly what a succeeded `roster.import` job's `result` already contains. `apps/web`'s
+own `RosterImportReport` (`api/types.ts`) mirrors that shape by hand, narrowed to the fields this screen
+actually renders — the same "not imported from the workspace" boundary this file's own module comment already
+states for `JobStatus` and every other shape in that file, one level stricter here: `apps/web` cannot import
+`apps/worker`'s source at all (no app imports another app's source, workspace package or not), so this is a
+mirror of a mirror, not a shortcut around the boundary.
+
+**Choice — `RosterImport.tsx` reads the chosen file's text with `FileReader#readAsText`, not the newer
+`File#text()`.** `File#text()` does not exist on the `File` implementation this repository's own test
+environment (`vitest`'s `jsdom` project) constructs, which surfaced as every import test throwing
+`selectedFile.text is not a function` the moment a real click ran `handleImport`. `FileReader` is the same
+device `CourseAttachments.tsx`'s own `fileToBase64` already uses for the identical reason, just reading text
+instead of a base64 data URL.
+
+**Choice — the join-link secret is copied via `navigator.clipboard.writeText`, with no fallback for a browser
+that lacks it.** Every browser this panel is built for (WEB-1's own "a modern browser," the same assumption
+`FileDropZone.tsx` already makes for drag-and-drop) supports the Clipboard API; a `document.execCommand('copy')`
+fallback would be dead code covering an environment this panel does not otherwise support, and the unit test
+(`join-links.test.tsx`) stubs `navigator.clipboard` directly rather than exercising a fallback path that does
+not exist.
+
+**Rework finding — two file-upload e2e specs' own `input[type="file"]` locators collided once both drop zones
+render on the same course screen.** `e2e/course-knowledge-files.spec.ts` (WEB-18, pre-existing) and
+`e2e/roster-import-panel.spec.ts` (WEB-21, this slice) each render one hidden `input[type="file"]`
+(`FileDropZone.tsx`'s own shape) inside `pages/CourseEditor.tsx`, once a course exists — before this slice, only
+one drop zone was ever on screen at a time, so an unscoped `page.locator('input[type="file"]')` was unambiguous
+by accident. Both specs now scope that locator to their own component's `data-testid`
+(`course-attachments`/`roster-import`) before calling `setInputFiles` — the fix belongs to both files, not only
+the new one, since the pre-existing spec's own locator became ambiguous the moment this slice's own component
+mounted alongside it.
+
+**Limits.** The join-link creation screen offers no control for setting `expiresAt` — every link this panel
+issues has no expiry, valid until revoked, even though `courseJoinLinks.create` already accepts one. WEB-20's
+own text describes "an optionally expiring link" as ENRL-3/ENRL-4's own capability, not as something this
+screen's own creation control must expose; adding one is a small, real gap left for whoever picks it up next,
+not a decision that anything here forecloses.
+
+---
+
+## D-57 — `packages/db`: ENRL-6/ENRL-8 rework — an instructor-ended enrolment must not be self-revivable through the same join link, by the same person or by the same human under a different identity
+
+**Problem.** Two independent reviews of D-55's ENRL-8 wiring — one security-focused, one spec-focused, the
+latter reproducing it over HTTP against the running app — found that `redeemJoinLink` becoming reachable for
+the first time made ENRL-6 bypassable by the very person it removed, acting alone. Reproduced: instructor
+issues a class join link → student redeems (`200`) → instructor ends the enrolment (ENRL-6) →
+`GET /organizations/:id/chat/courses` correctly reports the course gone → the student re-POSTs the identical,
+still-live secret to `/join-links/redeem` → `200`, and the course is back. The instructor's only remedy —
+revoking the link — locks out the entire class, not just the one person who should stay removed. There were
+two distinct mechanisms, and fixing only the first left the hole open.
+
+**Choice — Part 1: `enrolViaJoinLink` is reversed from `reviveEnded: true` to `reviveEnded: false`.**
+`enrolViaJoinLink`'s own doc comment (D-55) justified `true` as "an instructor handing the same link back to a
+student they had previously ended is a deliberate re-admission" — a premise that held only while
+`redeemJoinLink` had no live caller (D-55's own words: "existed, correct and tested, but nothing outside a test
+ever called it"). Once ENRL-8 wired a real, student-initiated route to it, the caller redeeming is never the
+instructor — it is whoever holds the secret, which ENRL-3 deliberately shares with an entire class. This is the
+identical shape D-35's rework finding 5 already fixed for `enrolViaDiscordRole`: an ambient credential the
+person already holds (there, a Discord role; here, a shared link) must not undo an instructor's decision on its
+own. `enrolViaJoinLink` now makes the same choice, for the same reason, and both of its own callers
+(`redeemJoinLink`, `redeemJoinLinkForWebAccount`) inherit it — neither is, today, reachable by an instructor
+acting deliberately, only by a redeemer presenting a secret. `enrolViaRoster` is untouched, per this rework's
+own brief — a roster re-import is this platform's own idempotent housekeeping, not a caller that means to
+re-admit anybody, the reasoning its own doc comment already gives and that this rework does not revisit.
+
+No parameter was added to `enrolViaJoinLink`, and no fourth `enrolVia*` function was created. `admit`'s own doc
+comment already states the file's convention: "Each `enrolVia*` below states its own choice explicitly, rather
+than this function assuming one default for every source" — a caller-supplied boolean would have broken that
+convention for no live benefit, since both of `enrolViaJoinLink`'s actual callers are self-service redemption,
+never an instructor-initiated re-admission. A distinct function would have meant inventing a caller nobody
+brief asked for — exactly the "correct and tested but nothing outside a test ever called it" trap D-55's own
+Problem section names for `redeemJoinLink` itself before ENRL-8 wired it. The practical consequence: after this
+rework, no exported function in `enrolments.ts` passes `reviveEnded: true` — there is currently no
+instructor-initiated re-admission path in this codebase at all, only ENRL-6's ended-stays-ended default. A
+future one (an explicit "re-admit" action, say) should call `admit` with `reviveEnded: true` the same way every
+choice in this file already is, not assume one.
+
+**Choice — Part 2: `redeemJoinLinkForWebAccount` refuses to mint a second person when the account's own
+verified email matches an existing person in the link's organization who holds an ended enrolment for the
+course.** Part 1 alone does not close the hole: `enrolViaJoinLink`'s `reviveEnded: false` is keyed on the exact
+`personId` being admitted, via `admit`'s own `priorEnded` lookup. A student who first messaged the bot on
+Discord, was enrolled and then removed, has an ended enrolment recorded against their *Discord* person.
+`resolveIdentity(organizationId, { surface: 'web', … })` correctly finds nobody — they have no web identity in
+this organization yet — so `redeemJoinLinkForWebAccount` proceeds to `createPerson`/`connectIdentity` a *third*
+row for the same human, and `admit`'s prior-ended lookup, scoped to that brand-new `personId`, finds nothing:
+a fresh, never-before-enrolled person is admitted freely, `reviveEnded` never even coming into play. `getAccountById`
+(`repos/accounts.ts`) resolves the redeeming account, and a new `people.ts#findPeopleByEmail` (case-insensitive,
+`lower(...)` on both sides — `people.email` is roster/Discord-supplied and never normalized on write, unlike
+`accounts.email`) finds every person in the organization sharing that address; `enrolments.ts#hasEndedEnrolment`
+(new, alongside `getActiveEnrolment`) checks each match for an ended enrolment in the course being joined. A
+match refuses the redemption before `createPerson` ever runs.
+
+`account.email` is treated as *verified*, not merely claimed: `people.ts#hasVerifiedAddress`'s own comment
+already establishes why an `accounts` row's email is the fact PPL-5 calls a verified address — `accounts` rows
+are never created except through an already-verified address (AUTH-1's redeemed sign-in link, or AUTH-2's
+Google-asserted `emailVerified`) — so this check reuses that same guarantee rather than trusting a claim nobody
+proved.
+
+**The PPL-4 tension, named rather than papered over.** PPL-4 deliberately refuses to *merge* two people on an
+address match alone — an unverified or coincidental match must never let one person read another's transcript.
+This check uses the identical signal (an email match) for a different, and deliberately weaker, purpose: it
+never merges anything — no identity moves, no conversation moves, no usage counter combines — it only *declines
+to admit*, the same fail-closed shape every other refusal in `redeemJoinLinkForWebAccount` already has. The
+worst outcome of a coincidental match (two different humans who happen to share a roster-entered address) is
+that the second human's join is refused, not-found-shaped, exactly as if the link were bad — recoverable by the
+instructor issuing a fresh link or re-admitting them by name, and never a disclosure of anything the matched
+person did not already have. The worst outcome of *not* checking is the defect this rework exists to close: an
+instructor's explicit removal, undone by the removed person alone. Refusing is the weaker of the two actions
+PPL-4's own "never merge, never disclose" concern could have generalized to, and it fails closed rather than
+open — declining to admit, not declining to check.
+
+**Refusals stay not-found-shaped.** Both new refusals return the same bare `undefined`
+`redeemJoinLinkForWebAccount` already returns for a never-issued, revoked or expired secret; `routes/join-links.ts`
+maps every `undefined` to the identical `404 { error: 'join_link_not_found' }` with no branch of its own between
+them, so neither refusal is a new oracle — a caller who was removed learns nothing more than "redeeming this
+link did not work," the same as a caller who mistyped it. `apps/api/tests/routes/join-links.test.ts` proves this
+by comparing each new refusal's own response byte-for-byte against a never-issued secret's.
+
+**Rework finding — the dead `getPerson` re-read in `redeemJoinLinkForWebAccount` is removed.** `person =
+getPerson(...) ?? created` predates this rework; its own comment ("`created` predates `connectIdentity`'s own
+write — re-read so the caller sees the row as it actually stands") was copied from `ensureWebPersonForAccount`
+(`@bloombot/auth`), where the person *is* that function's return value, so a stale `connectedAt` on it would
+leak to the caller. Here, the only later use of `person` is `person.id` (passed to `enrolViaJoinLink`), which
+`connectIdentity` never changes — the re-read cost a query and returned nothing this function's own caller
+could observe. `person = created` replaces it.
+
+**Rework finding — `redeemJoinLinkForWebAccount` had no atomicity regression test of its own.** A reviewer
+temporarily hoisted every read (the link's own liveness check, `resolveIdentity`) out of
+`redeemJoinLinkForWebAccount`'s `db.transaction(...)`, leaving the transaction's first statement a plain write
+— the exact defect `redeemJoinLink`'s own rework finding 6 test (D-34) exists to catch for *that* function — and
+every existing test still passed, because none of them race a concurrent revoke against an in-flight web-account
+redemption specifically. The implementation was already correct (both reads run inside `tx`, same as
+`redeemJoinLink`); the property was simply unguarded. A new test in `packages/db/tests/course-join-links.test.ts`
+mirrors `redeemJoinLink`'s own device — a second connection to the same file revokes the link mid-redemption —
+but spies on `people.createPerson`, not `people.getPerson`: `redeemJoinLinkForWebAccount`'s own "person missing"
+branch never calls `getPerson` (only `resolveIdentity`, a raw query, and `createPerson`), so the existing spy
+target does not transfer. Verified against the actual regression by temporarily reproducing the reviewer's
+hoist locally: the new test fails exactly when the reads are hoisted out, and passes against the real,
+already-atomic implementation.
+
+**Rework finding — two stale comments named a `sessionStorage` return path as working for a link "opened in the
+same tab or a fresh one."** `sessionStorage` is per-browsing-context; a sign-in link a mail client opens in a
+new tab has no marker to read (`pages/JoinLink.tsx`'s `PENDING_JOIN_LINK_KEY`, `pages/Connect.tsx`'s
+`PENDING_CONNECT_ORG_KEY`) and lands on the plain shell instead, exactly as if the pending marker had never been
+set. Both comments now say that directly; the mechanism itself (D-55's own choice of a `sessionStorage` marker
+over a `?next=` URL parameter) is unchanged.
+
+**Limits.** This rework closes the self-revival hole; it does not add the re-admission action the instructor's
+"only remedy is revoking the link, which locks out the entire class" reproduction implicitly asks for. After
+this rework, re-admitting a person an instructor has explicitly ended requires either a fresh join link (a new
+secret, so the old one's holders — including whoever was removed — cannot use it) or a roster re-import that
+newly lists them (still `reviveEnded: false`, per `enrolViaRoster`'s own unchanged reasoning, so this does not
+help either). Building a direct "re-admit this person" action, callable only by staff, is out of this rework's
+own scope — the brief for it named exactly two mechanisms to fix, not a new capability to add.
+
+---
+
+## D-58 — `apps/web`: WEB-20/WEB-21 rework — a roster report that silently drops three of its own fields, a copy control with no failure path, and a stale comment left behind by D-57
+
+**Problem.** Two reviews of D-56's own WEB-20/WEB-21 slice found one must-fix and one cheap-fix in `apps/web`,
+plus a stale comment in `packages/db/src/repos/enrolments.ts` that D-57's `reviveEnded` reversal (above) left
+behind.
+
+**Must-fix — `RosterImport.tsx` rendered eight of `RosterImportReport`'s eleven fields and silently dropped
+`ambiguousHandles`, `unresolvedRoles` and `limitations`,** even though `api/types.ts`'s own doc comment claimed
+"every field here narrows to what the panel's own import screen actually shows an instructor." The omission was
+not cosmetic: `apps/worker/src/handlers/roster-import.ts` still creates a channel for a row whose handle matched
+more than one guild member (`ambiguousHandles`) or whose course role did not resolve (`unresolvedRoles`) — the
+channel exists, with the deny-everyone and admins overwrites, but never the individual student's own grant — so
+a run that left a real student locked out of their own channel rendered only
+`1 added, 0 merged, 1 channels created, 0 channels already present`, an unqualified-looking success.
+`unresolvedHandles` (the identical consequence, for a handle that matched _nobody_ rather than more than one)
+was already rendered, which is what made this an omission rather than a considered exclusion — nothing
+distinguishes the two cases in the report's own shape or in what an instructor needs to know from either.
+`limitations` (ROST-6's pinned welcome message, today's one entry) exists precisely so a reader of one run's
+results does not need `docs/DECISIONS.md` open — this screen is that reader, so it stayed unread there too.
+Fixed by rendering all three in the same "name the row or value it concerns" style the other categories already
+use — `ambiguousHandles` names every display name it matched, since that is what actually lets an instructor
+correct the roster's own handle; `unresolvedRoles` and `limitations` are listed plainly. The `api/types.ts` doc
+comment needed no further edit once this landed: its claim is now true rather than aspirational.
+
+**Cheap-fix — `JoinLinks.tsx`'s `handleCopy` awaited `navigator.clipboard.writeText` with no `catch`.** On a
+non-secure origin (`http://` on a LAN, or a staging host without TLS) `navigator.clipboard` is `undefined`
+entirely — reading `.writeText` off it throws a `TypeError` before any promise exists to catch, which an
+un-guarded `await` left as an unhandled rejection: the button's own label stayed "Copy link" forever, with no
+signal at all, for the one value WEB-20 states is never recoverable if lost. Fixed with a `try`/`catch` around
+the write, reporting the failure through the same `ErrorMessage`/`describeApiError` pair every other refusal in
+this app already renders through — a new `'clipboard_unavailable'` case, since this is a real, distinct failure
+an instructor should be told about in words, not a code `apps/api` ever actually sent (no request happens at
+all). The URL itself was never at risk of disappearing on a failed copy — `created` is only ever cleared by a
+fresh `courseJoinLinks.create` call, never by `handleCopy` — so the fix is entirely the missing signal, not a
+missing fallback; D-56's own choice against a `document.execCommand('copy')` fallback stands unchanged.
+
+**Stale comment — `enrolments.ts#enrolViaDiscordRole`'s own doc comment still described `enrolViaJoinLink` and
+`enrolViaRoster` as "the other two `enrolVia*` functions" a re-admission would call, with `reviveEnded: true`
+"unchanged, and correct" for them.** D-57 (above) reversed `enrolViaJoinLink` to `reviveEnded: false` in the
+same file this comment lives in, without updating this passage — both halves of the sentence became false the
+moment that commit landed: none of the three `enrolVia*` functions in this file revive an ended enrolment
+today, and nothing re-admits anyone. Corrected to state that plainly, pointing at `enrolViaJoinLink`'s own
+"Limits" note (already accurate) for where a future re-admission action would need to be added. Comment only —
+`docs/DECISIONS.md` D-57 already made, and this rework does not revisit, the actual behavioral choice.
+
+**Tests.** Each rendered category and the clipboard failure path got its own test, verified failing against the
+pre-fix code before the fix (a targeted `git stash push --keep-index` of just the changed component, run once,
+popped immediately — never a discarded working-tree edit): `roster-import.test.tsx` gained three cases, each
+asserting the rendered report's own text for a report carrying that field, not merely the presence of a key on
+the mocked value (`ambiguousHandles` — a report naming a display-name collision; `unresolvedRoles` — a role
+name; `limitations` — the welcome-message note); `join-links.test.tsx` gained one case, overriding its own
+`beforeEach` clipboard stub to `undefined` and asserting both the rendered failure text and that the secret's
+own URL stays visible afterward.
+
+---
+
+## D-59 — `packages/db`/`packages/actions`/`apps/web`: ENRL-9/WEB-22 — reinstating an ended enrolment, recorded as columns on the row rather than a second history table
+
+**Problem.** D-57's ENRL-6/ENRL-8 rework set every admission path (`enrolViaJoinLink`/`enrolViaRoster`/
+`enrolViaDiscordRole`) to `reviveEnded: false`, correctly closing a real self-revival bypass — but left
+`enrolments.ts`'s own `admit(..., reviveEnded: true)` reachable from nowhere. An instructor who ends the wrong
+enrolment, or ends one a student has since appealed, had no way back: a decision that can be made and never
+unmade is a trap, not an access control (ENRL-9's own text). Separately, `listPeopleForCourse` returns active
+enrolments only, so the panel that would let an instructor choose who to reinstate could not even list an ended
+person (WEB-22).
+
+**Choice — reinstating is its own function, `repos/enrolments.ts#reinstateEnrolment`, and does not call
+`admit`.** It clears `endedAt` on the one row named by `enrolmentId` (the same "acts on the row `endEnrolment`
+already resolved" shape, not a fresh `enrolVia*` admission), and stamps two new nullable columns on `enrolments`
+— `reinstatedByAccountId`/`reinstatedAt` — the same "record it on the row itself" shape `memberships.grantedByAccountId`/
+`grantedAt` already uses for ENRL-5, rather than a new `enrolment_reinstatements`-style history table (the
+`course_instruction_revisions` shape: a new row per event, its own migration, its own repo surface, its own
+tenant-scoping test rows). Rejected because ENRL-9 asks only "who reinstated this, and when" — a fact about the
+row's current state, not an audit of every end/reinstate cycle it might see — and a second table would exist to
+answer a question nobody asked for. The honest trade this makes, inherited from the same precedent: a *second*
+reinstatement overwrites the first's record on the same row, exactly as a second `grantMembershipRole` call
+overwrites the first grantor. A migration was written (`packages/db/migrations/0014_spooky_bucky.sql`,
+`ALTER TABLE enrolments ADD reinstated_by_account_id`/`ADD reinstated_at`, both nullable, `drizzle-kit check`
+clean) — this is the first ENRL-7/ENRL-8/ENRL-6/ENRL-8-rework slice on this branch where a schema change was
+actually in scope.
+
+**Superseded by D-60's rework — kept here, corrected, for the historical record.** This paragraph originally
+claimed the reinstated person is kept out because "an enrolled person… holds no membership at all," and that
+`apps/api/tests/routes/enrolments-reinstate.test.ts` "proved [it] directly." Both claims were false, and D-60
+records what a review round found and how it was fixed; read that entry for the actual account. In brief: ENRL-7
+means a membership and an enrolment are orthogonal facts about two different tables, so a membership at any role
+is not proof of a stranger — the guarantee actually enforced is an explicit check in
+`reinstateEnrolmentAction.execute` (`actions/enrolments.ts`) comparing the caller's own connected person against
+the enrolment's `personId`, and the test that was meant to prove this used a scenario (a fresh, unrelated
+organization) that never exercised that check at all.
+
+**WEB-22 needed a new listing, not a widened `listPeopleForCourse`.** `listEnrolmentsForCourse`
+(`repos/enrolments.ts`) is additive — every existing caller of `listPeopleForCourse` (the roster-import
+idempotency check, the join-link duplicate-admission check) wants active-only, and widening its return shape to
+carry `source`/`endedAt`/reinstatement columns would touch call sites this slice has no reason to. The panel's
+own `components/CoursePeople.tsx` renders two visually distinct lists — "Enrolled" and "Enrolment ended" — never
+one list with a status column, on the same reasoning `JoinLinks.tsx` already separates a live link from a
+revoked one by section: a status column that only differs by a word is easy to misread right before removing
+somebody. It never renders a person's email — `displayName ?? personId`, the same fallback
+`pages/Transcripts.tsx` already uses for a person who never named itself, since a `null` display name is already
+told apart from another by a distinct id and these are real students' addresses.
+
+**Two new actions, not one.** `enrolments.reinstate` (write) is the act ENRL-9 names; `enrolments.listForCourse`
+(read, resolves the course) is what the panel actually dispatches to populate the screen — the brief that scoped
+this slice named only the first explicitly, but WEB-22's own listing needs a route to reach it the same way
+every other panel screen's own list does (`courseAttachments.list`, `courseJoinLinks.list`), so both were added
+together. `packages/actions/tests/access-audit.test.ts`, `catalog.test.ts` and
+`apps/api/tests/tenant-isolation.test.ts` (the last one deriving its own route table from the registry) were all
+updated for both.
+
+**Also fixed while in this file:** three stale doc-comment passages in `repos/enrolments.ts` — on
+`enrolViaJoinLink`, `enrolViaRoster` and `enrolViaDiscordRole` — that D-57's own rework left claiming "no
+function in this package re-admits anyone today" and pointing an instructor at "a future re-admission action"
+that would need writing. `reinstateEnrolment` is that action; all three now say so, and name it.
+
+**Limits.** No join-link expiry-setting control (a known, separately-scoped gap); the join-link redemption path,
+`packages/legacy-import`, MCP, and the cost ledger are all untouched. `reinstateEnrolment`'s "last reinstatement
+only" recording is the same limit `grantedByAccountId`/`grantedAt` already accepts for ENRL-5 — if a full
+end/reinstate history is ever needed (an audit trail of every cycle, not just the latest), that is the
+`course_instruction_revisions` shape, deliberately not built here.
+
+---
+
+## D-60 — `packages/actions`/`packages/db`/`apps/api`: ENRL-9/WEB-22 rework — a membership is not proof of a stranger, an unhandled unique-constraint 500, and a listing that could show one person twice
+
+**Problem.** Two independent reviewers reproduced the same must-fix in D-59's own `enrolments.reinstate`
+over HTTP against the real app: a caller holding an ordinary `assistant` membership in the same organization,
+connected to the exact person an instructor had just ended, reinstated their own enrolment — `200`, `endedAt`
+cleared, and `reinstated_by_account_id` recording the beneficiary as the actor. The same round found a second,
+unrelated must-fix (an unhandled unique-constraint error reachable through a real, if unusual, data shape) and a
+cheap-fix falling out of the same root cause (a listing that could render one person twice). This entry is the
+corrected record D-59 now points readers to for all three, and for what a "guarantee," properly stated, has to
+say about what is actually enforced versus what merely holds today by construction — the distinction this whole
+round turned on.
+
+**Must-fix 1 — the self-trigger guarantee was never actually checked; only a membership requirement one level up
+was, and that requirement does not rule out the reinstated person.** D-59's original text, and the doc comment
+in `actions/enrolments.ts`, both asserted "an enrolled person… holds no membership at all," reasoning that
+`apps/api/src/routes/actions.ts` refusing a caller with no membership in the target organization was sufficient.
+That premise is false in this platform, and ENRL-7 is why: "anyone a course is taught through is enrolled by
+asking it" means an `assistant`/`instructor`/`owner` membership and an enrolment are orthogonal facts about two
+different tables (`memberships`, `enrolments`) — the identical account can hold a staff membership for one
+course and, through a separately connected `web` identity, an enrolment (admitted the same way any student's is)
+in another. A membership at any role, including the lowest, says nothing about which person, if any, the same
+account is also connected to. **Fixed** by adding the check that was actually missing:
+`reinstateEnrolmentAction.execute` now resolves the caller's own connected `web`-surface person for the
+organization (`people.resolveIdentity`, the identical read-only lookup `routes/chat.ts#resolveConnectedCallerPerson`
+already performs) and refuses when it is the same person the enrolment names — the same "never on your own" rule
+`memberships.grant` already applies to granting a role to yourself (`actions/memberships.ts`'s own
+`if (target.id === accountId)` check), applied here to personhood rather than account identity. The membership
+requirement upstream still matters (it rules out a genuine stranger with no relationship to the organization at
+all) — it was just never the *whole* guarantee, and the doc comments describing it as such are corrected to say
+exactly that: what the membership check proves, what it does not, and which check actually closes the gap.
+
+**Also corrected: the test written to prove this exercised a weaker claim.** The original
+`apps/api/tests/routes/enrolments-reinstate.test.ts` seeded the "removed person" a *fresh organization* of their
+own (`seedSignedInCaller`) — which only ever proves the generic cross-tenant refusal
+`tenant-isolation.test.ts` already covers, not "connected to the enrolled person, holding an ordinary membership
+*inside this same organization*," the actual shape both reviewers reproduced. Rewritten to that real scenario:
+an `assistant` membership seeded with `seedSecondCallerInOrganization` in the *same* organization as the
+enrolment, connected via `people.connectIdentity` to the exact person an instructor ended. Verified failing
+before the fix (temporarily reverting only the new self-check in `execute` and rerunning): `200`, not the
+expected `404`. A second, dispatch-level test was added directly against `reinstateEnrolmentAction.execute` in
+`packages/actions/tests/enrolments.test.ts` for the same scenario, plus a companion proving the check is scoped
+to *that* person, not "any enrolment a member could reach" — the same membership reinstating a *different*
+person's enrolment still succeeds. The first test's own comment, which mislabeled `seedSecondCallerInOrganization`
+as "the student's own web account" when that helper actually grants an `assistant` membership, is corrected —
+that mislabel is what let this gap read as covered when it was not.
+
+**Must-fix 2 — `reinstateEnrolment`'s own doc comment claimed a data shape that does not hold, and the
+un-guarded case it hid reached a caller as a `500`.** The comment said "there is never more than one row for a
+given pairing once any `enrolVia*` has run," citing `admit`'s own module comment — contradicted by `schema.ts`'s
+own comment on `enrolments_org_course_person_active_unique`, which says the opposite plainly ("a person may hold
+more than one *ended* row for the same course… which is exactly why this index is partial rather than plain").
+Two reviewers found this false by different, both real, routes: `people.ts#mergePeople`'s own "already ended,
+moved outright" branch reassigns a loser's already-ended enrolment row's `personId` onto the survivor with no
+check for whether the survivor already holds an *active* row for that same course (correct in isolation — an
+ended row cannot collide with the partial unique index on its own — but it leaves the survivor holding both an
+active row and a second, ended one for the identical `(organizationId, courseId, personId)`); and any database
+that predates the D-35/D-57 reworks can carry the same shape from before `reviveEnded: false` existed everywhere.
+Reinstating that ended row collided with the survivor's own active one on `enrolments_org_course_person_active_unique`,
+raising an unhandled `SQLITE_CONSTRAINT_UNIQUE` that escaped `dispatch` as a `500`, not the `0`-rows-changed
+no-op the doc comment promised. **Fixed** the same "catch, check, no-op" shape this repo already established for
+the identical class of race (`admit`'s own catch block, in this file) — `reinstateEnrolment` catches
+`SQLITE_CONSTRAINT_UNIQUE` (`isUniqueConstraintError`, the same check-by-`error.code` device
+`repos/projects.ts`/`repos/people.ts` already each carry their own copy of) and returns `0`, the identical
+idempotent no-op every other "already in that state" write in this file gives. The doc comment now states what
+the data actually guarantees, with the merge scenario spelled out rather than asserted away. A new test
+(`packages/db/tests/enrolments.test.ts`) reproduces the merged-people shape exactly — a loser enrolled and
+ended *before* a merge, a survivor already actively enrolled in the same course, merged — and asserts a clean
+no-op; verified failing before the fix (temporarily removing the `try`/`catch`): an unhandled `SqliteError:
+UNIQUE constraint failed` thrown out of the call, not caught by the test's own `expect(...).not.toThrow()`.
+
+**Cheap-fix — the same merge shape made the panel list one person twice.** `listEnrolmentsForCourse` listed one
+row per *enrolment*, not per *person* — a survivor left with both an active row and a stray ended one (must-fix
+2's own scenario) appeared once under "Enrolled" and once under "Enrolment ended," the second offering a
+"Reinstate" that could only ever collide and no-op. **Fixed** in the repo layer, not the panel: `listEnrolmentsForCourse`
+now collapses its own rows to at most one per `personId` before returning — the active row wins when a person
+has one; between two ended rows (the same merge, without a pre-existing survivor enrolment), the more recently
+ended one wins. Fixed here rather than in `components/CoursePeople.tsx` because the duplication is a property of
+what the query returns, not of how the panel renders it — any future caller of `listEnrolmentsForCourse` gets
+the same correctness for free, and the panel itself needed no code change once the listing it reads was
+corrected. A new test proves it: the same merge setup as must-fix 2's own reproduction, asserting the survivor
+appears exactly once, as their active row; verified failing before the fix (temporarily bypassing the dedup
+step): two rows returned for one person, not one.
+
+**What this round is really about, stated plainly rather than left implicit.** A membership check, a `try`/`catch`
+around a database call, and a `Map` keyed by person id are all small changes. What made their absence a security
+gap rather than a cosmetic one is that the surrounding comments and D-59 itself asserted stronger guarantees than
+the code actually made true — "an enrolled person holds no membership," "there is never more than one row for a
+given pairing," "proven directly." Each was either false about this platform's own data model or true only by
+accident of what nothing had yet exercised. The corrected comments in `actions/enrolments.ts` and
+`repos/enrolments.ts`, and this entry, say explicitly which guarantees are structurally enforced (the self-check
+in `execute`, the `try`/`catch` around the update, the dedup in the listing) and which are merely true today by
+construction (that no other admission path currently produces a duplicate row outside the merge case named
+above) — a decision record or a doc comment that does not distinguish the two is the exact gap both reviewers
+found.
+
+**Tests.** Failing-then-passing evidence for all three, verified by temporarily reverting only the relevant fix
+and rerunning the one test written against it, then restoring: (1) the rewritten
+`apps/api/tests/routes/enrolments-reinstate.test.ts` case and the two new `packages/actions/tests/enrolments.test.ts`
+cases; (2) the new `packages/db/tests/enrolments.test.ts` merge-collision case; (3) the new
+`packages/db/tests/enrolments.test.ts` dedup case. `apps/web/tests/course-people.test.tsx` also gained coverage
+for the `role="status"` live region's own announced text (a hole a prior review pass left: deleting the region
+entirely left every existing test green) — verified failing the same way, by temporarily removing the region and
+rerunning.

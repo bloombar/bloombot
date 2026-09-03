@@ -205,12 +205,19 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
 
     // The label names the drop zone (a real button, so the keyboard reaches
     // it); the picker behind it is the `input[type=file]`, which is what
-    // Playwright sets files on.
-    await page.locator('input[type="file"]').setInputFiles({
-      name: 'syllabus.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('%PDF-1.4 e2e fixture'),
-    })
+    // Playwright sets files on. Scoped to this component's own container
+    // (`data-testid="course-attachments"`) since WEB-21's own roster-import
+    // drop zone renders a second, identically-shaped `input[type=file]`
+    // once this course exists — an unscoped locator is ambiguous the
+    // moment both are on screen.
+    await page
+      .getByTestId('course-attachments')
+      .locator('input[type="file"]')
+      .setInputFiles({
+        name: 'syllabus.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from('%PDF-1.4 e2e fixture'),
+      })
     await page.getByRole('button', { name: 'Attach file' }).click()
     await expect(page.getByText('syllabus.pdf')).toBeVisible()
     await expect(page.getByText('Pending…')).toBeVisible()
@@ -297,11 +304,14 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
       // The label names the drop zone (a real button, so the keyboard reaches
       // it); the picker behind it is the `input[type=file]`, which is what
       // Playwright sets files on.
-      await page.locator('input[type="file"]').setInputFiles({
-        name: 'notes.exe',
-        mimeType: 'application/octet-stream',
-        buffer: Buffer.from('not actually notes'),
-      })
+      await page
+        .getByTestId('course-attachments')
+        .locator('input[type="file"]')
+        .setInputFiles({
+          name: 'notes.exe',
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from('not actually notes'),
+        })
       await page.getByRole('button', { name: 'Attach file' }).click()
       await expect(page.getByText('notes.exe')).toBeVisible()
 

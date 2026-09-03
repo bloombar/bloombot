@@ -747,6 +747,27 @@ nobody can log into. The development stand-in that writes to a file stays refuse
 production, and a process that is configured to send mail and cannot must fail where an
 operator sees it rather than accepting a sign-in it will silently drop.
 
+#### AUTH-6 Signing in returns you to what you were doing, in whatever tab you land in
+
+A visitor who follows a course join link or a connect link while signed out is asked to sign in
+first, and the app remembers where they were going in `sessionStorage` so the returning session lands
+back on it. That works only while the whole round trip stays in one browsing context, and it usually
+does not: a sign-in link arrives by email, and a mail client opens it in a new tab. That tab has no
+marker to read, so the visitor lands on the ordinary shell — enrolled in nothing, connected to
+nothing, with no explanation and no way back except the original link, which they may no longer have
+to hand.
+
+Where a visitor was going survives the sign-in round trip regardless of which tab completes it. The
+intent belongs to the sign-in that was issued, not to the tab that requested it, which is the same
+reasoning that puts a join link's own binding on the account rather than on the browser. Two
+mechanisms exist for this today (`PENDING_JOIN_LINK_KEY`, `PENDING_CONNECT_ORG_KEY`) and both have
+this defect; one mechanism replaces both rather than a third being added beside them.
+
+A returning destination is a place inside this application and is treated as untrusted input: it is
+validated as a same-origin path before anything navigates to it, so a sign-in link can never be made
+to carry someone to another origin. Redemption itself is unchanged — it still binds to the account
+that signed in, never to anything the link or the destination names.
+
 ### 15. Tenancy & Server Registration
 
 #### TEN-1 The tenant is an organization
@@ -1945,6 +1966,25 @@ conversation means the newest message, not a jump that steals a reader's place: 
 scrolled up to re-read something is not yanked back down, and is told there is something new
 instead. The page itself does not scroll horizontally at any width, and the composer never covers
 the last message.
+
+#### WEB-25 Redeeming a join link says it worked, and lands the student in the course
+
+A student who follows an instructor's join link is enrolled correctly and then dropped on the panel's
+home screen with nothing said. Nothing confirms the link worked, nothing names the course they just
+joined, and the one thing they came to do — ask that course a question — is several clicks away
+behind a course picker they have no reason to understand. `JoinLink.tsx` calls
+`redeemCourseJoinLink(secret).then(onRedeemed)` and discards the result, so the course id the server
+already resolved is thrown away in the browser.
+
+Redemption confirms itself, names the course by title, and takes the student straight to the web
+chat for that course with it already selected. A student who was already enrolled is told so plainly
+rather than shown an error — redeeming twice is a thing people do with a link they were sent, and it
+is not a failure. Confirmation is announced to a screen reader as well as shown, and it does not
+depend on the student noticing something that disappears on its own.
+
+The refusals ENRL-8 defines are untouched: a link that never existed, one that was revoked, and one
+that expired stay identical to each other, and none of them is allowed to become a message that says
+which it was.
 
 #### WEB-18 A course's knowledge files are managed in the panel
 

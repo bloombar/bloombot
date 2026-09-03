@@ -260,7 +260,7 @@ describe('discordServers.list', () => {
 })
 
 describe('jobs.get', () => {
-  it("reads a pending job's status and payload, with a null result before it has run", async () => {
+  it("reads a pending job's status, with a null result before it has run", async () => {
     testDb = createTestDatabase()
     const organizationId = seedOrganizationWithProject(testDb.db).organizationId
     const enqueued = jobs.enqueueJob(
@@ -285,9 +285,85 @@ describe('jobs.get', () => {
       status: 'pending',
       attempts: 0,
       maxAttempts: 5,
-      payload: { courseId: 'course-1' },
       result: null,
     })
+  })
+
+  // JOB-6: `payload` is never on this action's own response — checked
+  // against the actual response shape (`Object.keys`), not against the
+  // repo's own row, so a future rework cannot quietly widen `toJobStatus`
+  // back to including it without this test catching it.
+  it("never hands back a job's payload, even while it is still pending", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 5,
+      },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      getJobAction,
+      { jobId: enqueued.id },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(Object.keys(result)).not.toContain('payload')
+    expect(JSON.stringify(result)).not.toMatch(/ada@example\.edu/)
+  })
+
+  // JOB-6: the platform-level guarantee this whole slice is about — a
+  // caller reading a *finished* job back cannot recover the roster CSV
+  // (names, emails, Discord handles) it was given, through this action's
+  // own response shape, not merely by inspecting the repo layer. The
+  // handler's own `result` (the report) is deliberately left out of this
+  // assertion's own search string — a report is this job's outcome, and is
+  // still meant to be readable back (this file's own "reads a succeeded
+  // job's parsed result" test, below, covers that); the CSV this job was
+  // *given* is the thing this test proves is gone.
+  it("a finished roster.import job's response carries none of the roster CSV it was given", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'roster.import',
+        payload: {
+          courseId: 'course-1',
+          csvText:
+            'First,Last,Email,Discord,GitHub\nAda,Lovelace,ada@example.edu,adalovelace,',
+        },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.completeJob(
+      organizationId,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { peopleCreated: 1, channelsCreated: 1 }
+    )
+
+    const result = await dispatch(
+      getJobAction,
+      { jobId: enqueued.id },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result.status).toBe('succeeded')
+    expect(Object.keys(result)).not.toContain('payload')
+    expect(JSON.stringify(result)).not.toMatch(/ada@example\.edu|adalovelace/)
   })
 
   // What makes the queue usable — a succeeded job's report is readable back

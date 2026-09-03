@@ -195,6 +195,35 @@ export async function runNextJob(
     return { outcome: 'failed', job: failed ?? job, reason }
   }
 
+  // JOB-6 — defensive, not a case this function's own contract expects a
+  // caller to hit, the same "registry changed shape" reasoning the missing-
+  // handler branch above already gives: `claimNextJob`'s own `eligible()`
+  // only ever claims a `pending` job or a `running` one whose lease lapsed,
+  // and `repos/jobs.ts`'s own `completeJob`/`markJobFailed` only null
+  // `payload` in the same write that records one of those two terminal
+  // statuses — a row in either state is never claimable again, so a freshly
+  // claimed job should never reach here with no payload at all. Guarded
+  // explicitly anyway, rather than trusting `JSON.parse(null)`'s own
+  // silent `null` result (JavaScript coerces its argument to the string
+  // `"null"` first, so this would not even throw) to fail loudly if that
+  // invariant is ever wrong.
+  if (job.payload === null) {
+    const reason =
+      'job payload was already cleared (JOB-6) — this job should not have been claimable'
+    deps.logger.error(
+      { jobId: job.id, kind: job.kind },
+      `@bloombot/jobs: ${reason}`
+    )
+    const failed = jobs.markJobFailed(
+      job.organizationId,
+      job.id,
+      { owner: deps.owner, claimExpiresAt: job.claimExpiresAt! },
+      reason,
+      deps.db
+    )
+    return { outcome: 'failed', job: failed ?? job, reason }
+  }
+
   let payload: unknown
   try {
     payload = JSON.parse(job.payload) as unknown

@@ -6510,3 +6510,63 @@ rule ("If a future package adds HTTP tests over supertest, it needs the same `st
 this entry exists because that rule was stated once and not enforced anywhere a second app could violate it
 silently — no lint rule or repo-wide grep currently catches a new `request(app)` call site against a bare
 Express app. That stays a manual discipline, not a structural guarantee, unless a future slice adds one.
+
+---
+
+## D-65 — `apps/web`: TEN-8/WEB-4 — D-23 closed the action layer, not the surface; the panel now reads its own organization's Discord binding instead of trusting only a same-session prop
+
+**Problem.** An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built," dated 2026-09-03) found
+`pages/Shell.tsx` still deriving `installedServerId` purely from `justInstalled`, a prop `App.tsx` sets only
+once — when a Discord OAuth callback completes in that same browser tab. A reload, or a second device, or an
+install from an earlier session, all leave `justInstalled` `undefined`, so the Discord tab renders "Install"
+for a server that is already bound, and `handleRemove`'s own `if (!installedServerId) return` makes WEB-4's
+"with the option to remove it" unreachable for exactly the accounts who did not just click through the OAuth
+flow in this tab. Both TEN-8 and WEB-4 were marked Done before this was noticed.
+
+**This is not a new gap — it is D-22's gap 2, restated.** D-22 named it directly: "a page reload, or a second
+device, sees no installed server at all even when one exists, which is a real gap in WEB-4's 'a server already
+installed shows as installed.'" D-23's own text is careful about what it claims to have done about that:
+"`discordServers.list` … exists and is exercised by that package's own tests, but no `apps/api` route reaches
+it" (D-22's own wording, restated as the gap D-23 closes) became, in D-23, five *actions* including
+`discordServers.list`, reachable through the existing generic `POST /organizations/:organizationId/actions/:name`
+route with no `apps/api` route change needed at all. That is real, and it is correctly recorded — D-23 is not
+being rewritten here, and this entry adds to it rather than correcting it. But closing the action layer is not
+the same claim as closing the gap D-22 described, which was specifically about what `pages/Shell.tsx` renders:
+the action existed and was dispatchable from the moment D-23 landed, and nothing in `apps/web` ever called it.
+`components/InstallButton.tsx`'s own module comment and `ShellProps.justInstalled`'s own doc both still asserted
+"there is no route today to look up an organization's existing bindings" after D-23 shipped — an assertion this
+slice found still committed, still false, and corrected here (this project's own repeated finding: a comment
+asserting the opposite of the code gets caught in review, eventually, but had not been yet). The audit is what
+finally traced "the action exists" all the way out to "and is called by nothing," which is the distinction this
+entry exists to record for the next person who reads D-23 and reasonably concludes WEB-4's gap is closed.
+
+**Choice, a client wrapper (`api/client.ts#listDiscordServers`) plus a fetch in `Shell.tsx`, not a new component.**
+The same shape every other read in this app already takes (`listProjects`, `listCourseAttachments`, etc.) —
+`dispatchAction(organizationId, 'discordServers.list', {})`, typed against a hand-mirrored
+`DiscordServerBindingSummary` (`api/types.ts`, this file's own module comment on why client types are mirrored
+rather than imported from `packages/actions`). No new component: `InstallButton.tsx` already renders whatever
+`installedServerId` it is handed: the fix is entirely in what `Shell.tsx` computes for that prop, not in what
+renders it.
+
+**Choice, `justInstalled` is consulted only while the fetch is `'loading'`, never after.** `discordBindingState`
+(`'loading' | 'ready' | 'error'`) starts `'loading'` on every mount and on every organization switch. While it
+is `'loading'`, `justInstalled` — known synchronously, no round trip needed — stands in for it, so a fresh
+install's own banner shows immediately rather than flickering through a loading state it does not need. Once the
+fetch resolves, one way or the other, `discordBindingState` is the only thing either `installedServerId` or
+`handleRemove` trust — a stale same-session signal must not outlive the server-truth read that supersedes it.
+The alternative — keeping `justInstalled` as a permanent fallback whenever the fetch fails — was rejected: it
+would mean a failed lookup after a successful install still reads as installed, which is accidentally correct
+for that one case and silently wrong for every other reason a lookup can fail, and WEB-5's "the panel adds no
+interpretation the API did not give it" argues for saying the failure plainly (`ErrorMessage`, the same path
+every other refusal in this app renders) over guessing which failures are safe to paper over.
+
+**Choice, fetched on `Shell.tsx` mount and on every organization switch, not gated behind opening the Discord
+tab.** `ProjectsPanel` already fetches unconditionally on mount for the same reason (`Shell.tsx`'s own module
+comment, D-25's accounting of what that costs the test file) — switching *into* a tab that has already fetched
+costs no further round trip. The alternative (fetch only once the Discord tab is actually opened) was rejected
+because it would reintroduce exactly the loading-state trade this slice is careful about, once per tab open
+rather than once per mount, for no offsetting benefit.
+
+**What this does not touch.** The OAuth+PKCE install flow itself, `apps/api/src/routes/discord-servers.ts`, and
+`discordServers.remove`'s own behaviour are all unchanged — this slice makes Remove *reachable* whenever a
+binding exists, it does not change what removing one does.

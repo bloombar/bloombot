@@ -23,11 +23,16 @@ import { PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
 // — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
 // 'projects' (`docs/DECISIONS.md` D-25), so the shell this file renders now
 // mounts `ProjectsPanel` on first render, not only when a test opts into the
-// Projects tab.
+// Projects tab. `listDiscordServers` is mocked for the same reason (TEN-8):
+// `Shell.tsx` now reads it on every mount, not only once the Discord tab is
+// opened, so the one test below that renders the shell needs a resolved
+// value or the fetch reaches this test's own unmocked `fetch` and fails as
+// a genuine network error.
 const {
   fetchMe,
   completeDiscordInstall,
   listProjects,
+  listDiscordServers,
   fetchAdminOrganizations,
   redeemSignInLink,
   previewDiscordPersonLink,
@@ -37,6 +42,7 @@ const {
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
   listProjects: vi.fn(),
+  listDiscordServers: vi.fn(),
   fetchAdminOrganizations: vi.fn(),
   redeemSignInLink: vi.fn(),
   previewDiscordPersonLink: vi.fn(),
@@ -53,6 +59,7 @@ vi.mock('../src/api/client.js', async () => {
     fetchMe,
     completeDiscordInstall,
     listProjects,
+    listDiscordServers,
     fetchAdminOrganizations,
     redeemSignInLink,
     previewDiscordPersonLink,
@@ -78,6 +85,19 @@ describe('App (WEB-1..4)', () => {
     sessionStorage.setItem(PENDING_INSTALL_ORG_KEY, 'org-2')
     completeDiscordInstall.mockResolvedValue({ serverId: 'guild-99' })
     listProjects.mockResolvedValue([])
+    // TEN-8: `Shell.tsx` reads this back too, now, not only `justInstalled`
+    // — resolved with the same binding the callback just reported, so this
+    // assertion (below) proves the two agree, not merely that the
+    // *immediate* signal alone renders something.
+    listDiscordServers.mockResolvedValue([
+      {
+        serverId: 'guild-99',
+        organizationId: 'org-2',
+        installedByAccountId: 'account-1',
+        installedAt: Date.now(),
+        removedAt: null,
+      },
+    ])
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',

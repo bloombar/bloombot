@@ -36,6 +36,7 @@ import type {
   CourseSummary,
   CreatedCourseJoinLink,
   DiscordPersonLinkPreviewResponse,
+  DiscordServerBindingSummary,
   DuplicateProjectResult,
   InstallBeginResponse,
   InstallCallbackResponse,
@@ -192,6 +193,26 @@ export function completeDiscordInstall(
   return request<InstallCallbackResponse>(
     `/organizations/${organizationId}/discord-servers/install/callback`,
     { method: 'POST', body: input }
+  )
+}
+
+/**
+ * TEN-8: every Discord server binding `organizationId` has ever held,
+ * active or removed — `discordServers.list`'s own action
+ * (`packages/actions`), reached through `dispatchAction` the same way
+ * `discordServers.remove` already is. What `pages/Shell.tsx` reads on
+ * mount (and after an organization switch) so the panel's install state
+ * reflects what is actually bound server-side, not only what this browser
+ * session happened to install (`beginDiscordInstall`/`completeDiscordInstall`
+ * above only ever learn about *this* session's own callback).
+ */
+export function listDiscordServers(
+  organizationId: string
+): Promise<DiscordServerBindingSummary[]> {
+  return dispatchAction<DiscordServerBindingSummary[]>(
+    organizationId,
+    'discordServers.list',
+    {}
   )
 }
 

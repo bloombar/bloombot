@@ -169,6 +169,24 @@ export interface DuplicateProjectResult {
   coursesDisabled: true
 }
 
+/**
+ * `discordServers.list`'s own return shape (`packages/actions`, TEN-8) —
+ * mirrors `packages/db`'s `discord_server_bindings` row by hand, the same
+ * "not imported from the workspace" discipline this file's own module
+ * comment already explains. Every binding an organization has ever held,
+ * active or removed, comes back this way — `removedAt` set is what lets
+ * `pages/Shell.tsx` tell "never installed" from "installed, then removed"
+ * (the action's own doc comment), rather than the list narrowing to
+ * active-only and throwing that distinction away.
+ */
+export interface DiscordServerBindingSummary {
+  serverId: string
+  organizationId: string
+  installedByAccountId: string
+  installedAt: number
+  removedAt: number | null
+}
+
 /** CFG-4: a channel inside one of a course's categories. */
 export interface CourseChannel {
   id: string

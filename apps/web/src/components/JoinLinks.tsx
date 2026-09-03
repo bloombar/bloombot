@@ -20,6 +20,14 @@
  * who already redeemed it — the same "say what it does and does not do"
  * discipline `CourseAttachments.tsx`'s own detach confirmation already
  * holds itself to for FILE-3.
+ *
+ * **A failed copy is reported, not swallowed** (rework finding, cheap-fix):
+ * `handleCopy`'s own comment has the mechanics — `navigator.clipboard` is
+ * `undefined` on a non-secure origin, which threw before this was caught,
+ * as an unhandled rejection with no visible change to the "Copy link"
+ * label. The URL stays on screen regardless (`created` is never cleared by
+ * a copy attempt), so a failed copy always leaves the secret still
+ * copyable by hand.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -73,6 +81,7 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
     undefined
   )
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<ApiError | undefined>(undefined)
   const [revokingId, setRevokingId] = useState<string | undefined>(undefined)
   const [revokeError, setRevokeError] = useState<ApiError | undefined>(
     undefined
@@ -114,9 +123,23 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
     }
   }
 
+  // WEB-20: `navigator.clipboard` is `undefined` on a non-secure origin (an
+  // `http://` LAN or staging host without TLS) — reading `.writeText` off
+  // it throws a `TypeError` before any promise even exists to await, which
+  // an un-guarded `await` would otherwise leave as an unhandled rejection
+  // with the label stuck on "Copy link" and no signal at all. This is the
+  // one control the requirement names, for the one value that is never
+  // recoverable once lost, so a failure here is reported the same visible
+  // way every other refusal in this app already is — and the URL itself
+  // stays on screen either way, still copyable by hand.
   const handleCopy = async (secret: string) => {
-    await navigator.clipboard.writeText(joinUrl(secret))
-    setCopied(true)
+    setCopyError(undefined)
+    try {
+      await navigator.clipboard.writeText(joinUrl(secret))
+      setCopied(true)
+    } catch {
+      setCopyError(new ApiError(0, { error: 'clipboard_unavailable' }))
+    }
   }
 
   const handleRevoke = async (link: CourseJoinLinkSummary) => {
@@ -171,6 +194,7 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
               {copied ? 'Copied!' : 'Copy link'}
             </Button>
           </div>
+          {copyError && <ErrorMessage error={copyError} />}
         </div>
       )}
 

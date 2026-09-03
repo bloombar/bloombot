@@ -101,6 +101,25 @@ export const memberships = sqliteTable(
       () => accounts.id
     ),
     grantedAt: integer('granted_at'),
+    // ENRL-11 — who revoked this membership, and when. Both null for a row
+    // that has never been revoked — every row created before this slice,
+    // and every row this slice's own `grantMembershipRole` reactivates
+    // (`repos/memberships.ts`'s own comment on why a fresh grant clears
+    // both columns rather than leaving a stale revocation on a row it just
+    // brought back). Marking, not deleting, is this requirement's own
+    // choice: ENRL-5 already requires a grant be recorded on the row itself
+    // (`grantedByAccountId`/`grantedAt`, above), and a deleted row records
+    // nothing — "who revoked whom, and when" is exactly the kind of thing
+    // an institution has to account for, the same reasoning TEN-6 already
+    // gives `discord_server_bindings.removed_at`, immediately below.
+    // `repos/memberships.ts#getMembership` excludes a revoked row from its
+    // own `WHERE`, so a revoked membership stops conferring anything the
+    // moment this column is set — every authorization path in this
+    // platform already reaches a membership through that one function.
+    revokedByAccountId: text('revoked_by_account_id').references(
+      () => accounts.id
+    ),
+    revokedAt: integer('revoked_at'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [

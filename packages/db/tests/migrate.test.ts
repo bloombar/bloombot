@@ -103,12 +103,15 @@ describe('runMigrations', () => {
       'email',
       'id',
     ])
+    // ENRL-11 — `revoked_at`/`revoked_by_account_id` added by this slice.
     expect(schema.memberships).toEqual([
       'account_id',
       'created_at',
       'granted_at',
       'granted_by_account_id',
       'organization_id',
+      'revoked_at',
+      'revoked_by_account_id',
       'role',
     ])
     expect(schema.discord_server_bindings).toEqual([

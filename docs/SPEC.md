@@ -894,6 +894,17 @@ configuration — with no file edited and no process restarted between the two. 
 sentence the whole migration exists to make true, and it is worth a test that would notice
 if it stopped being true.
 
+#### QA-9 The end-to-end suite is a gate, not a coin flip
+
+The Playwright suite fails intermittently under its own parallelism — `SQLITE_BUSY` and `database
+is locked`, raised from inside transactions in specs that have nothing to do with one another. It
+predates any one feature and reproduces on commits well before the branches that noticed it. A
+suite that has to be re-run until it passes is not a gate: it trains everyone reading it to
+discount a red result, which is precisely the habit that lets a real regression through. Every
+spec gets a database no other spec is writing to, or the runner stops sharing one — whichever the
+diagnosis supports. The fix is judged by running the suite repeatedly and getting the same answer,
+not by one green run.
+
 ### 18. People, Conversations & Transcripts
 
 #### PPL-1 People are the platform's end users
@@ -1096,6 +1107,20 @@ compiled into a client.
 The background worker is single-instance like every other process, reports whether it can reach
 the database and the queue, and shuts down by finishing or releasing what it holds rather than
 abandoning it.
+
+#### JOB-6 A finished job stops carrying the personal data it was given
+
+A job's payload is opaque JSON the enqueuer chooses, and `roster.import`'s payload is the whole
+roster CSV — every student's name, email and Discord handle. The row is never cleared, and
+`jobs.get` returns the parsed payload to any member of the organization, so one roster import
+leaves a queryable copy of a class list in the `jobs` table for the life of the database, long
+after the work it described has finished. That is the same data `data/*.db`, `results/*.csv` and
+`rosters/*.csv` are protected for, kept in the one place nothing protects. A job that has
+succeeded or failed permanently no longer needs what it was given: its payload is cleared once it
+reaches a terminal state, and what a caller may still read back is the job's own outcome — its
+status, its attempts, its error and its report — not its input. Nothing about the queue's own
+mechanics depends on re-reading a payload after the work is done; a retry re-reads it, so clearing
+waits for a state from which no retry follows.
 
 ### 21. Server Scaffolding on the Platform
 
@@ -1793,6 +1818,16 @@ are required and which may be blank, and a worked example row. The screen shows 
 progress while it runs and its report when it finishes, including every row that could not be
 parsed with the line number it was on, so a spreadsheet can be corrected and re-uploaded. Re-
 importing the same roster admits nobody twice.
+
+#### WEB-23 A join link's expiry is chosen when it is issued
+
+ENRL-3 gives a join link an optional expiry and `courseJoinLinks.create` accepts one, but no screen
+offers it, so every link the panel issues never expires. WEB-20 requires the links list to show
+"when each expires" — a column that can only ever read "No expiry", which is not information. A
+link handed to a class at the start of term should be able to stop admitting people at the end of
+it without an instructor having to remember to revoke it. The creation screen offers an expiry,
+defaulting to none so the existing behaviour is what an instructor gets by not choosing, and the
+list shows what was chosen.
 
 #### WEB-22 A course's people are visible in the panel, and admission is reversible there
 

@@ -24,12 +24,14 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 const {
   listMemberships,
   grantMembership,
+  revokeMembership,
   listMembershipInvitations,
   createMembershipInvitation,
   revokeMembershipInvitation,
 } = vi.hoisted(() => ({
   listMemberships: vi.fn(),
   grantMembership: vi.fn(),
+  revokeMembership: vi.fn(),
   listMembershipInvitations: vi.fn(),
   createMembershipInvitation: vi.fn(),
   revokeMembershipInvitation: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     listMemberships,
     grantMembership,
+    revokeMembership,
     listMembershipInvitations,
     createMembershipInvitation,
     revokeMembershipInvitation,
@@ -76,7 +79,9 @@ describe('Team (ENRL-5)', () => {
   it('shows the empty state when nobody holds a role yet', async () => {
     listMemberships.mockResolvedValue([])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
 
     expect(
       await screen.findByText('Nobody holds a role in this organization yet.')
@@ -95,7 +100,9 @@ describe('Team (ENRL-5)', () => {
       }),
     ])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
 
     expect(await screen.findByText(/TA Tam — Instructor/)).toBeInTheDocument()
     expect(screen.getByText(/Granted by Owner Ora/)).toBeInTheDocument()
@@ -109,7 +116,9 @@ describe('Team (ENRL-5)', () => {
       entry({ grantedByAccountId: null, grantedByDisplayName: null }),
     ])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
 
     expect(await screen.findByText(/Owner Ora — Owner/)).toBeInTheDocument()
     expect(screen.getByText(/Member since/)).toBeInTheDocument()
@@ -125,7 +134,9 @@ describe('Team (ENRL-5)', () => {
       entry({ displayName: 'Owner Ora', role: 'owner' }),
     ])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
 
     const row = await screen.findByText(/Owner Ora — Owner/)
     expect(row.closest('li')).not.toHaveTextContent('@')
@@ -134,7 +145,9 @@ describe('Team (ENRL-5)', () => {
   it('withholds the grant form for a caller who is not an owner', async () => {
     listMemberships.mockResolvedValue([entry()])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={false} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={false} viewerAccountId="viewer-1" />
+    )
 
     await screen.findByText(/Owner Ora — Owner/)
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
@@ -154,7 +167,9 @@ describe('Team (ENRL-5)', () => {
       createdAt: Date.now(),
     })
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
     await screen.findByText(/Owner Ora — Owner/)
 
     fireEvent.change(screen.getByLabelText('Email'), {
@@ -190,7 +205,9 @@ describe('Team (ENRL-5)', () => {
   it('cancelling the confirmation calls grantMembership with nothing', async () => {
     listMemberships.mockResolvedValue([entry()])
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
     await screen.findByText(/Owner Ora — Owner/)
 
     fireEvent.change(screen.getByLabelText('Email'), {
@@ -211,7 +228,9 @@ describe('Team (ENRL-5)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
     await screen.findByText(/Owner Ora — Owner/)
 
     fireEvent.change(screen.getByLabelText('Email'), {
@@ -231,11 +250,186 @@ describe('Team (ENRL-5)', () => {
       new ApiError(500, { error: 'internal_error' })
     )
 
-    renderWithModal(<Team organizationId="org-1" isOwner={true} />)
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Something went wrong. Try again.'
     )
     expect(screen.queryByText(/Grant a role/)).not.toBeInTheDocument()
+  })
+})
+
+// ENRL-11: revoking. `entry()`'s own default row is `'owner'`,
+// `accountId: 'account-1'` — every case below is explicit about which row
+// belongs to the viewer and which does not, since that is exactly the
+// distinction this component's own module comment says decides what
+// control, if any, a row offers.
+describe('Team (ENRL-11)', () => {
+  it('offers Revoke on a non-owner row to any owner viewer, and it confirms both halves before sending', async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'a1', displayName: 'TA Tam', role: 'instructor' }),
+    ])
+    revokeMembership.mockResolvedValue({ revoked: true })
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+    await screen.findByText(/TA Tam — Instructor/)
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: "Revoke TA Tam's Instructor role",
+      })
+    )
+
+    const dialog = await screen.findByRole('dialog', {
+      name: "Revoke TA Tam's Instructor role?",
+    })
+    expect(dialog).toHaveTextContent('stops their staff access')
+    expect(dialog).toHaveTextContent(
+      'deletes no transcript and ends no enrolment'
+    )
+    expect(revokeMembership).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }))
+
+    await waitFor(() =>
+      expect(revokeMembership).toHaveBeenCalledWith('org-1', 'a1')
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "Revoked TA Tam's role."
+    )
+  })
+
+  it('withholds every revoke control for a caller who is not an owner', async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'a1', displayName: 'TA Tam', role: 'instructor' }),
+    ])
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={false} viewerAccountId="viewer-1" />
+    )
+
+    await screen.findByText(/TA Tam — Instructor/)
+    expect(
+      screen.queryByRole('button', { name: /Revoke/ })
+    ).not.toBeInTheDocument()
+  })
+
+  // ENRL-11's own decision: a peer owner's row carries no control at
+  // all — the server would refuse every attempt identically, so this
+  // component never offers one to begin with (this file's own module
+  // comment).
+  it("withholds the revoke control on a peer owner's row", async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'viewer-1', displayName: 'Viewer', role: 'owner' }),
+      entry({ accountId: 'peer-1', displayName: 'Peer Owner', role: 'owner' }),
+    ])
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+
+    await screen.findByText(/Peer Owner — Owner/)
+    expect(
+      screen.queryByRole('button', { name: /Peer Owner/ })
+    ).not.toBeInTheDocument()
+  })
+
+  it("offers Step down on the viewer's own owner row when another owner exists", async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'viewer-1', displayName: 'Viewer', role: 'owner' }),
+      entry({ accountId: 'peer-1', displayName: 'Peer Owner', role: 'owner' }),
+    ])
+    revokeMembership.mockResolvedValue({ revoked: true })
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+    await screen.findByText(/Viewer — Owner/)
+
+    const stepDown = screen.getByRole('button', { name: 'Step down as Owner' })
+    expect(stepDown).toBeEnabled()
+    fireEvent.click(stepDown)
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Step down as Owner?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Step down' }))
+
+    await waitFor(() =>
+      expect(revokeMembership).toHaveBeenCalledWith('org-1', 'viewer-1')
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'You have stepped down.'
+    )
+  })
+
+  // The last-owner rule is enforced below this screen (`repos/memberships.ts#revokeMembership`,
+  // driven directly in that package's own tests) — this only proves the
+  // screen explains rather than merely hides, the same "absent or plainly
+  // disabled with the reason given" instruction this file's own module
+  // comment already states.
+  it("disables the viewer's own Step down when they are the organization's only owner, with the reason given", async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'viewer-1', displayName: 'Viewer', role: 'owner' }),
+    ])
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+    await screen.findByText(/Viewer — Owner/)
+
+    const stepDown = screen.getByRole('button', { name: 'Step down as Owner' })
+    expect(stepDown).toBeDisabled()
+    expect(
+      screen.getByText(/You are this organization.s only owner/)
+    ).toBeInTheDocument()
+  })
+
+  it('cancelling the revoke confirmation calls revokeMembership with nothing', async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'a1', displayName: 'TA Tam', role: 'instructor' }),
+    ])
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+    await screen.findByText(/TA Tam — Instructor/)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: "Revoke TA Tam's Instructor role" })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(dialog).not.toBeVisible())
+    expect(revokeMembership).not.toHaveBeenCalled()
+  })
+
+  it('a refused revoke renders the same ErrorMessage every other refusal in this app uses', async () => {
+    listMemberships.mockResolvedValue([
+      entry({ accountId: 'a1', displayName: 'TA Tam', role: 'instructor' }),
+    ])
+    revokeMembership.mockRejectedValue(
+      new ApiError(404, { error: 'action_refused' })
+    )
+
+    renderWithModal(
+      <Team organizationId="org-1" isOwner={true} viewerAccountId="viewer-1" />
+    )
+    await screen.findByText(/TA Tam — Instructor/)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: "Revoke TA Tam's Instructor role" })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not found, or you do not have access to it.'
+    )
   })
 })

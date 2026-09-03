@@ -562,11 +562,15 @@ function ShellInner({
         // ENRL-5 — the same `key={activeOrganizationId}` reasoning every
         // other tab above already holds itself to, plus `isOwner` (this
         // file's own module comment) so `Team.tsx` knows whether to offer
-        // the grant form at all.
+        // the grant form at all. `viewerAccountId` (ENRL-11) is what lets
+        // that same screen tell the caller's own row apart from a peer's —
+        // its own module comment has why that distinction decides whether a
+        // revoke control is even offered.
         <Team
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
           isOwner={isOwner}
+          viewerAccountId={account.id}
         />
       ) : effectiveTab === 'jobs' ? (
         // JOB-2 — the same `key={activeOrganizationId}` reasoning every

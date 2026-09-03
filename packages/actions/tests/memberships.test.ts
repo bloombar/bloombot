@@ -4,7 +4,17 @@
  * read side.
  */
 
-import { accounts, memberships } from '@bloombot/db'
+import {
+  accounts,
+  conversations,
+  courses,
+  enrolments,
+  memberships,
+  people,
+  projects,
+  schema,
+  type Database,
+} from '@bloombot/db'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -12,6 +22,7 @@ import { setSpendingCapAction } from '../src/actions/cost-ledger.js'
 import {
   grantMembershipAction,
   listMembershipsAction,
+  revokeMembershipAction,
 } from '../src/actions/memberships.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionInputError, ActionRefusedError } from '../src/errors.js'
@@ -400,5 +411,406 @@ describe('memberships.list (ENRL-5)', () => {
 
     expect(entries.map((entry) => entry.accountId)).toEqual([ownerOfA.id])
     expect(entries.map((entry) => entry.accountId)).not.toContain(ownerOfB.id)
+  })
+})
+
+/** One course, one person, an active enrolment, and a conversation with a couple of messages — the "revoking deletes no transcript and ends no enrolment" test needs actual rows to count, the same TEN-6 discipline `discord-servers.test.ts#seedCourseConversationAndMessages` already holds itself to. */
+function seedCourseEnrolmentAndConversation(
+  organizationId: string,
+  db: Database
+) {
+  const project = projects.createProject(
+    organizationId,
+    { name: 'Test Term' },
+    db
+  )
+  const courseResult = courses.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: 'Test Course',
+      filePrefix: 'tc',
+      enabled: true,
+      adminsRole: 'admins-tc',
+      studentsRole: 'students-tc',
+      categories: [],
+    },
+    db
+  )
+  if (!courseResult.ok) throw new Error('setup failed: unexpected conflict')
+
+  const person = people.createPerson(organizationId, {}, db)
+  const enrolment = enrolments.enrolViaRoster(
+    organizationId,
+    { courseId: courseResult.course.id, personId: person.id },
+    db
+  )
+  if (!enrolment) throw new Error('setup failed: no enrolment')
+
+  const conversation = conversations.getOrCreateConversation(
+    organizationId,
+    { courseId: courseResult.course.id, personId: person.id, surface: 'web' },
+    db
+  )
+  if (!conversation) throw new Error('setup failed: no conversation')
+  conversations.appendMessage(
+    organizationId,
+    conversation.id,
+    { direction: 'from_person', content: 'Hello' },
+    db
+  )
+
+  return { enrolmentId: enrolment.id }
+}
+
+describe('memberships.revoke (ENRL-11)', () => {
+  it('an owner revokes a membership, recording who revoked it and when', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      { email: 'assistant@example.edu', displayName: 'A', role: 'assistant' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      revokeMembershipAction,
+      { accountId: assistant.id },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    expect(result).toEqual({ revoked: true })
+    expect(
+      memberships.getMembership(organizationId, assistant.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // ENRL-11's own text, proven the same way D-67's own grant test proves
+  // ENRL-5: real authority, exercised through a dispatched action before
+  // and after — not merely a row that disappeared.
+  // `costLedger.setSpendingCap` is owner-only (COST-3), checked inside its
+  // own `execute` (`actions/cost-ledger.ts`'s own module comment) rather
+  // than only at the HTTP membership gate, so this is a genuine test of
+  // this slice's own change: `grantMembershipAction` promotes a colleague
+  // to owner, they really can set the cap, they step down (the only way an
+  // owner's own membership is ever revoked, this file's own module comment
+  // on the peer-owner decision), and the identical call is refused
+  // afterward.
+  it('an owner revokes a membership, and the holder can no longer do what that role permitted', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const colleague = accounts.createAccount(
+      organizationId,
+      { email: 'colleague@example.edu', displayName: 'C', role: 'assistant' },
+      testDb.db
+    )
+    await dispatch(
+      grantMembershipAction,
+      { email: 'colleague@example.edu', role: 'owner' },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    // Before revoking: the newly promoted owner really can set the cap.
+    const before = await dispatch(
+      setSpendingCapAction,
+      { capAmount: 10 },
+      { organizationId, db: testDb.db, accountId: colleague.id }
+    )
+    expect(before.spendingCapMicros).toBe(10_000_000)
+
+    await dispatch(
+      revokeMembershipAction,
+      { accountId: colleague.id },
+      { organizationId, db: testDb.db, accountId: colleague.id }
+    )
+
+    // After revoking: the identical call is refused — real access lost,
+    // not merely a row this test read back.
+    await expect(
+      dispatch(
+        setSpendingCapAction,
+        { capAmount: 20 },
+        { organizationId, db: testDb.db, accountId: colleague.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  it('refuses a caller who is not an owner', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+    const target = accounts.createAccount(
+      organizationId,
+      { email: 'target@example.edu', displayName: 'T', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: target.id },
+        { organizationId, db: testDb.db, accountId: instructor.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    expect(
+      memberships.getMembership(organizationId, target.id, testDb.db)
+    ).toMatchObject({ role: 'assistant' })
+  })
+
+  it('refuses when dispatch was given no authenticated caller at all', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const target = accounts.createAccount(
+      organizationId,
+      { email: 'target@example.edu', displayName: 'T', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: target.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // TEN-5: a foreign-tenant membership refuses identically to one that
+  // never existed — `resolve` scopes the lookup to the caller's own
+  // organization (`memberships.getMembership`), so it never even reaches
+  // the target's real organization.
+  it('refuses a membership belonging to another organization, indistinguishable from one that never existed', async () => {
+    testDb = createTestDatabase()
+    const orgA = seedOrganization(testDb.db)
+    const orgB = seedOrganization(testDb.db)
+    const ownerOfA = accounts.createAccount(
+      orgA,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    const memberOfB = accounts.createAccount(
+      orgB,
+      { email: 'memberB@example.edu', displayName: 'B', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: memberOfB.id },
+        { organizationId: orgA, db: testDb.db, accountId: ownerOfA.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    // Untouched — the refusal never reached orgB's own row.
+    expect(
+      memberships.getMembership(orgB, memberOfB.id, testDb.db)
+    ).toMatchObject({ role: 'assistant' })
+  })
+
+  // `z.strictObject` — the same discipline `grantInputSchema`'s own test
+  // gives ENRL-5. Fails without it: a plain `z.object` would silently drop
+  // `revokedByAccountId` rather than refusing the attempt to supply it.
+  it('refuses a revoke whose body supplies revokedByAccountId — it is stamped from the session, never the request', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const target = accounts.createAccount(
+      organizationId,
+      { email: 'target@example.edu', displayName: 'T', role: 'assistant' },
+      testDb.db
+    )
+    const impersonated = accounts.createAccount(
+      organizationId,
+      { email: 'nobody@example.edu', displayName: 'Nobody', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: target.id, revokedByAccountId: impersonated.id },
+        { organizationId, db: testDb.db, accountId: owner.id }
+      )
+    ).rejects.toThrow(ActionInputError)
+    // Refused before anything wrote at all.
+    expect(
+      memberships.getMembership(organizationId, target.id, testDb.db)
+    ).toMatchObject({ role: 'assistant' })
+  })
+
+  // --- ENRL-11's own decisions: the last owner, and a peer owner ---------
+
+  // Driven through the action directly, not a screen — the brief's own
+  // requirement. Fails without the repo's own guard
+  // (`repos/memberships.ts#revokeMembership`).
+  it('the last owner cannot revoke themselves', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const soleOwner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: soleOwner.id },
+        { organizationId, db: testDb.db, accountId: soleOwner.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    expect(
+      memberships.getMembership(organizationId, soleOwner.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // The exposure ENRL-11 was written for (`docs/SPEC.md`'s own "Why this
+  // exists" text, restated in this file's own module comment): once an
+  // invited account holds the owner role, does it gain the power to strip
+  // the founder's own standing? This platform's own answer, this slice: no
+  // — an owner's own membership is revoked only by that owner, stepping
+  // down themselves, never by a peer, however that peer came to hold the
+  // role.
+  it('an invited peer owner cannot revoke the founding owner', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const founder = accounts.createAccount(
+      organizationId,
+      { email: 'founder@example.edu', displayName: 'Founder', role: 'owner' },
+      testDb.db
+    )
+    const invited = accounts.createAccount(
+      organizationId,
+      {
+        email: 'invited@example.edu',
+        displayName: 'Invited',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    // `invited` becomes a second owner — standing in for ENRL-10's own
+    // invitation redemption, which this package's own module comment says
+    // its tests seed directly rather than replaying a whole invitation flow
+    // (`e2e/team-panel.spec.ts`'s own module comment gives the identical
+    // reasoning for the same substitution).
+    await dispatch(
+      grantMembershipAction,
+      { email: 'invited@example.edu', role: 'owner' },
+      { organizationId, db: testDb.db, accountId: founder.id }
+    )
+
+    await expect(
+      dispatch(
+        revokeMembershipAction,
+        { accountId: founder.id },
+        { organizationId, db: testDb.db, accountId: invited.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // The founder's own standing survives the attempt — real recourse, not
+    // merely a refused call: they can still do something only an owner can.
+    expect(
+      memberships.getMembership(organizationId, founder.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+    const capResult = await dispatch(
+      setSpendingCapAction,
+      { capAmount: 5 },
+      { organizationId, db: testDb.db, accountId: founder.id }
+    )
+    expect(capResult.spendingCapMicros).toBe(5_000_000)
+  })
+
+  // The other half of the same decision: an owner may always step down
+  // *themselves* — this is not a blanket "an owner's membership can never
+  // be revoked", only "never by a peer".
+  it("an owner may step down themselves, when they are not the organization's last owner", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const founder = accounts.createAccount(
+      organizationId,
+      { email: 'founder@example.edu', displayName: 'Founder', role: 'owner' },
+      testDb.db
+    )
+    const peer = accounts.createAccount(
+      organizationId,
+      { email: 'peer@example.edu', displayName: 'Peer', role: 'owner' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      revokeMembershipAction,
+      { accountId: peer.id },
+      { organizationId, db: testDb.db, accountId: peer.id }
+    )
+
+    expect(result).toEqual({ revoked: true })
+    expect(
+      memberships.getMembership(organizationId, peer.id, testDb.db)
+    ).toBeUndefined()
+    // The founder, still an owner, is untouched.
+    expect(
+      memberships.getMembership(organizationId, founder.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // ENRL-11's own text: "removes staff authority and nothing else" — proven
+  // by actually seeding a course, an enrolment and a conversation with
+  // messages, and counting every one of them before and after, the same
+  // TEN-6 discipline `discord-servers.test.ts` already holds itself to,
+  // rather than only asserting the membership row itself.
+  it('revoking deletes no transcript and ends no enrolment', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+    const { enrolmentId } = seedCourseEnrolmentAndConversation(
+      organizationId,
+      testDb.db
+    )
+    const before = {
+      conversations: testDb.db.select().from(schema.conversations).all().length,
+      messages: testDb.db.select().from(schema.messages).all().length,
+    }
+
+    await dispatch(
+      revokeMembershipAction,
+      { accountId: instructor.id },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    const after = {
+      conversations: testDb.db.select().from(schema.conversations).all().length,
+      messages: testDb.db.select().from(schema.messages).all().length,
+    }
+    expect(after).toEqual(before)
+    expect(
+      enrolments.getEnrolment(organizationId, enrolmentId, testDb.db)
+    ).toMatchObject({ endedAt: null })
   })
 })

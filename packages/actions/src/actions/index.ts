@@ -58,7 +58,11 @@ import {
   listEnrolmentsForPersonAction,
   reinstateEnrolmentAction,
 } from './enrolments.js'
-import { grantMembershipAction, listMembershipsAction } from './memberships.js'
+import {
+  grantMembershipAction,
+  listMembershipsAction,
+  revokeMembershipAction,
+} from './memberships.js'
 import {
   createMembershipInvitationAction,
   listMembershipInvitationsAction,
@@ -128,6 +132,7 @@ export {
 export {
   grantMembershipAction,
   listMembershipsAction,
+  revokeMembershipAction,
   type MembershipEntry,
 } from './memberships.js'
 export {
@@ -218,6 +223,7 @@ export function createPlatformRegistry(options?: {
   registry.register(listEnrolmentsForCourseAction)
   registry.register(grantMembershipAction)
   registry.register(listMembershipsAction)
+  registry.register(revokeMembershipAction)
   registry.register(createMembershipInvitationAction)
   registry.register(listMembershipInvitationsAction)
   registry.register(revokeMembershipInvitationAction)

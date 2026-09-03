@@ -125,6 +125,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'enrolments.listForCourse',
         'memberships.grant',
         'memberships.list',
+        'memberships.revoke',
         'membershipInvitations.create',
         'membershipInvitations.list',
         'membershipInvitations.revoke',

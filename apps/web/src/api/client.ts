@@ -748,6 +748,21 @@ export function grantMembership(
 }
 
 /**
+ * ENRL-11: revoke the membership held by `accountId` — only an existing
+ * owner may call this; an owner's own membership may only ever be revoked
+ * by that owner stepping down, never by a peer; and the organization's
+ * last owner can never be revoked (refused, 404, `action_refused`,
+ * identically to every other refusal this action can give — see
+ * `memberships.revoke`'s own description).
+ */
+export function revokeMembership(
+  organizationId: string,
+  accountId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'memberships.revoke', { accountId })
+}
+
+/**
  * ENRL-10 — inviting a colleague who is not yet in the organization: issuing
  * an invitation (the secret is the response's own, one-time payload —
  * nothing about it is ever fetched again), the outstanding list (never a

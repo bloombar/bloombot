@@ -58,13 +58,52 @@
  * says so. `components/MembershipInvitations.tsx`, mounted below, owner-
  * gated the identical way, is what actually lets an owner bring a
  * genuinely new colleague onto their staff: an invitation, not a grant.
+ *
+ * **ENRL-11 — revoking, and why a row's own control depends on whose row it
+ * is.** `revokeMembershipAction`'s own decision (`@bloombot/actions`'
+ * `actions/memberships.ts`, its own module comment has the reasoning): an
+ * owner's own membership is only ever revoked by that owner stepping down
+ * themselves, never by a peer — and the organization's last owner can never
+ * be revoked at all, enforced in the repo, below any screen. This component
+ * mirrors both, rather than offering a control the server would always
+ * refuse: a peer owner's row carries no control whatsoever (the server
+ * would refuse every attempt identically, so offering one would only ever
+ * teach a caller to expect a refusal); the viewer's *own* row, when it is
+ * `'owner'`, offers "Step down" — enabled, unless `entries` shows exactly
+ * one active owner, in which case it renders disabled with the reason
+ * stated, the same "explain, don't just hide" instruction WEB-23's own
+ * expiry control already follows for a different reason. A non-owner row
+ * (instructor, assistant) carries an ordinary "Revoke" any owner may use,
+ * on anyone, including the viewer's own — the peer-owner restriction is
+ * specific to the `'owner'` role, not to acting on another row generally.
+ * **The count `entries` itself gives is enough** — no separate request:
+ * `listMembershipsAction` already returns every *active* membership
+ * (`repos/memberships.ts#listMembershipsForOrganization`'s own doc
+ * comment), so counting `role === 'owner'` rows in the list this screen
+ * already fetched is the same count the repo's own last-owner guard uses.
+ * This is what decides what the button *offers*, not what makes revoking
+ * safe — `revokeMembership`'s own repo-level guard (`docs/DECISIONS.md`
+ * D-70) is the actual enforcement, the same "the screen explains, the write
+ * decides" split ENRL-11's own SPEC text requires.
+ *
+ * Revoking confirms, and says both halves of what it does — the same
+ * "say the consequence before it happens" discipline this file's own grant
+ * confirmation, and `components/JoinLinks.tsx#handleRevoke`, already hold
+ * themselves to: it stops the holder's staff access; it deletes no
+ * transcript and ends no enrolment (ENRL-11, mirroring TEN-6/ENRL-6 for the
+ * identical reason).
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { ApiError, grantMembership, listMemberships } from '../api/client.js'
+import {
+  ApiError,
+  grantMembership,
+  listMemberships,
+  revokeMembership,
+} from '../api/client.js'
 import type { OrganizationMembership } from '../api/types.js'
-import { AddIcon } from '../icons.js'
+import { AddIcon, DisableIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
@@ -76,6 +115,8 @@ export interface TeamProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the grant form is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
+  /** The caller's own account id (ENRL-11) — tells the viewer's own roster row apart from a peer's, which is what decides whether a revoke control is offered at all for an `'owner'` row (this file's own module comment). */
+  viewerAccountId: string
 }
 
 const ROLE_LABELS: Record<OrganizationMembership['role'], string> = {
@@ -90,7 +131,7 @@ const GRANTABLE_ROLES: OrganizationMembership['role'][] = [
   'owner',
 ]
 
-export function Team({ organizationId, isOwner }: TeamProps) {
+export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
   const [entries, setEntries] = useState<OrganizationMembership[] | undefined>(
     undefined
   )
@@ -99,6 +140,13 @@ export function Team({ organizationId, isOwner }: TeamProps) {
   const [role, setRole] = useState<OrganizationMembership['role']>('instructor')
   const [granting, setGranting] = useState(false)
   const [grantError, setGrantError] = useState<ApiError | undefined>(undefined)
+  // ENRL-11 — which row's revoke is in flight, and its own error, the same
+  // `revokingId`/`revokeError` shape `components/JoinLinks.tsx#handleRevoke`
+  // already uses for the identical "one row at a time" async need.
+  const [revokingId, setRevokingId] = useState<string | undefined>(undefined)
+  const [revokeError, setRevokeError] = useState<ApiError | undefined>(
+    undefined
+  )
   // A live region for the one thing a screen reader cannot otherwise learn
   // from this screen's own re-render: a new row appearing in the list below
   // once a grant succeeds. Cleared on every new attempt so a stale
@@ -160,6 +208,47 @@ export function Team({ organizationId, isOwner }: TeamProps) {
     }
   }
 
+  // ENRL-11 — how many active owners `entries` itself shows right now; this
+  // file's own module comment on why counting the list already fetched is
+  // enough to decide what the button *offers*, without a separate request.
+  const ownerCount =
+    entries?.filter((entry) => entry.role === 'owner').length ?? 0
+
+  const handleRevoke = async (entry: OrganizationMembership) => {
+    setRevokeError(undefined)
+    setStatusMessage(undefined)
+    const isSelf = entry.accountId === viewerAccountId
+    // ENRL-11: both halves, stated plainly, before anything happens — the
+    // same discipline `handleGrant`, above, and `JoinLinks.tsx#handleRevoke`
+    // already hold themselves to.
+    const confirmed = await confirm({
+      title: isSelf
+        ? `Step down as ${ROLE_LABELS[entry.role]}?`
+        : `Revoke ${entry.displayName}'s ${ROLE_LABELS[entry.role]} role?`,
+      description:
+        'This stops their staff access to this organization. It deletes no transcript and ends no enrolment.',
+      confirmLabel: isSelf ? 'Step down' : 'Revoke',
+      destructive: true,
+    })
+    if (!confirmed) return
+
+    setRevokingId(entry.accountId)
+    try {
+      await revokeMembership(organizationId, entry.accountId)
+      setStatusMessage(
+        isSelf
+          ? 'You have stepped down.'
+          : `Revoked ${entry.displayName}'s role.`
+      )
+      await refresh()
+    } catch (caught) {
+      if (caught instanceof ApiError) setRevokeError(caught)
+      else throw caught
+    } finally {
+      setRevokingId(undefined)
+    }
+  }
+
   if (loadError) {
     return (
       <div className="flex flex-col gap-4">
@@ -185,25 +274,64 @@ export function Team({ organizationId, isOwner }: TeamProps) {
         )}
         {entries && entries.length > 0 && (
           <ul className="flex flex-col gap-2">
-            {entries.map((entry) => (
-              <li
-                key={entry.accountId}
-                className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
-              >
-                <div>
-                  <p className="text-sm font-medium text-neutral-900">
-                    {entry.displayName} — {ROLE_LABELS[entry.role]}
-                  </p>
-                  <p className="text-sm text-neutral-500">
-                    {entry.grantedByDisplayName && entry.grantedAt !== null
-                      ? `Granted by ${entry.grantedByDisplayName} — ${new Date(entry.grantedAt).toLocaleString()}`
-                      : `Member since ${new Date(entry.createdAt).toLocaleString()}`}
-                  </p>
-                </div>
-              </li>
-            ))}
+            {entries.map((entry) => {
+              const isSelf = entry.accountId === viewerAccountId
+              // ENRL-11: an owner's own row is revocable only by that owner,
+              // stepping down — never a peer's — and the organization's last
+              // owner cannot step down either; a peer's `'owner'` row
+              // carries no control at all, this file's own module comment
+              // has why. A non-owner row (instructor, assistant) is always
+              // revocable by the viewer, whoever it belongs to.
+              const showRevoke = isOwner && (entry.role !== 'owner' || isSelf)
+              const isLastOwner = entry.role === 'owner' && ownerCount <= 1
+              return (
+                <li
+                  key={entry.accountId}
+                  className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-neutral-900">
+                      {entry.displayName} — {ROLE_LABELS[entry.role]}
+                    </p>
+                    <p className="text-sm text-neutral-500">
+                      {entry.grantedByDisplayName && entry.grantedAt !== null
+                        ? `Granted by ${entry.grantedByDisplayName} — ${new Date(entry.grantedAt).toLocaleString()}`
+                        : `Member since ${new Date(entry.createdAt).toLocaleString()}`}
+                    </p>
+                    {showRevoke && isLastOwner && (
+                      <p className="text-sm text-neutral-500">
+                        You are this organization&rsquo;s only owner — promote
+                        another member before stepping down.
+                      </p>
+                    )}
+                  </div>
+                  {showRevoke && (
+                    <Button
+                      variant="destructive"
+                      aria-label={
+                        isSelf
+                          ? `Step down as ${ROLE_LABELS[entry.role]}`
+                          : `Revoke ${entry.displayName}'s ${ROLE_LABELS[entry.role]} role`
+                      }
+                      icon={
+                        <DisableIcon aria-hidden="true" className="size-4" />
+                      }
+                      onClick={() => void handleRevoke(entry)}
+                      disabled={revokingId === entry.accountId || isLastOwner}
+                    >
+                      {revokingId === entry.accountId
+                        ? 'Revoking…'
+                        : isSelf
+                          ? 'Step down'
+                          : 'Revoke'}
+                    </Button>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
+        {revokeError && <ErrorMessage error={revokeError} />}
       </section>
 
       {isOwner && (

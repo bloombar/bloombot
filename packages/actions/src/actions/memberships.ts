@@ -1,6 +1,6 @@
 /**
- * Actions over `packages/db`'s `memberships` repo (ENRL-5): `memberships.grant`
- * and `memberships.list`.
+ * Actions over `packages/db`'s `memberships` repo (ENRL-5, ENRL-11):
+ * `memberships.grant`, `memberships.list` and `memberships.revoke`.
  *
  * Membership roles carry authority over a tenant's courses, transcripts and
  * spending, and ENRL-5 requires they are "granted only by an existing owner
@@ -26,6 +26,36 @@
  * below, is the read half that closes the second gap; `apps/web`'s own
  * `components/Team.tsx` and `api/client.ts` are what close the first, this
  * same slice.
+ *
+ * **`revokeMembershipAction` (ENRL-11) closes the gap D-67 and D-68 both
+ * named and left open: nothing revoked a membership, and nothing stopped an
+ * organization losing its last owner.** Once ENRL-10 made an outside
+ * account reachable as an owner at all, that owner could call
+ * `grantMembershipAction` to demote the founding owner with no way back —
+ * this action is the recourse: an owner may revoke a colleague's standing,
+ * recorded the same way a grant already is (`repos/memberships.ts#revokeMembership`'s
+ * own doc comment).
+ *
+ * **Decision this requirement exists to settle: an owner's own membership
+ * may only ever be revoked by that owner, stepping down themselves — never
+ * by a peer.** `grantMembershipAction` already lets one owner demote
+ * *another* to a lesser role (unchanged by this slice, out of scope per
+ * this requirement's own brief), so the identical peer-to-peer reach
+ * already exists there; closing it here as well, for the strictly more
+ * final act of removing a colleague's standing outright, is this
+ * requirement's own answer to the question its SPEC text names as
+ * unsettled. See `docs/DECISIONS.md` D-70 for the reasoning and what this
+ * does not close (the pre-existing `grantMembershipAction` path).
+ *
+ * **The last-owner invariant is enforced in the repo, not here.**
+ * `revokeMembership`'s own doc comment has why: this action's `execute`
+ * cannot be the last line of defense against an organization losing its
+ * only owner, because it is not the only caller `revokeMembership` will
+ * ever have. What `execute` cannot tell apart from `revokeMembership`'s own
+ * `undefined` return — the last owner, versus nothing left to revoke at
+ * all — it does not need to: both are `ActionRefusedError`, the same
+ * "refused, not-found-shaped" TEN-5 already gives every other refusal in
+ * this package.
  */
 
 import { accounts, memberships, organizations, schema } from '@bloombot/db'
@@ -151,6 +181,88 @@ export const grantMembershipAction: Action<
       { accountId: target.id, role: input.role, grantedByAccountId: accountId },
       db
     )
+  },
+}
+
+// `z.strictObject`, the same reason `grantInputSchema`'s own comment gives:
+// a caller sending `revokedByAccountId` (always stamped from the session's
+// own `accountId`, below, never read off `input`) deserves an explicit
+// `action_input_invalid` refusal, not silent disregard.
+const revokeInputSchema = z.strictObject({
+  accountId: z.string().min(1),
+})
+type RevokeInput = z.infer<typeof revokeInputSchema>
+
+type TargetMembership = NonNullable<
+  ReturnType<typeof memberships.getMembership>
+>
+
+/**
+ * ENRL-11: revoke a membership — removes staff authority and nothing else
+ * (`repos/memberships.ts#revokeMembership`'s own doc comment); it deletes no
+ * transcript and ends no enrolment, the same rule TEN-6 and ENRL-6 already
+ * hold to for the identical reason.
+ *
+ * `resolve` reaches the target through `memberships.getMembership`, scoped
+ * to the caller's own organization (TEN-5) — a target belonging to another
+ * organization, or one already revoked, refuses identically to one that
+ * never existed, before `execute` ever runs. *Who* may call this — only an
+ * existing owner — and the peer-owner restriction below are `execute`'s own
+ * checks, not the policy's, for the identical reason `grantMembershipAction`'s
+ * own module comment gives: a policy cannot see the caller's account id.
+ */
+export const revokeMembershipAction: Action<
+  'memberships.revoke',
+  RevokeInput,
+  TargetMembership,
+  { revoked: boolean }
+> = {
+  name: 'memberships.revoke',
+  description:
+    "Revoke a membership (ENRL-11): removes the holder's staff authority and nothing else — no transcript deleted, no enrolment ended. Only an existing owner may call this; an owner's own membership may only be revoked by that owner stepping down, never by a peer; and the organization's last owner can never be revoked.",
+  inputSchema: revokeInputSchema,
+  policy: {
+    descriptor: { resource: 'membership', access: 'write' },
+    resolve: (input, context) =>
+      memberships.getMembership(
+        context.organizationId,
+        input.accountId,
+        context.db
+      ),
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    if (!accountId) throw new ActionRefusedError()
+
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      accountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
+    // ENRL-11's own decision, this file's own module comment has the
+    // reasoning: an owner's own membership is revoked only by that owner,
+    // stepping down themselves — never by a peer, even another owner. A
+    // non-owner target (instructor, assistant) carries no such
+    // restriction; any owner may revoke one.
+    if (entity.role === 'owner' && entity.accountId !== accountId) {
+      throw new ActionRefusedError()
+    }
+
+    const revoked = memberships.revokeMembership(
+      organizationId,
+      { accountId: entity.accountId, revokedByAccountId: accountId },
+      db
+    )
+    if (!revoked) {
+      // Reached only when `entity` was this organization's sole remaining
+      // owner, revoking themselves — the repo's own last-owner invariant
+      // (`revokeMembership`'s own doc comment), not this action's.
+      throw new ActionRefusedError()
+    }
+    return { revoked: true }
   },
 }
 

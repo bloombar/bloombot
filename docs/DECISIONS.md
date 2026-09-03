@@ -7637,3 +7637,153 @@ that test pins exactly this property and nothing broader.
 Final counts after this slice: 90 node:test (unchanged), 2149 vitest across 183 files (+3 tests, no new file —
 `apps/web/tests/chat.test.tsx`'s own new "thread scroll behaviour" block), 26 e2e (+1 — `e2e/chat-scroll.spec.ts`,
 new). `npx drizzle-kit check` (from `packages/db`): not run — this slice touched no schema.
+
+---
+
+## D-73 — `packages/db`/`packages/actions`/`apps/web`/`e2e`: ENRL-11 — a membership can be revoked, and an organization always has an owner
+
+**Problem.** D-67 granted a role and D-68 invited a colleague who had none; neither took anything away, and each
+said so explicitly (D-67's own "Out of scope, deliberately" — "Demoting or removing a membership... is not built
+here... deciding what, if anything, stops the last owner removing themselves... is left for whoever picks it up
+next"; D-68's own "Removal/demotion... exactly the same open questions D-67 left, unchanged"). Together they
+create the gap this requirement names: D-68 is what first makes an outside account reachable as an owner in
+production, and once redeemed, that new owner could call `memberships.grant` to demote the original owner with
+no recourse, because nothing revoked a membership and nothing distinguished the account that created an
+organization from one invited into it. `deleteMembership` (`packages/db/src/repos/memberships.ts`) had existed,
+uncalled, since before D-67; nothing in `components/Team.tsx` offered a way to remove a row at all.
+
+**Choice, mark rather than delete.** The brief named this as mine to judge. ENRL-5 already requires a grant be
+*recorded* — `grantedByAccountId`/`grantedAt`, stamped on the row itself, not a separate audit log
+(`schema.ts`'s own comment on those two columns). A hard delete through `deleteMembership` would answer neither
+"who revoked this" nor "when" the moment it ran — exactly the kind of thing an institution has to account for on
+the way out, the identical reasoning TEN-6 already gives `discord_server_bindings.removed_at` for the same class
+of removal. `revokedByAccountId`/`revokedAt` (new columns, `0019_normal_patriot.sql`) mark instead, mirroring
+`discord_server_bindings.removed_at` and `course_join_links.revoked_at` exactly. `deleteMembership` itself is
+untouched and still uncalled — kept for whatever a future caller (a full account deletion, say) genuinely needs
+to be a hard delete, but `memberships.revoke` (the new action) never reaches it.
+
+**Consequence of marking: `getMembership` had to become the "active" query, and every one of its ~15 existing
+callers had to keep working unchanged.** `getMembership` is the one function nearly every authorization check in
+this platform calls — `apps/api`'s `routes/actions.ts`/`chat.ts`/`discord-servers.ts`/`transcript-exports.ts`,
+`apps/mcp`'s `authenticate.ts`/`call-tool.ts`, this package's own `discord-servers.ts`, and every owner-only
+action in `@bloombot/actions` — to answer "does this account currently have any standing here". A revoked row
+that `getMembership` kept returning would make revoking a no-op everywhere it actually matters, which is exactly
+the failure a first draft of this slice hit: marking the row without changing the read left every downstream
+check still authorizing the revoked account. `getMembership`'s own `WHERE` now excludes `revokedAt IS NOT NULL`
+— every one of those callers gets "a revoked membership is absent" for free, with no edit to any of them, and
+the `packages/actions` census tests (`access-audit.test.ts`, `catalog.test.ts`) and `apps/api`'s own
+`tenant-isolation.test.ts` all stayed green with zero changes beyond registering the new action, confirming
+nothing there had to learn a new column exists. `listMembershipsForOrganization` (the Team roster) and
+`listMembershipsForAccount` (`GET /auth/me`'s own organization discovery) both got the identical filter, for the
+same reason: a revoked membership must not still list as a current holder, or still name an organization the
+caller may act in.
+
+**Consequence of marking, the other direction: `grantMembershipRole` needed its own, unfiltered lookup.** The
+composite primary key on `memberships` (`organizationId`, `accountId`) means a revoked row still occupies that
+key exactly as an active one does. `grantMembershipRole`'s own "does a row already exist, so this is an update,
+not an insert" check used to be `getMembership` — now filtered to active-only, it would say "no" for a
+previously revoked account and attempt a second `INSERT` against a primary key the revoked row already holds,
+which SQLite refuses. Reached in practice through `redeemMembershipInvitation` (ENRL-10): that function's own
+"already a member" refusal also now reads a revoked account as having none, so a previously revoked colleague
+can be invited back in exactly like a stranger — and the redemption's own `grantMembershipRole` call would have
+crashed on the primary key without a fix. `findMembershipRow` (module-private, unfiltered) is that fix — used
+only by `grantMembershipRole`'s own `existing` check — and the update branch now also clears
+`revokedAt`/`revokedByAccountId`, so a fresh grant genuinely reactivates the row rather than leaving a stale
+revocation on one this call just made active again. Measured by mutation: dropping that reset (`packages/db/tests/memberships.test.ts`'s
+own "grantMembershipRole reactivates a previously revoked membership" test) fails without it; so does reverting
+`findMembershipRow` back to `getMembership` inside `grantMembershipRole`, though that failure mode is a thrown
+`SQLITE_CONSTRAINT` rather than a clean assertion — caught in this same test, from the other direction, before
+committing.
+
+**Choice, the decision ENRL-11's own text names as unsettled: an owner's own membership is revoked only by that
+owner, stepping down themselves — never by a peer, even another owner.** The brief required this be decided,
+implemented, and recorded rather than left to whichever screen was written first (D-67's and D-68's own
+deferral). `memberships.grant` already lets one owner demote *another* to a lesser role — untouched by this
+slice, out of scope per the brief — so the identical peer-to-peer reach already exists there for a role
+*change*; I chose to close it for `memberships.revoke`, the strictly more final act of removing a colleague's
+standing outright with no update afterward to reconsider. This is the literal scenario the requirement's own
+"Why this exists" text describes — an invited owner using new authority to strip an existing one's — and closing
+it for the new capability this slice introduces is the concrete recourse ENRL-11 asks for, even though
+`grantMembershipAction`'s own pre-existing demotion path is a known, separately-scoped gap this slice does not
+touch (recorded here, not silently narrowed, the same discipline D-67/D-68 already hold themselves to for their
+own open questions). Enforced in `revokeMembershipAction#execute` (`entity.role === 'owner' && entity.accountId
+!== accountId` refuses), because — the same reason `grantMembershipAction`'s own owner/self checks live in
+`execute`, not the policy — `PolicyContext` carries no caller account id at all. Measured by mutation: dropping
+this check made `packages/actions/tests/memberships.test.ts`'s own "an invited peer owner cannot revoke the
+founding owner" test fail (the call that should be refused instead succeeded); the self-target case remains
+allowed by the same check (`entity.accountId === accountId` is exempted), proven by "an owner may step down
+themselves, when they are not the organization's last owner" passing unmodified.
+
+**Choice, the last-owner invariant is enforced in the repo, not the action.** The brief was explicit that this
+belongs where the write happens, "not in the screen that offers it" — and named the action as an acceptable
+alternative to the repo. I chose the repo (`repos/memberships.ts#revokeMembership`) over the action, because
+this is a data invariant ("an organization has zero owners") rather than a fact about *who is calling* — the
+class of check `grantMembershipRole`'s own module comment already separates from "who may call this", which
+stays in `execute`. Enforcing it in the repo means any future caller of `revokeMembership` — not only today's one
+action — is forced through the same guard, the same reasoning `TargetMembership`'s own resolve being TEN-5-scoped
+protects every future caller of the policy, not only this one. The count of active owners and the revoking write
+run inside one `db.transaction(...)` — the same "narrow the race, don't just document it" discipline
+`course-join-links.ts#redeemJoinLink`'s own comment already explains — so two concurrent revokes of two
+different owners cannot both observe "more than one left" and both proceed, leaving none. Measured by mutation:
+replacing the `activeOwners.length <= 1` check with `false` (never refuse) made `packages/db/tests/memberships.test.ts`'s
+own "the last owner cannot be revoked, even by another owner" test fail — the sole owner's membership was
+actually removed. `revokeMembershipAction#execute` cannot tell "the last owner" apart from "nothing left to
+revoke at all" from `revokeMembership`'s own `undefined` return, by design — both become the identical
+`ActionRefusedError`, TEN-5's "not-found rather than a different refusal" shape, so a caller probing which
+reason it got learns nothing either way.
+
+**Choice, revoking removes staff authority and nothing else.** TEN-6 and ENRL-6 both hold this rule for the
+identical reason (removal must never delete what an institution may be required to retain), and `revokeMembership`
+touches only the `memberships` row — it calls into no other repo. Proven directly, not merely by omission:
+`packages/actions/tests/memberships.test.ts`'s own "revoking deletes no transcript and ends no enrolment" test
+seeds a course, an active enrolment and a conversation with messages, revokes an unrelated instructor
+membership, and counts every one of those rows before and after — the same TEN-6 discipline
+`packages/actions/tests/discord-servers.test.ts#countRows` already holds itself to, rather than trusting that an
+action touching one table could not possibly reach another.
+
+**Finding — the "holder can no longer do what that role permitted" test could not use an owner-role target the
+way a first draft tried.** The first version of that test promoted a colleague to owner, then had the *original*
+owner revoke them — which the peer-owner decision above refuses outright, so the test itself failed against the
+correct implementation, not merely against a bug. Fixed by having the colleague step down *themselves*
+(`accountId: colleague.id` as both caller and target) before proving `costLedger.setSpendingCap` (owner-only,
+checked inside its own `execute`) refuses the identical call afterward — a genuine "real access, lost" proof
+that also respects the requirement's own peer-owner rule rather than working around it.
+
+**The UI (`components/Team.tsx`, ENRL-11): the screen explains, the write decides.** A row's own control depends
+on whose row it is, computed entirely from `entries` (`listMembershipsAction`'s own return) and a new
+`viewerAccountId` prop (threaded from `pages/Shell.tsx`'s own `account.id`, the caller's `/auth/me` identity) —
+no separate request. A peer owner's row carries no control at all (the server would refuse every attempt
+identically, so offering one would only teach a caller to expect a refusal); the viewer's own `'owner'` row
+offers "Step down", disabled with the reason stated in the row itself when `entries` shows exactly one active
+owner — the same count the repo's own guard uses, read off the list this screen already fetched rather than a
+second request. A non-owner row always offers an ordinary "Revoke". The confirmation states both halves before
+sending, the same discipline `handleGrant`/`JoinLinks.tsx#handleRevoke` already hold themselves to. Measured by
+mutation, both in `apps/web/tests/team.test.tsx`: replacing the last-owner disabled condition with `false` left
+the sole owner's own "Step down" control enabled — caught by the "disables... with the reason given" test;
+replacing the peer-owner exclusion with "always show" surfaced a control on a peer owner's row — caught by the
+"withholds the revoke control on a peer owner's row" test.
+
+**Evidence, mutation testing beyond what is recorded above.** Every mutation the brief's own "On evidence" list
+names was tried directly, each confirmed to turn a specific test red, then reverted: dropping the last-owner
+guard (repo test above); letting the revoker be supplied by the request body (`revokeInputSchema` reverted from
+`z.strictObject` to a plain `z.object` — `packages/actions/tests/memberships.test.ts`'s own "refuses a revoke
+whose body supplies revokedByAccountId" fails without it, the identical `z.strictObject` discipline D-67's own
+`grantInputSchema` already established); allowing a non-owner to call the action at all (`callerMembership.role
+!== 'owner'` weakened to merely requiring *a* membership — "refuses a caller who is not an owner" fails); making
+the UI-side guard the only guard (covered above). No mutation tried survived any test in this slice's own suite.
+
+**Out of scope, deliberately, stated rather than left ambiguous.** ENRL-12 and the `expiresAt` refinement (a
+later slice, per the brief). `memberships.grant`'s own behaviour and its anti-oracle refusal — untouched; its
+own pre-existing ability to demote a peer owner to a lesser role remains a known, separately-scoped gap (see the
+peer-owner choice above). Invitation issuing/redeeming (ENRL-10, unchanged, beyond the "revoked reads as absent"
+consequence `getMembership`'s own filter gives it automatically). MCP's tool surface — `apps/mcp/src/tool-surface.ts`'s
+own module comment already reasons about the omission of membership actions, deliberately; this slice does not
+touch that file, so `memberships.revoke` is unreachable from a model caller by construction, the same as every
+other membership action. `accounts.disableAccount` (account lifecycle) — untouched.
+
+Final counts after this slice: 90 node:test (unchanged), 2178 vitest across 183 files (+29 — no new file: +8 in
+`packages/db/tests/memberships.test.ts`, +10 in `packages/actions/tests/memberships.test.ts`, +7 in
+`apps/web/tests/team.test.tsx`, +3 derived in `apps/api/tests/tenant-isolation.test.ts`'s own foreign-session/
+no-session/disabled-account matrix for the new route, +1 derived in `packages/actions/tests/access-audit.test.ts`'s
+own per-descriptor loop; `catalog.test.ts` gained a name in an existing array, no new case), 27 e2e (+1 —
+`e2e/team-panel-revoke.spec.ts`, new). `npx drizzle-kit check` (from `packages/db`): clean.

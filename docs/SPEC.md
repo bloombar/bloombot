@@ -1132,6 +1132,29 @@ TEN-6 and ENRL-6 already hold to for the same reason. Whether an owner may be de
 all, or only step down themselves, is the decision this requirement has to settle rather than leave
 to whichever screen is written first.
 
+#### ENRL-12 A live join link can be shown again to the instructor who owns it
+
+A course join link's secret is stored only as a SHA-256 hash, so the panel can show it once at
+creation and never again. That rule is right for `sign_in_tokens`, which prove one person's email
+address and are spent once. It fits a join link poorly: a join link is deliberately broadcast to a
+whole class, so the secrecy being protected has already been handed to everyone in it, while the
+cost falls entirely on the instructor — close the tab, or come back in week three to re-send the
+link, and the only way forward is to revoke and reissue, which breaks the link for every student who
+still holds the old one.
+
+A live link's secret is recoverable by the instructors of its own organization. It is stored
+encrypted at rest rather than in plaintext, so reading the database is not enough to enrol anybody:
+the key lives in the environment beside every other credential (CFG-5), never in the database, and
+the stored hash remains what redemption looks up — encryption is not searchable and must not become
+the lookup path.
+
+Showing a secret again is its own deliberate act, not a field that rides along on every listing: the
+links list continues to carry no secret at all, and revealing one is a separate, owner-or-instructor
+request for a single link. A revoked or expired link reveals nothing — there is no reason to hand
+back a secret that admits nobody. A deployment with no key configured keeps today's behaviour
+exactly: the secret is shown once at creation and the reveal is refused, rather than the platform
+failing to start or silently storing a secret it cannot protect.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

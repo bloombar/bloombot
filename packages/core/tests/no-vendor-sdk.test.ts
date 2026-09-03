@@ -126,3 +126,24 @@ describe('packages/core imports no vendor SDK (CORE-4)', () => {
     }
   })
 })
+
+/**
+ * CORE-7 — the defect this guard would have caught: `answer.ts` used to
+ * build Discord's own mention token (an angle bracket, an `@`, then an id)
+ * as a plain string literal, not an import, so every check above — which
+ * only looks for a vendor SDK being *pulled in* — never saw it. A vendor's
+ * own wire syntax embedded as a literal is the same "this package now knows
+ * about one surface" violation CORE-4 already forbids for an SDK import;
+ * this scans for the literal two-character token no legitimate line of
+ * `packages/core/src` should ever contain, surface syntax or otherwise.
+ */
+describe('packages/core contains no surface-specific address syntax (CORE-7)', () => {
+  const files = listSourceFilesRecursively(SRC_DIR)
+
+  for (const file of files) {
+    it(`${file} contains no Discord-style mention token`, () => {
+      const source = readFileSync(`${SRC_DIR}/${file}`, 'utf8')
+      expect(source, `${file} contains a literal "<@"`).not.toContain('<@')
+    })
+  }
+})

@@ -125,6 +125,23 @@ const NO_PRICING_CONFIGURED: PricingTable = {
   },
 }
 
+/**
+ * `deps.addressPerson`'s default when a caller omits it (CORE-7, CORE-8) —
+ * the same "expose the seam, default to the *safe* choice rather than a
+ * merely convenient one" discipline `NO_ADMISSION_LIMIT`/
+ * `NO_PRICING_CONFIGURED` above already hold themselves to, applied to
+ * addressing rather than concurrency or cost: a surface that has not
+ * decided how to address a person addresses nobody, exactly as CORE-8
+ * orders as the last resort of its own fallback — never an internal id,
+ * which is the defect this pair of ports fields replaces. This is what
+ * makes CORE-7's own "a new surface cannot inherit the bug by doing
+ * nothing" true structurally rather than by convention: the dangerous
+ * behaviour (build an id-shaped reference and hand it to the model) is not
+ * reachable by omission any more, on any surface, including one not yet
+ * written.
+ */
+const NO_ADDRESS: NonNullable<AnswerDependencies['addressPerson']> = () => null
+
 /** What one call to `answerQuestion` needs — the organization, course, person, surface and text CORE-1 names. */
 export interface AnswerQuestionInput {
   organizationId: string
@@ -157,6 +174,23 @@ export interface AnswerDependencies {
   admission?: AdmissionGate
   /** COST-1/COST-6's per-model rates, priced against a successful call's own reported tokens. Defaults to `NO_PRICING_CONFIGURED` (this file's own module comment) when omitted — a real process wires the configured table through (`apps/bot`'s own `main()`, from `@bloombot/config`'s `getModelPricingTable`). */
   pricing?: PricingTable
+  /**
+   * CORE-7 — how the calling surface wants the person addressed, given the
+   * person and (when they have one) their identity on this request's own
+   * surface; threaded through to `ModelRequest.addressAs` (`ports.ts`).
+   * Defaults to `NO_ADDRESS` (this file's own module comment) when omitted:
+   * addresses nobody, the safe choice, never an id. `@bloombot/discord`'s
+   * own `handleMention` supplies Discord's mention token here — unchanged
+   * from before this slice, just moved out of this package, which is meant
+   * to know nothing about any one surface's own syntax (CORE-4's rule,
+   * applied here to addressing too) — and `apps/api`'s own `routes/chat.ts`
+   * supplies CORE-8's fallback order (first name, then display name, then
+   * nothing) for the web chat.
+   */
+  addressPerson?: (
+    person: people.Person,
+    identity: people.PersonIdentity | undefined
+  ) => string | null
 }
 
 /**
@@ -496,6 +530,12 @@ export async function answerQuestion(
       db
     )
 
+    // CORE-7 — the calling surface decides how, or whether, to address this
+    // person (`deps.addressPerson`, defaulting to `NO_ADDRESS` above when
+    // omitted); this package builds neither Discord's mention token nor any
+    // other surface's own syntax itself any more.
+    const addressAs = (deps.addressPerson ?? NO_ADDRESS)(person, identity)
+
     // CORE-4 — the model is asked through the port, never a vendor SDK.
     // `modelText` (finding 10), not `text`: a surface may have rewritten the
     // question before sending it (BOT-6's mention rewriting) without that
@@ -513,7 +553,11 @@ export async function answerQuestion(
         question: modelText,
         displayName: person?.displayName ?? null,
         courseTitle: course.title,
-        personRef: identity ? `<@${identity.externalId}>` : null,
+        // MDL-4 — genuinely opaque (`ports.ts`'s own comment on the split):
+        // the raw identity, never rendered to a person, for a later
+        // transcript read.
+        personIdentifier: identity?.externalId ?? null,
+        addressAs,
       })
       replyText = isLastRequestOfDay
         ? withLastRequestNotice(course.title, modelAnswer.text)

@@ -36,7 +36,8 @@ function baseRequest(overrides: Partial<ModelRequest> = {}): ModelRequest {
     // threaded through.
     displayName: null,
     courseTitle: null,
-    personRef: null,
+    personIdentifier: null,
+    addressAs: null,
     ...overrides,
   }
 }
@@ -391,7 +392,7 @@ describe('createOpenAiModelClient', () => {
   })
 
   describe('finding 1 of the MDL-1 rework: the seeded opening item comes from the request', () => {
-    it("seeds the new conversation with the request's displayName, courseTitle and personRef", async () => {
+    it("seeds the new conversation with the request's displayName, courseTitle and addressAs, and carries personIdentifier only in metadata (CORE-7/CORE-8)", async () => {
       server.respondToConversations({
         status: 200,
         body: { id: 'conv_seeded' },
@@ -401,12 +402,17 @@ describe('createOpenAiModelClient', () => {
         body: fakeResponsesPayload('the answer'),
       })
 
+      // `addressAs` and `personIdentifier` given deliberately different
+      // values here, not the same string twice — the only way this test
+      // can actually prove the seeded content and the metadata are sourced
+      // independently (`ports.ts`'s own comment on why the split exists).
       await client.ask(
         baseRequest({
           upstreamThreadId: null,
           displayName: 'Ada Lovelace',
           courseTitle: 'Intro to Algorithms',
-          personRef: '<@123>',
+          addressAs: '<@123>',
+          personIdentifier: '123',
         })
       )
 
@@ -421,7 +427,7 @@ describe('createOpenAiModelClient', () => {
               'My name is Ada Lovelace (user id <@123>) and I am a student in the Intro to Algorithms course.',
           },
         ],
-        metadata: { user_id: '<@123>' },
+        metadata: { user_id: '123' },
       })
     })
   })

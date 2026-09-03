@@ -49,12 +49,42 @@ export interface ModelRequest {
    */
   courseTitle: string | null
   /**
-   * An opaque reference to the person — `<@id>` on Discord, matching
-   * `response_bot.py`'s own `metadata={"user_id": ...}` — embedded in both
-   * the opening item and the upstream conversation's metadata (MDL-4).
-   * `null` when the person has no identity on this request's surface.
+   * CORE-7/CORE-8 — this used to be one field, `personRef`, documented as
+   * "an opaque reference to the person" while actually holding Discord's
+   * own angle-bracket mention token, built by wrapping the identity's id
+   * inside this package — the one package meant to know nothing about any
+   * surface. That was wrong on every surface but Discord: on the web, the
+   * identity is the account's own id, so a student was answered with the
+   * Discord token wrapped around a raw UUID. Split in two here, so each
+   * half can actually be what its own name claims:
+   *
+   * `personIdentifier` is the genuinely opaque half — `person_identities.
+   * externalId` on this request's surface, embedded only in the upstream
+   * conversation's own metadata (`{"user_id": ...}`, matching
+   * `response_bot.py`'s own field, MDL-4), never in content a later turn's
+   * model call reads back. Nothing in this platform (or the model)
+   * interprets it; it exists so a later transcript read — an operator on
+   * the provider's own dashboard, not a person this platform answers — can
+   * trace a stored conversation back to the identity that opened it. `null`
+   * when the person has no identity on this request's surface.
    */
-  personRef: string | null
+  personIdentifier: string | null
+  /**
+   * The other half of what `personRef` used to be: how the surface that
+   * asked this question wants the model able to address the person,
+   * embedded in the opening item's own content alongside `displayName`
+   * (MDL-4) — content the model reads, and can echo back into a reply,
+   * which is exactly how Discord's mention ends up rendered in one and a
+   * raw UUID ended up leaking into the other. `answer.ts` no longer decides
+   * this itself (CORE-7): the calling surface does, through
+   * `AnswerDependencies.addressPerson`, and CORE-8 orders the choice —
+   * Discord supplies its own mention token; a surface with none of its own
+   * falls back through a first name, then a display name, then nothing at
+   * all, never this platform's own id, the mistake this field replaces.
+   * `null` when the surface addresses nobody, or has nothing to address
+   * them with.
+   */
+  addressAs: string | null
 }
 
 /**

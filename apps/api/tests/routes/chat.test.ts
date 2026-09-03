@@ -413,6 +413,76 @@ describe('routes/chat.ts (WEB-10)', () => {
     })
   })
 
+  // CORE-7/CORE-8 — this route's own `addressPersonForWeb` (`routes/chat.ts`)
+  // is the surface's own decision, exercised here through the real router
+  // rather than a unit test of a private function this file cannot import:
+  // a first name wins when the account has one, a display name is the
+  // fallback, and neither ever falls back to this platform's own person id
+  // — `model.calls` is an intermediate value (`@bloombot/core#answer.ts`'s
+  // own `ModelRequest`), legitimate here because this test is about *which*
+  // fact wins, not about what a student ultimately reads (that is
+  // `answer.test.ts`'s own "reply text a student sees" regression, one
+  // layer down).
+  it('addresses a connected caller by first name, falling back to display name, then to nobody — never an id (CORE-7, CORE-8)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: 'Ada', displayName: 'Ada L.' },
+      testDb.db
+    )
+    const model = new FakeModelClient('ok')
+
+    const app = await buildTestApp(testDb.db, { model })
+    const firstNameResponse = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(firstNameResponse.status).toBe(200)
+    expect(model.calls[0]?.addressAs).toBe('Ada')
+
+    // No first name — the display name is next in CORE-8's own order.
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: null, displayName: 'Ada L.' },
+      testDb.db
+    )
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(model.calls[1]?.addressAs).toBe('Ada L.')
+
+    // Neither known — CORE-8's own last resort: nobody, never this
+    // platform's own person id, even though `discordPersonId` is right
+    // here and would otherwise be the easiest thing to reach for.
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: null, displayName: null },
+      testDb.db
+    )
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(model.calls[2]?.addressAs).toBeNull()
+    expect(model.calls[2]?.addressAs).not.toBe(discordPersonId)
+  })
+
   it('an empty question is refused as invalid input before it ever reaches the model', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)

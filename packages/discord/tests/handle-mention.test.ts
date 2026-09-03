@@ -26,7 +26,11 @@ import {
 import { createFakeLogger } from './helpers/fake-logger.js'
 import { FakeModelClient } from './helpers/fake-model-client.js'
 import { createFakeReplyPort } from './helpers/fake-reply-port.js'
-import { BOT_ID, inboundMention } from './helpers/fixtures.js'
+import {
+  BOT_ID,
+  DEFAULT_AUTHOR_ID,
+  inboundMention,
+} from './helpers/fixtures.js'
 import { seedBoundServerWithCourse } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -200,6 +204,27 @@ describe('handleMention — SURF-2: only a direct mention is answered', () => {
     expect(model.calls).toHaveLength(1)
     // BOT-6 — the model sees the readable name, never the raw snowflake token.
     expect(model.calls[0]?.question).toBe('@Bloombot When is the midterm?')
+  })
+
+  // CORE-7/CORE-8 — this file's own `addressPersonForDiscord`
+  // (`handle-mention.ts`) is what `answerQuestion` now calls to build the
+  // mention token; `@bloombot/core#answer.ts` itself no longer knows this
+  // syntax exists (`packages/core/tests/no-vendor-sdk.test.ts`'s own guard).
+  // Exercised here through the real `handleMention`, not a duplicate of the
+  // function, so a mistake in the actual wiring — not just the function in
+  // isolation — would fail this.
+  it('addresses the model with the author’s own mention token, unchanged from before this slice (CORE-7, CORE-8)', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db)
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls[0]?.addressAs).toBe(`<@${DEFAULT_AUTHOR_ID}>`)
+    // MDL-4 — the raw identity is carried separately, for the upstream
+    // conversation's own metadata; not wrapped the way `addressAs` is.
+    expect(model.calls[0]?.personIdentifier).toBe(DEFAULT_AUTHOR_ID)
   })
 })
 

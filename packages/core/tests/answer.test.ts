@@ -22,7 +22,12 @@ import {
 import { createAdmissionGate, type AdmissionGate } from '@bloombot/jobs'
 
 import { answerQuestion } from '../src/answer.js'
-import { ModelAskError, type ModelClient } from '../src/ports.js'
+import {
+  ModelAskError,
+  type ModelAnswer,
+  type ModelClient,
+  type ModelRequest,
+} from '../src/ports.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
 import { FakeModelClient } from './helpers/fake-model-client.js'
 import { seedCourseAndPerson } from './helpers/seed.js'
@@ -1427,9 +1432,13 @@ describe('answerQuestion (finding 10 of the CORE-1 rework): `text` is recorded, 
 // `displayName`/`courseTitle`/`personRef` so an adapter can seed a new
 // upstream conversation's opening item the way `response_bot.py` does
 // (`response_bot.py:262-269`), and this is the one call site that
-// populates them.
+// populates them. CORE-7/CORE-8 later split `personRef` into
+// `personIdentifier` (this package's own, genuinely opaque) and `addressAs`
+// (the calling surface's own choice, via `deps.addressPerson`) — the tests
+// below were rewritten for that split, not merely renamed: `answer.ts`
+// itself no longer decides what a mention token looks like.
 describe('answerQuestion (finding 1 of the MDL-1 rework): the model is asked with who is asking and which course', () => {
-  it("sends the person's display name, the course title, and their identity reference", async () => {
+  it("sends the person's display name, the course title, and their raw identity (in personIdentifier only)", async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId, personId } = seedCourseAndPerson(
       testDb.db
@@ -1461,15 +1470,19 @@ describe('answerQuestion (finding 1 of the MDL-1 rework): the model is asked wit
         text: 'q',
         day: '2026-01-01',
       },
+      // No `addressPerson` supplied — CORE-7's own default (`NO_ADDRESS`)
+      // addresses nobody; this test is about `personIdentifier` alone,
+      // which `answer.ts` builds itself regardless of the surface.
       { db: testDb.db, model, logger }
     )
 
     expect(model.calls[0]?.displayName).toBe('Test Student')
     expect(model.calls[0]?.courseTitle).toBe('Test Course')
-    expect(model.calls[0]?.personRef).toBe('<@snowflake-1>')
+    expect(model.calls[0]?.personIdentifier).toBe('snowflake-1')
+    expect(model.calls[0]?.addressAs).toBeNull()
   })
 
-  it('sends `null` for the display name and identity reference when neither is known', async () => {
+  it('sends `null` for the display name and identity when neither is known', async () => {
     testDb = createTestDatabase()
     const { organizationId, courseId, personId } = seedCourseAndPerson(
       testDb.db
@@ -1499,10 +1512,133 @@ describe('answerQuestion (finding 1 of the MDL-1 rework): the model is asked wit
     )
 
     expect(model.calls[0]?.displayName).toBeNull()
-    expect(model.calls[0]?.personRef).toBeNull()
+    expect(model.calls[0]?.personIdentifier).toBeNull()
+    expect(model.calls[0]?.addressAs).toBeNull()
     // The course title is always in hand regardless (CORE-1 already
     // resolved the course before the model is ever asked).
     expect(model.calls[0]?.courseTitle).toBe('Test Course')
+  })
+})
+
+// CORE-7/CORE-8 — the defect this rework fixes, and the guarantee that
+// replaces it: `answer.ts` builds neither the reference sent to the model
+// nor the address embedded in it; the calling surface decides, and a
+// surface that decides nothing gets the *safe* default (address nobody),
+// never an id.
+describe('answerQuestion (CORE-7, CORE-8): addressing the person is the calling surface’s own decision', () => {
+  /**
+   * A `ModelClient` that mimics a model trained to open its reply by
+   * addressing the person the way its own opening item told it to — exactly
+   * the mechanism behind the reported defect (`docs/SPEC.md`'s own CORE-7:
+   * a course's prompt, written for Discord, echoes whatever `addressAs` it
+   * was given at the front of every reply). Used below to prove the
+   * platform's fix holds at the one place that actually matters: the text a
+   * person reads, not an intermediate request field.
+   */
+  class EchoingModelClient implements ModelClient {
+    calls: ModelRequest[] = []
+    async ask(request: ModelRequest): Promise<ModelAnswer> {
+      this.calls.push(request)
+      const prefix = request.addressAs ? `${request.addressAs} - ` : ''
+      return {
+        text: `${prefix}Hello`,
+        upstreamThreadId: 'echo-thread',
+        model: 'echo-model',
+      }
+    }
+  }
+
+  it('a Discord answer still carries the mention token exactly as today (regression)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    testDb.db
+      .insert(schema.personIdentities)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        personId,
+        surface: 'discord',
+        externalId: 'snowflake-1',
+        createdAt: Date.now(),
+      })
+      .run()
+    const model = new EchoingModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      {
+        db: testDb.db,
+        model,
+        logger,
+        // The exact function `@bloombot/discord#handle-mention.ts` supplies
+        // in production — duplicated here rather than imported, the same
+        // "packages/core knows nothing about any surface" boundary this
+        // whole rework is about.
+        addressPerson: (_person, identity) =>
+          identity ? `<@${identity.externalId}>` : null,
+      }
+    )
+
+    expect(result.kind).toBe('answered')
+    const text = result.kind === 'answered' ? result.text : ''
+    expect(text).toBe('<@snowflake-1> - Hello')
+  })
+
+  it('a web answer contains no mention token and no raw id anywhere, in the reply text a student actually sees', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    // The web identity's own external id *is* the account's own id — the
+    // exact defect this rework fixes: `resolveConnectedCallerPerson`
+    // (`apps/api/src/routes/chat.ts`) resolves a web identity keyed on the
+    // account's own uuid.
+    const accountId = randomUUID()
+    testDb.db
+      .insert(schema.personIdentities)
+      .values({
+        id: randomUUID(),
+        organizationId,
+        personId,
+        surface: 'web',
+        externalId: accountId,
+        createdAt: Date.now(),
+      })
+      .run()
+    const model = new EchoingModelClient()
+    const logger = createFakeLogger()
+
+    // No `addressPerson` supplied — a new (or, here, unmodified) surface
+    // that decides nothing must not inherit the bug (CORE-7's own
+    // guarantee): the default addresses nobody.
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'web',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result.kind).toBe('answered')
+    const text = result.kind === 'answered' ? result.text : ''
+    expect(text).toBe('Hello')
+    expect(text).not.toContain('<@')
+    expect(text).not.toContain(accountId)
+    expect(text).not.toContain(personId)
   })
 })
 

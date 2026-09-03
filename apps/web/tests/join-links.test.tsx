@@ -302,6 +302,50 @@ describe('JoinLinks expiry (WEB-23)', () => {
     )
   })
 
+  // Rework finding (cheap-fix): the test above only bounds `1w`'s own value
+  // (`> before`, `<= before + a week + 1000`) — any duration up to a week
+  // satisfies it, so mutating `EXPIRY_OPTIONS`' own `durationMs` table (a
+  // later edit mistyping `16 * 7` as `16 * 6`, say) shipped green with the
+  // label still reading "1 term (16 weeks)" while term links stopped
+  // admitting students two weeks early. This pins every timed option to its
+  // exact millisecond duration, computed off a frozen clock, so the table
+  // itself is what is under test rather than merely its own loose bounds.
+  it.each([
+    ['1d', 24 * 60 * 60 * 1000],
+    ['1w', 7 * 24 * 60 * 60 * 1000],
+    ['1mo', 30 * 24 * 60 * 60 * 1000],
+    ['1term', 16 * 7 * 24 * 60 * 60 * 1000],
+  ] as const)(
+    'option %s sends an expiry exactly %i ms after send time',
+    async (value, durationMs) => {
+      listCourseJoinLinks.mockResolvedValue([])
+      createCourseJoinLink.mockResolvedValue({
+        linkId: 'link-1',
+        secret: 'the-secret-value',
+        expiresAt: null,
+      })
+      const t0 = 1_700_000_000_000
+      const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(t0)
+
+      renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+      await screen.findByText('No join links issued yet.')
+      fireEvent.change(screen.getByLabelText('Expiry'), {
+        target: { value },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+
+      await waitFor(() => expect(createCourseJoinLink).toHaveBeenCalled())
+      const [, , expiresAt] = createCourseJoinLink.mock.calls[0] as [
+        string,
+        string,
+        number,
+      ]
+      expect(expiresAt).toBe(t0 + durationMs)
+
+      dateSpy.mockRestore()
+    }
+  )
+
   // "Mind the gap between rendering a choice and the request being made" —
   // the brief's own wording. Fails without the fix if the component instead
   // captured `Date.now() + duration` at the moment the option was selected:
@@ -361,5 +405,23 @@ describe('JoinLinks expiry (WEB-23)', () => {
     expect(
       screen.getAllByRole('button', { name: /^Revoke join link/ })
     ).toHaveLength(1)
+  })
+
+  // Rework finding (cheap-fix): the test above only ever exercises one
+  // expired-not-revoked link and one revoked-with-null-expiry link, never a
+  // link that is both — so `formatExpiry`'s own branch order (D-63: revoked
+  // checked before expired) was undefended. Moving the `expiresAt` branch
+  // above the `revokedAt` one survived every existing case; this one would
+  // not, since it is the one link both branches could plausibly claim.
+  it("a link that is both expired and revoked reads as revoked, not expired (D-63: the clock does not override an instructor's own act)", async () => {
+    const past = Date.now() - 1000
+    listCourseJoinLinks.mockResolvedValue([
+      link({ id: 'link-1', expiresAt: past, revokedAt: past }),
+    ])
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+
+    expect(await screen.findByText(/^Revoked /)).toBeInTheDocument()
+    expect(screen.queryByText(/^Expired /)).not.toBeInTheDocument()
   })
 })

@@ -2815,6 +2815,23 @@
   phase: 16
   status: In progress
   review: false
+- id: ENRL-9
+  title: An enrolment an instructor ended can be reinstated by an instructor
+  full: "ENRL-6 lets an instructor stop a person asking a course, and closing
+    ENRL-8's self-service bypass made that decision genuinely stick: no
+    admission path revives an ended enrolment any more — not a join link, not a
+    roster row, not a Discord role. That is correct, and it leaves an instructor
+    who ended the wrong enrolment, or ended one a student has since appealed,
+    with no way to undo it. A decision that can be made and never unmade is not
+    an access control, it is a trap. Reinstating is an instructor-initiated act,
+    recorded the way granting a membership already is (ENRL-5): who did it and
+    when. It is deliberately not something the reinstated person can trigger,
+    which is the whole distinction…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 16
+  status: In progress
+  review: false
 - id: WEB-20
   title: A course's join links are issued and copied from the panel
   full: "ENRL-3 and ENRL-4 give a course shareable join links that are revocable
@@ -2844,6 +2861,23 @@
     blank, and a worked example row. The screen shows the import's progress
     while it runs and its report when it finishes, including every row that
     could not be parsed with the line number it…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 16
+  status: In progress
+  review: false
+- id: WEB-22
+  title: A course's people are visible in the panel, and admission is reversible there
+  full: "ENRL-2's enrolment relation decides who may ask a course, ENRL-6 ends an
+    enrolment and ENRL-9 reinstates one — and no screen shows any of it.
+    enrolments.end has existed as an action with no surface, so removing a
+    student has only ever been possible by dispatching an action by hand, and
+    the repo cannot even list the people an instructor would be choosing
+    between: listPeopleForCourse returns active enrolments only, so a person who
+    was ended is invisible to every query the panel could make. The course
+    screen lists the people enrolled in that course and the ones whose enrolment
+    has ended, says how each was admitted — a join link, a roster row, or a
+    Discord role — and lets an instructor end an…"
   section: §34 Web Control Panel
   family: WEB
   phase: 16

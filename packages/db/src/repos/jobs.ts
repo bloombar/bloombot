@@ -400,6 +400,18 @@ export function getJob(
  * every row, and a stable order does not need to be a *meaningful* one,
  * only a deterministic one, for a bounded, unpaginated listing like this.
  *
+ * `id` ascending is a third, final tiebreaker — for two jobs that tie on
+ * *both* `updatedAt` and `createdAt`, which a batch enqueue genuinely
+ * produces (this file's own `enqueueJob` reads the clock once per call, so
+ * several calls issued back to back inside the same millisecond share both
+ * columns exactly). SQLite gives no guaranteed order among rows tied on
+ * every `ORDER BY` column, so without this a caller polling this same query
+ * twice — the Jobs tab's own "Refresh" button, worked example — could see a
+ * tied pair swap places between two reads with no activity in between,
+ * which reads as the queue lying about what changed. `id` itself carries no
+ * meaning (a fresh UUID per `enqueueJob` call), the same "deterministic, not
+ * meaningful" role `createdAt` above already plays.
+ *
  * `limit` is the caller's own bound, not read from a platform default here
  * — the same "no default value is invented" reasoning `maxAttempts`'s own
  * comment (`NewJob`, above) already applies to a value like this;
@@ -415,7 +427,7 @@ export function listJobsForOrganization(
     .select()
     .from(jobs)
     .where(eq(jobs.organizationId, organizationId))
-    .orderBy(desc(jobs.updatedAt), desc(jobs.createdAt))
+    .orderBy(desc(jobs.updatedAt), desc(jobs.createdAt), asc(jobs.id))
     .limit(limit)
     .all()
 }

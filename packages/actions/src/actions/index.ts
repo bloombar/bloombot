@@ -45,7 +45,7 @@ import {
 } from './discord-servers.js'
 import { getJobAction } from './jobs.js'
 import { importRosterAction } from './roster.js'
-import { organizationUsageAction } from './cost-ledger.js'
+import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
   listCourseJoinLinksAction,
@@ -99,7 +99,9 @@ export { getJobAction, type JobStatus } from './jobs.js'
 export { importRosterAction } from './roster.js'
 export {
   organizationUsageAction,
+  setSpendingCapAction,
   type OrganizationUsageReport,
+  type SetSpendingCapResult,
 } from './cost-ledger.js'
 export {
   createCourseJoinLinkAction,
@@ -184,6 +186,7 @@ export function createPlatformRegistry(options?: {
   registry.register(listCourseInstructionRevisionsAction)
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
+  registry.register(setSpendingCapAction)
   registry.register(createCourseJoinLinkAction)
   registry.register(listCourseJoinLinksAction)
   registry.register(revokeCourseJoinLinkAction)

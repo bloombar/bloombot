@@ -44,8 +44,10 @@ import type {
   McpPersonLinkPreviewResponse,
   MeResponse,
   OrganizationDeletionPreview,
+  OrganizationUsageReport,
   PersonLinkBeginResponse,
   Project,
+  SetSpendingCapResult,
   SignedInResponse,
   TenantDeletion,
   TranscriptExport,
@@ -646,6 +648,37 @@ export function getJobStatus(
   jobId: string
 ): Promise<JobStatus> {
   return dispatchAction<JobStatus>(organizationId, 'jobs.get', { jobId })
+}
+
+/**
+ * COST-3/COST-4 — an instructor's own usage read and their organization's
+ * spending cap, each a thin wrapper over `dispatchAction`, the same generic
+ * action route every other screen in this app already reaches through.
+ * What `pages/Usage.tsx` calls.
+ */
+
+/** COST-4: usage cost per course in the caller's own organization, plus which students are approaching a course's own daily limit, for `day` (`YYYY-MM-DD`). */
+export function fetchOrganizationUsage(
+  organizationId: string,
+  day: string
+): Promise<OrganizationUsageReport> {
+  return dispatchAction<OrganizationUsageReport>(
+    organizationId,
+    'costLedger.organizationUsage',
+    { day }
+  )
+}
+
+/** COST-3: set the organization's spending cap to `capAmount` (a currency amount, e.g. `12.5` for $12.50 — never micros; `costLedger.setSpendingCap`'s own input schema converts), or clear it entirely with `null`. Only an existing owner may call this — refused (404, `action_refused`) for anyone else. */
+export function setSpendingCap(
+  organizationId: string,
+  capAmount: number | null
+): Promise<SetSpendingCapResult> {
+  return dispatchAction<SetSpendingCapResult>(
+    organizationId,
+    'costLedger.setSpendingCap',
+    { capAmount }
+  )
 }
 
 /**

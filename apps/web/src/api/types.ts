@@ -521,3 +521,47 @@ export interface TenantDeletion {
   summary: string
   deletedAt: number
 }
+
+/** COST-4 — one course's own usage, as `costLedger.organizationUsage` reports it. Mirrors `@bloombot/db`'s own `CourseUsageSummary` by hand, the same boundary this file's own module comment already explains. */
+export interface CourseUsageSummary {
+  courseId: string
+  courseTitle: string
+  costMicros: number
+  /** The portion of `costMicros` that came from an estimate rather than a measurement (COST-6) — see `pages/Usage.tsx`'s own module comment for what this changes about how a total is shown. */
+  estimatedCostMicros: number
+  callCount: number
+}
+
+/**
+ * COST-4 — one (course, person) pair whose count for a given day has
+ * reached a course's own near-limit threshold. Mirrors `@bloombot/db`'s own
+ * `usage.UsageNearLimit` by hand. `personDisplayName`, not the student's own
+ * email — the same "no genuine need to disambiguate by it" reasoning
+ * `api/types.ts#CourseEnrolment`'s own doc comment already gives for the
+ * identical case; `components/CoursePeople.tsx`'s own `label` fallback
+ * (`displayName ?? personId`) is what `pages/Usage.tsx` uses for this too.
+ */
+export interface UsageNearLimit {
+  courseId: string
+  courseTitle: string
+  personId: string
+  personDisplayName: string | null
+  count: number
+  maxRequestsPerDay: number
+}
+
+/** COST-4 — `costLedger.organizationUsage`'s own report: every course's usage in the caller's organization, its cap (if any), and which students are approaching a course's own daily limit. Mirrors `@bloombot/actions`' own `OrganizationUsageReport` by hand. */
+export interface OrganizationUsageReport {
+  organizationId: string
+  spendingCapMicros: number | null
+  totalCostMicros: number
+  totalEstimatedCostMicros: number
+  courses: CourseUsageSummary[]
+  studentsNearLimit: UsageNearLimit[]
+}
+
+/** COST-3 — `costLedger.setSpendingCap`'s own return: what is now stored, after the call. Mirrors `@bloombot/actions`' own `SetSpendingCapResult` by hand. */
+export interface SetSpendingCapResult {
+  organizationId: string
+  spendingCapMicros: number | null
+}

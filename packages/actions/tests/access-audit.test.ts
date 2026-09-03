@@ -106,6 +106,14 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // itself is the resource, read rather than written, the same shape
   // `discordServers.list`/`projects.list` already use above.
   'costLedger.organizationUsage': { resource: 'organization', access: 'read' },
+  // COST-3: no existing record of its own to resolve either — the same
+  // "organization itself is the resource" shape `costLedger.organizationUsage`
+  // uses immediately above, written rather than read. *Who* may call this
+  // (an existing owner, never any membership) is `execute`'s own check, not
+  // the policy's — the same split `memberships.grant`'s own row (below)
+  // documents for the identical reason: a policy cannot see the caller's
+  // account id at all (`policy.ts`'s own module comment).
+  'costLedger.setSpendingCap': { resource: 'organization', access: 'write' },
   // ENRL-3/ENRL-4: resolves the course a join link is issued against, write —
   // the same "the course it names is what a write grant already protects"
   // shape `roster.import`/`discordServers.scaffold` both use above.

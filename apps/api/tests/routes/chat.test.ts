@@ -482,6 +482,73 @@ describe('routes/chat.ts (WEB-10)', () => {
     expect(model.calls).toHaveLength(1)
   })
 
+  // COST-3, end to end through this same pipeline — proves the cap is real,
+  // not merely storable. Before `costLedger.setSpendingCap` existed,
+  // `organizations.setSpendingCap` (`@bloombot/db`) had zero non-test
+  // callers anywhere in the monorepo (`docs/ROADMAP.md`'s "Audit —
+  // surfaces that were never built"): the enforcement below
+  // (`hasReachedSpendingCap`, `@bloombot/core#answer.ts`) was always real,
+  // but nothing could ever put a cap in front of it in a real deployment.
+  // This dispatches the ordinary action route, unmodified — the same one
+  // `pages/Usage.tsx` calls in the panel — and proves the very next
+  // question over this route's own `answerQuestion` pipeline is refused,
+  // never reaching the model a second time.
+  it('a spending cap set through the action layer actually refuses the next question, over the same answerQuestion pipeline (COST-3)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('# Welcome\n\nAsk away.')
+
+    const app = await buildTestApp(testDb.db, { model })
+
+    // A first question costs something real: `FakeModelClient` reports no
+    // token usage, so `computeCost` estimates and prices it from the
+    // request/answer text's own length (`@bloombot/core`'s own
+    // `pricing.ts`), never `0` (COST-6).
+    const first = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+    expect(first.status).toBe(200)
+    expect((first.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+    expect(model.calls).toHaveLength(1)
+
+    // A cap of $0 — already reached the moment anything has been spent at
+    // all (`hasReachedSpendingCap`'s own `spent >= cap`, and the question
+    // above spent something real) — set through the ordinary action route,
+    // exactly the way an owner reaches it from the panel.
+    const setCap = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/actions/costLedger.setSpendingCap`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ capAmount: 0 })
+    expect(setCap.status).toBe(200)
+
+    // The next question is refused before the model is ever asked again —
+    // `declined-over-cap`, not a generic failure (COST-3's own text) — and
+    // the fake model client proves it: still exactly one call, not two.
+    const second = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+    expect(second.status).toBe(200)
+    expect((second.body as { result: { kind: string } }).result.kind).toBe(
+      'declined-over-cap'
+    )
+    expect(model.calls).toHaveLength(1)
+  })
+
   it('a model that rejects (e.g. OPENAI_API_KEY unset — apps/api/src/index.ts#createUnconfiguredModelClient) apologizes rather than 500ing', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)

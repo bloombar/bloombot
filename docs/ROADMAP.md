@@ -191,3 +191,27 @@ the action but by no screen, leaving WEB-20's "when each expires" column permane
 expiry".
 
 **In scope:** JOB-6, QA-9, WEB-23, MCP-6
+
+## Audit — surfaces that were never built
+
+Dated 2026-09-03. An audit traced every registered action and every exported repo function to the
+surfaces that reach them. It found five capabilities complete in the action layer, marked Done, and
+reachable by no user — the same failure LINK-10, WEB-18 and WEB-19 each turned out to be, one layer
+further out. The board said 233 of 233 and was wrong.
+
+These requirements are **reopened, not re-specified**: each one's existing SPEC text already
+promises what was never built, so they keep their original phase and their status returns to
+outstanding until the surface exists.
+
+- **TEN-8, WEB-4** — the panel derives Discord install state from a prop set only by an OAuth
+  callback in the same browser session, so a reload offers "Install" for a server already bound.
+  That is the sentence TEN-8 was written to make true, and `discordServers.list` exists to serve it.
+- **COST-3** — `setSpendingCap` has no caller and the column has no default, so every organization's
+  cap is `NULL` forever and `hasReachedSpendingCap` can never fire. The enforcement half is real.
+- **COST-4** — the platform-administrator view exists; the instructor's own view of their courses'
+  spend and the students near their limits does not.
+- **ENRL-5** — an owner has no way to add a second instructor or a teaching assistant. The MCP
+  surface omits `memberships.grant` deliberately and correctly; the web omission is unreasoned.
+- **ADMIN-2** — the transcript-access audit trail is written and has no read path.
+- **JOB-2** — a job that exhausted its attempts in an earlier session is visible to nobody, because
+  nothing lists jobs at all.

@@ -40,6 +40,7 @@ const {
   listDiscordServers,
   fetchOrganizationUsage,
   listMemberships,
+  listJobs,
 } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
   dispatchAction: vi.fn(),
@@ -50,6 +51,7 @@ const {
   listDiscordServers: vi.fn(),
   fetchOrganizationUsage: vi.fn(),
   listMemberships: vi.fn(),
+  listJobs: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -67,6 +69,7 @@ vi.mock('../src/api/client.js', async () => {
     listDiscordServers,
     fetchOrganizationUsage,
     listMemberships,
+    listJobs,
   }
 })
 
@@ -482,6 +485,24 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     await screen.findByRole('heading', { name: 'Team' })
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+  })
+
+  // JOB-2: a seventh tab, the same shape Usage/Team above already take —
+  // switching to it renders `pages/Jobs.tsx` and fetches the caller's own
+  // organization's jobs. No `isOwner`: `jobs.list` carries no owner-only
+  // restriction (`pages/Shell.tsx`'s own module comment on why).
+  it('switches to the Jobs tab, and lists the active organization’s own jobs', async () => {
+    listJobs.mockResolvedValue([])
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Jobs' }))
+
+    expect(
+      await screen.findByRole('heading', { name: 'Jobs' })
+    ).toBeInTheDocument()
+    expect(listJobs).toHaveBeenCalledWith('org-1')
   })
 
   // --- LINK-10: a connected-but-not-a-member organization -------------------

@@ -66,6 +66,16 @@
  * `isOwner` is reused here exactly as `Usage.tsx` already takes it — the
  * grant form is owner-only, the same reasoning, the same server-side
  * enforcement doing the real work.
+ *
+ * JOB-2: a seventh tab, Jobs (`pages/Jobs.tsx`) — the same class of gap a
+ * third time: `jobs.get` needs an id the caller already holds, and every
+ * screen that reaches it only ever holds one for a job dispatched in the
+ * current browser session, so a job that failed permanently in an earlier
+ * one was invisible to everyone, forever (`docs/ROADMAP.md`'s own audit
+ * note; `pages/Jobs.tsx`'s own module comment has the full account). Open
+ * to any member, not only an owner — `isOwner` is not threaded through
+ * here, unlike Usage/Team, because `jobs.list` itself carries no owner-only
+ * restriction (that action's own descriptor).
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -92,6 +102,7 @@ import {
 } from '../hooks/navigation-guard.js'
 import { SignOutIcon } from '../icons.js'
 import { Chat } from './Chat.js'
+import { Jobs } from './Jobs.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
 import { Usage } from './Usage.js'
@@ -200,7 +211,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
   const [activeTab, setActiveTab] = useState<
-    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team'
+    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team' | 'jobs'
   >('projects')
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
@@ -398,6 +409,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
                 onClick: () => guardedNavigate(() => setActiveTab('team')),
                 active: effectiveTab === 'team',
               },
+              {
+                key: 'jobs',
+                label: 'Jobs',
+                onClick: () => guardedNavigate(() => setActiveTab('jobs')),
+                active: effectiveTab === 'jobs',
+              },
             ]
           : [chatNavItem]
       }
@@ -473,10 +490,14 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning
         // `Chat`/`ProjectsPanel` already hold themselves to: a project or
         // course selected in the previous organization must not linger
-        // once a different one is active.
+        // once a different one is active. `isOwner` (ADMIN-2, this file's
+        // own module comment) is the same shape Usage/Team already take,
+        // one level below — this screen decides whether to fetch or render
+        // the Access log section at all.
         <Transcripts
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          isOwner={isOwner}
         />
       ) : effectiveTab === 'usage' ? (
         // COST-3/COST-4 — the same `key={activeOrganizationId}` reasoning
@@ -497,6 +518,15 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
           isOwner={isOwner}
+        />
+      ) : effectiveTab === 'jobs' ? (
+        // JOB-2 — the same `key={activeOrganizationId}` reasoning every
+        // other tab above already holds itself to; no `isOwner`, unlike
+        // Usage/Team (this file's own module comment on why `jobs.list`
+        // needs none).
+        <Jobs
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
         />
       ) : (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

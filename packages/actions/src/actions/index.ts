@@ -43,7 +43,7 @@ import {
   removeDiscordServerAction,
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
-import { getJobAction } from './jobs.js'
+import { getJobAction, listJobsAction } from './jobs.js'
 import { importRosterAction } from './roster.js'
 import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
@@ -66,6 +66,7 @@ import {
 } from './membership-invitations.js'
 import {
   exportTranscriptAction,
+  listTranscriptAccessLogAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
   readTranscriptAction,
@@ -100,7 +101,7 @@ export {
   removeDiscordServerAction,
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
-export { getJobAction, type JobStatus } from './jobs.js'
+export { getJobAction, listJobsAction, type JobStatus } from './jobs.js'
 export { importRosterAction } from './roster.js'
 export {
   organizationUsageAction,
@@ -139,9 +140,11 @@ export {
 } from './membership-invitations.js'
 export {
   exportTranscriptAction,
+  listTranscriptAccessLogAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
   readTranscriptAction,
+  type TranscriptAccessLogRow,
 } from './transcripts.js'
 
 /**
@@ -195,6 +198,7 @@ export function createPlatformRegistry(options?: {
   registry.register(listDiscordServersAction)
   registry.register(scaffoldDiscordServerAction)
   registry.register(getJobAction)
+  registry.register(listJobsAction)
   registry.register(importRosterAction)
   registry.register(createAttachCourseAttachmentAction(attachmentStorage))
   registry.register(listCourseAttachmentsAction)
@@ -221,5 +225,6 @@ export function createPlatformRegistry(options?: {
   registry.register(listTranscriptStudentsAction)
   registry.register(exportTranscriptAction)
   registry.register(listTranscriptExportsAction)
+  registry.register(listTranscriptAccessLogAction)
   return registry
 }

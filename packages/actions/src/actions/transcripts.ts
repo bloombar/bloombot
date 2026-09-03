@@ -59,11 +59,55 @@
  * handler's own module comment for the reasoning in full, and
  * `docs/DECISIONS.md` D-48 for what this still trades away and the
  * objection recorded against it.
+ *
+ * **`transcripts.listAccessLog` (ADMIN-2).** An audit
+ * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found
+ * `transcriptAccess.listAccessLogForCourse` had zero callers — the audit
+ * trail `readCourseTranscript` writes to on every read or export was
+ * genuinely being written, so ADMIN-2's own "is written to an audit trail"
+ * held, but its "an institution has to be able to account for" did not:
+ * nothing in the panel, `/admin` or MCP ever read a row back, so nobody
+ * could actually account for anything.
+ *
+ * **Restricted to an owner**, not open to any member the way `.read`
+ * itself is. This log is a different kind of disclosure than the
+ * transcript content it is *about*: `.read`'s own module comment above
+ * establishes that any membership may read a course's transcript, because
+ * ADMIN-1 says so plainly and the read is itself the accountable event.
+ * But *who else has been reading* is oversight of that same accountable
+ * population, not a widening of it — ENRL-4 restricted `courseJoinLinks.revoke`
+ * one way, `memberships.grant` another, and this is the same class of
+ * decision `memberships.ts`'s own module comment already makes for a
+ * different action: "authority over a tenant's courses, transcripts and
+ * spending" is what a membership role carries, and an owner is who this
+ * platform already holds accountable for a tenant's spending
+ * (`costLedger.setSpendingCap`) and its staff roster (`memberships.grant`,
+ * `membershipInvitations.create`) — ADMIN-2's own "an institution has to be
+ * able to account for" names the same accountable party, not a course's
+ * own instructor reading up on a colleague's activity. `ADMIN-4`'s "sees
+ * tenants, not conversations" was also considered and rejected: a platform
+ * administrator is explicitly kept out of a tenant's transcripts
+ * entirely, and this log — who read whose conversation — is closer to that
+ * boundary than to the usage totals ADMIN-4 actually shows, so this stays
+ * on the organization-scoped panel (`pages/Transcripts.tsx`), never
+ * `pages/Admin.tsx`.
+ *
+ * **No email, ever.** The log names two people per row — the staff member
+ * who read (`actorAccountId`) and, when the read was filtered, the student
+ * whose conversation it named (`personId`) — and this action resolves both
+ * to a display name the same way `memberships.list`
+ * (`actions/memberships.ts`) already resolves a grantor's, falling back to
+ * the id itself rather than ever reading an email off either `accounts` or
+ * `people` (`components/CoursePeople.tsx`'s own `displayName ?? personId`
+ * precedent, `pages/Usage.tsx`'s own module comment on why this platform
+ * never shows one where a display name already tells two rows apart).
  */
 
 import {
+  accounts,
   courses,
   jobs,
+  memberships,
   people,
   transcriptAccess,
   transcriptExports,
@@ -284,4 +328,92 @@ export const listTranscriptExportsAction: Action<
   },
   execute: ({ organizationId, entity, db }) =>
     transcriptExports.listExportsForCourse(organizationId, entity.id, db),
+}
+
+const listAccessLogInputSchema = z.object({
+  courseId: z.string().min(1),
+})
+type ListAccessLogInput = z.infer<typeof listAccessLogInputSchema>
+
+/** One ADMIN-2 audit row, with a display name resolved for each account it names — never an email (this file's own module comment). */
+export interface TranscriptAccessLogRow {
+  id: string
+  actorAccountId: string
+  actorDisplayName: string
+  /** `null` for an unfiltered read/export across the whole course — the same "nobody in particular" case `transcriptAccessLog.personId` itself carries (`schema.ts`). */
+  personId: string | null
+  /** `null` exactly when `personId` is — there is no student to name a display name for. */
+  personDisplayName: string | null
+  kind: transcriptAccess.TranscriptAccessLogEntry['kind']
+  startAt: number | null
+  endAt: number | null
+  createdAt: number
+}
+
+/**
+ * ADMIN-2 — read a course's own transcript-access audit trail, most recent
+ * first: who read (or exported) whose conversation, and when. Restricted to
+ * an owner (see this file's own module comment for why), the same
+ * "restricted in `execute`, not the policy" split `costLedger.setSpendingCap`
+ * already takes — `PolicyContext` carries no caller identity at all
+ * (`policy.ts`'s own module comment), so *who* may call this can only be
+ * decided once `execute` has the real `accountId`.
+ */
+export const listTranscriptAccessLogAction: Action<
+  'transcripts.listAccessLog',
+  ListAccessLogInput,
+  Course,
+  TranscriptAccessLogRow[]
+> = {
+  name: 'transcripts.listAccessLog',
+  description:
+    "Read a course's transcript-access audit trail (ADMIN-2): who read or exported whose conversation, and when — most recent first. Only an existing owner may call this.",
+  inputSchema: listAccessLogInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'read' },
+    resolve: (input, context) =>
+      courses.getCourse(context.organizationId, input.courseId, context.db),
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    const callerAccountId = requireAccountId(accountId)
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      callerAccountId,
+      db
+    )
+    if (!callerMembership || callerMembership.role !== 'owner') {
+      throw new ActionRefusedError()
+    }
+
+    const rows = transcriptAccess.listAccessLogForCourse(
+      organizationId,
+      entity.id,
+      db
+    )
+    return rows.map((row) => {
+      // Every account/person id here comes off a row this file's own audit
+      // trail wrote — `readCourseTranscript` (`transcript-access.ts`)
+      // resolves both before writing it — but this reads each back rather
+      // than trusting the reference blindly, the same discipline
+      // `memberships.list`'s own `listMembershipsAction` already holds
+      // itself to for the identical shape (that file's own comment).
+      const actor = accounts.getAccountById(row.actorAccountId, db)
+      const person = row.personId
+        ? people.getPerson(organizationId, row.personId, db)
+        : undefined
+      return {
+        id: row.id,
+        actorAccountId: row.actorAccountId,
+        actorDisplayName: actor?.displayName ?? row.actorAccountId,
+        personId: row.personId,
+        personDisplayName: row.personId
+          ? (person?.displayName ?? row.personId)
+          : null,
+        kind: row.kind,
+        startAt: row.startAt,
+        endAt: row.endAt,
+        createdAt: row.createdAt,
+      }
+    })
+  },
 }

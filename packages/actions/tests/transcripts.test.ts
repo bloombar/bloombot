@@ -1,13 +1,23 @@
 /**
- * `transcripts.read`/`.listStudents`/`.export`/`.listExports` (ADMIN-1..3) —
- * against a real, throwaway database (never `data/`, QA-2, QA-3).
+ * `transcripts.read`/`.listStudents`/`.export`/`.listExports`/`.listAccessLog`
+ * (ADMIN-1..3) — against a real, throwaway database (never `data/`, QA-2,
+ * QA-3).
  */
 
-import { conversations, jobs, people, type Database } from '@bloombot/db'
+import { randomUUID } from 'node:crypto'
+
+import {
+  accounts,
+  conversations,
+  jobs,
+  people,
+  type Database,
+} from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   exportTranscriptAction,
+  listTranscriptAccessLogAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
   readTranscriptAction,
@@ -278,5 +288,116 @@ describe('transcripts.listExports (ADMIN-3)', () => {
       first.exportId,
     ])
     expect(result.every((entry) => entry.status === 'pending')).toBe(true)
+  })
+})
+
+describe('transcripts.listAccessLog (ADMIN-2)', () => {
+  it('an owner reads the log, most recent first, with a display name resolved for the actor and the student — never an email', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const student = people.createPerson(
+      organizationId,
+      { displayName: 'Alice' },
+      testDb.db
+    )
+    seedMessage(organizationId, course.id, student.id, 'Hi!', testDb.db)
+
+    // Two reads write two ADMIN-2 rows through the exact same audited path
+    // ADMIN-1's own panel screen uses — an unfiltered read, then a
+    // student-filtered one.
+    await dispatch(
+      readTranscriptAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    await dispatch(
+      readTranscriptAction,
+      { courseId: course.id, personId: student.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const result = await dispatch(
+      listTranscriptAccessLogAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(result).toHaveLength(2)
+    // Most recent first — the student-filtered read.
+    expect(result[0]).toMatchObject({
+      actorAccountId: ownerId,
+      personId: student.id,
+      personDisplayName: 'Alice',
+      kind: 'read',
+    })
+    // The unfiltered read names nobody in particular.
+    expect(result[1]).toMatchObject({
+      actorAccountId: ownerId,
+      personId: null,
+      personDisplayName: null,
+      kind: 'read',
+    })
+    expect(result.every((entry) => entry.actorDisplayName.length > 0)).toBe(
+      true
+    )
+    // Never an email — the owner's own account carries one
+    // (`seedOrganizationWithCourse`'s own `${randomUUID()}@example.edu`),
+    // and it must not reach this response by any field.
+    expect(JSON.stringify(result)).not.toMatch(/@example\.edu/)
+  })
+
+  // The defect this slice fixes: before this action existed, an audit found
+  // `listAccessLogForCourse` had zero callers anywhere outside a test
+  // (`docs/ROADMAP.md`'s own audit note) — an owner had no way to read this
+  // back at all. This is that read, proven end to end through `dispatch`.
+  it('refuses a non-owner membership (ADMIN-2 is restricted to an owner)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        listTranscriptAccessLogAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: instructor.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  it('refuses when dispatch was given no accountId', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+
+    await expect(
+      dispatch(
+        listTranscriptAccessLogAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  it('refuses a course belonging to another organization (TEN-5), not-found-shaped', async () => {
+    testDb = createTestDatabase()
+    const { ownerId, course } = seedOrganizationWithCourse(testDb.db)
+    const { organizationId: otherOrg } = seedOrganizationWithCourse(testDb.db)
+
+    await expect(
+      dispatch(
+        listTranscriptAccessLogAction,
+        { courseId: course.id },
+        { organizationId: otherOrg, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
   })
 })

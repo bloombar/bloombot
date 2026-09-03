@@ -6963,3 +6963,94 @@ already reasons about the omission; `MCP_TOOL_SURFACE` is a hand-maintained allo
 touch, so the three new actions are unreachable from a model caller by construction). Emailing the invitation —
 an owner copies a link and sends it however they like, exactly as ENRL-3's own join link already works; if the
 mail transport should send it instead, that is a different slice's call.
+
+## D-69 — `packages/db`/`packages/actions`/`apps/web`/`e2e`: ADMIN-2/JOB-2 — a job listing bounded by what needs attention, and an access log restricted to an owner
+
+**Problem.** An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found two capabilities
+complete in the data layer and unreachable from any surface: `transcriptAccess.listAccessLogForCourse`
+(`packages/db`) had zero callers outside a test, so ADMIN-2's own "an institution has to be able to account
+for" a transcript read never actually held past the write; and there was no `jobs.list` action or route at
+all, so a job that exhausted its attempts in a session nobody still had open — the exact case JOB-2 names —
+was invisible to everyone, forever, even though the row itself was never deleted.
+
+**Choice, `transcripts.listAccessLog` is restricted to an owner, not open to any membership the way `.read`
+itself is.** The brief named this as mine to decide, and to say deliberately. Two readings of "an institution
+has to be able to account for" were live: the same population `.read` already admits (any membership —
+`policy.ts`'s own "a descriptor documents, it does not enforce" means today any owner/instructor/assistant can
+already read a course's raw transcript), or the narrower population this platform already holds accountable
+for organization-wide consequences. I chose the narrower one, measured against what the log actually adds
+over what `.read` already discloses: `.read`'s own content is the sensitive thing, and any membership can
+already see it — the access log is *metadata about who else has been looking*, which is oversight of that same
+staff population, not a fact a member is otherwise entitled to about their colleagues. That is the same shape
+`memberships.ts`'s own module comment already draws for `memberships.grant` and `costLedger.setSpendingCap`:
+"authority over a tenant's courses, transcripts and spending" is what a role carries, and an owner is who this
+platform already holds accountable for the tenant as a whole, not a course's own instructor auditing a peer.
+`ADMIN-4`'s "sees tenants, not conversations" was also weighed and rejected for the *reader*, not merely the
+surface: a platform administrator is kept out of a tenant's transcripts entirely, and this log names courses
+and (sometimes) students — closer to that boundary than to the usage totals ADMIN-4 actually shows — so
+`pages/Admin.tsx` was never a candidate; the only real choice was "any member" versus "owner alone" within the
+tenant's own panel. Measured by mutation, not merely asserted: `transcripts.ts`'s own inline `role !== 'owner'`
+check was weakened to "any existing membership" and run directly against `packages/actions/tests/transcripts.test.ts`'s
+own "refuses a non-owner membership" test — it fails without the check, the way every other owner-only action
+in this package (`memberships.grant`, `costLedger.setSpendingCap`) is already proven the same way.
+
+**Choice, the log never carries an email, on either side.** `actorAccountId`/`personId` are both resolved to a
+display name (`accounts.getAccountById`/`people.getPerson`, falling back to the id itself — the identical
+"defensive, do not trust a foreign key blindly" shape `memberships.list`'s own `listMembershipsAction` already
+takes), never to the underlying `email` column. Measured by mutation: swapping the actor's own
+`displayName` for `email` in the mapping was tried directly against this slice's own "an owner reads the log
+... never an email" test (`packages/actions/tests/transcripts.test.ts`) — it fails without the fix, catching
+the leaked address in the response body itself, not merely in a type.
+
+**Choice, `jobs.list` orders by `updatedAt`, not `createdAt`, and is bounded rather than unbounded.** JOB-2's
+own text ("a job that keeps failing is visible") is about what needs attention *now* — a job stuck retrying
+for an hour is what an instructor checking in on the queue wants to see first, not a job that finished cleanly
+a minute after being enqueued. `repos/jobs.ts#listJobsForOrganization` orders `desc(updatedAt), desc(createdAt)`
+(the second only a deterministic tiebreaker, not a meaningful one — this file adds no new `sequence` column for
+it, unlike `transcript_access_log`/`transcript_exports`, since a bounded, unpaginated listing does not need a
+tiebreaker that survives a schema migration, only one that survives one query). `MAX_JOBS_LIST_LIMIT` (200) is
+enforced by the input schema's own `.max()` — a caller asking above it is refused (`ActionInputError`), not
+silently clamped, the same shape `costLedger.setSpendingCap`'s own `.max(MAX_SPENDING_CAP_AMOUNT)` already
+takes for an out-of-range number. Measured by mutation: the `organizationId` argument passed to
+`listJobsForOrganization` was swapped for a literal string, and the payload-omission was removed from
+`toJobStatus`'s own mapping — both tried directly against this slice's own suite (`packages/actions/tests/reads.test.ts`);
+both fail without the fix, the tenant-scoping one against three separate assertions ("does not include another
+organization's jobs" and the two tests that depend on seeing the seeded organization's own rows at all) and the
+payload one against both `jobs.get`'s pre-existing JOB-6 tests and this slice's own new listing-shaped one —
+confirming `payload` omission is genuinely shared through `toJobStatus`, not duplicated per action.
+
+**Choice, `jobs.list` carries no owner restriction, unlike the access log.** `jobs.get` itself has never been
+role-restricted — any member of the organization may poll any job's own status — and a listing is the same
+read, plural. Nothing about knowing that a `roster.import` job failed is the kind of oversight-over-staff fact
+the access log's own restriction is about; it is operational status any member dispatching work already needs.
+
+**Choice, surface placement: a new "Jobs" tab (`pages/Jobs.tsx`), and the access log inside the existing
+Transcripts screen, not a new one.** The brief left both open. Jobs span the whole organization, not one
+course — the same shape Usage/Team already take as their own tabs (`pages/Shell.tsx`'s own module comment on
+each) — so a seventh tab, not a subsection of an existing one, is what that shape calls for. The access log is
+inescapably course-scoped (ADMIN-2's own "who read whose conversation" is per-course, the same as the
+transcript it is about) and already has exactly the screen where a course is selected and where ADMIN-1's own
+read happens — adding a second, course-picking screen for a fact about the first would duplicate the picker for
+no reader's benefit, so it is a new section inside `pages/Transcripts.tsx`, gated on `isOwner` the same way
+`pages/Usage.tsx`/`components/Team.tsx` already gate their own owner-only sections — withheld entirely, not
+merely disabled, so a non-owner is never offered a control that would refuse.
+
+**Schema.** No migration. `transcriptAccess.listAccessLogForCourse` (`packages/db`) already existed, correctly
+scoped, with a caller added by this slice rather than a shape changed; `jobs.listJobsForOrganization` is new but
+reads the existing `jobs` table with no new column. `drizzle-kit check` confirms no drift.
+
+**Tests, failing-then-passing.** Every new assertion (`packages/db/tests/jobs.test.ts`'s own
+`listJobsForOrganization` block; `packages/actions/tests/reads.test.ts`'s own `jobs.list` block;
+`packages/actions/tests/transcripts.test.ts`'s own `transcripts.listAccessLog` block; `apps/web/tests/jobs.test.tsx`,
+new; `apps/web/tests/transcripts.test.tsx`'s own new "Access log" block; `apps/web/tests/shell.test.tsx`'s own new
+Jobs-tab case) was run against the implementation with the mutations above applied and confirmed failing before
+being reverted and confirmed passing — see each mutation paragraph for which test caught it. `npm run lint &&
+npx prettier --check . && npm run typecheck && npm test && npm run e2e && npx drizzle-kit check` all pass:
+90 node:test, 2095 vitest across 182 files (baseline 2065/181; +30 tests, +1 file —
+`apps/web/tests/jobs.test.tsx`), 22 e2e (baseline 20; +2 — `e2e/jobs-panel.spec.ts`, `e2e/transcript-access-log.spec.ts`).
+
+**Out of scope, deliberately, unchanged from what the brief named.** Job retry/cancel controls — listing is
+what JOB-2 asks for; a "retry this job" button is a new capability this record does not build. Changing what
+`readCourseTranscript` writes, or JOB-6's retention rules (both untouched — `listJobsForOrganization` reads the
+same `payload`-may-already-be-null column JOB-6 already clears, on the same schedule). MCP's tool surface
+(neither new action is added to `apps/mcp/src/tool-surface.ts`'s own allowlist).

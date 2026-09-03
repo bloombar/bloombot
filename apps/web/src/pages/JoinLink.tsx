@@ -10,10 +10,13 @@
  * Signed out, this page asks the visitor to sign in first — the same
  * `SignIn` screen every other entry point uses (`pages/Connect.tsx`'s own
  * precedent for "a visit alone does nothing") — and stashes the secret
- * (`PENDING_JOIN_LINK_KEY`, `sessionStorage`) so a returning sign-in (an
- * emailed link, opened in the same tab or a fresh one) lands back on this
- * exact link rather than the ordinary shell (`App.tsx`'s own
- * `returnToShell`). A `sessionStorage` marker, not a `?next=` URL
+ * (`PENDING_JOIN_LINK_KEY`, `sessionStorage`) so a returning sign-in lands
+ * back on this exact link rather than the ordinary shell (`App.tsx`'s own
+ * `returnToShell`) — but only when the emailed sign-in link is opened in
+ * this *same* browsing context: `sessionStorage` is per-tab, so a link a
+ * mail client opens in a fresh tab has no marker to read and lands on the
+ * plain shell instead, exactly as if no join link had ever been in play. A
+ * `sessionStorage` marker, not a `?next=` URL
  * parameter carried through the sign-in redirect: this app already has one
  * established, working device for "return here after signing in"
  * (`Connect.tsx`'s `PENDING_CONNECT_ORG_KEY`), and a second, differently-shaped

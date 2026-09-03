@@ -1040,6 +1040,16 @@ enrolment it gains is one the web chat can actually find. A link that never exis
 revoked and one that expired are refused identically, because a redemption endpoint that
 distinguishes them is an oracle for guessing links.
 
+Redemption never revives an enrolment ENRL-6 already ended. A join link is deliberately shared
+with an entire class, so a person an instructor has removed still holds the same secret everybody
+else does; redeeming it again is that removed person acting alone, not an instructor's decision,
+and must not be able to undo one. This holds even when the removed person's only prior identity in
+the organization used a different surface than the one redeeming now — a verified email the
+redeeming account shares with a person already holding an ended enrolment for the course refuses
+the redemption rather than admitting a second, freshly-created person for the same human. Whoever
+actually means to re-admit a removed person does so through a caller that says so, the same way
+ROST-9's roster import already does; redeeming a link is never that caller.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

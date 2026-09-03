@@ -17,10 +17,12 @@
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { getAccountById } from './accounts.js'
 import * as enrolments from './enrolments.js'
 import {
   connectIdentity,
   createPerson,
+  findPeopleByEmail,
   getPerson,
   resolveIdentity,
 } from './people.js'
@@ -288,6 +290,42 @@ export function redeemJoinLink(
  * and opens its own nested transaction (a savepoint, `client.ts`'s own
  * `TransactingExecutor` doc comment) when called with a `tx` that is already
  * inside one — exactly this function's own case.
+ *
+ * ENRL-6/ENRL-8 rework — before minting that new person, refuses when the
+ * account's own verified email matches an existing person in this
+ * organization who holds an *ended* enrolment for this course. Without
+ * this, `enrolViaJoinLink`'s own `reviveEnded: false` (above) protects
+ * nothing here: it is keyed on the exact `personId` being admitted, and the
+ * person this function is about to create has never been enrolled in
+ * anything — it is a *different* row than the one an instructor ended,
+ * even though it is the same human. The case this closes: a student who
+ * first messaged the bot on Discord (so `resolveIdentity` above, keyed on
+ * `{ surface: 'web', … }`, correctly misses — they have no web identity yet)
+ * was removed from the course, then redeemed the same link a second time by
+ * signing in on the web with the address the roster already named for
+ * them. `accountId` is proof enough of *that* email specifically —
+ * `people.ts#hasVerifiedAddress`'s own comment: `accounts` rows are never
+ * created except through an already-verified address (AUTH-1's redeemed
+ * link or AUTH-2's Google-asserted `emailVerified`), so `account.email` is
+ * exactly the fact PPL-5 calls a verified address, not merely a claimed one.
+ *
+ * This is a *refusal*, not a merge, and that distinction is load-bearing:
+ * PPL-4 forbids combining two people's histories on an address match alone,
+ * precisely because an unverified or coincidental match must never let one
+ * person read another's transcript. Nothing here combines anything — no
+ * identity moves, no conversation moves, no usage counter moves; the only
+ * effect of this check firing is that a *second* person and a *second*
+ * course access grant are not created for someone an instructor already
+ * removed. It fails closed (declines to admit) rather than open (declines
+ * to check), the weaker and safer of the two actions PPL-4's own concern
+ * could have generalized to. See `docs/DECISIONS.md` for this rework's own
+ * record of that reasoning.
+ *
+ * Refuses identically to every other refusal this function gives — a plain
+ * `undefined`, indistinguishable at the caller from a never-issued, revoked
+ * or expired secret (this function's own "no oracle" shape, above). No
+ * branch here reveals that a match was found; the caller only ever learns
+ * "redeeming this link did not work."
  */
 export function redeemJoinLinkForWebAccount(
   secretHash: string,
@@ -302,6 +340,28 @@ export function redeemJoinLinkForWebAccount(
     const identity = { surface: 'web' as const, externalId: accountId }
     let person = resolveIdentity(link.organizationId, identity, tx)
     if (!person) {
+      // ENRL-6/ENRL-8 rework — see this function's own doc comment. Only
+      // reachable here, never for an account that already resolved to a
+      // person above: an existing person's own `reviveEnded: false` (via
+      // `enrolViaJoinLink`, below) already protects that pairing directly.
+      const account = getAccountById(accountId, tx)
+      if (account) {
+        const matches = findPeopleByEmail(
+          link.organizationId,
+          account.email,
+          tx
+        )
+        const wasRemoved = matches.some((match) =>
+          enrolments.hasEndedEnrolment(
+            link.organizationId,
+            link.courseId,
+            match.id,
+            tx
+          )
+        )
+        if (wasRemoved) return undefined
+      }
+
       const created = createPerson(link.organizationId, {}, tx)
       // `connectIdentity` refuses (`undefined`) on exactly three conditions
       // (its own doc comment): `personId` foreign or absent, already merged
@@ -323,11 +383,10 @@ export function redeemJoinLinkForWebAccount(
           `redeemJoinLinkForWebAccount: connectIdentity refused for a person (${created.id}) and organization (${link.organizationId}) this function just created — should be unreachable`
         )
       }
-      // `created` (above) predates `connectIdentity`'s own write —
-      // `connectedAt` on it is still `null`. Re-read so `enrolViaJoinLink`
-      // below (and this function's own caller) sees the row as it actually
-      // stands.
-      person = getPerson(link.organizationId, created.id, tx) ?? created
+      // The only later use of `person` is its own `id` (below), which
+      // `connectIdentity` never changes — no re-read needed to see
+      // `created` "as it actually stands" the way `connectedAt` would.
+      person = created
     }
 
     return enrolments.enrolViaJoinLink(

@@ -139,6 +139,43 @@ export function getPerson(
     .get()
 }
 
+/**
+ * ENRL-6/ENRL-8 rework: every person in `organizationId` whose stored
+ * `email` matches `email`, case-insensitively. `people.email` is roster or
+ * Discord-supplied (`RosterFields`, above) and never normalized on write the
+ * way `accounts.ts#getAccountByEmail`'s own column already is — so, unlike
+ * that lookup, this one lower-cases both sides of the comparison itself
+ * rather than trusting the stored value already is.
+ *
+ * `[]`, not one row, because this table carries no uniqueness constraint on
+ * `email` (unlike `accounts.email`) — an organization is free to have two
+ * roster rows sharing an address before anyone notices and corrects it, and
+ * this function's own caller (`repos/course-join-links.ts#redeemJoinLinkForWebAccount`)
+ * needs to check every match, not assume there is exactly one.
+ *
+ * This is not `resolveIdentity`'s job (that resolves a *proven* identity,
+ * PPL-2) and not a step toward merging anyone — see that caller's own doc
+ * comment for why an address match here ends in a refusal, never a merge
+ * (PPL-4's own "never on an address match alone" is about combining two
+ * people's histories, which nothing here does).
+ */
+export function findPeopleByEmail(
+  organizationId: string,
+  email: string,
+  db: Executor
+): Person[] {
+  return db
+    .select()
+    .from(people)
+    .where(
+      and(
+        eq(people.organizationId, organizationId),
+        sql`lower(${people.email}) = ${email.toLowerCase()}`
+      )
+    )
+    .all()
+}
+
 /** Every person in an organization. */
 export function listPeople(organizationId: string, db: Database): Person[] {
   return db

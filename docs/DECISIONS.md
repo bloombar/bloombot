@@ -5747,3 +5747,120 @@ issues has no expiry, valid until revoked, even though `courseJoinLinks.create` 
 own text describes "an optionally expiring link" as ENRL-3/ENRL-4's own capability, not as something this
 screen's own creation control must expose; adding one is a small, real gap left for whoever picks it up next,
 not a decision that anything here forecloses.
+
+---
+
+## D-57 — `packages/db`: ENRL-6/ENRL-8 rework — an instructor-ended enrolment must not be self-revivable through the same join link, by the same person or by the same human under a different identity
+
+**Problem.** Two independent reviews of D-55's ENRL-8 wiring — one security-focused, one spec-focused, the
+latter reproducing it over HTTP against the running app — found that `redeemJoinLink` becoming reachable for
+the first time made ENRL-6 bypassable by the very person it removed, acting alone. Reproduced: instructor
+issues a class join link → student redeems (`200`) → instructor ends the enrolment (ENRL-6) →
+`GET /organizations/:id/chat/courses` correctly reports the course gone → the student re-POSTs the identical,
+still-live secret to `/join-links/redeem` → `200`, and the course is back. The instructor's only remedy —
+revoking the link — locks out the entire class, not just the one person who should stay removed. There were
+two distinct mechanisms, and fixing only the first left the hole open.
+
+**Choice — Part 1: `enrolViaJoinLink` is reversed from `reviveEnded: true` to `reviveEnded: false`.**
+`enrolViaJoinLink`'s own doc comment (D-55) justified `true` as "an instructor handing the same link back to a
+student they had previously ended is a deliberate re-admission" — a premise that held only while
+`redeemJoinLink` had no live caller (D-55's own words: "existed, correct and tested, but nothing outside a test
+ever called it"). Once ENRL-8 wired a real, student-initiated route to it, the caller redeeming is never the
+instructor — it is whoever holds the secret, which ENRL-3 deliberately shares with an entire class. This is the
+identical shape D-35's rework finding 5 already fixed for `enrolViaDiscordRole`: an ambient credential the
+person already holds (there, a Discord role; here, a shared link) must not undo an instructor's decision on its
+own. `enrolViaJoinLink` now makes the same choice, for the same reason, and both of its own callers
+(`redeemJoinLink`, `redeemJoinLinkForWebAccount`) inherit it — neither is, today, reachable by an instructor
+acting deliberately, only by a redeemer presenting a secret. `enrolViaRoster` is untouched, per this rework's
+own brief — a roster re-import is this platform's own idempotent housekeeping, not a caller that means to
+re-admit anybody, the reasoning its own doc comment already gives and that this rework does not revisit.
+
+No parameter was added to `enrolViaJoinLink`, and no fourth `enrolVia*` function was created. `admit`'s own doc
+comment already states the file's convention: "Each `enrolVia*` below states its own choice explicitly, rather
+than this function assuming one default for every source" — a caller-supplied boolean would have broken that
+convention for no live benefit, since both of `enrolViaJoinLink`'s actual callers are self-service redemption,
+never an instructor-initiated re-admission. A distinct function would have meant inventing a caller nobody
+brief asked for — exactly the "correct and tested but nothing outside a test ever called it" trap D-55's own
+Problem section names for `redeemJoinLink` itself before ENRL-8 wired it. The practical consequence: after this
+rework, no exported function in `enrolments.ts` passes `reviveEnded: true` — there is currently no
+instructor-initiated re-admission path in this codebase at all, only ENRL-6's ended-stays-ended default. A
+future one (an explicit "re-admit" action, say) should call `admit` with `reviveEnded: true` the same way every
+choice in this file already is, not assume one.
+
+**Choice — Part 2: `redeemJoinLinkForWebAccount` refuses to mint a second person when the account's own
+verified email matches an existing person in the link's organization who holds an ended enrolment for the
+course.** Part 1 alone does not close the hole: `enrolViaJoinLink`'s `reviveEnded: false` is keyed on the exact
+`personId` being admitted, via `admit`'s own `priorEnded` lookup. A student who first messaged the bot on
+Discord, was enrolled and then removed, has an ended enrolment recorded against their *Discord* person.
+`resolveIdentity(organizationId, { surface: 'web', … })` correctly finds nobody — they have no web identity in
+this organization yet — so `redeemJoinLinkForWebAccount` proceeds to `createPerson`/`connectIdentity` a *third*
+row for the same human, and `admit`'s prior-ended lookup, scoped to that brand-new `personId`, finds nothing:
+a fresh, never-before-enrolled person is admitted freely, `reviveEnded` never even coming into play. `getAccountById`
+(`repos/accounts.ts`) resolves the redeeming account, and a new `people.ts#findPeopleByEmail` (case-insensitive,
+`lower(...)` on both sides — `people.email` is roster/Discord-supplied and never normalized on write, unlike
+`accounts.email`) finds every person in the organization sharing that address; `enrolments.ts#hasEndedEnrolment`
+(new, alongside `getActiveEnrolment`) checks each match for an ended enrolment in the course being joined. A
+match refuses the redemption before `createPerson` ever runs.
+
+`account.email` is treated as *verified*, not merely claimed: `people.ts#hasVerifiedAddress`'s own comment
+already establishes why an `accounts` row's email is the fact PPL-5 calls a verified address — `accounts` rows
+are never created except through an already-verified address (AUTH-1's redeemed sign-in link, or AUTH-2's
+Google-asserted `emailVerified`) — so this check reuses that same guarantee rather than trusting a claim nobody
+proved.
+
+**The PPL-4 tension, named rather than papered over.** PPL-4 deliberately refuses to *merge* two people on an
+address match alone — an unverified or coincidental match must never let one person read another's transcript.
+This check uses the identical signal (an email match) for a different, and deliberately weaker, purpose: it
+never merges anything — no identity moves, no conversation moves, no usage counter combines — it only *declines
+to admit*, the same fail-closed shape every other refusal in `redeemJoinLinkForWebAccount` already has. The
+worst outcome of a coincidental match (two different humans who happen to share a roster-entered address) is
+that the second human's join is refused, not-found-shaped, exactly as if the link were bad — recoverable by the
+instructor issuing a fresh link or re-admitting them by name, and never a disclosure of anything the matched
+person did not already have. The worst outcome of *not* checking is the defect this rework exists to close: an
+instructor's explicit removal, undone by the removed person alone. Refusing is the weaker of the two actions
+PPL-4's own "never merge, never disclose" concern could have generalized to, and it fails closed rather than
+open — declining to admit, not declining to check.
+
+**Refusals stay not-found-shaped.** Both new refusals return the same bare `undefined`
+`redeemJoinLinkForWebAccount` already returns for a never-issued, revoked or expired secret; `routes/join-links.ts`
+maps every `undefined` to the identical `404 { error: 'join_link_not_found' }` with no branch of its own between
+them, so neither refusal is a new oracle — a caller who was removed learns nothing more than "redeeming this
+link did not work," the same as a caller who mistyped it. `apps/api/tests/routes/join-links.test.ts` proves this
+by comparing each new refusal's own response byte-for-byte against a never-issued secret's.
+
+**Rework finding — the dead `getPerson` re-read in `redeemJoinLinkForWebAccount` is removed.** `person =
+getPerson(...) ?? created` predates this rework; its own comment ("`created` predates `connectIdentity`'s own
+write — re-read so the caller sees the row as it actually stands") was copied from `ensureWebPersonForAccount`
+(`@bloombot/auth`), where the person *is* that function's return value, so a stale `connectedAt` on it would
+leak to the caller. Here, the only later use of `person` is `person.id` (passed to `enrolViaJoinLink`), which
+`connectIdentity` never changes — the re-read cost a query and returned nothing this function's own caller
+could observe. `person = created` replaces it.
+
+**Rework finding — `redeemJoinLinkForWebAccount` had no atomicity regression test of its own.** A reviewer
+temporarily hoisted every read (the link's own liveness check, `resolveIdentity`) out of
+`redeemJoinLinkForWebAccount`'s `db.transaction(...)`, leaving the transaction's first statement a plain write
+— the exact defect `redeemJoinLink`'s own rework finding 6 test (D-34) exists to catch for *that* function — and
+every existing test still passed, because none of them race a concurrent revoke against an in-flight web-account
+redemption specifically. The implementation was already correct (both reads run inside `tx`, same as
+`redeemJoinLink`); the property was simply unguarded. A new test in `packages/db/tests/course-join-links.test.ts`
+mirrors `redeemJoinLink`'s own device — a second connection to the same file revokes the link mid-redemption —
+but spies on `people.createPerson`, not `people.getPerson`: `redeemJoinLinkForWebAccount`'s own "person missing"
+branch never calls `getPerson` (only `resolveIdentity`, a raw query, and `createPerson`), so the existing spy
+target does not transfer. Verified against the actual regression by temporarily reproducing the reviewer's
+hoist locally: the new test fails exactly when the reads are hoisted out, and passes against the real,
+already-atomic implementation.
+
+**Rework finding — two stale comments named a `sessionStorage` return path as working for a link "opened in the
+same tab or a fresh one."** `sessionStorage` is per-browsing-context; a sign-in link a mail client opens in a
+new tab has no marker to read (`pages/JoinLink.tsx`'s `PENDING_JOIN_LINK_KEY`, `pages/Connect.tsx`'s
+`PENDING_CONNECT_ORG_KEY`) and lands on the plain shell instead, exactly as if the pending marker had never been
+set. Both comments now say that directly; the mechanism itself (D-55's own choice of a `sessionStorage` marker
+over a `?next=` URL parameter) is unchanged.
+
+**Limits.** This rework closes the self-revival hole; it does not add the re-admission action the instructor's
+"only remedy is revoking the link, which locks out the entire class" reproduction implicitly asks for. After
+this rework, re-admitting a person an instructor has explicitly ended requires either a fresh join link (a new
+secret, so the old one's holders — including whoever was removed — cannot use it) or a roster re-import that
+newly lists them (still `reviveEnded: false`, per `enrolViaRoster`'s own unchanged reasoning, so this does not
+help either). Building a direct "re-admit this person" action, callable only by staff, is out of this rework's
+own scope — the brief for it named exactly two mechanisms to fix, not a new capability to add.

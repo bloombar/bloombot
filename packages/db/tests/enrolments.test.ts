@@ -311,6 +311,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
         'endEnrolment',
         'getActiveEnrolment',
         'getEnrolment',
+        'hasEndedEnrolment',
         'listCoursesForPerson',
         'listPeopleForCourse',
       ].sort()
@@ -381,14 +382,18 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toHaveLength(0)
   })
 
-  // --- Rework finding 3 / cheap-fix 9: reviving an ended enrolment -------
+  // --- Rework finding 3 / cheap-fix 9, and the ENRL-6/ENRL-8 rework -------
 
-  // The load-bearing consequence of the partial unique index
-  // (`enrolments_org_course_person_active_unique`, `schema.ts`'s own
-  // comment): a person who holds an *ended* enrolment can still be admitted
-  // again, as a genuinely new row, through a path that means to revive
-  // them — `enrolViaJoinLink`'s own `reviveEnded: true`.
-  it('re-enrolling through a path that means to revive creates a new, distinct row and leaves the ended one intact', () => {
+  // ENRL-6/ENRL-8 rework — this test used to prove the opposite: that
+  // `enrolViaJoinLink`'s own `reviveEnded: true` created a genuinely new row
+  // for a person an instructor had already ended. That premise held only
+  // while `redeemJoinLink` had no live caller (see `docs/DECISIONS.md`);
+  // once ENRL-8 wired a real, student-initiated redemption route to it, the
+  // same behaviour let the removed person undo their own removal by
+  // re-submitting the class's shared secret. Fails without the fix: before
+  // `enrolViaJoinLink` was reversed to `reviveEnded: false`, redeeming the
+  // same link again after `endEnrolment` produced a brand-new active row.
+  it("enrolViaJoinLink does not revive an ended enrolment — a link redeemed again must not undo an instructor's ENRL-6 decision", () => {
     testDb = createTestDatabase()
     const { organizationId, course } = seedOrganizationWithCourse(testDb)
     const person = people.createPerson(organizationId, {}, testDb.db)
@@ -407,11 +412,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       testDb.db
     )
 
-    expect(second?.id).toBeDefined()
-    expect(second?.id).not.toBe(first.id)
-    expect(
-      enrolments.getEnrolment(organizationId, first.id, testDb.db)
-    ).toMatchObject({ endedAt: expect.any(Number) })
+    expect(second).toBeUndefined()
     expect(
       enrolments.getActiveEnrolment(
         organizationId,
@@ -419,11 +420,17 @@ describe('enrolments repo (ENRL-1..6)', () => {
         person.id,
         testDb.db
       )
-    ).toMatchObject({ id: second?.id })
+    ).toBeUndefined()
+    // The original row is still there, still ended — not deleted, not
+    // reactivated.
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })
   })
 
-  // A roster re-import must not do what the test above proves
-  // `enrolViaJoinLink` deliberately does — reviving an ended enrolment.
+  // A roster re-import does not revive an ended enrolment either —
+  // `enrolViaRoster`'s own `reviveEnded: false` is unchanged by this
+  // rework (the brief for it explicitly leaves this function alone).
   // Fails without the fix: before `admit` gained `reviveEnded`, this same
   // call sequence produced a brand-new active row here too, silently
   // undoing the `endEnrolment` call an instructor made on purpose (ENRL-6).

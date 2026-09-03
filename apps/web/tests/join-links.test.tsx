@@ -238,3 +238,128 @@ describe('JoinLinks (WEB-20)', () => {
     )
   })
 })
+
+// WEB-23: an instructor chooses an expiry when issuing a link — defaulting
+// to none, so today's behaviour (the block above) is what an instructor
+// gets by not choosing at all.
+describe('JoinLinks expiry (WEB-23)', () => {
+  it("issuing without choosing an expiry still sends none — today's behaviour, unchanged. Fails without the fix: before WEB-23, this was the only path that existed at all, but a naive fix that always sends a third argument breaks this exact call shape", async () => {
+    listCourseJoinLinks
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([link({ id: 'link-1' })])
+    createCourseJoinLink.mockResolvedValue({
+      linkId: 'link-1',
+      secret: 'the-secret-value',
+      expiresAt: null,
+    })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText('No join links issued yet.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+
+    // Exactly two arguments — no `expiresAt`, not even `undefined` — so a
+    // link issued without touching the new control redeems forever, same as
+    // before this slice.
+    await waitFor(() =>
+      expect(createCourseJoinLink).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+  })
+
+  it('choosing an expiry sends a future epoch-millisecond value, and the created link carries it. Fails without the fix: the expiry control did not exist, so there was nothing to select and this action was never called with a third argument at all', async () => {
+    listCourseJoinLinks
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        link({ id: 'link-1', expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
+      ])
+    createCourseJoinLink.mockResolvedValue({
+      linkId: 'link-1',
+      secret: 'the-secret-value',
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText('No join links issued yet.')
+
+    fireEvent.change(screen.getByLabelText('Expiry'), {
+      target: { value: '1w' },
+    })
+    const before = Date.now()
+    fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+
+    await waitFor(() => expect(createCourseJoinLink).toHaveBeenCalled())
+    const [organizationId, courseId, expiresAt] = createCourseJoinLink.mock
+      .calls[0] as [string, string, number]
+    expect(organizationId).toBe('org-1')
+    expect(courseId).toBe('course-1')
+    expect(typeof expiresAt).toBe('number')
+    expect(Number.isInteger(expiresAt)).toBe(true)
+    // Strictly in the future, as `createInputSchema` requires — and
+    // consistent with a one-week duration added to roughly "now".
+    expect(expiresAt).toBeGreaterThan(before)
+    expect(expiresAt).toBeLessThanOrEqual(
+      before + 7 * 24 * 60 * 60 * 1000 + 1000
+    )
+  })
+
+  // "Mind the gap between rendering a choice and the request being made" —
+  // the brief's own wording. Fails without the fix if the component instead
+  // captured `Date.now() + duration` at the moment the option was selected:
+  // this test lets a long delay pass between selecting and clicking, and
+  // asserts the value sent is still computed relative to *send* time, not
+  // stale from selection time.
+  it('recomputes the expiry at send time, not at the moment the option was selected', async () => {
+    listCourseJoinLinks.mockResolvedValue([])
+    createCourseJoinLink.mockResolvedValue({
+      linkId: 'link-1',
+      secret: 'the-secret-value',
+      expiresAt: null,
+    })
+    const dayMs = 24 * 60 * 60 * 1000
+    const t0 = 1_700_000_000_000
+    const dateSpy = vi.spyOn(Date, 'now').mockReturnValue(t0)
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText('No join links issued yet.')
+    fireEvent.change(screen.getByLabelText('Expiry'), {
+      target: { value: '1d' },
+    })
+
+    // A long pause between choosing and clicking — long enough that a value
+    // computed eagerly at selection time (t0 + 1 day) would already be in
+    // the past by the time the request is actually sent.
+    dateSpy.mockReturnValue(t0 + 2 * dayMs)
+    fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+
+    await waitFor(() => expect(createCourseJoinLink).toHaveBeenCalled())
+    const [, , expiresAt] = createCourseJoinLink.mock.calls[0] as [
+      string,
+      string,
+      number,
+    ]
+    // Computed off the clock at send time (t0 + 2 days), not selection time
+    // (t0) — strictly greater than "now" at the moment of sending.
+    expect(expiresAt).toBe(t0 + 2 * dayMs + dayMs)
+    expect(expiresAt).toBeGreaterThan(t0 + 2 * dayMs)
+
+    dateSpy.mockRestore()
+  })
+
+  it('the list renders a real expiry, and an already-expired link reads as expired — distinct from a revoked one', async () => {
+    const past = Date.now() - 1000
+    listCourseJoinLinks.mockResolvedValue([
+      link({ id: 'link-1', expiresAt: past, revokedAt: null }),
+      link({ id: 'link-2', expiresAt: null, revokedAt: past }),
+    ])
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+
+    expect(await screen.findByText(/^Expired /)).toBeInTheDocument()
+    expect(screen.getByText(/^Revoked /)).toBeInTheDocument()
+    // An already-expired, never-revoked link still offers "Revoke" — it is
+    // read as expired, not folded into the revoked state.
+    expect(
+      screen.getAllByRole('button', { name: /^Revoke join link/ })
+    ).toHaveLength(1)
+  })
+})

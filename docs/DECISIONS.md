@@ -6219,3 +6219,43 @@ is exactly the "coin flip" QA-9 is about not being.
 file are timestamped during the pre-fix baseline reproduction, ~7 minutes earlier than the first post-fix run).
 `npm run lint && npx prettier --check . && npm run typecheck && npm test` all pass unchanged
 (90 node:test, 1926 vitest across 172 files, matching this slice's stated baseline).
+
+## D-63 — `apps/web`: WEB-23 — a relative-duration control for a join link's expiry, not a datetime field
+
+**Problem.** `courseJoinLinks.create` has always accepted an optional `expiresAt`, but
+`components/JoinLinks.tsx` never offered it, so every link the panel issued was permanent and its own
+`formatExpiry` could only ever print "No expiry" — dead text on a column WEB-20 required to mean something.
+
+**Control chosen: a small set of relative durations (`EXPIRY_OPTIONS`), not a raw datetime picker.** The
+brief's own reasoning held up: an instructor issuing a link for a term is thinking in weeks, not timestamps,
+and `createInputSchema`'s own refusal (`expiresAt` must be strictly `> Date.now()`, `packages/actions/src/
+actions/course-join-links.ts`) is exactly the failure mode a datetime field invites — a picker lets someone
+select today's date with no time component and land on a value already in the past by the time the request
+lands. A `<select>` of durations (`Never`, `1 day`, `1 week`, `1 month`, `1 term (16 weeks)`) cannot produce
+that: every non-`Never` value is `Date.now() + durationMs`, computed the moment the request is actually sent
+(`handleCreate`), never at the moment the option was selected — so a pause between choosing and clicking
+never lets the value fall behind. `Never` (`durationMs: null`) is the default and sends no third argument at
+all, matching `createCourseJoinLink`'s existing "omitted means no expiry" and leaving an instructor who never
+touches the control with exactly today's unchanged behaviour.
+
+**Wording: "Never", not "No expiry", in the select.** The list already reads a link with no expiry as "No
+expiry" (`formatExpiry`, asserted by both `join-links.test.tsx` and `join-links-panel.spec.ts`). Labelling the
+select's own default option identically would put two elements carrying that same text on screen at once the
+moment a link with no expiry exists — a real strict-mode collision for any test (or screen reader Get-by-text
+navigation) that looks for "No expiry" without first scoping to the list. `Never` says the same thing without
+colliding with the list's own established string.
+
+**Expired is distinct from revoked.** `formatExpiry` already branched on `revokedAt` before `expiresAt`; this
+slice added a third branch — `expiresAt <= Date.now()` and not revoked reads "Expired …", never folded into
+"Revoked …". The two are different causes (the clock, versus an instructor's own act) and ENRL-9/WEB-22's own
+distinction between an ended and a revoked state (D-59/D-60) is exactly this same discipline applied here: an
+expired-but-not-revoked link still offers a "Revoke" control, since expiry stopping *new* admissions is not
+the same act as an instructor choosing to stop it.
+
+**Verification.** New tests fail on the pre-change component (`git stash` of `JoinLinks.tsx` alone, tests
+kept): 3 of 12 in `join-links.test.tsx` failed — choosing an expiry, recomputing it at send time rather than
+selection time, and expired-vs-revoked — the other 9 (pre-existing WEB-20 cases) stayed green throughout,
+confirming they exercise this slice's own change rather than something already there. `npm run lint && npx
+prettier --check . && npm run typecheck && npm test` all pass: 1930 vitest across 172 files (baseline 1926 —
+four new cases, no new files), 90 node:test unchanged. `npm run e2e`: 15 passed (baseline 14 plus one new
+WEB-23 case), no intermittent failures.

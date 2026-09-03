@@ -2796,7 +2796,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 16
-  status: In progress
+  status: In review
   review: false
 - id: ENRL-8
   title: A join link enrols whoever redeems it, and only them
@@ -2813,7 +2813,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 16
-  status: In progress
+  status: In review
   review: false
 - id: ENRL-9
   title: An enrolment an instructor ended can be reinstated by an instructor
@@ -2830,7 +2830,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 16
-  status: In progress
+  status: In review
   review: false
 - id: WEB-20
   title: A course's join links are issued and copied from the panel
@@ -2847,7 +2847,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 16
-  status: In progress
+  status: In review
   review: false
 - id: WEB-21
   title: A roster is imported from the panel, with its format stated on the screen
@@ -2864,7 +2864,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 16
-  status: In progress
+  status: In review
   review: false
 - id: WEB-22
   title: A course's people are visible in the panel, and admission is reversible there
@@ -2881,5 +2881,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 16
-  status: In progress
+  status: In review
   review: false

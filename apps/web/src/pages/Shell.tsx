@@ -40,6 +40,13 @@
  * on mount and on every organization switch, and — once it resolves — is
  * the only thing either `installedServerId` or `handleRemove` below trust;
  * `justInstalled` is consulted only while that fetch is still `'loading'`.
+ * That `'loading'` state recurs on every organization switch, not only the
+ * first render, so `justInstalled`'s stand-in has two independent ways to go
+ * stale, not one — a same-session `discordServers.remove` (guarded by
+ * `removedServerId`, its own comment below) and a switch away from and back
+ * to a different organization mid-fetch (guarded by `discordFetchId`, its
+ * own comment below, for the response race; `removedServerId` again for
+ * what the `'loading'` window itself renders).
  *
  * COST-3/COST-4: a fifth tab, Usage (`pages/Usage.tsx`) — an audit found
  * neither an instructor's own read of their courses' spend nor a way to
@@ -150,6 +157,22 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // mistaken for "not installed."
   const [discordBindingState, setDiscordBindingState] =
     useState<DiscordBindingState>({ status: 'loading' })
+  // TEN-8 rework (must-fix 1) — the `justInstalled` fallback below is
+  // consulted on *every* `'loading'` state, not only the first: an
+  // organization switch away and back re-runs the effect below, which sets
+  // `discordBindingState` back to `'loading'` while the refetch is in
+  // flight, and without this record `justInstalled` would answer for that
+  // window too — resurrecting a binding this same session already removed,
+  // with a live Remove button that then 404s (`discordServers.remove`'s own
+  // policy correctly refuses a binding that is no longer active). Recorded
+  // once, in `handleRemove`, and never cleared — `justInstalled` itself
+  // never changes after mount (it is a prop, not state this component
+  // updates), so once its own server id has been removed this session it
+  // must never be offered again, from *any* organization switch, not only
+  // the one immediately after removing it.
+  const [removedServerId, setRemovedServerId] = useState<string | undefined>(
+    undefined
+  )
   // Tags each `listDiscordServers` call, the same `refreshId` shape
   // `pages/Projects.tsx#refresh` already uses — an organization switch
   // (re-running the effect below) or a successful `handleRemove` can each
@@ -241,15 +264,19 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // `discordBindingState` is the source of truth once it has resolved; while
   // it is still `'loading'`, `justInstalled` — known synchronously, no
   // request required — stands in for it, but only for the organization it
-  // actually names (this file's own module comment on why). Once the fetch
-  // resolves (`'ready'` or `'error'`), `justInstalled` is not consulted
-  // again: a stale same-session signal must never outlive the server-truth
-  // read that supersedes it.
+  // actually names (this file's own module comment on why) and only when
+  // `handleRemove` has not already removed that exact server this session
+  // (`removedServerId`'s own comment — a `'loading'` state can be *any*
+  // organization switch, not only the first render, so this must hold every
+  // time, not once). Once the fetch resolves (`'ready'` or `'error'`),
+  // `justInstalled` is not consulted again: a stale same-session signal must
+  // never outlive the server-truth read that supersedes it.
   const installedServerId =
     discordBindingState.status === 'ready'
       ? discordBindingState.binding?.serverId
       : discordBindingState.status === 'loading' &&
-          justInstalled?.organizationId === activeOrganizationId
+          justInstalled?.organizationId === activeOrganizationId &&
+          justInstalled.serverId !== removedServerId
         ? justInstalled.serverId
         : undefined
 
@@ -270,6 +297,10 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
       // show the just-removed binding as installed again.
       discordFetchId.current++
       setDiscordBindingState({ status: 'ready', binding: undefined })
+      // Records exactly which server id this session just removed —
+      // `removedServerId`'s own comment on why a later organization switch,
+      // not only this immediate render, needs to keep seeing it.
+      setRemovedServerId(installedServerId)
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught

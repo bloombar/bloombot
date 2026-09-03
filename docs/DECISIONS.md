@@ -5864,3 +5864,59 @@ secret, so the old one's holders — including whoever was removed — cannot us
 newly lists them (still `reviveEnded: false`, per `enrolViaRoster`'s own unchanged reasoning, so this does not
 help either). Building a direct "re-admit this person" action, callable only by staff, is out of this rework's
 own scope — the brief for it named exactly two mechanisms to fix, not a new capability to add.
+
+---
+
+## D-58 — `apps/web`: WEB-20/WEB-21 rework — a roster report that silently drops three of its own fields, a copy control with no failure path, and a stale comment left behind by D-57
+
+**Problem.** Two reviews of D-56's own WEB-20/WEB-21 slice found one must-fix and one cheap-fix in `apps/web`,
+plus a stale comment in `packages/db/src/repos/enrolments.ts` that D-57's `reviveEnded` reversal (above) left
+behind.
+
+**Must-fix — `RosterImport.tsx` rendered eight of `RosterImportReport`'s eleven fields and silently dropped
+`ambiguousHandles`, `unresolvedRoles` and `limitations`,** even though `api/types.ts`'s own doc comment claimed
+"every field here narrows to what the panel's own import screen actually shows an instructor." The omission was
+not cosmetic: `apps/worker/src/handlers/roster-import.ts` still creates a channel for a row whose handle matched
+more than one guild member (`ambiguousHandles`) or whose course role did not resolve (`unresolvedRoles`) — the
+channel exists, with the deny-everyone and admins overwrites, but never the individual student's own grant — so
+a run that left a real student locked out of their own channel rendered only
+`1 added, 0 merged, 1 channels created, 0 channels already present`, an unqualified-looking success.
+`unresolvedHandles` (the identical consequence, for a handle that matched _nobody_ rather than more than one)
+was already rendered, which is what made this an omission rather than a considered exclusion — nothing
+distinguishes the two cases in the report's own shape or in what an instructor needs to know from either.
+`limitations` (ROST-6's pinned welcome message, today's one entry) exists precisely so a reader of one run's
+results does not need `docs/DECISIONS.md` open — this screen is that reader, so it stayed unread there too.
+Fixed by rendering all three in the same "name the row or value it concerns" style the other categories already
+use — `ambiguousHandles` names every display name it matched, since that is what actually lets an instructor
+correct the roster's own handle; `unresolvedRoles` and `limitations` are listed plainly. The `api/types.ts` doc
+comment needed no further edit once this landed: its claim is now true rather than aspirational.
+
+**Cheap-fix — `JoinLinks.tsx`'s `handleCopy` awaited `navigator.clipboard.writeText` with no `catch`.** On a
+non-secure origin (`http://` on a LAN, or a staging host without TLS) `navigator.clipboard` is `undefined`
+entirely — reading `.writeText` off it throws a `TypeError` before any promise exists to catch, which an
+un-guarded `await` left as an unhandled rejection: the button's own label stayed "Copy link" forever, with no
+signal at all, for the one value WEB-20 states is never recoverable if lost. Fixed with a `try`/`catch` around
+the write, reporting the failure through the same `ErrorMessage`/`describeApiError` pair every other refusal in
+this app already renders through — a new `'clipboard_unavailable'` case, since this is a real, distinct failure
+an instructor should be told about in words, not a code `apps/api` ever actually sent (no request happens at
+all). The URL itself was never at risk of disappearing on a failed copy — `created` is only ever cleared by a
+fresh `courseJoinLinks.create` call, never by `handleCopy` — so the fix is entirely the missing signal, not a
+missing fallback; D-56's own choice against a `document.execCommand('copy')` fallback stands unchanged.
+
+**Stale comment — `enrolments.ts#enrolViaDiscordRole`'s own doc comment still described `enrolViaJoinLink` and
+`enrolViaRoster` as "the other two `enrolVia*` functions" a re-admission would call, with `reviveEnded: true`
+"unchanged, and correct" for them.** D-57 (above) reversed `enrolViaJoinLink` to `reviveEnded: false` in the
+same file this comment lives in, without updating this passage — both halves of the sentence became false the
+moment that commit landed: none of the three `enrolVia*` functions in this file revive an ended enrolment
+today, and nothing re-admits anyone. Corrected to state that plainly, pointing at `enrolViaJoinLink`'s own
+"Limits" note (already accurate) for where a future re-admission action would need to be added. Comment only —
+`docs/DECISIONS.md` D-57 already made, and this rework does not revisit, the actual behavioral choice.
+
+**Tests.** Each rendered category and the clipboard failure path got its own test, verified failing against the
+pre-fix code before the fix (a targeted `git stash push --keep-index` of just the changed component, run once,
+popped immediately — never a discarded working-tree edit): `roster-import.test.tsx` gained three cases, each
+asserting the rendered report's own text for a report carrying that field, not merely the presence of a key on
+the mocked value (`ambiguousHandles` — a report naming a display-name collision; `unresolvedRoles` — a role
+name; `limitations` — the welcome-message note); `join-links.test.tsx` gained one case, overriding its own
+`beforeEach` clipboard stub to `undefined` and asserting both the rendered failure text and that the secret's
+own URL stays visible afterward.

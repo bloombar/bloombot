@@ -19,6 +19,18 @@
  * "a queued job with no worker running to claim it must not read as a
  * silent hang" problem, so it reuses the identical `getJobStatus` poll and
  * "still queued" hint rather than inventing a second mechanism.
+ *
+ * **Every field of `RosterImportReport` is rendered somewhere** — ROST-12's
+ * own "an import says what it could not do." Rework finding (must-fix):
+ * `ambiguousHandles`, `unresolvedRoles` and `limitations` were declared in
+ * `api/types.ts` but never read here, which is not a cosmetic gap —
+ * `apps/worker`'s own handler still creates a channel for an ambiguous or
+ * unresolved-role row, just without that student's own access grant, so an
+ * instructor reading only the counts this component used to show would see
+ * an unqualified success on a run that actually left a real student locked
+ * out of their own channel. All three now render in the same "name the row
+ * or value it concerns" style as `parseErrors`/`unresolvedHandles` above
+ * them.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -303,6 +315,60 @@ export function RosterImport({
                     Line {entry.line}: {entry.email} collides with line{' '}
                     {entry.collidesWithLine} ({entry.collidesWithEmail})
                   </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Rework finding (must-fix): this run left a row's channel with
+              no student overwrite at all — the same real consequence
+              `unresolvedHandles` above already reports, just for a handle
+              that matched more than one member rather than none. Naming
+              which display names it matched is what lets an instructor
+              actually correct the roster's own handle. */}
+          {report.ambiguousHandles.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Discord handles that matched more than one server member — no
+                channel access was granted, to avoid guessing which student:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.ambiguousHandles.map((entry) => (
+                  <li key={`${entry.line}-${entry.discord}`}>
+                    Line {entry.line}: {entry.discord} ({entry.email}) matched{' '}
+                    {entry.matchedDisplayNames.join(', ')}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Rework finding (must-fix): every channel this run created is
+              missing this role's own access grant — silent otherwise. */}
+          {report.unresolvedRoles.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Roles not found in the server — every channel this run created
+                is missing that role&apos;s own access grant:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.unresolvedRoles.map((role) => (
+                  <li key={role}>{role}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Rework finding (must-fix): what this run structurally cannot
+              do (ROST-6's own pinned welcome message, today) — stated here
+              so this screen is the one place an instructor needs to read,
+              not `docs/DECISIONS.md`. */}
+          {report.limitations.length > 0 && (
+            <div>
+              <p className="font-medium text-neutral-900">This run does not:</p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.limitations.map((text) => (
+                  <li key={text}>{text}</li>
                 ))}
               </ul>
             </div>

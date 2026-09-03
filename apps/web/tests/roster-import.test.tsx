@@ -159,6 +159,82 @@ describe('RosterImport (WEB-21)', () => {
     expect(report).toHaveTextContent('1 added')
   })
 
+  // Rework finding (must-fix): before this, `ambiguousHandles`,
+  // `unresolvedRoles` and `limitations` were declared on `RosterImportReport`
+  // but nothing in this component ever read them — a report carrying an
+  // entry in each rendered only the summary counts, with no sign a real
+  // student's own channel access grant was skipped. Each assertion below
+  // reads the rendered report, not the presence of a key on the mocked
+  // value, so it fails the same way a reviewer clicking through the screen
+  // would have noticed it failing.
+  it('a finished report names a Discord handle that matched more than one server member, and who it matched', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          ambiguousHandles: [
+            {
+              line: 4,
+              discord: 'alex',
+              email: 'alex@example.edu',
+              matchedDisplayNames: ['Alex Chen', 'Alex Diaz'],
+            },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('Line 4: alex')
+    expect(report).toHaveTextContent('alex@example.edu')
+    expect(report).toHaveTextContent('Alex Chen, Alex Diaz')
+  })
+
+  it('a finished report names a role that did not resolve in the guild', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          unresolvedRoles: ['admins-wd-fa26'],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('admins-wd-fa26')
+  })
+
+  it("a finished report states the run's own structural limitations", async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          limitations: ['This run does not send or pin a welcome message.'],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent(
+      'This run does not send or pin a welcome message.'
+    )
+  })
+
   it('a pending job stuck past the hint threshold says the worker might not be running', async () => {
     importRoster.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(job({ status: 'pending' }))

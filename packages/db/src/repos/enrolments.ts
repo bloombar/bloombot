@@ -445,12 +445,24 @@ export function enrolViaRoster(
  * closes that: a person who has never held any enrolment for this course is
  * still admitted freely (there is no "prior ended row" to block — `admit`'s
  * own `reviveEnded` only matters once one exists), and a person an
- * instructor has explicitly ended stays ended until an instructor
- * re-admits them through one of the other two `enrolVia*` functions
- * (`reviveEnded: true` there is unchanged, and correct: redeeming a link or
- * a roster row *is* a deliberate re-admission decision the way an ambient
- * Discord role never was — see each function's own comment). This reasoning
- * never turned on *which* role the caller held — an admins-role holder's
+ * instructor has explicitly ended stays ended, full stop. Stale as of the
+ * ENRL-6/ENRL-8 rework (`docs/DECISIONS.md` D-57): this paragraph used to
+ * point here at "the other two `enrolVia*` functions" as the re-admission
+ * path, on the reasoning that redeeming a link or a roster row is a
+ * deliberate decision an ambient Discord role never is. That premise held
+ * only while `redeemJoinLink` had no live caller; once ENRL-8 wired a real
+ * route to it, the redeemer is whoever holds the shared secret, not the
+ * instructor, so `enrolViaJoinLink` was reversed to `reviveEnded: false` too
+ * (its own doc comment has the full reasoning) — and `enrolViaRoster`
+ * already was. All three `enrolVia*` functions in this file now refuse to
+ * revive an ended enrolment. **No function in this package re-admits anyone
+ * today.** `enrolViaJoinLink`'s own "Limits" note already says this
+ * plainly: a future instructor-initiated re-admission action would call
+ * `admit` with `reviveEnded: true` explicitly, the same way every choice in
+ * this file is stated, not assumed.
+ *
+ * None of the above ever turned on *which* role the caller held — an
+ * admins-role holder's
  * enrolment is just as ambient a fact, re-checked on every message the same
  * way, as a students-role holder's — so ENRL-7's widening to either role
  * leaves `reviveEnded: false` exactly as it was: an instructor an owner has

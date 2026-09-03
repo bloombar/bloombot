@@ -182,6 +182,46 @@ describe('JoinLinks (WEB-20)', () => {
     ).not.toBeInTheDocument()
   })
 
+  // Rework finding (cheap-fix): `navigator.clipboard` is `undefined` on a
+  // non-secure origin — before this fix, `handleCopy` awaited
+  // `.writeText` straight off it with no `try`/`catch`, which threw a
+  // `TypeError` as an unhandled rejection: the label stayed "Copy link"
+  // forever and nothing told the instructor their one, unrecoverable
+  // secret was never actually copied. Fails without the fix (the `catch`
+  // in `handleCopy`): `screen.findByRole('alert')` below times out, since
+  // nothing renders one.
+  it('a clipboard that cannot be reached is reported, and the URL stays visible to copy by hand', async () => {
+    listCourseJoinLinks.mockResolvedValue([])
+    createCourseJoinLink.mockResolvedValue({
+      linkId: 'link-1',
+      secret: 'the-secret-value',
+      expiresAt: null,
+    })
+    // Standing in for a non-secure origin, where the browser never defines
+    // `navigator.clipboard` at all — overriding this test file's own
+    // `beforeEach` stub.
+    Object.assign(navigator, { clipboard: undefined })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText('No join links issued yet.')
+    fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+    await screen.findByTestId('created-join-link-url')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not copy the link — copy it from the text above by hand.'
+    )
+    // The label never claims a copy that did not happen.
+    expect(
+      screen.queryByRole('button', { name: 'Copied!' })
+    ).not.toBeInTheDocument()
+    // The one unrecoverable value stays on screen, still copyable by hand.
+    expect(screen.getByTestId('created-join-link-url')).toHaveTextContent(
+      '/join/the-secret-value'
+    )
+  })
+
   it('a refused create renders the same ErrorMessage every other refusal in this app uses', async () => {
     listCourseJoinLinks.mockResolvedValue([])
     createCourseJoinLink.mockRejectedValue(

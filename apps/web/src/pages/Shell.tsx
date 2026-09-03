@@ -58,6 +58,14 @@
  * check (`costLedger.setSpendingCap`, restricted to an owner) is what
  * actually enforces this; this only decides what the panel offers, the
  * same division `isMember` already draws for the other four tabs.
+ *
+ * ENRL-5: a sixth tab, Team (`components/Team.tsx`) — the same class of gap
+ * again: `memberships.grant` had existed since TEN-1's own slice with no
+ * caller outside a test, so an owner had no actual way to add a second
+ * instructor or a teaching assistant (`docs/ROADMAP.md`'s own audit note).
+ * `isOwner` is reused here exactly as `Usage.tsx` already takes it — the
+ * grant form is owner-only, the same reasoning, the same server-side
+ * enforcement doing the real work.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -77,6 +85,7 @@ import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
+import { Team } from '../components/Team.js'
 import {
   NavigationGuardProvider,
   useNavigationGuard,
@@ -191,7 +200,7 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
   const [activeTab, setActiveTab] = useState<
-    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage'
+    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team'
   >('projects')
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
@@ -383,6 +392,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
                 onClick: () => guardedNavigate(() => setActiveTab('usage')),
                 active: effectiveTab === 'usage',
               },
+              {
+                key: 'team',
+                label: 'Team',
+                onClick: () => guardedNavigate(() => setActiveTab('team')),
+                active: effectiveTab === 'team',
+              },
             ]
           : [chatNavItem]
       }
@@ -469,6 +484,16 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         // (this file's own module comment) so `Usage.tsx` knows whether to
         // offer the cap-setting form at all.
         <Usage
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          isOwner={isOwner}
+        />
+      ) : effectiveTab === 'team' ? (
+        // ENRL-5 — the same `key={activeOrganizationId}` reasoning every
+        // other tab above already holds itself to, plus `isOwner` (this
+        // file's own module comment) so `Team.tsx` knows whether to offer
+        // the grant form at all.
+        <Team
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
           isOwner={isOwner}

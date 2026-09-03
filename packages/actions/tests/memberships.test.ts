@@ -1,15 +1,20 @@
 /**
  * ENRL-5: `memberships.grant` — granted only by an existing owner, never on
- * the caller's own account, and recorded.
+ * the caller's own account, and recorded — and `memberships.list`, its own
+ * read side.
  */
 
 import { accounts, memberships } from '@bloombot/db'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { grantMembershipAction } from '../src/actions/memberships.js'
+import { setSpendingCapAction } from '../src/actions/cost-ledger.js'
+import {
+  grantMembershipAction,
+  listMembershipsAction,
+} from '../src/actions/memberships.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionRefusedError } from '../src/errors.js'
+import { ActionInputError, ActionRefusedError } from '../src/errors.js'
 import { seedOrganization } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -188,5 +193,212 @@ describe('memberships.grant (ENRL-5)', () => {
     expect(
       memberships.getMembership(orgA, strangerOfA.id, testDb.db)
     ).toBeUndefined()
+  })
+
+  // `z.strictObject` (`grantInputSchema`'s own comment): `grantedByAccountId`
+  // is not a field this schema declares at all, so sending one is refused
+  // outright — `ActionInputError`, before the policy or `execute` ever run —
+  // rather than silently accepted and ignored. Fails without the fix: a
+  // plain `z.object` strips a key it does not declare rather than rejecting
+  // it, so this same call would have reached `execute` (and still recorded
+  // the caller's own `accountId` as the granter — `execute` never reads
+  // `input.grantedByAccountId` regardless), leaving the *attempt* to smuggle
+  // one in unnoticed rather than refused.
+  it('refuses a grant whose body supplies grantedByAccountId — it is stamped from the session, never the request', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const recipient = accounts.createAccount(
+      organizationId,
+      { email: 'recipient@example.edu', displayName: 'TA', role: 'assistant' },
+      testDb.db
+    )
+    const impersonated = accounts.createAccount(
+      organizationId,
+      { email: 'nobody@example.edu', displayName: 'Nobody', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        grantMembershipAction,
+        {
+          email: 'recipient@example.edu',
+          role: 'instructor',
+          grantedByAccountId: impersonated.id,
+        },
+        { organizationId, db: testDb.db, accountId: owner.id }
+      )
+    ).rejects.toThrow(ActionInputError)
+
+    // Refused before anything wrote at all — the recipient's role never
+    // changed as a side effect of the rejected body.
+    expect(
+      memberships.getMembership(organizationId, recipient.id, testDb.db)
+    ).toMatchObject({ role: 'assistant', grantedByAccountId: null })
+  })
+
+  // ENRL-5's own text again, from the other direction: a granted role is not
+  // merely a row — it is real authority a dispatched action actually honors.
+  // `costLedger.setSpendingCap` (COST-3) is restricted to an owner the same
+  // way `memberships.grant` is (`actions/cost-ledger.ts`'s own module
+  // comment); before the grant below, the assistant's own call to it is
+  // refused, and after, the identical call succeeds — proven by actually
+  // dispatching it, not by re-reading the membership row `grantMembershipAction`
+  // already returned.
+  it('an owner grants the owner role, and the new owner can then do something an assistant could not: set the spending cap', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      { email: 'assistant@example.edu', displayName: 'A', role: 'assistant' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        setSpendingCapAction,
+        { capAmount: 10 },
+        { organizationId, db: testDb.db, accountId: assistant.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    await dispatch(
+      grantMembershipAction,
+      { email: 'assistant@example.edu', role: 'owner' },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    const result = await dispatch(
+      setSpendingCapAction,
+      { capAmount: 10 },
+      { organizationId, db: testDb.db, accountId: assistant.id }
+    )
+    expect(result.spendingCapMicros).toBe(10_000_000)
+  })
+})
+
+describe('memberships.list (ENRL-5)', () => {
+  it("lists every membership in the caller's organization — the role, who granted it, and when", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner Ora', role: 'owner' },
+      testDb.db
+    )
+    const recipient = accounts.createAccount(
+      organizationId,
+      {
+        email: 'recipient@example.edu',
+        displayName: 'TA Tam',
+        role: 'assistant',
+      },
+      testDb.db
+    )
+    await dispatch(
+      grantMembershipAction,
+      { email: 'recipient@example.edu', role: 'instructor' },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    const entries = await dispatch(
+      listMembershipsAction,
+      {},
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        accountId: owner.id,
+        displayName: 'Owner Ora',
+        role: 'owner',
+        // The founding owner row `accounts.createAccount` writes inline
+        // records no grantor (`schema.ts`'s own comment) — nobody granted
+        // the very membership that first gave this account anything to act
+        // with.
+        grantedByAccountId: null,
+        grantedByDisplayName: null,
+      })
+    )
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        accountId: recipient.id,
+        displayName: 'TA Tam',
+        role: 'instructor',
+        grantedByAccountId: owner.id,
+        grantedByDisplayName: 'Owner Ora',
+      })
+    )
+  })
+
+  // Any member may read this list, unlike `memberships.grant` — proven here
+  // with a non-owner caller, rather than only asserted in the action's own
+  // description.
+  it('a non-owner member can list — this is a read, not a grant', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      { email: 'assistant@example.edu', displayName: 'A', role: 'assistant' },
+      testDb.db
+    )
+
+    const entries = await dispatch(
+      listMembershipsAction,
+      {},
+      { organizationId, db: testDb.db, accountId: assistant.id }
+    )
+
+    expect(entries.map((entry) => entry.accountId).sort()).toEqual(
+      [owner.id, assistant.id].sort()
+    )
+  })
+
+  // TEN-2/TEN-5: a foreign organization's own members never leak into this
+  // organization's list. Fails without the fix (`memberships.list`'s own
+  // `execute` reading `organizationId` from the dispatch context, not from
+  // an id `listMembershipsForOrganization` could otherwise be tricked into
+  // ignoring): a version of `execute` that called
+  // `memberships.listMembershipsForAccount`-style unscoped lookup, or
+  // ignored `organizationId` entirely, would return every organization's
+  // members here.
+  it("is tenant-scoped — another organization's members never appear", async () => {
+    testDb = createTestDatabase()
+    const orgA = seedOrganization(testDb.db)
+    const orgB = seedOrganization(testDb.db)
+    const ownerOfA = accounts.createAccount(
+      orgA,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    const ownerOfB = accounts.createAccount(
+      orgB,
+      { email: 'ownerB@example.edu', displayName: 'Owner B', role: 'owner' },
+      testDb.db
+    )
+
+    const entries = await dispatch(
+      listMembershipsAction,
+      {},
+      { organizationId: orgA, db: testDb.db, accountId: ownerOfA.id }
+    )
+
+    expect(entries.map((entry) => entry.accountId)).toEqual([ownerOfA.id])
+    expect(entries.map((entry) => entry.accountId)).not.toContain(ownerOfB.id)
   })
 })

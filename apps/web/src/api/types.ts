@@ -565,3 +565,44 @@ export interface SetSpendingCapResult {
   organizationId: string
   spendingCapMicros: number | null
 }
+
+/**
+ * ENRL-5 — one membership in the caller's organization, as `memberships.list`
+ * returns it. Mirrors `@bloombot/actions`' own `MembershipEntry` by hand, the
+ * same boundary this file's own module comment already explains.
+ * `displayName`/`grantedByDisplayName`, never an email — an account's
+ * `displayName` is never `null` (unlike a student's own, `CourseEnrolment`'s
+ * own doc comment), so there is no id fallback to render here the way
+ * `components/CoursePeople.tsx#label` needs one. `grantedByAccountId`/
+ * `grantedByDisplayName`/`grantedAt` are all `null` for the one membership
+ * nobody grants — the founding owner row `accounts.createAccount` writes
+ * inline at sign-up (`@bloombot/db`'s own `schema.ts`).
+ */
+export interface OrganizationMembership {
+  accountId: string
+  displayName: string
+  role: 'owner' | 'instructor' | 'assistant'
+  grantedByAccountId: string | null
+  grantedByDisplayName: string | null
+  grantedAt: number | null
+  createdAt: number
+}
+
+/**
+ * ENRL-5 — `memberships.grant`'s own return: `@bloombot/db`'s raw
+ * `memberships` row (`packages/db/src/repos/memberships.ts`'s own
+ * `Membership`), not `OrganizationMembership` above — the grant action
+ * hands back exactly what it wrote, with no display name attached (that
+ * enrichment is `memberships.list`'s own job, above). `components/Team.tsx`
+ * re-fetches the list after a grant rather than reading a display name off
+ * this, the same "refresh after a write" shape `pages/Usage.tsx`'s own
+ * `handleSave` already takes after `setSpendingCap`.
+ */
+export interface GrantMembershipResult {
+  organizationId: string
+  accountId: string
+  role: 'owner' | 'instructor' | 'assistant'
+  grantedByAccountId: string | null
+  grantedAt: number | null
+  createdAt: number
+}

@@ -156,6 +156,13 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // not the policy's — `policy.ts`'s own module comment on why a policy
   // cannot see the caller's account id at all.
   'memberships.grant': { resource: 'organization', access: 'write' },
+  // ENRL-5: no existing membership to resolve against either — the
+  // organization itself is the resource, read rather than written, the same
+  // shape `discordServers.list`/`costLedger.organizationUsage` use above.
+  // Unlike `memberships.grant`, *who* may call this is not further
+  // restricted in `execute` — this file's own module comment on
+  // `listMembershipsAction` has why a read needs no owner check.
+  'memberships.list': { resource: 'organization', access: 'read' },
   // ADMIN-1: resolves the course whose transcript is being read, read —
   // `execute` also writes an ADMIN-2 audit row, but that write happens
   // inside `@bloombot/db`'s own `readCourseTranscript` regardless of who

@@ -1,10 +1,11 @@
 /**
- * Actions over `packages/db`'s `memberships` repo (ENRL-5): `memberships.grant`.
+ * Actions over `packages/db`'s `memberships` repo (ENRL-5): `memberships.grant`
+ * and `memberships.list`.
  *
  * Membership roles carry authority over a tenant's courses, transcripts and
  * spending, and ENRL-5 requires they are "granted only by an existing owner
- * through an action that is recorded" and never self-selected. This is the
- * one action in the platform that grants one — no other action, and no
+ * through an action that is recorded" and never self-selected. `grantMembershipAction`
+ * is the one action in the platform that grants one — no other action, and no
  * surface, offers a staff role as a choice — and it enforces both rules
  * itself, in `execute`, because `PolicyContext` (`policy.ts`) carries only
  * `organizationId` and `db`, never the caller's own account id: "is the
@@ -15,6 +16,16 @@
  * Rework finding 1: `execute` also requires the target to already hold a
  * membership in *this* organization before it will change their role — see
  * that check's own comment, below, for why.
+ *
+ * An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built")
+ * found `grantMembershipAction` had no caller outside this package's own
+ * tests — no route, no panel screen — so an owner had no actual way to add a
+ * second instructor or a teaching assistant, and `listMembershipsForOrganization`
+ * (`@bloombot/db`'s own `repos/memberships.ts`) had no caller at all, so
+ * there was no way to see who already held a role. `listMembershipsAction`,
+ * below, is the read half that closes the second gap; `apps/web`'s own
+ * `components/Team.tsx` and `api/client.ts` are what close the first, this
+ * same slice.
  */
 
 import { accounts, memberships, organizations, schema } from '@bloombot/db'
@@ -27,7 +38,16 @@ type Organization = NonNullable<
   ReturnType<typeof organizations.getOrganizationById>
 >
 
-const grantInputSchema = z.object({
+// `z.strictObject`, not `z.object`: a plain `z.object` silently drops a key
+// it does not declare, which would make `grantedByAccountId` or `grantedAt`
+// typed into this body indistinguishable from one that was never sent at
+// all — `execute` never reads either off `input` regardless (both are
+// stamped from the session's own `accountId`, below), but a caller sending
+// them deserves an explicit `action_input_invalid` refusal, not silent
+// disregard, the same "fail loud on an unknown field" discipline this
+// action's own `grantedByAccountId` guarantee depends on being visibly true,
+// not merely true by omission.
+const grantInputSchema = z.strictObject({
   email: z.email(),
   role: z.enum(schema.MEMBERSHIP_ROLES),
 })
@@ -123,5 +143,87 @@ export const grantMembershipAction: Action<
       { accountId: target.id, role: input.role, grantedByAccountId: accountId },
       db
     )
+  },
+}
+
+const listInputSchema = z.strictObject({}).default({})
+type ListInput = z.infer<typeof listInputSchema>
+
+/**
+ * ENRL-5's read side: one entry per membership `listMembershipsForOrganization`
+ * (`@bloombot/db`'s `repos/memberships.ts`) already returns — that repo
+ * function's own row already carries the role, `grantedByAccountId` and
+ * `grantedAt` this needs, so nothing there needed to change. What this adds
+ * is a display name for the two account ids that row carries: `accountId`
+ * (the holder) and, when present, `grantedByAccountId` (the granter) —
+ * `accounts.getAccountById` for each, the same TEN-2-exception lookup
+ * `routes/auth.ts`'s own `/auth/me` already uses to turn an account id into
+ * something a person reads. Never email: `displayName` is what identifies a
+ * *holder* here, the same "no genuine need to disambiguate by it" reasoning
+ * `pages/Usage.tsx`/`components/CoursePeople.tsx` already give for a
+ * student's own row — an account's `displayName` is `NOT NULL`
+ * (`schema.ts`), so unlike those two, there is no `null` case to fall back
+ * from at all.
+ */
+export interface MembershipEntry {
+  accountId: string
+  displayName: string
+  role: memberships.MembershipRole
+  grantedByAccountId: string | null
+  /** `null` for the one membership nobody grants — the founding owner row `accounts.createAccount` writes inline (`schema.ts`'s own comment on `grantedByAccountId`) — and for any other row a caller wrote directly rather than through `grantMembershipRole`. */
+  grantedByDisplayName: string | null
+  grantedAt: number | null
+  createdAt: number
+}
+
+/**
+ * ENRL-5 — list every membership role held in the caller's own organization,
+ * who holds it, who granted it, and when. Read, not write, so — unlike
+ * `grantMembershipAction` above — this is open to any member, not only an
+ * owner: seeing who is already staff carries none of a grant's own
+ * account-level consequences, the same "a read needs no extra role check"
+ * shape `costLedger.organizationUsage` already takes over `costLedger.setSpendingCap`'s
+ * own owner-only write.
+ */
+export const listMembershipsAction: Action<
+  'memberships.list',
+  ListInput,
+  Organization,
+  MembershipEntry[]
+> = {
+  name: 'memberships.list',
+  description:
+    "List every membership role held in the caller's organization (ENRL-5): who holds it, who granted it, and when.",
+  inputSchema: listInputSchema,
+  policy: {
+    descriptor: { resource: 'organization', access: 'read' },
+    resolve: (_input, context) =>
+      organizations.getOrganizationById(context.organizationId, context.db),
+  },
+  execute: ({ organizationId, db }) => {
+    const rows = memberships.listMembershipsForOrganization(organizationId, db)
+    return rows.map((row) => {
+      // A membership's own `accountId` references `accounts.id` (`schema.ts`)
+      // — `account` should always resolve — but this reads it back rather
+      // than trusting the foreign key blindly, the same "do not trust a
+      // reference blindly" discipline `grantMembershipRole`'s own `updated`
+      // check (`repos/memberships.ts`) already holds itself to; falling back
+      // to the id itself keeps a row rendering rather than disappearing if
+      // it somehow does not.
+      const account = accounts.getAccountById(row.accountId, db)
+      const granter = row.grantedByAccountId
+        ? accounts.getAccountById(row.grantedByAccountId, db)
+        : undefined
+      return {
+        accountId: row.accountId,
+        displayName: account?.displayName ?? row.accountId,
+        role: row.role,
+        grantedByAccountId: row.grantedByAccountId,
+        grantedByDisplayName:
+          granter?.displayName ?? row.grantedByAccountId ?? null,
+        grantedAt: row.grantedAt,
+        createdAt: row.createdAt,
+      }
+    })
   },
 }

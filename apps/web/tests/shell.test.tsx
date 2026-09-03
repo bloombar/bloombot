@@ -39,6 +39,7 @@ const {
   listChatCourses,
   listDiscordServers,
   fetchOrganizationUsage,
+  listMemberships,
 } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
   dispatchAction: vi.fn(),
@@ -48,6 +49,7 @@ const {
   listChatCourses: vi.fn(),
   listDiscordServers: vi.fn(),
   fetchOrganizationUsage: vi.fn(),
+  listMemberships: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -64,6 +66,7 @@ vi.mock('../src/api/client.js', async () => {
     listChatCourses,
     listDiscordServers,
     fetchOrganizationUsage,
+    listMemberships,
   }
 })
 
@@ -441,6 +444,44 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
     await screen.findByRole('heading', { name: 'Usage' })
     expect(screen.queryByLabelText('Spending cap ($)')).not.toBeInTheDocument()
+  })
+
+  // ENRL-5: a sixth tab, the same shape Usage above already takes —
+  // switching to it renders `components/Team.tsx`, and the caller's own
+  // owner role in org-1 (`MULTI_MEMBERSHIP_ACCOUNT`) reaches it as
+  // `isOwner`, so the grant form renders too.
+  it("switches to the Team tab, and passes the caller's own owner role through as isOwner", async () => {
+    listMemberships.mockResolvedValue([])
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Team' }))
+
+    expect(
+      await screen.findByRole('heading', { name: 'Team' })
+    ).toBeInTheDocument()
+    expect(listMemberships).toHaveBeenCalledWith('org-1')
+    // org-1's own membership is 'owner' — the grant form is offered.
+    expect(await screen.findByLabelText('Email')).toBeInTheDocument()
+  })
+
+  // The second membership in `MULTI_MEMBERSHIP_ACCOUNT` is 'assistant', not
+  // 'owner' — the same tab renders, but withholds the form
+  // (`components/Team.tsx`'s own module comment on why).
+  it('the Team tab withholds the grant form for a non-owner membership', async () => {
+    listMemberships.mockResolvedValue([])
+
+    renderWithModal(
+      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+    )
+    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+      target: { value: 'org-2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Team' }))
+
+    await screen.findByRole('heading', { name: 'Team' })
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
   })
 
   // --- LINK-10: a connected-but-not-a-member organization -------------------

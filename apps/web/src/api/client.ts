@@ -41,9 +41,11 @@ import type {
   InstallBeginResponse,
   InstallCallbackResponse,
   JobStatus,
+  GrantMembershipResult,
   McpPersonLinkPreviewResponse,
   MeResponse,
   OrganizationDeletionPreview,
+  OrganizationMembership,
   OrganizationUsageReport,
   PersonLinkBeginResponse,
   Project,
@@ -678,6 +680,38 @@ export function setSpendingCap(
     organizationId,
     'costLedger.setSpendingCap',
     { capAmount }
+  )
+}
+
+/**
+ * ENRL-5 — an owner's own team screen: who already holds a membership role
+ * in the caller's organization, and granting one to a second instructor or a
+ * teaching assistant. Thin wrappers over `dispatchAction`, the same shape
+ * every other pair above already uses. `components/Team.tsx` is what calls
+ * these.
+ */
+
+/** ENRL-5: every membership role held in the caller's organization — the role, who granted it, and when. Open to any member, not only an owner (`memberships.list`'s own description). */
+export function listMemberships(
+  organizationId: string
+): Promise<OrganizationMembership[]> {
+  return dispatchAction<OrganizationMembership[]>(
+    organizationId,
+    'memberships.list',
+    {}
+  )
+}
+
+/** ENRL-5: grant `role` to the account already in this organization under `email` — never on the caller's own account, and only an existing owner may call this (refused, 404, `action_refused`, for anyone else — the same not-found shape every other refusal in this app takes). */
+export function grantMembership(
+  organizationId: string,
+  email: string,
+  role: 'owner' | 'instructor' | 'assistant'
+): Promise<GrantMembershipResult> {
+  return dispatchAction<GrantMembershipResult>(
+    organizationId,
+    'memberships.grant',
+    { email, role }
   )
 }
 

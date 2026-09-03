@@ -212,6 +212,20 @@ outstanding until the surface exists.
   spend and the students near their limits does not.
 - **ENRL-5** — an owner has no way to add a second instructor or a teaching assistant. The MCP
   surface omits `memberships.grant` deliberately and correctly; the web omission is unreasoned.
+  Building the surface exposed a second layer: `memberships.grant` only ever changes an *existing*
+  membership, and nothing in production creates the first one, so ENRL-10 was written to carry the
+  invitation the requirement actually needs.
 - **ADMIN-2** — the transcript-access audit trail is written and has no read path.
 - **JOB-2** — a job that exhausted its attempts in an earlier session is visible to nobody, because
   nothing lists jobs at all.
+
+## Phase 18 — Inviting a colleague
+
+Building ENRL-5's surface exposed the layer beneath it. `memberships.grant` changes the role of
+someone who already holds a membership, and nothing in production ever creates that first one — so
+an owner can reassign among people already present and still cannot add anybody. The restriction is
+deliberate: refusing an address it cannot find is what stops the action becoming an oracle for which
+email addresses have accounts here. An invitation keeps that closed while making the requirement
+true.
+
+**In scope:** ENRL-10

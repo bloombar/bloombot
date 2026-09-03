@@ -2950,3 +2950,20 @@
   phase: 17
   status: Done
   review: false
+- id: ENRL-10
+  title: An owner invites a colleague who is not yet in the organization
+  full: "ENRL-5 says a second instructor or a teaching assistant can be added to
+    an organization, and memberships.grant plus the panel's team screen now
+    change a role — but only for someone who already holds a membership in that
+    organization, which nothing in production ever creates. The first membership
+    any account gets is the owner row written at sign-up for its own personal
+    organization. So the one thing ENRL-5 exists to make possible, adding a
+    colleague, still cannot be done. That restriction is deliberate and should
+    not simply be removed: memberships.grant refuses an address it cannot find
+    so that it never becomes an oracle for which email addresses have accounts
+    on this platform. An invitation…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 18
+  status: In progress
+  review: false

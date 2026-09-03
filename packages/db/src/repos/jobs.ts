@@ -79,12 +79,38 @@ export interface NewJob {
   availableAt?: number
 }
 
+/**
+ * JOB-6 rework note — refuses an `undefined` payload at the point of the
+ * mistake, rather than letting it become a misleading diagnosis later.
+ * `payload: unknown` accepts `undefined` as a value (`unknown` is not
+ * `unknown | never`), and `JSON.stringify(undefined)` itself returns
+ * `undefined`, not the string `"undefined"` — drizzle omits an `undefined`
+ * column from its own `INSERT` entirely, so this used to insert a bare
+ * `NULL` into `payload` silently. Before `payload` became nullable (JOB-6,
+ * this table's own `NOT NULL` until this rework), that same call was
+ * refused at insert time by the column constraint; nulling it deliberately
+ * on a terminal row is now this table's own normal behaviour, so that
+ * safety net is gone, and the same mistake instead surfaces much later, at
+ * claim time, as `runner.ts`'s own "job payload was already cleared" —
+ * which is true of the symptom and false about the cause: this payload was
+ * never set, not cleared. No call site passes `undefined` today; this
+ * guards the mistake at the one place that can tell the two apart.
+ */
+function assertPayloadProvided(payload: unknown): void {
+  if (payload === undefined) {
+    throw new Error(
+      'enqueueJob: payload must not be undefined — pass null or an explicit value if a job genuinely has nothing to carry'
+    )
+  }
+}
+
 /** Serializes `payload` and inserts a fresh, unclaimed, pending job. */
 export function enqueueJob(
   organizationId: string,
   input: NewJob,
   db: Database
 ): Job {
+  assertPayloadProvided(input.payload)
   const now = Date.now()
   return db
     .insert(jobs)

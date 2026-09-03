@@ -138,6 +138,25 @@ describe('enqueueJob (JOB-1)', () => {
 
     expect(resolved).toBeUndefined()
   })
+
+  // JOB-6 rework note — before `payload` became nullable, `undefined` was
+  // refused by the column's own `NOT NULL` constraint at insert time; that
+  // safety net is gone now that a terminal row's own `null` payload is
+  // normal, so `enqueueJob` refuses it explicitly instead of silently
+  // inserting a job that looks, at claim time, exactly like one this
+  // slice's own retention write already cleared.
+  it('refuses an undefined payload rather than silently inserting a job with none', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    expect(() =>
+      jobs.enqueueJob(
+        orgA,
+        { kind: 'noop', payload: undefined, maxAttempts: 3 },
+        testDb.db
+      )
+    ).toThrow(/payload must not be undefined/)
+  })
 })
 
 describe('claimNextJob (JOB-3): the race', () => {

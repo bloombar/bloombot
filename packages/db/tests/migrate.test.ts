@@ -490,4 +490,251 @@ describe('runMigrations', () => {
       .get(logId) as { id: string; sequence: number } | undefined
     expect(row).toMatchObject({ id: logId, sequence: 0 })
   })
+
+  // JOB-6 rework, must-fix — nothing pinned 0016's own `WHERE` clause, the
+  // one data-destroying statement this slice wrote, and every test database
+  // above is created empty and migrated *before* any job row exists, so an
+  // empty `jobs` table never exercised it: replacing `WHERE status in
+  // ('succeeded', 'failed')` with an unconditional `UPDATE` left every
+  // other test in this file (and the whole suite) green. The same "seed
+  // exactly what a real deployment would already have, apply the real
+  // migration on top of it" shape the 0002 and 0013 tests above already
+  // use — here, one job row per status `claimNextJob`'s own `eligible()`
+  // distinguishes (`repos/jobs.ts`'s own module comment): a fresh `pending`
+  // job, a `pending` job already rescheduled once and awaiting its next
+  // attempt, a `running` job under a still-live lease, a `running` job
+  // whose lease has lapsed (eligible for reclaim, but its own `status`
+  // column still literally reads `running` — 0016's own `WHERE` matches on
+  // that column, not on `eligible()`'s computed lease check), a `succeeded`
+  // job, and a `failed` one. Only the last two may lose their payload; the
+  // other four are exactly the shapes JOB-2's retry and JOB-3's once-only
+  // execution across a worker restart still need theirs for.
+  it("applies 0015 and 0016 to a database with a job row in every status, clearing payload only on the terminal ones — proves 0016's own WHERE clause, not merely that the migration runs", () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    // A migrations folder containing every migration through 0014 — the
+    // state a database is in before 0015/0016 have ever run, `payload` still
+    // `NOT NULL` (0005's own `CREATE TABLE jobs`).
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0014 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 14
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0014) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0014,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+
+    // One row per status `eligible()` distinguishes — raw SQL, deliberately
+    // not through `enqueueJob`/`completeJob`/etc: those already carry this
+    // slice's own fix, and seeding a pre-0015 database means writing rows
+    // exactly as a real deployment's own pre-existing rows would look.
+    const insertJob = db.$client.prepare(
+      `insert into jobs
+        (id, organization_id, kind, payload, status, attempts, max_attempts,
+         next_attempt_at, claimed_by, claim_expires_at, last_error, result,
+         created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    const ids = {
+      pendingFresh: randomUUID(),
+      pendingRetry: randomUUID(),
+      runningLive: randomUUID(),
+      runningLapsed: randomUUID(),
+      succeeded: randomUUID(),
+      failed: randomUUID(),
+    }
+    insertJob.run(
+      ids.pendingFresh,
+      organizationId,
+      'roster.import',
+      '{"csvText":"pending-fresh"}',
+      'pending',
+      0,
+      3,
+      now,
+      null,
+      null,
+      null,
+      null,
+      now,
+      now
+    )
+    insertJob.run(
+      ids.pendingRetry,
+      organizationId,
+      'roster.import',
+      '{"csvText":"pending-retry"}',
+      'pending',
+      1,
+      3,
+      now + 60_000,
+      null,
+      null,
+      'upstream timed out',
+      null,
+      now,
+      now
+    )
+    insertJob.run(
+      ids.runningLive,
+      organizationId,
+      'roster.import',
+      '{"csvText":"running-live"}',
+      'running',
+      1,
+      3,
+      now,
+      'worker-1',
+      now + 60_000,
+      null,
+      null,
+      now,
+      now
+    )
+    insertJob.run(
+      ids.runningLapsed,
+      organizationId,
+      'roster.import',
+      '{"csvText":"running-lapsed"}',
+      'running',
+      1,
+      3,
+      now,
+      'worker-1',
+      now - 60_000,
+      null,
+      null,
+      now,
+      now
+    )
+    insertJob.run(
+      ids.succeeded,
+      organizationId,
+      'roster.import',
+      '{"csvText":"succeeded"}',
+      'succeeded',
+      1,
+      3,
+      now,
+      null,
+      null,
+      null,
+      '{"peopleCreated":1}',
+      now,
+      now
+    )
+    insertJob.run(
+      ids.failed,
+      organizationId,
+      'roster.import',
+      '{"csvText":"failed"}',
+      'failed',
+      3,
+      3,
+      now,
+      null,
+      null,
+      'exhausted attempts',
+      null,
+      now,
+      now
+    )
+
+    // The migrations under test: 0015 (the table rebuild) and 0016 (the
+    // backfill), applied through the real migrations folder.
+    runMigrations(db)
+
+    const rows = db.$client
+      .prepare('select id, status, payload from jobs order by id')
+      .all() as { id: string; status: string; payload: string | null }[]
+    // 0015's own table rebuild loses no row.
+    expect(rows).toHaveLength(6)
+
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    // Not terminal — 0016's own WHERE must leave every one of these alone.
+    expect(byId.get(ids.pendingFresh)?.payload).toBe(
+      '{"csvText":"pending-fresh"}'
+    )
+    expect(byId.get(ids.pendingRetry)?.payload).toBe(
+      '{"csvText":"pending-retry"}'
+    )
+    expect(byId.get(ids.runningLive)?.payload).toBe(
+      '{"csvText":"running-live"}'
+    )
+    // `running` with a lapsed lease is eligible for *reclaim*, but its own
+    // `status` column still reads `running` — 0016 matches on that column,
+    // not on `claimNextJob`'s own computed eligibility — so this, too, must
+    // survive.
+    expect(byId.get(ids.runningLapsed)?.payload).toBe(
+      '{"csvText":"running-lapsed"}'
+    )
+    // Terminal — 0016 clears exactly these two, and only these two.
+    expect(byId.get(ids.succeeded)?.payload).toBeNull()
+    expect(byId.get(ids.failed)?.payload).toBeNull()
+
+    // 0015 is the first table-rebuild migration in this schema — pin that
+    // the rebuild actually preserves what it claims to, not merely that the
+    // row count survives: the index pair `repos/jobs.ts#claimNextJob`
+    // itself depends on, and the `jobs_status_check` CHECK constraint.
+    // `sqlite_autoindex_jobs_1` (the text primary key's own implicit
+    // uniqueness index) is filtered out — an implementation detail SQLite
+    // manages on its own, not one of this table's named indexes.
+    const indexNames = (
+      db.$client
+        .prepare(
+          "select name from sqlite_master where type = 'index' and tbl_name = 'jobs'"
+        )
+        .all() as { name: string }[]
+    )
+      .map((row) => row.name)
+      .filter((name) => !name.startsWith('sqlite_autoindex'))
+      .sort()
+    expect(indexNames).toEqual([
+      'jobs_organization_id_idx',
+      'jobs_status_next_attempt_idx',
+    ])
+
+    expect(() =>
+      insertJob.run(
+        randomUUID(),
+        organizationId,
+        'roster.import',
+        '{}',
+        'not-a-real-status',
+        0,
+        1,
+        now,
+        null,
+        null,
+        null,
+        null,
+        now,
+        now
+      )
+    ).toThrow(/CHECK constraint failed/)
+  })
 })

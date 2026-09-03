@@ -6220,6 +6220,21 @@ file are timestamped during the pre-fix baseline reproduction, ~7 minutes earlie
 `npm run lint && npx prettier --check . && npm run typecheck && npm test` all pass unchanged
 (90 node:test, 1926 vitest across 172 files, matching this slice's stated baseline).
 
+**A second failure signature, observed pre-fix, added here so a recurrence is not misdiagnosed.** The JOB-6
+rework's own reviewer hit a 13/14 failure at `e2e/course-people-panel.spec.ts:108`
+(`getByTestId('organization-switcher')` never appearing) in a worktree still at `f094665` — before this
+record's own `workers: 1` had landed there. That run shows no `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` in its own
+log; a UI element never appearing after a panel action is exactly the same *symptom* this record's own baseline
+reproduction described ("a UI timeout after a panel action silently never completed"), consistent with the same
+root cause (a concurrent worker's own request or direct database connection interleaving with this spec's)
+rather than a distinct defect — multiple specs open their own direct `openDatabase(E2E_DATABASE_PATH)`
+connection (this record's own "Diagnosis" paragraph), and `course-people-panel.spec.ts` is one of them. Recorded
+as a second signature rather than a new entry because `require-single-worker.ts` (this record's own "Made hard
+to silently undo" paragraph) is exactly what rules it out going forward: a worktree that predates that guard is
+not evidence against the fix, but a reader who only knows the `SQLITE_BUSY` text would not recognise this one as
+the same class of failure if it recurred. Not reproduced against the fixed suite — ten consecutive `workers: 1`
+runs (the paragraph above) stayed at `14 passed`, and QA-9's own implementation is unchanged by this note.
+
 ## D-63 — `apps/web`: WEB-23 — a relative-duration control for a join link's expiry, not a datetime field
 
 **Problem.** `courseJoinLinks.create` has always accepted an optional `expiresAt`, but

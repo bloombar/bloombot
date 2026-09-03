@@ -2898,7 +2898,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 17
-  status: In review
+  status: Done
   review: false
 - id: MCP-6
   title: A session is found when it exists, under load as well as at rest
@@ -2932,7 +2932,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 17
-  status: In review
+  status: Done
   review: false
 - id: WEB-23
   title: A join link's expiry is chosen when it is issued
@@ -2948,5 +2948,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 17
-  status: In review
+  status: Done
   review: false

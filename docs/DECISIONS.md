@@ -6323,3 +6323,190 @@ one expired-not-revoked link and one revoked-with-null-expiry link, never one th
 a new case seeds a link with both fields set in the past and asserts it still reads "Revoked …", confirmed to
 fail against exactly that reordering. `join-links.test.tsx` now has 17 cases (12 WEB-20 plus 5 WEB-23, up from
 4); `apps/web`'s own `web` vitest project passed all 17 both times.
+
+---
+
+## D-64 — `apps/mcp/tests`: MCP-6 — the session-lookup flake was D-24's own bug, not yet copied to a second app
+
+**Problem.** `apps/mcp/tests/server.test.ts` failed roughly one full `npm test` run in twenty-four, always as a
+`404 session not found` where some other status was expected — a different assertion each time, never
+reproducing when the `mcp` vitest project ran alone. Two prior hypotheses (the idle sweep, the per-account
+eviction ceiling) were checked and both ruled out on inspection before this investigation started (`docs/
+SPEC.md`'s own MCP-6 text records why): the sweep's own thirty-minute timeout cannot fire inside a twenty-second
+run, and each test builds its own fresh `sessions` map (`server.test.ts`'s `buildTestApp` default parameter, a
+new object every call — verified directly, not merely re-asserted, since the brief that opened this slice asked
+for that reading to be checked rather than assumed).
+
+**Why `apps/mcp/src/server.ts` cannot have produced either observed symptom shape — checkable from source, no
+log required.** This is the primary evidence for exonerating the app; the instrumented captures below
+corroborate it but are not, on their own, independently inspectable (the instrumentation was temporary and has
+been removed, correctly — carrying it in the built app would be its own liability). Two structural facts, both
+still true of the committed file and re-checkable by reading it, exclude `server.ts`'s own code from both
+symptom shapes this investigation's brief named:
+
+- `apps/mcp/src/server.ts:667-673` — `authenticateBearerToken` is checked, and a `401` returned, *before*
+  `handleMcpRequest` ever reads `req.headers['mcp-session-id']` or touches `sessions` at all (the session-lookup
+  code does not begin until line 677). A request whose bearer token does not authenticate at all is refused with
+  `401` unconditionally — there is no branch, timing window, or map state that could turn that specific check
+  into a `404` instead. So the brief's own cited instance ("refuses a second account's bearer token reused
+  against a session that is not its own" — expected `401`, got `404`) cannot have come from this function ever
+  actually running against that request: whichever `401` branch would have applied (this one, for a token that
+  fails to authenticate as any account, or the account-pin check at lines 688-690, for a token that authenticates
+  as the *wrong* account against an existing session) is unconditional once reached, and the file's only `404`
+  (line 703) is reachable only when `existing` is falsy — which a session created and awaited moments earlier,
+  in the same test, would not be, if the request had actually reached this code.
+- `apps/mcp/src/server.ts:676-703` — walk an `initialize` `POST` (the exact shape `initializeMcpSession`,
+  `tests/helpers/mcp-http-client.ts`, always sends) through the `try` block: `existingSessionId` is `undefined`
+  (no `Mcp-Session-Id` header on an `initialize` call — `mcp-http-client.ts`'s own `postToMcp` never sends one
+  for it), so `existing` is `undefined`, so the file's *only* `404` (line 703) is guarded by `req.method !==
+  'POST' || !isInitializeRequest(req.body)` — both halves false for this exact request shape, so the guard is
+  false and that return is never reached. There is no path from a well-formed `initialize` `POST` to a `404`
+  anywhere in this file. So `initializeMcpSession`'s own observed `Error: initialize did not succeed (status
+  404)` (the capture below) cannot have been this file answering the request it was sent.
+
+Together these exclude `server.ts` from both shapes without needing a log at all: whatever answered with the
+wrong status, it was not this code running against the request the test believed it sent.
+
+**Corroboration (not independently inspectable — the raw captures are gone).** A loop of full `npm test` runs
+(`MCP6_DEBUG`-gated `console.error` instrumentation added temporarily to `apps/mcp/src/server.ts` at every place
+a request enters `handleMcpRequest`, at both places this file's own code returns a `404`, at
+`onsessioninitialized`/`onsessionclosed`/`onclose`, and — after the first capture came back with *no* trace at
+any of those — a catch-all Express middleware registered before routing, logging literally every request the app
+receives and its final status) caught two failures directly, matching the structural argument above rather than
+contradicting it:
+
+- Run 44 of a batch: `initializeMcpSession` threw `status 404` on the sixth of twenty sequential `initialize`
+  calls in the `MAX_SESSIONS_PER_ACCOUNT` eviction test. The instrumented log showed five `set` registrations
+  (matching the five sessions actually opened) and then — nothing: no `lookup`, no `own-404`, not even the
+  catch-all `inbound` logger (added for the next capture, so this specific run predates it, but the same absence
+  held for every layer that *was* wired at the time). The request the test believed it sent never reached
+  `handleMcpRequest`, or anything else in `server.ts`, at all — exactly what the second structural argument above
+  says must be true, since that `404` could not have come from this file's own line 703.
+- A second batch, run 9, with the catch-all logger now in place: the second of two assertions in "refuses
+  GET/DELETE against a session id nothing has ever heard of" threw `ECONNRESET` outright — not a response, a
+  connection failure — again with zero application-level trace, including the catch-all logger that fires before
+  Express does any routing at all.
+
+These two captures are recorded as what was observed at the time, offered as corroboration of the structural
+argument above, not as evidence a future reader can re-open and check — the logs themselves were never
+committed, and removing the temporary instrumentation (correct, since it should not ship) means they cannot be
+regenerated from this commit alone. The structural argument above is what actually carries the conclusion.
+
+**Cause: `docs/DECISIONS.md` D-24's own bug, in the one app that had not yet copied its fix.** D-24 (above)
+already diagnosed and fixed this exact mechanism for `apps/api`: `supertest`'s own `Test#serverAddress`
+(`node_modules/supertest/lib/test.js`) calls `app.listen(0)` with no host when handed a bare Express app, which
+binds the IPv6 wildcard `::`, then dials the hard-coded literal `http://127.0.0.1:<port>`. `SO_REUSEADDR` lets
+the OS hand that wildcard listen an ephemeral port some *other* process already holds bound specifically to
+`127.0.0.1` — this machine runs plenty (VS Code's helper sockets, a `vite` dev server, another test file's own
+server) — and the more specific binding wins the connection, so the request never reaches the app under test at
+all; whatever that other process answers (or however its own connection handling behaves) is what the test
+observes, indistinguishable from the app itself misbehaving. D-24's own "Limits" section named this precisely:
+"the only package in this repo using supertest… If a future package adds HTTP tests over supertest, it needs
+the same `startTestServer`-style helper, not a bare `request(app)`." `apps/mcp/tests/helpers/mcp-http-client.ts`
+was that future package, added after D-24, and had called `request(app)` on a bare Express app on every single
+one of its four exported request-issuing calls — the one file every request in `server.test.ts` actually goes
+through, including the twenty-session eviction test, this bug's highest-volume exposure in the whole repo.
+`apps/mcp/tests/mcp-e2e.test.ts` already knew about this (its own `listen()` binds `127.0.0.1` explicitly, with
+a comment naming "a prior slice in this project had a real bug from binding the wildcard in a test") — the fix
+had been applied once in this app and not carried to the file that needed it.
+
+**Why only under the full suite, never `mcp` alone.** The collision needs some *other* process holding a
+specific `127.0.0.1` bind at the exact ephemeral port the wildcard listen receives, at the exact moment. Running
+`mcp` alone leaves far fewer such binds active system-wide; a full 173+-file run has every other supertest-based
+suite (fixed, via `startTestServer`, since D-24 — but still opening and closing sockets throughout the run) plus
+whatever else the host machine is doing. D-24 measured the underlying per-request rate directly: 0.10% per
+request, against `apps/api`'s own ~50-60 requests per run, predicting `apps/api`'s observed ~1-in-10. `apps/mcp`'s
+`server.test.ts` issues roughly sixty to seventy requests per run (44 static call sites, one of them a 19-
+iteration loop) — the same per-request rate against that volume predicts a failure in roughly 1 run in 16 to 1 in
+20, the same order of magnitude as the ~1-in-24 this slice's brief measured (not an exact match — the two
+suites' own request timing and the rest of the host machine's own socket activity differ — but well within what
+"same underlying mechanism, different request volume" would produce, not a coincidence requiring a separate
+explanation).
+
+**The mis-resolution question.** MCP-6's own SPEC text asked directly: does anything in the session-lookup path
+admit or misattribute a request, not merely miss one? The answer, from this investigation: **no evidence of
+mis-resolution was found, and the mechanism identified gives no way for one to occur.** Every reproduced failure
+was a request that never reached `server.ts`'s own code at all (zero trace at the catch-all Express layer, the
+earliest point `handleMcpRequest`'s own logic could possibly run) — a connection stolen by another process's
+listener, or reset outright, both *availability* failures against the app under test, not the app under test
+answering a request it should have refused. This was tested directly, not merely inferred from the two captures:
+`handleMcpRequest`'s own account-pinning check (`existing.accountId !== accountId`, MCP-3's own guarantee) was
+read in full, and nothing between an authenticated request entering the map lookup and the map returning a
+result touches the network, blocks the event loop, or interleaves with any other request within the same test —
+the entire session-pinning decision is synchronous over an already-parsed request. A genuinely broken lookup
+mis-attributing an authenticated caller to another account's session would require either two requests actually
+racing inside the same `handleMcpRequest` call (structurally impossible here — each `it()` awaits every request
+before issuing the next) or the map itself holding a wrong entry (ruled out: `sessions.set` runs synchronously,
+inside the SDK's own awaited `onsessioninitialized` call, strictly before the initialize response is ever built,
+so a session that registers is registered correctly, and a request the app under test never receives cannot
+poison a map it never touches). This is a claim about what was checked, not a proof that no defect can ever
+exist in this path — stated as an inference from direct code reading and two reproduced failures, not as an
+exhaustive proof.
+
+**Fix.** `apps/mcp/tests/helpers/mcp-http-client.ts` gained its own `startTestServer` — the same shape as
+`apps/api/tests/helpers/build-test-app.ts`'s (duplicated, not imported across an app boundary test helpers are
+not published through, `test-db.ts`'s own already-stated convention for this directory): binds `127.0.0.1`
+explicitly, awaits the bind (the `dns.lookup` reason D-24 already gives for why this cannot be patched around),
+tracks every server it opens in a module-level `Set`, and closes them all in a single `afterEach` registered at
+import time. `postToMcp`/`initializeMcpSession`/`sendMcpRequest`/`closeMcpSession` now take the already-listening
+`http.Server` this returns, not a bare `Express`. `server.test.ts`'s own `buildTestApp` calls it, and every
+`const app = buildTestApp(...)` call site became `await buildTestApp(...)` — the raw `request(app)` calls this
+file also makes directly (the `/health` checks, the two nothing-has-ever-heard-of-this-session checks) needed no
+change at all, since `supertest` reuses an already-listening server transparently when handed one instead of a
+bare app.
+
+**Regression test, copied per D-24's own instruction.** D-24's "Limits" section named the exact test to bring
+along: `apps/mcp/tests/helpers/mcp-http-client.test.ts` is `apps/api/tests/helpers/build-test-app.test.ts`
+duplicated against this app's own `startTestServer` — binds a squatter to a specific `127.0.0.1` port, then
+asks `startTestServer` for that same port, and asserts `EADDRINUSE` rather than a silent, different-port
+success. Confirmed to fail without the fix, directly: temporarily reverting `startTestServer`'s `listen(port,
+'127.0.0.1', …)` back to a bare `listen(port, …)` (the wildcard bind `request(app)` always used) made this new
+test fail — the wildcard bind against the squatter's own occupied port succeeds silently rather than rejecting,
+exactly the shape that lets a request go to the wrong process. Restoring the explicit host argument made it pass
+again.
+
+**Verification.** `apps/mcp/src/server.ts` carries a zero-line diff (`git diff` confirms it) — this was a
+test-harness bug, not an application one, so the app is untouched. `npm run lint && npx prettier --check . &&
+npm run typecheck && npm test` all pass: 1945 vitest across 174 files (baseline at `c13e092` was 1944/173 — one
+new file, `mcp-http-client.test.ts`, one new test), 90 node:test unchanged. `npm run board:derive` leaves
+`scripts/board/manifest.yaml` byte-identical (same MD5 before and after).
+
+Full `npm test` run 30 consecutive times after the fix landed, individually recorded at the time (`date` before
+each run, pass/fail after) — the raw tally, committed here rather than pointed at notes that do not exist in
+this repository:
+
+```text
+run  1  Thu Sep  3 04:44:00 EDT 2026  passed    run 16  Thu Sep  3 04:54:41 EDT 2026  passed
+run  2  Thu Sep  3 04:44:42 EDT 2026  passed    run 17  Thu Sep  3 04:55:24 EDT 2026  passed
+run  3  Thu Sep  3 04:45:26 EDT 2026  passed    run 18  Thu Sep  3 04:56:07 EDT 2026  passed
+run  4  Thu Sep  3 04:46:09 EDT 2026  passed    run 19  Thu Sep  3 04:56:50 EDT 2026  passed
+run  5  Thu Sep  3 04:46:52 EDT 2026  passed    run 20  Thu Sep  3 04:57:33 EDT 2026  passed
+run  6  Thu Sep  3 04:47:34 EDT 2026  passed    run 21  Thu Sep  3 04:58:16 EDT 2026  passed
+run  7  Thu Sep  3 04:48:17 EDT 2026  passed    run 22  Thu Sep  3 04:58:58 EDT 2026  passed
+run  8  Thu Sep  3 04:49:00 EDT 2026  passed    run 23  Thu Sep  3 04:59:41 EDT 2026  passed
+run  9  Thu Sep  3 04:49:43 EDT 2026  passed    run 24  Thu Sep  3 05:00:24 EDT 2026  passed
+run 10  Thu Sep  3 04:50:25 EDT 2026  passed    run 25  Thu Sep  3 05:01:06 EDT 2026  passed
+run 11  Thu Sep  3 04:51:07 EDT 2026  passed    run 26  Thu Sep  3 05:01:49 EDT 2026  passed
+run 12  Thu Sep  3 04:51:50 EDT 2026  passed    run 27  Thu Sep  3 05:02:31 EDT 2026  passed
+run 13  Thu Sep  3 04:52:32 EDT 2026  passed    run 28  Thu Sep  3 05:03:13 EDT 2026  passed
+run 14  Thu Sep  3 04:53:15 EDT 2026  passed    run 29  Thu Sep  3 05:03:57 EDT 2026  passed
+run 15  Thu Sep  3 04:53:58 EDT 2026  passed    run 30  Thu Sep  3 05:04:39 EDT 2026  passed
+```
+
+Every one of the 30 runs reported the identical `1945 vitest / 174 files`, `90 node:test` — no run passed by a
+different route (a different test skipped, a different count) than any other.
+
+**Honest limit on what the 30 runs alone prove.** At the pre-fix rate this slice measured (roughly one failure
+in twenty-four full runs, ~4%), thirty consecutive clean runs is meaningful — it would be a little under 30% odds
+of the flake surviving undetected by chance alone, `(1 - 0.04)^30 ≈ 0.29` — but it is not conclusive on its own;
+a run count can always be unlucky, and thirty is not enough to distinguish "fixed" from "still flaky at a lower
+rate this batch happened not to hit." The structural argument above — that `server.ts` cannot produce either
+observed symptom shape from its own code, checkable from source with no run count at all — is what actually
+carries this entry's conclusion. The 30 runs are consistent with the fix and rule out an obvious regression from
+it; they are not, by themselves, the proof.
+
+**Limits.** This fixes `apps/mcp`'s own suite. D-24's own "Limits" section already generalised the underlying
+rule ("If a future package adds HTTP tests over supertest, it needs the same `startTestServer`-style helper");
+this entry exists because that rule was stated once and not enforced anywhere a second app could violate it
+silently — no lint rule or repo-wide grep currently catches a new `request(app)` call site against a bare
+Express app. That stays a manual discipline, not a structural guarantee, unless a future slice adds one.

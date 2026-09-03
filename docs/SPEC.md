@@ -1279,6 +1279,29 @@ confirmation the assistant cannot supply on the person's behalf.
 Calls made through MCP draw on the same allowances and the same cost ledger, attributed to the
 account that authorized the connection. An assistant is not a way around a cap.
 
+#### MCP-6 A session is found when it exists, under load as well as at rest
+
+`apps/mcp`'s own test suite fails intermittently: a request against a session that was just
+initialized comes back `404 session not found` where a specific status was expected. It is not one
+assertion — a different one fails each time — and it appears only when the whole test suite runs,
+never when the MCP project runs alone. Measured at roughly one failure in twenty-four full runs,
+and it reproduces on commits that predate the branch that noticed it, so it is neither new nor
+caused by any one feature.
+
+The cause is not known. Two hypotheses have been offered and neither survives inspection: the idle
+sweep cannot be reaping these sessions, because its timeout is thirty minutes and a full run takes
+about twenty seconds; and the per-account session ceiling cannot be evicting them, because each
+test builds its own session map and no single test opens twenty sessions. Something else about how
+a session is registered, looked up or closed is timing-dependent, and the first job is to find out
+what — not to make the symptom go away.
+
+This matters beyond a flaky test. The same lookup decides whether a request carrying a bearer token
+belongs to the session it names, so a session that goes missing under load is an availability
+problem at best and, if the lookup can also mis-resolve rather than merely miss, an authorization
+one. A `404` where a `401` was expected is exactly the shape that would hide the difference. The
+requirement is that the cause is identified and stated, that the fix follows from it, and that the
+suite gives the same answer over repeated runs.
+
 ### 26. Admin Console, Transcripts & Export
 
 #### ADMIN-1 An instructor can read their course's transcripts

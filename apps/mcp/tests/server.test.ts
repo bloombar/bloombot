@@ -35,6 +35,7 @@ import {
   closeMcpSession,
   initializeMcpSession,
   sendMcpRequest,
+  startTestServer,
   type JsonRpcMessage,
 } from './helpers/mcp-http-client.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -55,6 +56,14 @@ function createFakeLogger() {
   } as unknown as ServerDependencies['logger']
 }
 
+// MCP-6 — `startTestServer` (`mcp-http-client.ts`'s own module comment)
+// binds `127.0.0.1` explicitly and hands back an already-listening server,
+// rather than the bare Express app `buildApp` returns, so `supertest`
+// (called from this file directly for `/health` and the two
+// nothing-has-ever-heard-of-this-session checks, and from every
+// `mcp-http-client.ts` helper for everything else) never falls back to its
+// own wildcard `app.listen(0)` — the intermittent-`404` bug D-24 already
+// named and fixed once, for `apps/api`, and this file had not yet copied.
 function buildTestApp(
   overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] },
   sessions?: Map<string, McpSession>,
@@ -65,7 +74,7 @@ function buildTestApp(
     toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
     ...overrides,
   }
-  return buildApp(deps, sessions, isShuttingDown)
+  return startTestServer(buildApp(deps, sessions, isShuttingDown))
 }
 
 /** A fake `StreamableHTTPServerTransport` — just enough surface for `sweepIdleSessions` to exercise (`.close()`), with no real SDK object or HTTP request involved at all. */
@@ -99,7 +108,7 @@ afterEach(() => {
 describe('the health endpoint', () => {
   it('reports ready when the database is reachable', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     const response = await request(app).get('/health')
 
@@ -114,7 +123,7 @@ describe('the health endpoint', () => {
   it('reports how many MCP sessions are currently open — visibility this rework round added after a live listener found unbounded growth with no way to see it', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     await initializeMcpSession(app, caller.token)
     const response = await request(app).get('/health')
@@ -124,7 +133,7 @@ describe('the health endpoint', () => {
 
   it('reports not-ready (503) once shutdown has begun, even though the database is still reachable — a rework finding: this used to keep reporting ready: true for the whole teardown window', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp({ db: testDb.db }, undefined, () => true)
+    const app = await buildTestApp({ db: testDb.db }, undefined, () => true)
 
     const response = await request(app).get('/health')
 
@@ -138,7 +147,7 @@ describe('the health endpoint', () => {
     const path = join(tmpRoot, `${randomUUID()}.db`)
     const db = openDatabase(path)
     runMigrations(db)
-    const app = buildTestApp({ db })
+    const app = await buildTestApp({ db })
     closeDatabase(db)
 
     const response = await request(app).get('/health')
@@ -153,14 +162,14 @@ describe('the health endpoint', () => {
 describe('MCP-3 — authentication happens before a tool ever runs', () => {
   it('refuses to even start a session with no Authorization header at all', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     await expect(initializeMcpSession(app, '')).rejects.toThrow()
   })
 
   it('refuses to start a session with a bearer token that does not validate', async () => {
     testDb = createTestDatabase()
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     await expect(
       initializeMcpSession(app, 'not-a-real-token')
@@ -170,7 +179,7 @@ describe('MCP-3 — authentication happens before a tool ever runs', () => {
   it('refuses a later request in an existing session once its bearer token stops validating', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, 'not-a-real-token', {
@@ -187,7 +196,7 @@ describe('MCP-3 — authentication happens before a tool ever runs', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
     const otherCaller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, otherCaller.token, {
@@ -203,7 +212,7 @@ describe('MCP-3 — authentication happens before a tool ever runs', () => {
   it('refuses GET/DELETE against a session id nothing has ever heard of', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     const get = await request(app)
       .get('/mcp')
@@ -225,7 +234,7 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
   it('lists the allow-listed tools, each requiring organizationId', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -253,7 +262,7 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
   it('calls an allow-listed tool and returns its dispatched result', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -278,7 +287,7 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
     const otherOrganizationId = seedOtherOrganization(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -304,7 +313,7 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
   it('returns an isError result for a tool name not on the allowlist', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -332,7 +341,7 @@ describe('the /mcp endpoint end to end, once authenticated', () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
     const attachmentId = seedAttachment(testDb.db, caller.organizationId)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -358,7 +367,7 @@ describe('bloombot_connectAssistant (LINK-8)', () => {
   it('is on the tool list, not gated behind organizationId the same way the dispatch catalog is (it takes its own)', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -381,7 +390,7 @@ describe('bloombot_connectAssistant (LINK-8)', () => {
   it('returns a token in the tool result, redeemable to connect the calling account as an mcp identity', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -423,7 +432,7 @@ describe('bloombot_connectAssistant (LINK-8)', () => {
   it('two calls for the same account and organization mint two independent, single-use tokens', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const first = await sendMcpRequest(app, session, caller.token, {
@@ -472,7 +481,7 @@ describe('bloombot_connectAssistant (LINK-8)', () => {
   it('refuses cleanly for a nonexistent organization, never leaking a raw driver error', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -510,7 +519,7 @@ describe('bloombot_connectAssistant (LINK-8)', () => {
       { name: 'A Different Institution', isPersonal: false },
       testDb.db
     )
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     const response = await sendMcpRequest(app, session, caller.token, {
@@ -539,7 +548,7 @@ describe('session lifecycle — bounded growth (rework finding: a live listener 
   it('closes the session and evicts it from the map when the client sends DELETE /mcp — the same session id then reads as unknown', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, caller.token)
 
     expect((await request(app).get('/health')).body).toMatchObject({
@@ -578,7 +587,7 @@ describe('session lifecycle — bounded growth (rework finding: a live listener 
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
     const sessions = new Map<string, McpSession>()
-    const app = buildTestApp({ db: testDb.db }, sessions)
+    const app = await buildTestApp({ db: testDb.db }, sessions)
     await initializeMcpSession(app, caller.token)
 
     expect(sessions.size).toBe(1)
@@ -599,7 +608,7 @@ describe('session lifecycle — bounded growth (rework finding: a live listener 
     // one — never a refusal, and never another account's session.
     testDb = createTestDatabase()
     const caller = seedSignedInAccount(testDb.db)
-    const app = buildTestApp({ db: testDb.db })
+    const app = await buildTestApp({ db: testDb.db })
 
     const oldestSession = await initializeMcpSession(app, caller.token)
     for (let i = 1; i < MAX_SESSIONS_PER_ACCOUNT; i++) {

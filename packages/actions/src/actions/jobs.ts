@@ -6,6 +6,20 @@
  * disappearing into the queue with no way back. This is the "way to see the
  * outcome" SRV-6..8's own brief describes: without it, dispatching a job is
  * a write into a hole nothing reads back from.
+ *
+ * JOB-6 — `payload` is deliberately never in what this hands back. Every
+ * caller of this action that exists today (`ScaffoldButton.tsx`,
+ * `RosterImport.tsx`) only ever reads `status`/`lastError`/`result`; neither
+ * reads `payload` off the response, so dropping it costs nothing a real
+ * caller uses. Kept off unconditionally — not merely while the row's own
+ * `payload` column happens to be non-null — because a caller belonging to
+ * this organization who could dispatch `roster.import` themselves could
+ * already read the raw CSV they uploaded; returning it back through this
+ * read action a second time, for as long as the row is still pending or
+ * running, added a second way to reach the same PII this slice closes, for
+ * no reader that needed it. `repos/jobs.ts`'s own `completeJob`/
+ * `markJobFailed` are what actually clear the column once a job is
+ * terminal; this action simply never surfaces it, terminal or not.
  */
 
 import { jobs } from '@bloombot/db'
@@ -20,7 +34,7 @@ const jobIdInputSchema = z.object({
 })
 type JobIdInput = z.infer<typeof jobIdInputSchema>
 
-/** A job's status and outcome, as `jobs.get` hands it back — `payload`/`result` parsed, not the raw JSON string `packages/db` stores them as, the same convenience `courses.get` gives its own caller over the repo layer's own row shape. */
+/** A job's status and outcome, as `jobs.get` hands it back — `result` parsed, not the raw JSON string `packages/db` stores it as, the same convenience `courses.get` gives its own caller over the repo layer's own row shape. No `payload` field (JOB-6, this file's own module comment) — what a caller was given is not the job's outcome, and this action never hands it back. */
 export interface JobStatus {
   id: string
   kind: string
@@ -28,7 +42,6 @@ export interface JobStatus {
   attempts: number
   maxAttempts: number
   lastError: string | null
-  payload: unknown
   /** `null` until the job succeeds (or if it succeeded with nothing to report) — `undefined` would be indistinguishable from "not yet read" once this crosses a JSON boundary, so this is explicit. */
   result: unknown
   createdAt: number
@@ -43,7 +56,6 @@ function toJobStatus(job: Job): JobStatus {
     attempts: job.attempts,
     maxAttempts: job.maxAttempts,
     lastError: job.lastError,
-    payload: JSON.parse(job.payload) as unknown,
     result: job.result ? (JSON.parse(job.result) as unknown) : null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,

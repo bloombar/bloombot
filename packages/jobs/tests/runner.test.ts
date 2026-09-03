@@ -111,6 +111,9 @@ describe('runNextJob: success', () => {
       claimedBy: null,
       claimExpiresAt: null,
     })
+    // JOB-6: succeeded is terminal — the payload this job was given does
+    // not outlive it.
+    expect(row?.payload).toBeNull()
   })
 
   // SRV-6..8: whatever a handler resolves with is its own report — proven
@@ -586,5 +589,120 @@ describe('runNextJob: rework finding 5 — a wedged handler is bounded by a time
     expect(result.outcome).toBe('failed')
     const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
     expect(row?.lastError).toMatch(/did not settle within 20ms/)
+  })
+})
+
+describe('runNextJob: JOB-6, a job that will be retried keeps its payload', () => {
+  // The regression this slice's own brief calls out as mattering most: a
+  // job that fails but has attempts left must still carry its payload into
+  // the *next* real claim — proved by actually retrying it through
+  // `runNextJob` twice, not by asserting on a column after one write.
+  it('a failing attempt is rescheduled with its payload intact, and the retried attempt still sees it', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'flaky',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 2,
+      },
+      testDb.db
+    )
+
+    const seenPayloads: unknown[] = []
+    let calls = 0
+    const handlers = new HandlerRegistry()
+    handlers.register('flaky', async (payload) => {
+      seenPayloads.push(payload)
+      calls++
+      if (calls === 1) throw new Error('transient upstream hiccup')
+    })
+
+    const deps = {
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    }
+
+    // Attempt 1 fails: rescheduled, not terminal — its payload must survive.
+    const first = await runNextJob(deps)
+    if (first.outcome !== 'retried') {
+      throw new Error(`expected attempt 1 to be retried, got ${first.outcome}`)
+    }
+    const rowAfterFirst = jobs.getJob(organizationId, first.job.id, testDb.db)
+    expect(rowAfterFirst?.status).toBe('pending')
+    expect(JSON.parse(rowAfterFirst?.payload ?? 'null')).toEqual({
+      courseId: 'course-1',
+      csvText: 'Ada,ada@example.edu',
+    })
+
+    // Force the retry due now — this proves the schedule ran, not real
+    // wall-clock backoff (the same device the JOB-2 test above already
+    // uses).
+    ;(testDb.db as any).$client
+      .prepare('update jobs set next_attempt_at = ? where id = ?')
+      .run(Date.now(), first.job.id)
+
+    // Attempt 2 succeeds — the real second claim re-reads the same payload
+    // attempt 1 was given, and the handler actually receives it.
+    const second = await runNextJob(deps)
+    expect(second.outcome).toBe('succeeded')
+    expect(seenPayloads).toEqual([
+      { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+      { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+    ])
+
+    // Now terminal — this slice's own retention guarantee catches up.
+    const rowAfterSecond = jobs.getJob(organizationId, first.job.id, testDb.db)
+    expect(rowAfterSecond?.status).toBe('succeeded')
+    expect(rowAfterSecond?.payload).toBeNull()
+  })
+})
+
+describe('runNextJob: JOB-6, a payload already cleared cannot be claimed for real work', () => {
+  // Defensive, not a case this function's own contract expects a caller to
+  // hit (`runner.ts`'s own comment on this branch) — `claimNextJob`'s own
+  // `eligible()` never reclaims a terminal (`succeeded`/`failed`) row, so
+  // this reaches past the repo layer on purpose, the same device the
+  // "a payload that will not parse" tests above already use, to prove the
+  // guard fails loudly rather than a null `JSON.parse` masking it silently.
+  it('fails immediately, without calling the handler, when a claimed row has no payload at all', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb)
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    ;(testDb.db as any).$client
+      .prepare('update jobs set payload = null where id = ?')
+      .run(enqueued.id)
+
+    let handlerCalled = false
+    const handlers = new HandlerRegistry()
+    handlers.register('noop', async () => {
+      handlerCalled = true
+    })
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('failed')
+    expect(handlerCalled).toBe(false)
+    const row = jobs.getJob(organizationId, enqueued.id, testDb.db)
+    expect(row).toMatchObject({ status: 'failed' })
+    expect(row?.lastError).toMatch(/payload was already cleared/)
   })
 })

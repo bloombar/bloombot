@@ -35,6 +35,7 @@ import { expect, test } from '@playwright/test'
 import {
   accounts,
   closeDatabase,
+  courseJoinLinks,
   courses,
   enrolments,
   memberships,
@@ -244,5 +245,97 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
     )
   } finally {
     await secondVisitorContext.close()
+  }
+})
+
+/**
+ * WEB-23, end to end: an instructor chooses an expiry when issuing a link,
+ * rather than only ever getting the permanent default the test above
+ * covers. Real, same as above: the browser (`JoinLinks.tsx`'s new expiry
+ * control), a real `apps/api`, and a real throwaway SQLite database — this
+ * reads `course_join_links.expires_at` back directly to prove the value the
+ * panel sent was actually persisted, not merely rendered.
+ */
+test('an owner chooses an expiry when issuing a join link, and it is what gets persisted and shown (WEB-23)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const ownerEmail = `owner-web23-${suffix}@example.edu`
+  const projectName = `Web23 — ${suffix}`
+  const courseTitle = `Web23 Course — ${suffix}`
+  const weekMs = 7 * 24 * 60 * 60 * 1000
+
+  await page.goto('/')
+  await page.getByLabel('Email').fill(ownerEmail)
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
+  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
+  const ownerToken = await readSignInToken(ownerEmail)
+  await page.goto(`/sign-in/${ownerToken}`)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Projects' }).click()
+  await page.getByLabel('New project name').fill(projectName)
+  await page.getByRole('button', { name: 'Create project' }).click()
+  await page.getByRole('button', { name: projectName }).click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(courseTitle)
+  await page.getByLabel('File prefix').fill(`w23-${suffix}`)
+  await page.getByLabel('Admins role').fill(`admins-w23-${suffix}`)
+  await page.getByLabel('Students role').fill(`students-w23-${suffix}`)
+  await page.getByLabel('Enabled').check()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+
+  await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
+  await expect(page.getByText('No join links issued yet.')).toBeVisible()
+
+  const before = Date.now()
+  await page.getByLabel('Expiry').selectOption('1w')
+  await page.getByRole('button', { name: 'Create join link' }).click()
+  await expect(page.getByTestId('created-join-link-url')).toBeVisible()
+
+  // The list shows what was chosen — a real future date, not the permanent
+  // default the test above covers.
+  await expect(page.getByText(/^Expires /)).toBeVisible()
+
+  // Read back through the real database — proves the panel's own value
+  // round-tripped through `courseJoinLinks.create` and was actually
+  // persisted, not merely rendered from client-side state.
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const ownerAccount = accounts.getAccountByEmail(ownerEmail, db)
+    if (!ownerAccount) throw new Error('verify failed: owner account not found')
+    const [ownerMembership] = memberships.listMembershipsForAccount(
+      ownerAccount.id,
+      db
+    )
+    if (!ownerMembership) throw new Error('verify failed: membership not found')
+    const organizationId = ownerMembership.organizationId
+
+    const project = projects
+      .listProjects(organizationId, db)
+      .find((candidate) => candidate.name === projectName)
+    if (!project) throw new Error('verify failed: project not found')
+    const course = courses
+      .listCourses(organizationId, db, { projectId: project.id })
+      .find((candidate) => candidate.title === courseTitle)
+    if (!course) throw new Error('verify failed: course not found')
+
+    const [joinLink] = courseJoinLinks.listJoinLinks(
+      organizationId,
+      course.id,
+      db
+    )
+    if (!joinLink) throw new Error('verify failed: join link not found')
+    expect(joinLink.expiresAt).not.toBeNull()
+    // Strictly in the future at the moment it was sent, and consistent with
+    // the one-week duration chosen — not merely "some number".
+    expect(joinLink.expiresAt as number).toBeGreaterThan(before)
+    expect(joinLink.expiresAt as number).toBeLessThanOrEqual(
+      before + weekMs + 60_000
+    )
+  } finally {
+    closeDatabase(db)
   }
 })

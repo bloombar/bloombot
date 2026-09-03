@@ -3,14 +3,26 @@
  * course actually matters — through `routes/chat.ts`, which authorizes on
  * an *active* enrolment (`enrolments.getActiveEnrolment`), not merely
  * `endedAt` on the row — and proven that the reinstated person cannot
- * trigger this themselves. That second guarantee is the whole distinction
- * the ENRL-8 rework turns on (`actions/enrolments.ts`'s own module comment
- * on `reinstateEnrolmentAction`): holding the connected identity of the
- * ended person is not a membership, and `routes/actions.ts` resolves the
- * caller's organization from a membership alone, before `dispatch` ever
- * runs — so an account that is only ever this course's *student* cannot
- * reach `enrolments.reinstate` at all, regardless of what its own policy
- * would otherwise allow.
+ * trigger this themselves.
+ *
+ * **What that second guarantee actually is, corrected after a review round
+ * caught the original version of this file understating the attack.**
+ * `routes/actions.ts` resolving the caller's organization from a
+ * membership alone rules out a *stranger* — nothing else. It does not rule
+ * out the reinstated person themselves: ENRL-7 admits anyone a course is
+ * taught through (any membership role, including the lowest, `assistant`)
+ * by *asking* it exactly like a plain student, so the identical account can
+ * hold a staff membership in this organization for one course and, through
+ * a separately connected `web` identity, an enrolment in another — being
+ * enrolled and being a member are orthogonal facts about two different
+ * tables. The test below proves the actual attack: an account with an
+ * ordinary `assistant` membership in *this* organization, whose own web
+ * identity is connected to the exact person an instructor just ended, gets
+ * refused all the same — because `reinstateEnrolmentAction.execute` (not
+ * the membership check upstream) compares the caller's own connected
+ * person against the enrolment's `personId` and refuses on a match
+ * (`actions/enrolments.ts`'s own doc comment on `reinstateEnrolmentAction`
+ * has the full account, including the must-fix this replaced).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -100,9 +112,16 @@ describe('enrolments.reinstate over HTTP (ENRL-9)', () => {
       testDb.db,
       instructor
     )
-    // The student's own web account — connected to the enrolled person, the
-    // same "signed in, proven by connecting" shape `routes/chat.ts`'s own
-    // module comment describes for a real student.
+    // A second account in the same organization, connected to the enrolled
+    // person — the same "signed in, proven by connecting" shape
+    // `routes/chat.ts`'s own module comment describes for a real student's
+    // web identity. `seedSecondCallerInOrganization` actually grants an
+    // `assistant` membership (a correction to this comment: an earlier
+    // revision called this "the student's own web account," which is not
+    // what this helper mints — a plain student holds no membership at all,
+    // and this scenario does not depend on which is true here, only that
+    // `routes/chat.ts` authorizes on the connected person's own enrolment,
+    // not on whatever membership the same account happens to also hold).
     const student = seedSecondCallerInOrganization(
       testDb.db,
       instructor.organizationId
@@ -171,19 +190,31 @@ describe('enrolments.reinstate over HTTP (ENRL-9)', () => {
     })
   })
 
-  it('the removed person cannot reinstate their own enrolment — their connected account holds no membership here', async () => {
+  // The must-fix a review round caught: this used to seed the "removed
+  // person" a fresh organization of their own (`seedSignedInCaller`),
+  // which only ever proves `tenant-isolation.test.ts`'s generic "a foreign
+  // session is refused" — not "connected to the enrolled person, holding
+  // an ordinary membership *inside this same organization*," which is the
+  // actual shape ENRL-7 makes possible and the actual shape both reviewers
+  // reproduced over HTTP (a TA's own, separate enrolment in a different
+  // course, reinstated by themselves, with the audit column naming them as
+  // the actor). Rewritten to that real scenario.
+  it('an account with an ordinary membership in this organization cannot reinstate its own connected enrolment', async () => {
     testDb = createTestDatabase()
     const instructor = seedSignedInCaller(testDb.db)
     const { discordPersonId, enrolmentId } = seedEnrolledCourse(
       testDb.db,
       instructor
     )
-    // A signed-in account of its own, in a *different* organization — the
-    // same "own account, own membership, elsewhere" shape a real student's
-    // web sign-in produces (`seedSignedInCaller` mints a fresh organization
-    // per call, so this account's only membership is there, never in
-    // `instructor.organizationId`).
-    const removedPerson = seedSignedInCaller(testDb.db)
+    // ENRL-7's own shape: a second account, an ordinary `assistant`
+    // membership in the *same* organization (a TA for some other course,
+    // say) — never a stranger, and never a different tenant — whose own
+    // web identity is separately connected to the exact person this
+    // course's enrolment names.
+    const removedPerson = seedSecondCallerInOrganization(
+      testDb.db,
+      instructor.organizationId
+    )
     const connected = people.connectIdentity(
       instructor.organizationId,
       discordPersonId,
@@ -202,9 +233,10 @@ describe('enrolments.reinstate over HTTP (ENRL-9)', () => {
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ enrolmentId })
 
-    // ACT-3/TEN-5: refused the same not-found shape a foreign session gets
-    // against any other action — this account genuinely has no membership
-    // in `instructor.organizationId`, connected identity or not.
+    // ACT-3/TEN-5's not-found shape — refused not because this account
+    // lacks a membership here (it genuinely holds one), but because
+    // `reinstateEnrolmentAction.execute`'s own self-check finds the
+    // caller's connected person is the exact person this enrolment names.
     expect(response.status).toBe(404)
     expect(
       enrolments.getEnrolment(instructor.organizationId, enrolmentId, testDb.db)

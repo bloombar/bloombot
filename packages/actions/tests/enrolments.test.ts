@@ -3,7 +3,7 @@
  * `.checkAccess`, `.end`, `.reinstate` and `.listForCourse`.
  */
 
-import { enrolments, people } from '@bloombot/db'
+import { accounts, enrolments, people } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -233,6 +233,109 @@ describe('enrolments.listForPerson/.checkAccess/.end (ENRL-2, ENRL-6)', () => {
       endedAt: expect.any(Number),
       reinstatedByAccountId: null,
     })
+  })
+
+  // Must-fix (rework): ENRL-7 admits anyone a course is taught through by
+  // any membership role, including the lowest (`assistant`) — so a
+  // membership in this organization is not proof the caller is a stranger
+  // to the enrolment being reinstated. Reproduces the exact attack both
+  // reviewers found over HTTP, directly at the dispatch layer: an account
+  // that holds an ordinary membership here, and whose own `web` identity is
+  // separately connected to the exact person the enrolment names, must
+  // still be refused.
+  it('enrolments.reinstate refuses when the caller is connected to the exact person the enrolment names, even holding a membership here', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    await dispatch(
+      endEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db }
+    )
+
+    // An ordinary membership — never a stranger — in this same
+    // organization, standing in for a TA whose own, separate enrolment
+    // (this one) was ended.
+    const assistant = accounts.createAccount(
+      organizationId,
+      {
+        email: 'assistant@example.edu',
+        displayName: 'Assistant',
+        role: 'assistant',
+      },
+      testDb.db
+    )
+    const connected = people.connectIdentity(
+      organizationId,
+      person.id,
+      { surface: 'web', externalId: assistant.id },
+      testDb.db
+    )
+    if (!connected) throw new Error('setup failed: connectIdentity refused')
+
+    await expect(
+      dispatch(
+        reinstateEnrolmentAction,
+        { enrolmentId: enrolment.id },
+        { organizationId, db: testDb.db, accountId: assistant.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: expect.any(Number),
+      reinstatedByAccountId: null,
+      reinstatedAt: null,
+    })
+  })
+
+  // The same membership, reinstating a *different* person's enrolment, is
+  // not refused — the self-check names exactly the caller's own connected
+  // person, not "any enrolment this account could plausibly reach."
+  it('enrolments.reinstate still succeeds for a member reinstating a different person', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+    const student = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: student.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    await dispatch(
+      endEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db }
+    )
+
+    const assistant = accounts.createAccount(
+      organizationId,
+      {
+        email: 'assistant2@example.edu',
+        displayName: 'Assistant',
+        role: 'assistant',
+      },
+      testDb.db
+    )
+    // No `connectIdentity` call at all here — this account is not connected
+    // to `student`, or to anyone.
+
+    const result = await dispatch(
+      reinstateEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db, accountId: assistant.id }
+    )
+    expect(result).toEqual({ reinstated: true })
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({ endedAt: null, reinstatedByAccountId: assistant.id })
   })
 
   it('enrolments.reinstate on an enrolment that is not ended is a no-op', async () => {

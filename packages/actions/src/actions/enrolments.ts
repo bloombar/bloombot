@@ -140,32 +140,53 @@ type ReinstateInput = z.infer<typeof reinstateInputSchema>
  * ENRL-9: reinstate an enrolment an instructor previously ended (ENRL-6) —
  * the one door the ENRL-6/ENRL-8 rework's `reviveEnded: false` closed on
  * every admission path, deliberately (`repos/enrolments.ts`'s own module
- * comment), and the one this action deliberately reopens, but only for an
- * instructor, never for the person it reinstates.
+ * comment), and the one this action deliberately reopens, but never for the
+ * person it reinstates.
  *
- * **Why an authenticated `accountId`, not merely a resolved enrolment, is
- * required.** ENRL-9's own text is explicit that reinstating "is
- * deliberately not something the reinstated person can trigger" — the
- * distinction the whole ENRL-8 rework turns on. This action's policy alone
- * cannot enforce that: `PolicyContext` carries only `organizationId` and
- * `db`, never who is calling (`policy.ts`'s own module comment, the same
- * reason `memberships.grant` checks the caller in `execute` instead). What
- * actually keeps the reinstated person out is one level up, structural
- * rather than a check this action makes itself: `apps/api`'s
- * `routes/actions.ts` resolves the caller's organization from their own
- * *membership* before `dispatch` ever runs, and an enrolled person (a
- * student, admitted through `enrolments`) holds no membership at all — they
- * have nothing to sign in to this route *as*, so they cannot reach any
- * action here, this one included, regardless of what its own policy would
- * otherwise allow. This action's own `execute` still refuses outright when
- * `dispatch` was given no `accountId` (the same `requireAccountId`
- * discipline `course-instructions.ts`'s own actions hold themselves to) —
- * belt-and-suspenders, not the actual guarantee: ENRL-9's guarantee is that
- * structural gap, not a check this file could get wrong.
+ * **What the membership requirement upstream does and does not prove.**
+ * `apps/api`'s `routes/actions.ts` resolves the caller's organization from
+ * their own *membership* before `dispatch` ever runs, so a caller with no
+ * membership in this organization at all cannot reach this action, this
+ * one included. That rules out a stranger — but it does **not** rule out
+ * the reinstated person themselves: ENRL-7 admits anyone a course is
+ * taught through (an `assistant`/`instructor`/`owner` membership) by
+ * *asking* it exactly like a plain student, which means the identical
+ * account can hold a staff membership for one course and, through a
+ * different, connected `web` identity in the same organization, an
+ * enrolment in another. Being enrolled and being a member are orthogonal
+ * facts about two different tables (`memberships` and `enrolments`) — a
+ * membership at any role, including the lowest, says nothing about which
+ * person, if any, that same account is also connected to. A prior revision
+ * of this comment (and `docs/DECISIONS.md` D-59) claimed "an enrolled
+ * person holds no membership at all," which is false in this platform and
+ * was the must-fix a review round caught: a TA whose *own, separate*
+ * enrolment in a different course was ended could reinstate it themselves,
+ * with the audit column (`reinstatedByAccountId`) recording them as the
+ * actor who granted their own access back.
+ *
+ * **The actual guarantee is the explicit check below, not the membership
+ * requirement above it.** `execute` resolves the caller's own connected
+ * `web`-surface person for this organization — the identical read-only
+ * lookup `routes/chat.ts#resolveConnectedCallerPerson` already performs —
+ * and refuses when it is the same person `entity.personId` names, the same
+ * "never on your own" rule `memberships.grant` already applies to granting
+ * a role to yourself (`actions/memberships.ts`'s own `if (target.id ===
+ * accountId)` check), applied here to personhood rather than account
+ * identity, since the caller and the enrolment's own person only line up
+ * through that connected identity, not through the account id directly.
+ * `execute` also still refuses outright when `dispatch` was given no
+ * `accountId` at all (the same `requireAccountId` discipline
+ * `course-instructions.ts`'s own actions hold themselves to) — a
+ * necessary precondition for the self-check to run at all, not a
+ * substitute for it.
  *
  * Idempotent on an enrolment that is not currently ended, the same
  * "rows-changed is not state" treatment `enrolments.end` above already
- * gives — reinstating a person who is not ended changes nothing.
+ * gives — reinstating a person who is not ended changes nothing. Also a
+ * no-op, not a thrown constraint error, when an *active* enrolment already
+ * exists for the same person and course under a different row — see
+ * `repos/enrolments.ts#reinstateEnrolment`'s own doc comment for why that
+ * case is reachable at all and how it is guarded.
  */
 export const reinstateEnrolmentAction: Action<
   'enrolments.reinstate',
@@ -175,7 +196,7 @@ export const reinstateEnrolmentAction: Action<
 > = {
   name: 'enrolments.reinstate',
   description:
-    'Reinstate an enrolment an instructor previously ended (ENRL-9): restores the access `enrolments.end` removed, and records who reinstated it and when. A no-op on an enrolment that is not currently ended.',
+    'Reinstate an enrolment an instructor previously ended (ENRL-9): restores the access `enrolments.end` removed, and records who reinstated it and when. A no-op on an enrolment that is not currently ended, and never on your own enrolment.',
   inputSchema: reinstateInputSchema,
   policy: {
     descriptor: { resource: 'enrolment', access: 'write' },
@@ -188,9 +209,22 @@ export const reinstateEnrolmentAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     if (!accountId) throw new ActionRefusedError()
+    // ENRL-9's own "never on your own" guarantee — see this action's own
+    // doc comment for why the membership check `dispatch`'s caller already
+    // ran is not enough by itself, and why this is the check that actually
+    // closes it.
+    const callerPerson = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      db
+    )
+    if (callerPerson && callerPerson.id === entity.personId) {
+      throw new ActionRefusedError()
+    }
     // The policy already proved this enrolment exists and belongs to this
     // organization; `reinstateEnrolment` itself is the idempotent no-op on
-    // one that is not currently ended.
+    // one that is not currently ended, or that would collide with an
+    // active row for the same person and course.
     enrolments.reinstateEnrolment(
       organizationId,
       entity.id,

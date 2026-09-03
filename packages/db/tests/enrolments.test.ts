@@ -689,6 +689,116 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toBeUndefined()
   })
 
+  // Must-fix (rework): `reinstateEnrolment`'s own doc comment used to claim
+  // "there is never more than one row for a given pairing once any
+  // `enrolVia*` has run" — false. `people.mergePeople` reaches exactly the
+  // opposite shape whenever a loser's own enrolment for a course is
+  // *already ended* before the merge: that branch moves the row's
+  // `personId` onto the survivor outright, with no check for whether the
+  // survivor already holds an *active* row for the same course
+  // (`people.ts#mergePeople`'s own "no unique constraint to collide with"
+  // reasoning — true for the move itself, since the partial unique index
+  // only restricts active rows, but it leaves the survivor holding both an
+  // active row and this newly-moved ended row for the identical
+  // `(organizationId, courseId, personId)`). Reinstating that moved row
+  // then collides with the survivor's own active one on
+  // `enrolments_org_course_person_active_unique`. Before the fix, this
+  // reached the caller as an unhandled `SQLITE_CONSTRAINT_UNIQUE`.
+  it('reinstating an ended enrolment that collides with an active one after a merge is a clean no-op, not a thrown constraint error', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const account = accounts.createAccount(
+      organizationId,
+      { email: 'merge-owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    // The loser: enrolled, then ended, *before* the merge — the branch
+    // `mergePeople` moves outright with no collision check.
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const loserEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: loser.id },
+      testDb.db
+    )
+    if (!loserEnrolment) throw new Error('setup failed: no loser enrolment')
+    enrolments.endEnrolment(organizationId, loserEnrolment.id, testDb.db)
+
+    // The survivor: already actively enrolled in the same course.
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const survivorEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: survivor.id },
+      testDb.db
+    )
+    if (!survivorEnrolment)
+      throw new Error('setup failed: no survivor enrolment')
+
+    const merge = people.mergePeople(
+      organizationId,
+      survivor.id,
+      loser.id,
+      testDb.db
+    )
+    if (!merge) throw new Error('setup failed: merge refused')
+
+    // The moved row now shares (organizationId, courseId, personId) with
+    // the survivor's own still-active enrolment.
+    const movedLoserEnrolment = enrolments.getEnrolment(
+      organizationId,
+      loserEnrolment.id,
+      testDb.db
+    )
+    expect(movedLoserEnrolment).toMatchObject({
+      personId: survivor.id,
+      courseId: course.id,
+      endedAt: expect.any(Number),
+    })
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        survivor.id,
+        testDb.db
+      )?.id
+    ).toBe(survivorEnrolment.id)
+
+    // Reinstating the moved, now-colliding row is a clean no-op — not a
+    // thrown `SQLITE_CONSTRAINT_UNIQUE`.
+    expect(() =>
+      enrolments.reinstateEnrolment(
+        organizationId,
+        loserEnrolment.id,
+        { reinstatedByAccountId: account.id },
+        testDb.db
+      )
+    ).not.toThrow()
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      loserEnrolment.id,
+      { reinstatedByAccountId: account.id },
+      testDb.db
+    )
+    expect(changed).toBe(0)
+
+    // Nothing changed: the moved row is still ended, still unreinstated,
+    // and the survivor's original active row is still the only active one.
+    expect(
+      enrolments.getEnrolment(organizationId, loserEnrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: expect.any(Number),
+      reinstatedByAccountId: null,
+    })
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        survivor.id,
+        testDb.db
+      )?.id
+    ).toBe(survivorEnrolment.id)
+  })
+
   // --- WEB-22: the panel's own listing, active and ended alike -----------
 
   it('listEnrolmentsForCourse includes both an active and an ended enrolment, with source and endedAt', () => {
@@ -739,6 +849,65 @@ describe('enrolments repo (ENRL-1..6)', () => {
     expect(endedRow).toMatchObject({
       source: 'discord_role',
       endedAt: expect.any(Number),
+    })
+  })
+
+  // Cheap-fix (rework): without deduping by person, the merge shape above
+  // (a survivor holding both an active row and a stray, moved-in ended row
+  // for the same course) listed the survivor twice — once per row — with a
+  // "Reinstate" offered on the stray row that could only ever no-op.
+  it('listEnrolmentsForCourse lists a person at most once, even when a merge leaves them with two rows for the same course', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+
+    const loser = people.createPerson(
+      organizationId,
+      { displayName: 'Loser' },
+      testDb.db
+    )
+    const loserEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: loser.id },
+      testDb.db
+    )
+    if (!loserEnrolment) throw new Error('setup failed: no loser enrolment')
+    enrolments.endEnrolment(organizationId, loserEnrolment.id, testDb.db)
+
+    const survivor = people.createPerson(
+      organizationId,
+      { displayName: 'Survivor' },
+      testDb.db
+    )
+    const survivorEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: survivor.id },
+      testDb.db
+    )
+    if (!survivorEnrolment) {
+      throw new Error('setup failed: no survivor enrolment')
+    }
+
+    const merge = people.mergePeople(
+      organizationId,
+      survivor.id,
+      loser.id,
+      testDb.db
+    )
+    if (!merge) throw new Error('setup failed: merge refused')
+
+    const listed = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    // Exactly one row for the survivor — the active one, not the stray
+    // ended row the merge moved onto them.
+    const survivorRows = listed.filter((row) => row.personId === survivor.id)
+    expect(survivorRows).toHaveLength(1)
+    expect(survivorRows[0]).toMatchObject({
+      id: survivorEnrolment.id,
+      endedAt: null,
     })
   })
 

@@ -81,10 +81,15 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    administrator read — "usage per organization", spanning every
 //    organization by definition, the same class `countQueuedJobs` already
 //    is one level up from every other function in this file.
-//  - course-join-links.ts#redeemJoinLink: ENRL-3/ENRL-4, the same class as
-//    `sign-in-tokens.ts` — a redeemer presents only the secret, not an
-//    organization id, so there is nothing to scope the lookup by until the
-//    hash itself resolves one (this file's own module comment).
+//  - course-join-links.ts#redeemJoinLink/#redeemJoinLinkForWebAccount:
+//    ENRL-3/ENRL-4/ENRL-8, the same class as `sign-in-tokens.ts` — a
+//    redeemer presents only the secret, not an organization id, so there is
+//    nothing to scope the lookup by until the hash itself resolves one
+//    (this file's own module comment). `redeemJoinLinkForWebAccount` is the
+//    identical shape for a signed-in web account rather than an
+//    already-resolved person id; the two share the module-private
+//    `findLiveJoinLinkByHash`, which this test does not see at all (it
+//    scans exported functions only).
 //  - person-link-challenges.ts: LINK-3, the same class as
 //    `discord-install-states.ts` one level up — a callback (Discord's own
 //    OAuth) or a token redemption (MCP) carries only the secret value, not
@@ -100,7 +105,7 @@ const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
   'organizations.ts': ['listTenantDeletions'],
-  'course-join-links.ts': ['redeemJoinLink'],
+  'course-join-links.ts': ['redeemJoinLink', 'redeemJoinLinkForWebAccount'],
   'discord-servers.ts': ['resolveDiscordServerBinding'],
   'discord-install-states.ts': [
     'createInstallState',

@@ -30,8 +30,11 @@ import type {
   ChatMessageEntry,
   Course,
   CourseAttachmentSummary,
+  CourseEnrolment,
   CourseInstructionRevisionSummary,
+  CourseJoinLinkSummary,
   CourseSummary,
+  CreatedCourseJoinLink,
   DiscordPersonLinkPreviewResponse,
   DuplicateProjectResult,
   InstallBeginResponse,
@@ -147,6 +150,23 @@ export function signInWithGoogle(idToken: string): Promise<SignedInResponse> {
 /** AUTH-3: sign out — ends the session server-side, not merely in this tab. */
 export function signOut(): Promise<void> {
   return request<void>('/auth/sign-out', { method: 'POST' })
+}
+
+/**
+ * ENRL-8: redeem a course join link, bound to the caller's own signed-in
+ * session — `apps/api`'s own `routes/join-links.ts` never accepts anything
+ * beyond the secret itself in the request body. Throws `ApiError` (404,
+ * `join_link_not_found`) identically for a secret that was never issued,
+ * one that is revoked, and one that has expired (ENRL-4) — never a
+ * different status or message across the three.
+ */
+export function redeemCourseJoinLink(
+  secret: string
+): Promise<{ courseId: string }> {
+  return request<{ courseId: string }>('/join-links/redeem', {
+    method: 'POST',
+    body: { secret },
+  })
 }
 
 /** "Who am I" — the account and its memberships (WEB-3), or `{ account: null }` when signed out. */
@@ -497,6 +517,105 @@ export function scaffoldCourseDiscord(
 ): Promise<{ jobId: string }> {
   return dispatchAction(organizationId, 'discordServers.scaffold', {
     courseId,
+  })
+}
+
+/**
+ * WEB-20 — a course's join links: issuing one (the secret is the response's
+ * own, one-time payload — nothing about it is ever fetched again), the
+ * current list (never a secret among them), and revoking one. Each a thin
+ * wrapper over `dispatchAction`, the same generic action route every other
+ * screen in this app already reaches through.
+ */
+
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `courseJoinLinks.create`'s own optional `expiresAt` (omitted or `null` both mean "no expiry"). */
+export function createCourseJoinLink(
+  organizationId: string,
+  courseId: string,
+  expiresAt?: number | null
+): Promise<CreatedCourseJoinLink> {
+  return dispatchAction<CreatedCourseJoinLink>(
+    organizationId,
+    'courseJoinLinks.create',
+    {
+      courseId,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    }
+  )
+}
+
+/** WEB-20: a course's own join links, newest first — never carries a secret (`courseJoinLinks.list`'s own projection, `@bloombot/actions`). */
+export function listCourseJoinLinks(
+  organizationId: string,
+  courseId: string
+): Promise<CourseJoinLinkSummary[]> {
+  return dispatchAction<CourseJoinLinkSummary[]>(
+    organizationId,
+    'courseJoinLinks.list',
+    { courseId }
+  )
+}
+
+/** ENRL-4: revoke a join link — stops it admitting anyone new; never un-enrols anyone it already admitted. */
+export function revokeCourseJoinLink(
+  organizationId: string,
+  linkId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'courseJoinLinks.revoke', { linkId })
+}
+
+/**
+ * WEB-22 — a course's own people, active and ended alike, and the two acts
+ * an instructor may take on one: end an active enrolment (ENRL-6) or
+ * reinstate an ended one (ENRL-9). Thin wrappers over `dispatchAction`, the
+ * same shape `createCourseJoinLink`/`listCourseJoinLinks`/
+ * `revokeCourseJoinLink` above already use.
+ */
+
+/** WEB-22: every enrolment a course has ever had, active and ended alike — `enrolments.listForCourse`'s own projection, `@bloombot/actions`. */
+export function listCourseEnrolments(
+  organizationId: string,
+  courseId: string
+): Promise<CourseEnrolment[]> {
+  return dispatchAction<CourseEnrolment[]>(
+    organizationId,
+    'enrolments.listForCourse',
+    { courseId }
+  )
+}
+
+/** ENRL-6: end an enrolment — stops that person asking this course; deletes neither their transcript nor the course's record of what was asked. */
+export function endCourseEnrolment(
+  organizationId: string,
+  enrolmentId: string
+): Promise<{ ended: boolean }> {
+  return dispatchAction(organizationId, 'enrolments.end', { enrolmentId })
+}
+
+/** ENRL-9: reinstate an enrolment an instructor previously ended — restores the access `endCourseEnrolment` removed. A no-op, not an error, on an enrolment that is not currently ended. */
+export function reinstateCourseEnrolment(
+  organizationId: string,
+  enrolmentId: string
+): Promise<{ reinstated: boolean }> {
+  return dispatchAction(organizationId, 'enrolments.reinstate', {
+    enrolmentId,
+  })
+}
+
+/**
+ * WEB-21/ROST-9..12: import a roster CSV into a course — enqueues a
+ * background job and returns immediately; the report itself is read back
+ * through `getJobStatus`'s own `result`, the same "poll a job id" shape
+ * `scaffoldCourseDiscord`/`attachCourseFile` already use.
+ */
+export function importRoster(
+  organizationId: string,
+  courseId: string,
+  csvText: string
+): Promise<{ jobId: string }> {
+  return dispatchAction(organizationId, 'roster.import', {
+    courseId,
+    csvText,
   })
 }
 

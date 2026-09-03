@@ -167,3 +167,15 @@ AUTH-5 lands here rather than with the rest of authentication because it was fou
 production hardening is what surfaced that `apps/api` cannot start under `NODE_ENV=production`
 at all, since the only mail transport is a development stand-in that is refused there. A
 deployment nobody can sign in to is not a deployment.
+
+## Phase 16 — Course admission surfaces
+
+Every way into a course exists in the action layer and nowhere else: a join link can be
+created and revoked but never redeemed, a roster can be imported only by dispatching an
+action by hand, and the enrolment relation admits students while quietly leaving the
+instructors and assistants who ask the same course through the same channels out of it. This
+phase makes admission something a person can actually do — issue a link, hand it out, redeem
+it as yourself, upload a roster with its format stated on the screen — and makes asking a
+course you are taught through enough to be enrolled in it, whichever role carried you there.
+
+**In scope:** ENRL-7/8/9, WEB-20/21/22

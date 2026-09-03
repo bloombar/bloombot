@@ -54,6 +54,19 @@
  * shape; this file only decides where it sits and that it is offered for
  * an existing course, the same "existing record only" gate the Discord
  * channels section and the enable/disable toggle both already use.
+ *
+ * WEB-20/WEB-21: a course's join links and roster import are, respectively,
+ * `components/JoinLinks.tsx` and `components/RosterImport.tsx`'s own
+ * screens, embedded below on the same "existing record only" gate — see
+ * each file's own module comment for its own shape (a link's secret shown
+ * once at creation; an import's format description, progress and per-row
+ * report). This file only decides where the two sit, keeping this already
+ * large form's own growth to that.
+ *
+ * WEB-22/ENRL-9: a course's people — everyone it has ever enrolled, active
+ * and ended alike, with ending (ENRL-6) and reinstating (ENRL-9) both
+ * offered — are `components/CoursePeople.tsx`'s own screen, embedded below
+ * on the same "existing record only" gate as everything else in this list.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -65,10 +78,13 @@ import type { Course, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
+import { CoursePeople } from '../components/CoursePeople.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { FormField } from '../components/FormField.js'
+import { JoinLinks } from '../components/JoinLinks.js'
 import { useModal } from '../components/modal/ModalProvider.js'
+import { RosterImport } from '../components/RosterImport.js'
 import { ScaffoldButton } from '../components/ScaffoldButton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
@@ -693,6 +709,54 @@ export function CourseEditor({
             Discord server bound to this organization.
           </p>
           <ScaffoldButton organizationId={organizationId} courseId={courseId} />
+        </section>
+      )}
+
+      {/* WEB-20: a course's join links — same "existing record only" gate
+          as Discord channels above, a link belongs to an existing course. */}
+      {courseId !== undefined && (
+        <section aria-label="Join links" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            Join links
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Share a link that lets a student enrol themselves, without a Discord
+            role — each link&apos;s secret is shown only once, right after you
+            create it.
+          </p>
+          <JoinLinks organizationId={organizationId} courseId={courseId} />
+        </section>
+      )}
+
+      {/* WEB-21/ROST-9..12: a course's roster import — same gate as above. */}
+      {courseId !== undefined && (
+        <section aria-label="Roster import" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            Roster
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Import a class roster to enrol every student and create their
+            private Discord channel.
+          </p>
+          <RosterImport organizationId={organizationId} courseId={courseId} />
+        </section>
+      )}
+
+      {/* WEB-22/ENRL-9: a course's people — everyone it has ever enrolled,
+          active and ended alike, with ending and reinstating both offered.
+          Same "existing record only" gate as the sections above: an
+          enrolment belongs to an existing course. */}
+      {courseId !== undefined && (
+        <section aria-label="People" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            People
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Everyone this course has ever enrolled, however they were admitted.
+            Ending stops someone asking this course without deleting their
+            transcript; reinstating undoes an end.
+          </p>
+          <CoursePeople organizationId={organizationId} courseId={courseId} />
         </section>
       )}
 

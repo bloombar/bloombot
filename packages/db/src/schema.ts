@@ -895,6 +895,23 @@ export type EnrolmentSource = (typeof ENROLMENT_SOURCES)[number]
 // TEN-6/PROJ-2 — "currently active" means `endedAt is null`, read that way
 // everywhere in `repos/enrolments.ts` rather than a separate boolean this
 // column would only ever duplicate.
+//
+// ENRL-9 — `reinstatedByAccountId`/`reinstatedAt` record the one fact ENRL-9
+// requires: reinstating an ended enrolment is an instructor-initiated act,
+// and who did it and when is kept. "Record it on the row itself" is the same
+// shape `memberships.grantedByAccountId`/`grantedAt` already uses for ENRL-5
+// — chosen over a separate history table (the `course_instruction_revisions`
+// shape, a new row per event) because ENRL-9 asks only "who reinstated this,
+// and when," not a full audit of every end/reinstate cycle a row might see;
+// a second table, its own migration, its own repo functions and its own
+// tenant-scoping test rows would all exist to answer a question nobody asked
+// for. The trade this makes, honestly: like `grantedByAccountId`/`grantedAt`,
+// a *second* reinstatement overwrites the first's record on the same row —
+// this pair names the most recent reinstatement, not the row's whole
+// history, exactly as `grantedByAccountId`/`grantedAt` already names only
+// the most recent grant. Both null on every row until `reinstateEnrolment`
+// (`repos/enrolments.ts`) first touches it — most enrolments are never
+// ended at all, let alone reinstated.
 export const enrolments = sqliteTable(
   'enrolments',
   {
@@ -911,6 +928,10 @@ export const enrolments = sqliteTable(
     source: text('source', { enum: ENROLMENT_SOURCES }).notNull(),
     createdAt: integer('created_at').notNull(),
     endedAt: integer('ended_at'),
+    reinstatedByAccountId: text('reinstated_by_account_id').references(
+      () => accounts.id
+    ),
+    reinstatedAt: integer('reinstated_at'),
   },
   (table) => [
     // At most one *active* enrolment per (organization, course, person) —

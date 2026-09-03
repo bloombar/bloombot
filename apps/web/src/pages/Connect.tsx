@@ -11,9 +11,12 @@
  * A visit alone does nothing (LINK-6's own "does nothing until the person
  * says to"): signed out, this page asks the visitor to sign in — the same
  * `SignIn` screen every other entry point uses — and stashes
- * `organizationId` (`PENDING_CONNECT_ORG_KEY`) so a returning sign-in (an
- * emailed link, opened in the same tab or a fresh one) lands back here
- * rather than on the ordinary shell (`App.tsx`'s own `returnToShell`).
+ * `organizationId` (`PENDING_CONNECT_ORG_KEY`) so a returning sign-in lands
+ * back here rather than on the ordinary shell (`App.tsx`'s own
+ * `returnToShell`) — but only when the emailed sign-in link is opened in
+ * this *same* browsing context: `sessionStorage` is per-tab, so a link a
+ * mail client opens in a fresh tab has no marker to read and lands on the
+ * plain shell instead, exactly as if this page had never stashed anything.
  * Signed in, it offers two independent things to connect — Discord
  * (LINK-7) and an assistant (LINK-8) — neither of which spends anything
  * until its own preview screen is confirmed.

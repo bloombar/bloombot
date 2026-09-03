@@ -12,6 +12,10 @@
  *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
  *    every other path below, since a Discord invitation cannot know which
  *    it will be.
+ *  - `/join/:secret` — ENRL-8's own course join link (`pages/JoinLink.tsx`);
+ *    reachable signed in or signed out, for the identical reason
+ *    `/connect/:organizationId` is above — a course join link is shared
+ *    with a whole class, most of whom have never signed in before.
  *  - `/platform-admin` — ADMIN-4's console (`pages/Admin.tsx`); reachable
  *    by any signed-in account (deliberately *not* `/admin`, `apps/api`'s
  *    own mount for this screen's reads and writes — see this file's own
@@ -35,6 +39,7 @@ import { Button } from './components/Button.js'
 import { Admin } from './pages/Admin.js'
 import { Connect, PENDING_CONNECT_ORG_KEY } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
+import { JoinLink, PENDING_JOIN_LINK_KEY } from './pages/JoinLink.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
@@ -97,12 +102,25 @@ export function App() {
   // actually came for. Checked here, not inside `Connect.tsx` itself: this
   // is the one function every "I am done, go somewhere sensible" callback
   // in this app already funnels through.
+  //
+  // ENRL-8: the identical problem for `/join/:secret` (`JoinLink.tsx`'s own
+  // `PENDING_JOIN_LINK_KEY`) — a visitor who followed a course join link
+  // signed out must return to that same link, not the shell, once a
+  // redeemed sign-in link brings them back. Checked after the connect key,
+  // arbitrarily: this app never sets both in the same visit (each page
+  // clears the other's marker only if it happens to render, and a browser
+  // tab only ever has one such link open).
   const returnToShell = useCallback(() => {
     const pendingConnectOrganizationId = sessionStorage.getItem(
       PENDING_CONNECT_ORG_KEY
     )
+    const pendingJoinLinkSecret = sessionStorage.getItem(PENDING_JOIN_LINK_KEY)
     if (pendingConnectOrganizationId) {
       const target = `/connect/${pendingConnectOrganizationId}`
+      window.history.replaceState(null, '', target)
+      setPath(target)
+    } else if (pendingJoinLinkSecret) {
+      const target = `/join/${pendingJoinLinkSecret}`
       window.history.replaceState(null, '', target)
       setPath(target)
     } else {
@@ -185,6 +203,24 @@ export function App() {
           organizationId={organizationId}
           account={session.kind === 'signed-in' ? session.account : null}
           onSignedIn={refreshSession}
+        />
+      )
+    }
+  }
+
+  // ENRL-8 — a course join link, reachable whether or not this browser
+  // already has a session: `JoinLink.tsx` itself renders `SignIn` when
+  // `account` is `null`, the same split `Connect.tsx` already draws above.
+  const joinLinkMatch = /^\/join\/([^/]+)$/.exec(path)
+  if (joinLinkMatch) {
+    const secret = joinLinkMatch[1]
+    if (secret) {
+      return (
+        <JoinLink
+          secret={secret}
+          account={session.kind === 'signed-in' ? session.account : null}
+          onSignedIn={refreshSession}
+          onRedeemed={returnToShell}
         />
       )
     }

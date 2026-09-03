@@ -63,8 +63,10 @@ Another agent may be writing to the same checkout right now. You cannot see its 
 
 - `git status` before you commit, every time. **Stage only your own files, by path.** Never `git add -A`,
   `git add .` or `git commit -a`.
-- Files in `git status` you did not touch belong to someone else. Stop and report. Do not commit them,
-  revert them, or tidy them.
+- Files in `git status` you did not touch are not yours. **Report before acting, not after** — a revert
+  cannot be undone, and the content may be the user's own work rather than another agent's. Do not
+  commit them, revert them, or tidy them.
+- **Never edit `docs/DEPLOY_DROPLET.md`** — the user maintains it.
 - A failing check in a file outside your slice is not yours to fix. Report it and stop — a `tsc` error
   in someone else's half-written module means they are mid-edit, not that you have work to do.
 - Re-measure the baselines your brief quotes after your final pull. They go stale as soon as another

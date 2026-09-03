@@ -5948,17 +5948,15 @@ overwrites the first grantor. A migration was written (`packages/db/migrations/0
 clean) — this is the first ENRL-7/ENRL-8/ENRL-6/ENRL-8-rework slice on this branch where a schema change was
 actually in scope.
 
-**The reinstated person cannot trigger this themselves — enforced structurally, not by a check in the action.**
-`enrolments.reinstate`'s own policy resolves the enrolment (`{ resource: 'enrolment', access: 'write' }`, the
-same shape `enrolments.end` already uses) and `execute` refuses without an authenticated `accountId` — but
-neither of those is what actually keeps the removed person out, since a policy cannot see who is calling at all
-(`policy.ts`'s own module comment). What does: `apps/api`'s `routes/actions.ts` resolves the caller's
-organization from their own *membership* before `dispatch` ever runs, and an enrolled person (a course
-participant, admitted through `enrolments`) holds no membership — they have nothing to sign in to this route
-*as*. Proven directly, not merely assumed: `apps/api/tests/routes/enrolments-reinstate.test.ts` connects a
-signed-in account's own web identity onto the exact person whose enrolment was ended, then dispatches
-`enrolments.reinstate` as that same account, and asserts the ordinary TEN-5 not-found refusal — the distinction
-the whole ENRL-8 rework turns on, tested explicitly rather than assumed covered by the policy layer.
+**Superseded by D-60's rework — kept here, corrected, for the historical record.** This paragraph originally
+claimed the reinstated person is kept out because "an enrolled person… holds no membership at all," and that
+`apps/api/tests/routes/enrolments-reinstate.test.ts` "proved [it] directly." Both claims were false, and D-60
+records what a review round found and how it was fixed; read that entry for the actual account. In brief: ENRL-7
+means a membership and an enrolment are orthogonal facts about two different tables, so a membership at any role
+is not proof of a stranger — the guarantee actually enforced is an explicit check in
+`reinstateEnrolmentAction.execute` (`actions/enrolments.ts`) comparing the caller's own connected person against
+the enrolment's `personId`, and the test that was meant to prove this used a scenario (a fresh, unrelated
+organization) that never exercised that check at all.
 
 **WEB-22 needed a new listing, not a widened `listPeopleForCourse`.** `listEnrolmentsForCourse`
 (`repos/enrolments.ts`) is additive — every existing caller of `listPeopleForCourse` (the roster-import
@@ -5989,3 +5987,109 @@ that would need writing. `reinstateEnrolment` is that action; all three now say 
 only" recording is the same limit `grantedByAccountId`/`grantedAt` already accepts for ENRL-5 — if a full
 end/reinstate history is ever needed (an audit trail of every cycle, not just the latest), that is the
 `course_instruction_revisions` shape, deliberately not built here.
+
+---
+
+## D-60 — `packages/actions`/`packages/db`/`apps/api`: ENRL-9/WEB-22 rework — a membership is not proof of a stranger, an unhandled unique-constraint 500, and a listing that could show one person twice
+
+**Problem.** Two independent reviewers reproduced the same must-fix in D-59's own `enrolments.reinstate`
+over HTTP against the real app: a caller holding an ordinary `assistant` membership in the same organization,
+connected to the exact person an instructor had just ended, reinstated their own enrolment — `200`, `endedAt`
+cleared, and `reinstated_by_account_id` recording the beneficiary as the actor. The same round found a second,
+unrelated must-fix (an unhandled unique-constraint error reachable through a real, if unusual, data shape) and a
+cheap-fix falling out of the same root cause (a listing that could render one person twice). This entry is the
+corrected record D-59 now points readers to for all three, and for what a "guarantee," properly stated, has to
+say about what is actually enforced versus what merely holds today by construction — the distinction this whole
+round turned on.
+
+**Must-fix 1 — the self-trigger guarantee was never actually checked; only a membership requirement one level up
+was, and that requirement does not rule out the reinstated person.** D-59's original text, and the doc comment
+in `actions/enrolments.ts`, both asserted "an enrolled person… holds no membership at all," reasoning that
+`apps/api/src/routes/actions.ts` refusing a caller with no membership in the target organization was sufficient.
+That premise is false in this platform, and ENRL-7 is why: "anyone a course is taught through is enrolled by
+asking it" means an `assistant`/`instructor`/`owner` membership and an enrolment are orthogonal facts about two
+different tables (`memberships`, `enrolments`) — the identical account can hold a staff membership for one
+course and, through a separately connected `web` identity, an enrolment (admitted the same way any student's is)
+in another. A membership at any role, including the lowest, says nothing about which person, if any, the same
+account is also connected to. **Fixed** by adding the check that was actually missing:
+`reinstateEnrolmentAction.execute` now resolves the caller's own connected `web`-surface person for the
+organization (`people.resolveIdentity`, the identical read-only lookup `routes/chat.ts#resolveConnectedCallerPerson`
+already performs) and refuses when it is the same person the enrolment names — the same "never on your own" rule
+`memberships.grant` already applies to granting a role to yourself (`actions/memberships.ts`'s own
+`if (target.id === accountId)` check), applied here to personhood rather than account identity. The membership
+requirement upstream still matters (it rules out a genuine stranger with no relationship to the organization at
+all) — it was just never the *whole* guarantee, and the doc comments describing it as such are corrected to say
+exactly that: what the membership check proves, what it does not, and which check actually closes the gap.
+
+**Also corrected: the test written to prove this exercised a weaker claim.** The original
+`apps/api/tests/routes/enrolments-reinstate.test.ts` seeded the "removed person" a *fresh organization* of their
+own (`seedSignedInCaller`) — which only ever proves the generic cross-tenant refusal
+`tenant-isolation.test.ts` already covers, not "connected to the enrolled person, holding an ordinary membership
+*inside this same organization*," the actual shape both reviewers reproduced. Rewritten to that real scenario:
+an `assistant` membership seeded with `seedSecondCallerInOrganization` in the *same* organization as the
+enrolment, connected via `people.connectIdentity` to the exact person an instructor ended. Verified failing
+before the fix (temporarily reverting only the new self-check in `execute` and rerunning): `200`, not the
+expected `404`. A second, dispatch-level test was added directly against `reinstateEnrolmentAction.execute` in
+`packages/actions/tests/enrolments.test.ts` for the same scenario, plus a companion proving the check is scoped
+to *that* person, not "any enrolment a member could reach" — the same membership reinstating a *different*
+person's enrolment still succeeds. The first test's own comment, which mislabeled `seedSecondCallerInOrganization`
+as "the student's own web account" when that helper actually grants an `assistant` membership, is corrected —
+that mislabel is what let this gap read as covered when it was not.
+
+**Must-fix 2 — `reinstateEnrolment`'s own doc comment claimed a data shape that does not hold, and the
+un-guarded case it hid reached a caller as a `500`.** The comment said "there is never more than one row for a
+given pairing once any `enrolVia*` has run," citing `admit`'s own module comment — contradicted by `schema.ts`'s
+own comment on `enrolments_org_course_person_active_unique`, which says the opposite plainly ("a person may hold
+more than one *ended* row for the same course… which is exactly why this index is partial rather than plain").
+Two reviewers found this false by different, both real, routes: `people.ts#mergePeople`'s own "already ended,
+moved outright" branch reassigns a loser's already-ended enrolment row's `personId` onto the survivor with no
+check for whether the survivor already holds an *active* row for that same course (correct in isolation — an
+ended row cannot collide with the partial unique index on its own — but it leaves the survivor holding both an
+active row and a second, ended one for the identical `(organizationId, courseId, personId)`); and any database
+that predates the D-35/D-57 reworks can carry the same shape from before `reviveEnded: false` existed everywhere.
+Reinstating that ended row collided with the survivor's own active one on `enrolments_org_course_person_active_unique`,
+raising an unhandled `SQLITE_CONSTRAINT_UNIQUE` that escaped `dispatch` as a `500`, not the `0`-rows-changed
+no-op the doc comment promised. **Fixed** the same "catch, check, no-op" shape this repo already established for
+the identical class of race (`admit`'s own catch block, in this file) — `reinstateEnrolment` catches
+`SQLITE_CONSTRAINT_UNIQUE` (`isUniqueConstraintError`, the same check-by-`error.code` device
+`repos/projects.ts`/`repos/people.ts` already each carry their own copy of) and returns `0`, the identical
+idempotent no-op every other "already in that state" write in this file gives. The doc comment now states what
+the data actually guarantees, with the merge scenario spelled out rather than asserted away. A new test
+(`packages/db/tests/enrolments.test.ts`) reproduces the merged-people shape exactly — a loser enrolled and
+ended *before* a merge, a survivor already actively enrolled in the same course, merged — and asserts a clean
+no-op; verified failing before the fix (temporarily removing the `try`/`catch`): an unhandled `SqliteError:
+UNIQUE constraint failed` thrown out of the call, not caught by the test's own `expect(...).not.toThrow()`.
+
+**Cheap-fix — the same merge shape made the panel list one person twice.** `listEnrolmentsForCourse` listed one
+row per *enrolment*, not per *person* — a survivor left with both an active row and a stray ended one (must-fix
+2's own scenario) appeared once under "Enrolled" and once under "Enrolment ended," the second offering a
+"Reinstate" that could only ever collide and no-op. **Fixed** in the repo layer, not the panel: `listEnrolmentsForCourse`
+now collapses its own rows to at most one per `personId` before returning — the active row wins when a person
+has one; between two ended rows (the same merge, without a pre-existing survivor enrolment), the more recently
+ended one wins. Fixed here rather than in `components/CoursePeople.tsx` because the duplication is a property of
+what the query returns, not of how the panel renders it — any future caller of `listEnrolmentsForCourse` gets
+the same correctness for free, and the panel itself needed no code change once the listing it reads was
+corrected. A new test proves it: the same merge setup as must-fix 2's own reproduction, asserting the survivor
+appears exactly once, as their active row; verified failing before the fix (temporarily bypassing the dedup
+step): two rows returned for one person, not one.
+
+**What this round is really about, stated plainly rather than left implicit.** A membership check, a `try`/`catch`
+around a database call, and a `Map` keyed by person id are all small changes. What made their absence a security
+gap rather than a cosmetic one is that the surrounding comments and D-59 itself asserted stronger guarantees than
+the code actually made true — "an enrolled person holds no membership," "there is never more than one row for a
+given pairing," "proven directly." Each was either false about this platform's own data model or true only by
+accident of what nothing had yet exercised. The corrected comments in `actions/enrolments.ts` and
+`repos/enrolments.ts`, and this entry, say explicitly which guarantees are structurally enforced (the self-check
+in `execute`, the `try`/`catch` around the update, the dedup in the listing) and which are merely true today by
+construction (that no other admission path currently produces a duplicate row outside the merge case named
+above) — a decision record or a doc comment that does not distinguish the two is the exact gap both reviewers
+found.
+
+**Tests.** Failing-then-passing evidence for all three, verified by temporarily reverting only the relevant fix
+and rerunning the one test written against it, then restoring: (1) the rewritten
+`apps/api/tests/routes/enrolments-reinstate.test.ts` case and the two new `packages/actions/tests/enrolments.test.ts`
+cases; (2) the new `packages/db/tests/enrolments.test.ts` merge-collision case; (3) the new
+`packages/db/tests/enrolments.test.ts` dedup case. `apps/web/tests/course-people.test.tsx` also gained coverage
+for the `role="status"` live region's own announced text (a hole a prior review pass left: deleting the region
+entirely left every existing test green) — verified failing the same way, by temporarily removing the region and
+rerunning.

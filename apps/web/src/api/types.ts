@@ -289,7 +289,7 @@ export interface CreatedCourseJoinLink {
  * own module comment already explains. `displayName`, not the person's own
  * email — the same "no genuine need to disambiguate by it" reasoning that
  * repo function's own doc comment gives; a `null` `displayName` is told
- * apart from another by `personId` instead (`components/EnrolmentsPanel.tsx`'s
+ * apart from another by `personId` instead (`components/CoursePeople.tsx`'s
  * own fallback, the same one `Transcripts.tsx` already uses for the
  * identical case). `endedAt`/`reinstatedByAccountId`/`reinstatedAt` are all
  * `null` for an enrolment that has never been ended (ENRL-6) or, having

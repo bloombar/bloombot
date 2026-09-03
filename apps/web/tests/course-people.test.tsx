@@ -168,6 +168,13 @@ describe('CoursePeople (WEB-22)', () => {
     expect(
       screen.queryByRole('button', { name: "End Ada Lovelace's enrolment" })
     ).not.toBeInTheDocument()
+    // WEB-22: the sr-only live region announces what the row's own move
+    // already tells a sighted user — the one thing a screen reader has no
+    // other way to learn from this screen's re-render (`CoursePeople.tsx`'s
+    // own module comment on why `sr-only` rather than a visible banner).
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "Ended Ada Lovelace's enrolment."
+    )
   })
 
   // ENRL-9: reinstating grants access back, so it runs with no confirmation
@@ -196,6 +203,9 @@ describe('CoursePeople (WEB-22)', () => {
       })
     ).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "Reinstated Ada Lovelace's enrolment."
+    )
   })
 
   it('a refused end renders the same ErrorMessage every other refusal in this app uses', async () => {

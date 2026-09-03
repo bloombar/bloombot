@@ -31,6 +31,7 @@
  * already resolved; this file makes no Discord call of its own.
  */
 
+import BetterSqlite3 from 'better-sqlite3'
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
@@ -42,6 +43,20 @@ export type Enrolment = typeof enrolments.$inferSelect
 export type { EnrolmentSource }
 
 type Person = typeof people.$inferSelect
+
+/**
+ * `SQLITE_CONSTRAINT_UNIQUE` is what `enrolments_org_course_person_active_unique`
+ * (`schema.ts`) throws as — the same check `repos/projects.ts#isUniqueConstraintError`/
+ * `repos/people.ts`'s own copy already run for their own unique constraints,
+ * duplicated here rather than shared: each repo file in this package checks
+ * its own constraint against its own error, not a cross-file helper.
+ */
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof BetterSqlite3.SqliteError &&
+    error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+  )
+}
 
 /**
  * The active enrolment binding `personId` to `courseId`, if any — ENRL-1/
@@ -233,9 +248,9 @@ export interface CourseEnrolmentEntry {
 }
 
 /**
- * WEB-22: every enrolment `courseId` has ever had — active and ended alike
- * — for the panel's own people screen. Unlike `listPeopleForCourse` above
- * (active only, and every other existing caller's own scenario:
+ * WEB-22: every *distinct person's* enrolment in `courseId`, active and
+ * ended alike — for the panel's own people screen. Unlike `listPeopleForCourse`
+ * above (active only, and every other existing caller's own scenario:
  * `redeemJoinLink`'s duplicate-admission check, `roster-import.ts`'s
  * idempotent re-sync), this is the first caller that needs an ended
  * enrolment to be visible at all — the panel cannot offer "reinstate" over
@@ -243,6 +258,22 @@ export interface CourseEnrolmentEntry {
  * unchanged: every one of its own existing callers wants active-only, and
  * widening its own return shape would touch call sites this slice has no
  * reason to.
+ *
+ * **At most one row per `personId` — a cheap-fix a review round caught.**
+ * `reinstateEnrolment`'s own doc comment has how a person can end up with
+ * *two* rows for this course at once (`people.ts#mergePeople` moving a
+ * loser's already-ended row onto a survivor who already holds an active
+ * one, or a database predating D-35/D-57): without this, the panel listed
+ * that person twice — once under "Enrolled" for their active row, once
+ * under "Enrolment ended" for the stray one, offering a "Reinstate" that
+ * would only ever collide and no-op. When a person has both, the active
+ * row wins and the stray ended one is dropped from this listing entirely
+ * — it names no decision an instructor could usefully make (reinstating it
+ * changes nothing they do not already have), and showing it is what
+ * produced the duplicate. When a person has more than one ended row and no
+ * active one (the same merge, without a pre-existing survivor enrolment),
+ * the most recently ended one wins — the row an instructor is most likely
+ * to mean by "reinstate this person."
  *
  * Ordered by `displayName`, then `personId` as the tiebreaker — the same
  * order `transcript-access.ts#listPeopleWithTranscript` already uses for
@@ -256,7 +287,7 @@ export function listEnrolmentsForCourse(
   courseId: string,
   db: Database
 ): CourseEnrolmentEntry[] {
-  return db
+  const rows = db
     .select({
       id: enrolments.id,
       personId: enrolments.personId,
@@ -283,6 +314,29 @@ export function listEnrolmentsForCourse(
     )
     .orderBy(asc(people.displayName), asc(enrolments.personId))
     .all()
+
+  // Collapse to one row per person — see this function's own doc comment
+  // for why more than one can exist at all, and which one wins.
+  const byPerson = new Map<string, CourseEnrolmentEntry>()
+  for (const row of rows) {
+    const existing = byPerson.get(row.personId)
+    if (!existing) {
+      byPerson.set(row.personId, row)
+      continue
+    }
+    // The active row always wins over an ended one; between two ended
+    // rows, the more recently ended one wins.
+    const rowIsBetter =
+      existing.endedAt !== null &&
+      (row.endedAt === null || row.endedAt > existing.endedAt)
+    if (rowIsBetter) byPerson.set(row.personId, row)
+  }
+
+  // `Map` preserves insertion order, and `rows` above is already ordered by
+  // `displayName`/`personId` — a later, better row for a person already
+  // seen overwrites its map entry in place rather than moving it, so this
+  // stays sorted the same way without a second sort here.
+  return Array.from(byPerson.values())
 }
 
 /**
@@ -330,12 +384,34 @@ export function endEnrolment(
  * above sets: `0` for an enrolment that does not exist, belongs to a
  * different organization (TEN-5), or is not currently ended — reinstating a
  * person who is not ended changes nothing, the identical idempotent no-op
- * `endEnrolment` gives a caller ending an already-ended one. Never revives
- * a *different* row for the same `(course, person)` pairing — this
- * function, like `endEnrolment`, acts on the one row named by
- * `enrolmentId`, and (`admit`'s own module comment) there is never more
- * than one row for a given pairing once any `enrolVia*` has run, since a
- * prior ended row now blocks every one of them.
+ * `endEnrolment` gives a caller ending an already-ended one. Acts on the one
+ * row named by `enrolmentId`, like `endEnrolment` — this function never
+ * revives a *different* row for the same `(course, person)` pairing itself.
+ *
+ * **Corrected (a must-fix a review round caught): this comment used to
+ * claim "there is never more than one row for a given pairing once any
+ * `enrolVia*` has run," citing `admit`'s own module comment.** That is
+ * false — `schema.ts`'s own comment on `enrolments_org_course_person_active_unique`
+ * says the opposite plainly ("a person may hold more than one *ended* row
+ * for the same course… which is exactly why this index is partial rather
+ * than plain"), and `people.ts#mergePeople` is a real, reachable way to
+ * produce exactly that shape for a *survivor* person: when the survivor
+ * already holds an active enrolment for a course the loser was also
+ * enrolled in, the loser's own row for that course moves onto the
+ * survivor's `personId` *ended* rather than merged away — so the survivor
+ * can hold both an active row and a distinct ended row for the identical
+ * `(organizationId, courseId, personId)`. (Any database predating the
+ * D-35/D-57 reworks that first constrained this can carry the same shape
+ * from before those reworks existed, for the same reason.) Reinstating
+ * that ended row would collide with the survivor's own active one on
+ * `enrolments_org_course_person_active_unique` — caught below, and treated
+ * as the same idempotent no-op every other "already in that state" write
+ * in this file gives, rather than an unhandled `SQLITE_CONSTRAINT_UNIQUE`
+ * reaching a caller as a 500 (the second must-fix the same review round
+ * caught: this repo's own history had already established the "catch,
+ * check, no-op" shape for exactly this class of collision —
+ * `admit`'s own catch block, below — and this function did not yet follow
+ * it).
  *
  * `reinstatedByAccountId` is not read from the row's own `organizationId`
  * (there is nothing to trust there — this parameter is who the *caller*
@@ -352,22 +428,34 @@ export function reinstateEnrolment(
   input: { reinstatedByAccountId: string },
   db: Database
 ): number {
-  const result = db
-    .update(enrolments)
-    .set({
-      endedAt: null,
-      reinstatedByAccountId: input.reinstatedByAccountId,
-      reinstatedAt: Date.now(),
-    })
-    .where(
-      and(
-        eq(enrolments.id, enrolmentId),
-        eq(enrolments.organizationId, organizationId),
-        isNotNull(enrolments.endedAt)
+  try {
+    const result = db
+      .update(enrolments)
+      .set({
+        endedAt: null,
+        reinstatedByAccountId: input.reinstatedByAccountId,
+        reinstatedAt: Date.now(),
+      })
+      .where(
+        and(
+          eq(enrolments.id, enrolmentId),
+          eq(enrolments.organizationId, organizationId),
+          isNotNull(enrolments.endedAt)
+        )
       )
-    )
-    .run()
-  return result.changes
+      .run()
+    return result.changes
+  } catch (error) {
+    // This row's own `(organizationId, courseId, personId)` already has a
+    // different, active row covering it (this function's own doc comment
+    // has how that shape arises) — reinstating loses the race against
+    // `enrolments_org_course_person_active_unique` the same way a
+    // concurrent admission does in `admit`, below. `0`, the identical
+    // no-op every other "already in that state" write in this file gives,
+    // rather than letting the raw driver error escape.
+    if (isUniqueConstraintError(error)) return 0
+    throw error
+  }
 }
 
 /**

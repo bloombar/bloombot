@@ -70,6 +70,10 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // organization resolves to nothing (TEN-5), the same as every other
   // scoped read in this table.
   'jobs.get': { resource: 'job', access: 'read' },
+  // JOB-2: no existing job to resolve on a list — the organization itself
+  // is the resource, read, the same "no existing record to resolve on a
+  // list" shape `projects.list`/`discordServers.list` both use above.
+  'jobs.list': { resource: 'organization', access: 'read' },
   // ROST-9: resolves the course a roster is imported into, write — the
   // same shape `discordServers.scaffold` uses above: `execute` reaches no
   // person or Discord state at all (it only enqueues), but the course it
@@ -204,6 +208,13 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'transcripts.export': { resource: 'course', access: 'write' },
   // ADMIN-3: resolves the course an export list is scoped to, read.
   'transcripts.listExports': { resource: 'course', access: 'read' },
+  // ADMIN-2: resolves the course whose access log is being read, read —
+  // `execute` further restricts this to an existing owner
+  // (`transcripts.ts`'s own module comment on why this log is not open to
+  // every membership the way `.read`/`.listStudents`/`.listExports` above
+  // are), the same "restricted in execute, not the policy" split
+  // `costLedger.setSpendingCap`/`memberships.grant` both already take.
+  'transcripts.listAccessLog': { resource: 'course', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

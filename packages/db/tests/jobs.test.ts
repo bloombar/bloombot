@@ -694,6 +694,117 @@ describe('getJob and countQueuedJobs', () => {
   })
 })
 
+// JOB-2: a job that keeps failing is visible, and stays visible past the
+// browser session that dispatched it — proved directly against the
+// database, the same "assert against the database, not a return value"
+// discipline this file's own module comment already holds every other
+// claim here to.
+describe('listJobsForOrganization (JOB-2)', () => {
+  it("lists the caller's own organization's jobs, not another organization's", () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(orgA, { kind: 'a', payload: {}, maxAttempts: 1 }, testDb.db)
+    jobs.enqueueJob(orgB, { kind: 'b', payload: {}, maxAttempts: 1 }, testDb.db)
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?.kind).toBe('a')
+  })
+
+  // This is JOB-2's own defect, proved at the repo layer: a job that
+  // exhausted its attempts is never deleted (`markJobFailed` never removes
+  // the row), and this listing is what actually surfaces it — with the
+  // reason it stopped and how many attempts it took, not merely "it is
+  // still in the table somewhere."
+  it('a permanently failed job appears with its own error and attempt count', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'e2e-worker', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'e2e-worker', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+
+  // Newest *activity* first, not newest *created* first — a job that was
+  // enqueued first but updated most recently (a retry, a completion) sorts
+  // above one enqueued after it but never touched since.
+  it('orders by most recently updated, not by creation order', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    const older = jobs.enqueueJob(
+      orgA,
+      { kind: 'older', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'newer', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    // Touch the older job after the newer one was created — its own
+    // `updatedAt` now leads.
+    const claimed = jobs.claimNextJob(
+      ['older'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db
+    )
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result[0]?.id).toBe(older.id)
+  })
+
+  it('is bounded by limit', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    for (let i = 0; i < 5; i++) {
+      jobs.enqueueJob(
+        orgA,
+        { kind: `k${i}`, payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+    }
+
+    expect(jobs.listJobsForOrganization(orgA, 3, testDb.db)).toHaveLength(3)
+  })
+})
+
 // Confirms this file's own type import compiles and is exercised — a plain
 // smoke test so `Database` staying imported for typing below is not flagged
 // as unused if every other test above only ever passes `testDb.db` through.

@@ -105,6 +105,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'discordServers.list',
         'discordServers.scaffold',
         'jobs.get',
+        'jobs.list',
         'roster.import',
         'courseAttachments.attach',
         'courseAttachments.list',
@@ -131,6 +132,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'transcripts.listStudents',
         'transcripts.export',
         'transcripts.listExports',
+        'transcripts.listAccessLog',
       ].sort()
     )
 

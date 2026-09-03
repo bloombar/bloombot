@@ -54,6 +54,7 @@ import type {
   SetSpendingCapResult,
   SignedInResponse,
   TenantDeletion,
+  TranscriptAccessLogEntry,
   TranscriptExport,
   TranscriptReadResult,
   TranscriptStudent,
@@ -654,6 +655,11 @@ export function getJobStatus(
   return dispatchAction<JobStatus>(organizationId, 'jobs.get', { jobId })
 }
 
+/** JOB-2: every job the caller's organization has run, newest activity first — including one that failed permanently in a session this browser never held the id for. `pages/Jobs.tsx` is what calls this. */
+export function listJobs(organizationId: string): Promise<JobStatus[]> {
+  return dispatchAction<JobStatus[]>(organizationId, 'jobs.list', {})
+}
+
 /**
  * COST-3/COST-4 — an instructor's own usage read and their organization's
  * spending cap, each a thin wrapper over `dispatchAction`, the same generic
@@ -894,6 +900,18 @@ export function listTranscriptExports(
   return dispatchAction<TranscriptExport[]>(
     organizationId,
     'transcripts.listExports',
+    { courseId }
+  )
+}
+
+/** ADMIN-2: a course's transcript-access audit trail, most recent first — who read or exported whose conversation, and when. Only an existing owner may call this (refused, 404, `action_refused`, for anyone else — the same not-found shape every other refusal in this app takes). */
+export function listTranscriptAccessLog(
+  organizationId: string,
+  courseId: string
+): Promise<TranscriptAccessLogEntry[]> {
+  return dispatchAction<TranscriptAccessLogEntry[]>(
+    organizationId,
+    'transcripts.listAccessLog',
     { courseId }
   )
 }

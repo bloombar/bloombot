@@ -332,7 +332,10 @@ export interface ChatCourse {
 
 /**
  * SRV-6/JOB-1..5 — a job's status and outcome, as `jobs.get` (dispatched
- * through the ordinary action route) hands it back. Mirrors
+ * through the ordinary action route) hands it back, and as each entry in
+ * `jobs.list`'s own array (JOB-2) is shaped too — both actions share the
+ * same `toJobStatus` mapping server-side (`packages/actions/src/actions/jobs.ts`'s
+ * own module comment), so one interface here mirrors both. Mirrors
  * `packages/actions/src/actions/jobs.ts`'s own `JobStatus` by hand, the
  * same "this app does not import `@bloombot/actions`" boundary this
  * file's own module comment already explains for every other shape here.
@@ -471,6 +474,19 @@ export interface TranscriptExport {
   failureReason: string | null
   createdAt: number
   updatedAt: number
+}
+
+/** ADMIN-2 — one row of a course's transcript-access audit trail, mirroring `@bloombot/actions`'s own `TranscriptAccessLogRow` by hand — a display name for both the reading account and, when the read was filtered, the student it named, never an email (`packages/actions/src/actions/transcripts.ts`'s own module comment on why). */
+export interface TranscriptAccessLogEntry {
+  id: string
+  actorAccountId: string
+  actorDisplayName: string
+  personId: string | null
+  personDisplayName: string | null
+  kind: 'read' | 'export'
+  startAt: number | null
+  endAt: number | null
+  createdAt: number
 }
 
 /** ADMIN-4 — `GET /admin/organizations`'s own per-organization row: usage only, never a course, a person or a message. */

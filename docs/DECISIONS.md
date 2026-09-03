@@ -8039,3 +8039,97 @@ above). `npx drizzle-kit check` (from `packages/db`): clean, no drift.
 if a future slice tightens that, this one should tighten in step, via the shared policy object. Key rotation is
 named but not built (above). No panel affordance exists yet for an instructor to actually click "show again" —
 the backend capability is complete and tested; the screen is not this slice's own scope.
+
+---
+
+**Rework — a coordinator's own audit reopened five requirements this build had already marked Done for exactly
+this reason (TEN-8, WEB-4, COST-3, COST-4, ENRL-5: "a working action nobody could reach"), and this entry's own
+"Out of scope" above was the sixth: `courseJoinLinks.reveal` was real, tested, and authorized, and reachable by
+nothing an instructor could click. The audit's own criterion — the generic
+`/organizations/:id/actions/:name` route does not count as a surface — closes this gap the same way.**
+
+**Choice — `CourseJoinLinkSummary` gains one field, `revealable: boolean`, rather than threading the encryption
+key into `courseJoinLinks.list` to compute it freshly on every call.** `revealable` is
+`Boolean(link.secretCiphertext)` alone — a link this listing already has in hand, not a decrypt attempt — so
+`.list` stays the plain object it already was; only `.create`/`.reveal` needed to become factories. This is
+capability metadata, not secret material: it says nothing a caller could not already learn by attempting
+`.reveal` and reading whether it refused, so it carries none of the risk `secretHash`'s own omission from this
+same summary (WEB-20's original doc comment) guards against. It does not account for "is a key configured right
+now" — only "did this row get one at creation" — so it would read `true` for a link encrypted under a key an
+operator later removed, a real gap but the same one `.reveal` itself already has (this entry's own "Out of
+scope" on rotation, above), not a new one. `apps/web/src/components/JoinLinks.tsx` reads it, alongside its own
+`isLiveForReveal` (mirroring `.reveal`'s own revoked/expired refusal), to decide whether to offer the control at
+all — never a control certain to fail, the follow-up brief's own explicit requirement.
+
+**Choice — the panel keeps at most one revealed secret in memory at a time, the same discipline `created`
+already held itself to, plus an explicit "Hide."** `revealed: { linkId, secret } | undefined` — revealing a
+different link replaces it outright (never a list, never keyed by anything that survives past this one value),
+and a "Hide" button lets an instructor clear it before doing anything else, closing the follow-up brief's own
+"do not leave it there indefinitely" more directly than `created`'s own precedent does (which has no hide
+control at all, since it is shown exactly once and reads as done the moment the instructor moves on). Copying a
+revealed secret uses its own `handleCopyRevealed`/`revealCopied`/`revealCopyError`, deliberately not shared with
+`created`'s own `handleCopy`/`copied`/`copyError` — sharing would flip both the creation banner's and a revealed
+row's own "Copied!" label on a single click in whichever one was actually used, wrong whenever both are on
+screen at once (both are reachable independently: creating a link, then revealing a _different_ existing one).
+Nothing here touches the URL — no query parameter, no route, no `window.location` write — so the secret never
+enters browser history either.
+
+**Choice — a live but non-revealable link explains itself in a sentence, never a control.** "Bloombot didn't
+keep a recoverable copy of this link's secret, so it can't be shown again. Revoke it and create a new one if
+students still need a link." — instructor-facing wording, not "no ciphertext," and rendered as an ordinary `<p>`
+(no `role="alert"`), since this is a fact the listing already carried, not a failure that just happened. A
+revoked or expired link gets neither the control nor this sentence — `formatExpiry` already says why, and a
+second sentence explaining a state the screen already displays would be noise, not help.
+
+**Choice — the role question is settled, not left an inference.** The follow-up brief's own challenge: ENRL-12's
+text says "instructors," `.reveal` shares `.revoke`'s policy (any member, un-role-differentiated), and ENRL-11
+has since made a role load-bearing elsewhere in this codebase (only an owner may revoke a membership or demote a
+peer owner). Decided: keep matching `.create`/`.list`/`.revoke` exactly, un-role-differentiated, for a reason
+ENRL-11's own precedent does not undercut — narrowing `.reveal` alone to `owner`/`instructor` would build a
+boundary any caller already inside `.revoke`'s own trust perimeter can walk straight around: an `assistant` who
+may revoke a link may also `.create` a fresh one and read its secret from the response the instant it is issued,
+so refusing that same caller `.reveal` on the _original_ link protects nothing a revoke-and-reissue does not
+already defeat — unlike ENRL-11's own concern (an organization always keeping an owner), which a role check
+genuinely does protect and revoke-and-reissue cannot substitute for. Pinned, not merely argued: `packages/actions/tests/course-join-links.test.ts`'s new "an assistant — not only an owner — can reveal a live link" dispatches as
+an `assistant` account directly and asserts the real secret comes back. Mutated to prove the test is not
+vacuous: adding an owner-only membership check to `.reveal`'s own `execute` turned exactly that one test red and
+left the other eighteen in the same file green — the precise, narrow proof this decision is pinned by something
+that would actually fail if it regressed, not merely present.
+
+**Evidence, the frontend half.** Every mutation the follow-up brief's own "assert on what remains" line implies
+was tried directly against `components/JoinLinks.tsx`, confirmed to turn a specific, named test in
+`apps/web/tests/join-links.test.tsx` red, then reverted (`diff` against a saved copy, confirmed byte-identical
+in every case): `isLiveForReveal` short-circuited to always `true` (the revoked-link and expired-link "offers no
+reveal control" tests, both); the `link.revealable` check dropped from the control's own render guard (the
+"nothing encrypted to show" test); `setRevealed` changed to keep the first revealed secret rather than replace
+it (the "does not survive the re-render" test); `handleHideRevealed`'s own `setRevealed(undefined)` removed (the
+"hiding... removes it from the DOM" test). The backend's own new `revealable` field was mutated too — forced to
+`true` unconditionally in `toSummary` — and caught by two tests at once: the listing test's own `revealable:
+false` assertion (no key configured) and the new "revealable is true only for a link created with an encryption
+key configured" test.
+
+**Evidence, end to end.** `e2e/join-links-panel.spec.ts` gained
+`an owner issues a join link, closes the tab that showed it, then reveals it again later and a real visitor
+redeems that revealed URL (ENRL-12)` — the journey the requirement itself names, issue → close → reveal →
+redeem, proved by a real second browser context following the _revealed_ URL and landing connected, the same
+outcome `join-link.spec.ts` already proves for an ordinary just-created link — not by comparing the revealed
+string against the created one. `e2e/support/start-api.ts` now configures a real `joinLinkEncryptionKey`
+(`randomBytes(32)`, generated once per harness run, never read from `process.env`) — without it every link this
+harness creates has `revealable: false` and this journey has no control to click at all, which was confirmed
+directly: with the key omitted, the new spec's own `page.getByRole('button', { name: /^Show join link/ })` step
+times out rather than failing on a later assertion.
+
+Final counts after this rework: 90 node:test (unchanged), 2208 vitest across 183 files (+11 from this rework's
+own baseline of 2197 — +2 in `packages/actions/tests/course-join-links.test.ts` (`revealable`'s own listing
+test, and the assistant-reveals test), +9 in `apps/web/tests/join-links.test.tsx`'s own new
+`JoinLinks reveal (ENRL-12)` describe block; no new file in either package), 28 e2e (+1 —
+`e2e/join-links-panel.spec.ts`'s new case). `npx drizzle-kit check` (from `packages/db`): clean, no drift — this
+rework touched no schema.
+
+**Limits, updated.** The "no `apps/web` change accompanies this slice" line in this entry's own original text
+(above) no longer holds — corrected here rather than silently edited away, the same "state what changed and
+why" discipline this file holds every other rework to. The role decision is now pinned by a test and a mutation,
+not merely argued; it remains exactly as firm as `.create`/`.list`/`.revoke`'s own existing, un-role-
+differentiated gating, and should move in step with them if a future requirement narrows any of the four.
+`revealable`'s own key-rotation gap (above) is the same one `.reveal` itself already had — still out of scope,
+still named, not newly introduced by this field.

@@ -85,6 +85,10 @@ describe('env.example (QA-6)', () => {
       'BOT_PERMISSIONS',
       'BOT_TOKEN',
       'DISCORD_CLIENT_SECRET',
+      // ENRL-12 — the join link secret's own AES-256-GCM key, read directly
+      // by apps/api rather than through the schema (CFG-5), the same reason
+      // DISCORD_CLIENT_SECRET is not part of envSchema either.
+      'JOIN_LINK_ENCRYPTION_KEY',
       'MAIL_FILE',
       // AUTH-5 — the SMTP relay's own credentials, read directly by
       // apps/api rather than through the schema (CFG-5): a credential, the

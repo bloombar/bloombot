@@ -158,6 +158,24 @@ function sendNotConnected(res: Response): void {
   res.status(404).json({ error: 'chat_not_connected' })
 }
 
+/**
+ * CORE-7/CORE-8 — this surface's own answer to "how does this surface want
+ * the person addressed": the web chat is one person's own conversation, so
+ * naming the reader is noise a Discord-style mention exists to solve for a
+ * room full of people, not a one-to-one thread — this surface has no
+ * mention token of its own to fall back to at all. CORE-8's order applies
+ * regardless: a first name, when the account has one (a roster import
+ * matched it by email, or a later profile screen sets one — neither exists
+ * yet, WEB-24/WEB-25's own scope); a display name otherwise; `null` — never
+ * this platform's own account id — when neither is known, which is the
+ * ordinary state for a web account today (`sign-in.ts`'s own
+ * `createPerson(organizationId, {}, db)` sets neither field), and exactly
+ * why "the web addresses nobody" in practice right now.
+ */
+function addressPersonForWeb(person: people.Person): string | null {
+  return person.firstName ?? person.displayName ?? null
+}
+
 export function buildChatRouter(deps: ChatRouterDependencies): Router {
   const router = Router({ mergeParams: true })
 
@@ -324,6 +342,7 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
           db: deps.db,
           model: deps.model,
           logger: deps.logger,
+          addressPerson: addressPersonForWeb,
           ...(deps.admission ? { admission: deps.admission } : {}),
           ...(deps.pricing ? { pricing: deps.pricing } : {}),
         }

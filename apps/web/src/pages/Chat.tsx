@@ -29,10 +29,14 @@ import type {
 import { Button } from '../components/Button.js'
 import { ChatMessage } from '../components/ChatMessage.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
-import { SendIcon } from '../icons.js'
+import { SendIcon, SuccessIcon } from '../icons.js'
 
 export interface ChatProps {
   organizationId: string
+  /** WEB-25 — the course a join-link redemption most recently resolved for this account in this organization, preferred over `listChatCourses`' own first entry (`selectedCourseId`'s own initializer, below) so a redeemer already enrolled in more than one course here still lands on the one they just joined, not whichever the list happens to return first. */
+  initialCourseId?: string
+  /** WEB-25 — set only right alongside `initialCourseId`, by a just-completed join-link redemption: names the outcome plainly (`joinConfirmationText`, below) rather than leaving a redeemer to infer it from which course happens to be selected. `alreadyEnrolled` distinguishes "you're already enrolled" from a fresh join — ENRL-8's own "redeeming twice is a confirmation, not an error." */
+  joinConfirmation?: { alreadyEnrolled: boolean }
 }
 
 /**
@@ -85,13 +89,21 @@ function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
   }
 }
 
-export function Chat({ organizationId }: ChatProps) {
+export function Chat({
+  organizationId,
+  initialCourseId,
+  joinConfirmation,
+}: ChatProps) {
   const [courses, setCourses] = useState<ChatCourse[] | undefined>(undefined)
   const [coursesError, setCoursesError] = useState<ApiError | undefined>(
     undefined
   )
+  // WEB-25: seeded from `initialCourseId` when supplied — `listChatCourses`'
+  // own callback below (`current ?? result[0]?.id`) then leaves it alone,
+  // the same "do not override a value already chosen" guard it already
+  // holds for a course this component's own `<select>` picked.
   const [selectedCourseId, setSelectedCourseId] = useState<string | undefined>(
-    undefined
+    initialCourseId
   )
   const [messages, setMessages] = useState<ChatMessageEntry[] | undefined>(
     undefined
@@ -102,7 +114,38 @@ export function Chat({ organizationId }: ChatProps) {
   const [notice, setNotice] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const threadEndRef = useRef<HTMLDivElement>(null)
+  // WEB-24: the thread's own scroll container — `scrollThreadToBottom`
+  // below sets its `scrollTop` directly, rather than the previous
+  // `scrollIntoView`, which (the reported defect) moved the whole page
+  // once nothing bounded the thread's height and it was no longer the
+  // nearest *scrollable* ancestor for `scrollIntoView` to find.
+  const threadRef = useRef<HTMLDivElement>(null)
+  // WEB-24: whether the reader was at, or within a few pixels of, the
+  // bottom of the thread the last time they scrolled it — kept current by
+  // `onScroll` on the thread itself (below), not recomputed here.
+  // Appending a message never fires a `scroll` event on its own (the
+  // browser does not move `scrollTop` just because the scrollable content
+  // beneath it grew), so this still reflects the reader's own position at
+  // the moment a new message lands, not a position the new message has
+  // already shifted.
+  const isNearBottomRef = useRef(true)
+  // WEB-24: set immediately before the student's own message is appended
+  // (`handleSend`, below), so the thread jumps to it even if the reader
+  // had scrolled up to reread something first. The requirement draws a
+  // scroll-preservation exception for a reply that *arrives*, not for a
+  // message the reader just sent themselves — consumed (and reset) the
+  // first time the effect below runs afterward.
+  const forceScrollRef = useRef(false)
+  // WEB-24: true once a message has arrived while the reader was scrolled
+  // away from the bottom — the affordance below tells them plainly, rather
+  // than silently scrolling them to a message they did not ask to see yet.
+  const [newMessageWaiting, setNewMessageWaiting] = useState(false)
+
+  const scrollThreadToBottom = useCallback(() => {
+    const el = threadRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [])
 
   useEffect(() => {
     setCourses(undefined)
@@ -123,6 +166,13 @@ export function Chat({ organizationId }: ChatProps) {
     if (!selectedCourseId) return
     setMessages(undefined)
     setMessagesError(undefined)
+    // WEB-24: a freshly selected course's thread opens at its newest
+    // message regardless of where the reader had scrolled in whichever
+    // course was open before — without this, a stale `isNearBottomRef`
+    // left over from the previous thread could suppress this thread's own
+    // first auto-scroll.
+    isNearBottomRef.current = true
+    setNewMessageWaiting(false)
     getChatMessages(organizationId, selectedCourseId).then(
       (result) => setMessages(result),
       (caught: unknown) => {
@@ -136,9 +186,36 @@ export function Chat({ organizationId }: ChatProps) {
     loadMessages()
   }, [loadMessages])
 
+  // WEB-24: the thread follows the conversation — but only when following
+  // it does not steal a reader's place (the requirement's own judgement
+  // call, `docs/SPEC.md`'s WEB-24). Skipped while `messages` is still
+  // `undefined` (the initial fetch, or a course switch already reset by
+  // `loadMessages` above) — nothing to scroll to, and reading
+  // `isNearBottomRef` before the new thread has rendered would still hold
+  // whichever course was open before.
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [messages])
+    if (messages === undefined) return
+    if (forceScrollRef.current || isNearBottomRef.current) {
+      forceScrollRef.current = false
+      scrollThreadToBottom()
+      isNearBottomRef.current = true
+      setNewMessageWaiting(false)
+    } else {
+      setNewMessageWaiting(true)
+    }
+  }, [messages, scrollThreadToBottom])
+
+  // WEB-24: jumps the reader to the newest message on demand — the
+  // "New messages" affordance below is the only caller, but this also
+  // stands in for a reader who instead scrolls the thread back to the
+  // bottom themselves (`onScroll`, below, clears `newMessageWaiting` the
+  // same way once `isNearBottomRef` reports they arrived there on their
+  // own).
+  const jumpToLatest = () => {
+    scrollThreadToBottom()
+    isNearBottomRef.current = true
+    setNewMessageWaiting(false)
+  }
 
   const handleSend = async () => {
     const text = draft.trim()
@@ -162,6 +239,12 @@ export function Chat({ organizationId }: ChatProps) {
       text,
       createdAt: Date.now(),
     }
+    // WEB-24: the thread jumps to the reader's own message unconditionally
+    // (`forceScrollRef`'s own comment, above) — sending is exactly the
+    // "student sends one" case the requirement names with no
+    // scroll-preservation exception, unlike a reply that arrives on its
+    // own.
+    forceScrollRef.current = true
     setMessages((current) => [...(current ?? []), optimistic])
     setDraft('')
     try {
@@ -256,16 +339,81 @@ export function Chat({ organizationId }: ChatProps) {
     )
   }
 
+  // WEB-25 — named by title, not merely "this course": `courses` (just
+  // confirmed defined, above) is this account's own enrolled list, read
+  // moments after the redemption that set `joinConfirmation` in the first
+  // place, so the just-joined course's own title is always in it.
+  //
+  // Rework finding (must-fix): this used to look the title up by
+  // `selectedCourseId`, which `courses.length > 1`'s own `<select onChange>`
+  // (below) rewrites on every switch — the banner has no dismissal and
+  // persists for the mount's whole life, so it kept asserting a fact about
+  // whichever course the student most recently *looked at*, not the one the
+  // link actually joined. `initialCourseId` is the one value this component
+  // never changes after mount (there is no setter for it, unlike
+  // `selectedCourseId`), so it is the only correct key for a banner that is
+  // itself about a one-time event, not the current selection.
+  const joinedCourseTitle = joinConfirmation
+    ? courses.find((course) => course.id === initialCourseId)?.title
+    : undefined
+
   return (
     <section
       aria-label="Chat"
       data-testid="chat-screen"
-      className="flex flex-col gap-4"
+      // WEB-24: bounded to exactly the space `AppShell.tsx`'s fixed header
+      // and footer leave for `main`'s own content — `--spacing-header`/
+      // `--spacing-footer` (`style.css`) are the same tokens `AppShell`
+      // itself sizes them with, minus the 1.5rem gap `main`'s own padding
+      // reserves on each side (`AppShell.tsx`'s `pt-[...]`/`pb-[...]`) —
+      // rather than changing `main` itself, which every other screen this
+      // shell renders still relies on to grow with its content and let the
+      // ordinary document scroll (this slice's own report has the reasoning
+      // for staying scoped to this one screen). `overflow-hidden` is what
+      // actually enforces the bound: a flex column's children can still
+      // spill past a fixed height rather than being clipped to it, which is
+      // the same "grows past its box" failure this slice exists to fix, one
+      // level up. `100dvh`, not `100vh` — the dynamic viewport unit shrinks
+      // with a mobile browser's own chrome, and with a software keyboard on
+      // the browsers that report it there, so this box (and the composer
+      // pinned inside it, below) resizes down with the keyboard rather than
+      // leaving the composer hidden underneath it.
+      className="flex h-[calc(100dvh-var(--spacing-header)-var(--spacing-footer)-3rem)] flex-col gap-4 overflow-hidden"
     >
-      <h1 className="text-page-title font-semibold text-neutral-900">Chat</h1>
+      <h1 className="shrink-0 text-page-title font-semibold text-neutral-900">
+        Chat
+      </h1>
+
+      {joinConfirmation && (
+        // WEB-25: `role="status"` — an `aria-live` region, so a screen
+        // reader announces this the moment it renders, the same "confirmed
+        // to a screen reader, not only shown" requirement `docs/SPEC.md`'s
+        // own WEB-25 states directly. Rendered inline with the rest of this
+        // screen, not a toast that times out on its own — nothing here ever
+        // removes it, so there is nothing a student has to notice before it
+        // disappears.
+        <p
+          role="status"
+          data-testid="join-confirmation"
+          // WEB-24: `shrink-0` — this banner, like every other element
+          // outside the thread itself, keeps its natural height rather than
+          // being squeezed by the flex column's fixed total (this file's
+          // own module comment on the outer `<section>`, above); only the
+          // thread (`flex-1 min-h-0`, below) gives up space for it.
+          className="flex shrink-0 items-center gap-2 rounded-md bg-success-50 px-3 py-2 text-sm text-neutral-700"
+        >
+          <SuccessIcon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-success-600"
+          />
+          {joinConfirmation.alreadyEnrolled
+            ? `You're already enrolled in ${joinedCourseTitle ?? 'this course'}.`
+            : `You're enrolled in ${joinedCourseTitle ?? 'this course'}.`}
+        </p>
+      )}
 
       {courses.length > 1 && (
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
+        <label className="flex shrink-0 items-center gap-2 text-sm text-neutral-600">
           Course
           <select
             aria-label="Course"
@@ -282,13 +430,40 @@ export function Chat({ organizationId }: ChatProps) {
         </label>
       )}
       {courses.length === 1 && (
-        <p className="text-sm font-medium text-neutral-700">
+        <p className="shrink-0 text-sm font-medium text-neutral-700">
           {courses[0]?.title}
         </p>
       )}
 
       <div
-        className="flex min-h-64 flex-col gap-2 overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-3"
+        ref={threadRef}
+        onScroll={(event) => {
+          // WEB-24: kept current on every real scroll — appending a message
+          // never itself fires this handler (`isNearBottomRef`'s own
+          // comment, above), so it only ever reflects the reader's own
+          // movement, including scrolling back to the bottom themselves
+          // rather than using the "New messages" affordance below.
+          const el = event.currentTarget
+          const distanceFromBottom =
+            el.scrollHeight - el.scrollTop - el.clientHeight
+          // "Near", not "exactly at" — a few pixels of rounding (subpixel
+          // layout, a scrollbar's own reserved width) would otherwise read
+          // a reader who is visually at the bottom as scrolled away from
+          // it.
+          const nearBottom = distanceFromBottom < 48
+          isNearBottomRef.current = nearBottom
+          if (nearBottom) setNewMessageWaiting(false)
+        }}
+        // WEB-24: `flex-1 min-h-0`, not the previous `min-h-64` with no
+        // maximum — this is the actual fix for the reported defect. `flex-1`
+        // gives the thread every pixel the bounded column (above) has left
+        // once the title, course picker, banners and composer have taken
+        // their own natural height; `min-h-0` overrides a flex item's
+        // default `min-height: auto` (sized to its content), which would
+        // otherwise refuse to shrink below the transcript's full height and
+        // push the composer past the bottom of the column again — the exact
+        // "grows with the conversation" failure this slice exists to fix.
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-3"
         aria-live="polite"
         data-testid="chat-thread"
       >
@@ -311,17 +486,41 @@ export function Chat({ organizationId }: ChatProps) {
             />
           ))
         )}
-        <div ref={threadEndRef} />
       </div>
 
+      {newMessageWaiting && (
+        // WEB-24: the judgement call the requirement's own text calls out
+        // by name — a reader scrolled away from the bottom is told a new
+        // message arrived, not scrolled to it against their will. A plain
+        // sibling of the thread, in normal flow rather than an overlay
+        // positioned on top of it, so it can never cover the last message
+        // the way an absolutely-positioned banner would risk doing.
+        // `role="status"` is an `aria-live` region — the same device the
+        // join banner and decline notice below already use — so a screen
+        // reader announces it the moment it appears; the `<button>` inside
+        // is a perfectly ordinary one, reachable by Tab and activated by
+        // Enter/Space like every other control on this screen, so nothing
+        // about noticing or acting on it depends on a mouse.
+        <p role="status" className="flex shrink-0 justify-center">
+          <button
+            type="button"
+            data-testid="new-messages-button"
+            onClick={jumpToLatest}
+            className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-sm font-medium text-brand-700 hover:bg-brand-100"
+          >
+            New messages ↓
+          </button>
+        </p>
+      )}
+
       {notice && (
-        <p role="status" className="text-sm text-neutral-600">
+        <p role="status" className="shrink-0 text-sm text-neutral-600">
           {notice}
         </p>
       )}
 
       <form
-        className="flex items-end gap-2"
+        className="flex shrink-0 items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault()
           void handleSend()

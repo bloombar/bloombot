@@ -1,10 +1,12 @@
 /**
  * `pages/Connect.tsx` (LINK-6/7/8) — the panel's own connect screen. Signed
- * out, it renders `SignIn` and stashes the organization id for `App.tsx`'s
- * own `returnToShell` to pick back up. Signed in, it offers Discord
- * (begins the OAuth round trip — the rest of that flow is
- * `discord-callback.test.tsx`'s own scenario) and an assistant token,
- * previewed before it is ever redeemed (LINK-6).
+ * out, it renders `SignIn`, passing this page's own address as `SignIn`'s
+ * `destination` prop (AUTH-6) so a later sign-in redemption returns here
+ * regardless of which tab redeems it. Signed in, it offers Discord (begins
+ * the OAuth round trip — a same-tab redirect that still uses
+ * `PENDING_CONNECT_ORG_KEY`, unaffected by the AUTH-6 rework; the rest of
+ * that flow is `discord-callback.test.tsx`'s own scenario) and an assistant
+ * token, previewed before it is ever redeemed (LINK-6).
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -14,12 +16,17 @@ import { ApiError } from '../src/api/client.js'
 import type { AccountSummary } from '../src/api/types.js'
 import { Connect, PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
 
-const { beginDiscordPersonLink, previewMcpPersonLink, confirmMcpPersonLink } =
-  vi.hoisted(() => ({
-    beginDiscordPersonLink: vi.fn(),
-    previewMcpPersonLink: vi.fn(),
-    confirmMcpPersonLink: vi.fn(),
-  }))
+const {
+  beginDiscordPersonLink,
+  previewMcpPersonLink,
+  confirmMcpPersonLink,
+  requestSignInLink,
+} = vi.hoisted(() => ({
+  beginDiscordPersonLink: vi.fn(),
+  previewMcpPersonLink: vi.fn(),
+  confirmMcpPersonLink: vi.fn(),
+  requestSignInLink: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
@@ -30,6 +37,7 @@ vi.mock('../src/api/client.js', async () => {
     beginDiscordPersonLink,
     previewMcpPersonLink,
     confirmMcpPersonLink,
+    requestSignInLink,
   }
 })
 
@@ -52,7 +60,7 @@ afterEach(() => {
 })
 
 describe('Connect — signed out', () => {
-  it('renders SignIn, and stashes the organization id for a later sign-in redemption to pick back up', () => {
+  it('renders SignIn', () => {
     render(
       <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
     )
@@ -60,7 +68,31 @@ describe('Connect — signed out', () => {
     expect(
       screen.getByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeInTheDocument()
-    expect(sessionStorage.getItem(PENDING_CONNECT_ORG_KEY)).toBe('org-1')
+  })
+
+  // AUTH-6: fails without the fix — before `destination` existed, this
+  // page's own return trip was a `sessionStorage` marker (`PENDING_CONNECT_ORG_KEY`,
+  // this file's own former assertion here), which only ever survived a
+  // sign-in redemption completing in the same tab that set it.
+  it('requests a sign-in link with this page as the destination', async () => {
+    requestSignInLink.mockResolvedValue(undefined)
+
+    render(
+      <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
+    )
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'student@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() =>
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'student@example.edu',
+        '/connect/org-1'
+      )
+    )
   })
 })
 
@@ -90,21 +122,10 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
 
     await waitFor(() => expect(assign).toHaveBeenCalled())
     expect(beginDiscordPersonLink).toHaveBeenCalledWith('org-1')
+    // `PENDING_CONNECT_ORG_KEY` still does this one job (this file's own
+    // module comment: a same-tab redirect to Discord and back) — AUTH-6
+    // only retired its *other* former job, surviving a sign-in redemption.
     expect(sessionStorage.getItem(PENDING_CONNECT_ORG_KEY)).toBe('org-1')
-  })
-
-  // The pending marker exists only to survive a full-page navigation
-  // (a sign-in redemption's own round trip) — once this screen already has
-  // an account, a stale value left over from an earlier, unrelated visit
-  // must not linger and redirect some later, unrelated sign-in back here.
-  it('clears a stale pending marker once signed in, before Connect Discord is ever clicked', () => {
-    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'some-other-org')
-
-    render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
-    )
-
-    expect(sessionStorage.getItem(PENDING_CONNECT_ORG_KEY)).toBeNull()
   })
 })
 

@@ -68,6 +68,10 @@ describe('createUpstreamConversation (MDL-4)', () => {
   it('POSTs to /conversations with the seeded opening item and metadata, and returns the id', async () => {
     server.respondToConversations({ status: 200, body: { id: 'conv_new_1' } })
 
+    // `addressAs` and `personIdentifier` given deliberately different
+    // values — the only way this test can prove the opening item's content
+    // and the metadata are sourced independently (CORE-7/CORE-8, `ports.ts`'s
+    // own comment on why the split exists).
     const id = await createUpstreamConversation({
       fetchFn: fetch,
       baseUrl: server.baseUrl,
@@ -75,7 +79,8 @@ describe('createUpstreamConversation (MDL-4)', () => {
       timeoutMs: 1000,
       displayName: 'Ada Lovelace',
       courseTitle: 'Intro to Algorithms',
-      personRef: '<@123>',
+      addressAs: '<@123>',
+      personIdentifier: '123',
     })
 
     expect(id).toBe('conv_new_1')
@@ -92,11 +97,11 @@ describe('createUpstreamConversation (MDL-4)', () => {
             'My name is Ada Lovelace (user id <@123>) and I am a student in the Intro to Algorithms course.',
         },
       ],
-      metadata: { user_id: '<@123>' },
+      metadata: { user_id: '123' },
     })
   })
 
-  it('omits metadata entirely when personRef is null', async () => {
+  it('omits metadata entirely when personIdentifier is null', async () => {
     server.respondToConversations({ status: 200, body: { id: 'conv_new_2' } })
 
     await createUpstreamConversation({
@@ -106,12 +111,38 @@ describe('createUpstreamConversation (MDL-4)', () => {
       timeoutMs: 1000,
       displayName: null,
       courseTitle: null,
-      personRef: null,
+      addressAs: null,
+      personIdentifier: null,
     })
 
     const request = server.requests[0]!
     expect(request.body).toEqual({
       items: [{ role: 'user', content: 'Starting a new conversation.' }],
+    })
+  })
+
+  // CORE-7/CORE-8 — the defect this pair of fields replaces: a surface (the
+  // web chat) that addresses nobody must not still leak a raw identity into
+  // content the model reads, even when it has one to identify the person
+  // with in metadata.
+  it('omits the opening item’s address clause, but still sends metadata, when addressAs is null and personIdentifier is not', async () => {
+    server.respondToConversations({ status: 200, body: { id: 'conv_new_3' } })
+
+    await createUpstreamConversation({
+      fetchFn: fetch,
+      baseUrl: server.baseUrl,
+      apiKey: 'test-key',
+      timeoutMs: 1000,
+      displayName: 'Ada Lovelace',
+      courseTitle: null,
+      addressAs: null,
+      personIdentifier: 'account-uuid-1',
+    })
+
+    const request = server.requests[0]!
+    expect(request.body).toEqual({
+      items: [{ role: 'user', content: 'My name is Ada Lovelace.' }],
+      metadata: { user_id: 'account-uuid-1' },
     })
   })
 
@@ -129,7 +160,8 @@ describe('createUpstreamConversation (MDL-4)', () => {
         timeoutMs: 1000,
         displayName: null,
         courseTitle: null,
-        personRef: null,
+        addressAs: null,
+        personIdentifier: null,
       })
     ).rejects.toBeInstanceOf(ModelRequestError)
   })

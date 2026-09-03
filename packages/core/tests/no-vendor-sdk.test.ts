@@ -126,3 +126,35 @@ describe('packages/core imports no vendor SDK (CORE-4)', () => {
     }
   })
 })
+
+/**
+ * CORE-7 — the defect this guard would have caught: `answer.ts` used to
+ * build Discord's own mention token (an angle bracket, an `@`, then an id)
+ * as a plain string literal, not an import, so every check above — which
+ * only looks for a vendor SDK being *pulled in* — never saw it. A vendor's
+ * own wire syntax embedded as a literal is the same "this package now knows
+ * about one surface" violation CORE-4 already forbids for an SDK import;
+ * this scans for the literal two-character token no legitimate line of
+ * `packages/core/src` should ever contain, surface syntax or otherwise.
+ *
+ * A known, accepted limitation, worth stating rather than leaving implied
+ * (found in review): this only catches the *literal* token — writing the
+ * same mention by concatenation (`'<' + '@' + id + '>'`) or any other
+ * obfuscation passes cleanly. This is the weaker of two layers, not the
+ * only one: `packages/core/tests/answer.test.ts`'s own CORE-7/CORE-8 block
+ * asserts on actual behaviour (an `EchoingModelClient` proving the reply
+ * text itself, not merely a request field), which no string-shaped dodge of
+ * this guard can pass. This guard exists for the cheap, fast case — a
+ * future contributor pasting the obvious literal back in — not as the
+ * platform's only defence against the defect class.
+ */
+describe('packages/core contains no surface-specific address syntax (CORE-7)', () => {
+  const files = listSourceFilesRecursively(SRC_DIR)
+
+  for (const file of files) {
+    it(`${file} contains no Discord-style mention token`, () => {
+      const source = readFileSync(`${SRC_DIR}/${file}`, 'utf8')
+      expect(source, `${file} contains a literal "<@"`).not.toContain('<@')
+    })
+  }
+})

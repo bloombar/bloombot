@@ -60,6 +60,8 @@ export interface MeResponse {
 /** `POST /auth/redeem`, `POST /auth/google`. */
 export interface SignedInResponse {
   accountId: string
+  /** AUTH-6 — set only by `/auth/redeem`, and only when the token that produced this session was issued with one (`pages/SignIn.tsx`'s own `destination` prop): the same-origin path this sign-in should return to, regardless of which tab redeemed the link. `/auth/google` never sets this — see `pages/RedeemLink.tsx`'s own module comment for why only the emailed-link path needs one at all. */
+  destination?: string
 }
 
 /** `POST /organizations/:organizationId/discord-servers/install/begin`. */
@@ -169,6 +171,24 @@ export interface DuplicateProjectResult {
   coursesDisabled: true
 }
 
+/**
+ * `discordServers.list`'s own return shape (`packages/actions`, TEN-8) —
+ * mirrors `packages/db`'s `discord_server_bindings` row by hand, the same
+ * "not imported from the workspace" discipline this file's own module
+ * comment already explains. Every binding an organization has ever held,
+ * active or removed, comes back this way — `removedAt` set is what lets
+ * `pages/Shell.tsx` tell "never installed" from "installed, then removed"
+ * (the action's own doc comment), rather than the list narrowing to
+ * active-only and throwing that distinction away.
+ */
+export interface DiscordServerBindingSummary {
+  serverId: string
+  organizationId: string
+  installedByAccountId: string
+  installedAt: number
+  removedAt: number | null
+}
+
 /** CFG-4: a channel inside one of a course's categories. */
 export interface CourseChannel {
   id: string
@@ -255,8 +275,15 @@ export interface CourseAttachmentSummary {
  * and, just as deliberately, narrower than the database row it is drawn
  * from: there is no `secretHash` field here for the same reason
  * `CourseAttachmentSummary` above carries no `providerFileId` — the secret
- * is shown once, at creation (`CreatedCourseJoinLink` below), and never
- * again.
+ * is shown once, at creation (`CreatedCourseJoinLink` below), or again later
+ * (ENRL-12, `RevealedCourseJoinLink` below), never on this listing itself.
+ *
+ * `revealable` (ENRL-12) says whether `courseJoinLinks.reveal` can plausibly
+ * succeed for this link — `false` for a link created before ENRL-12
+ * shipped, or created while no encryption key was configured — so
+ * `components/JoinLinks.tsx` can withhold the reveal control rather than
+ * offer one certain to fail; it carries no secret material itself
+ * (`CourseJoinLinkSummary`'s own doc comment, `packages/actions`).
  */
 export interface CourseJoinLinkSummary {
   id: string
@@ -265,6 +292,7 @@ export interface CourseJoinLinkSummary {
   revokedAt: number | null
   createdByAccountId: string
   createdAt: number
+  revealable: boolean
 }
 
 /**
@@ -279,6 +307,20 @@ export interface CreatedCourseJoinLink {
   linkId: string
   secret: string
   expiresAt: number | null
+}
+
+/**
+ * ENRL-12 — what `courseJoinLinks.reveal` hands back: the plaintext secret
+ * again, for a live link an instructor already asked to see once, at
+ * creation. Mirrors `packages/actions`' own `RevealedCourseJoinLink`. The
+ * same "never stored past the component that renders it" discipline
+ * `CreatedCourseJoinLink` above already holds itself to —
+ * `components/JoinLinks.tsx` keeps at most one of these in memory at a
+ * time, cleared explicitly or replaced by the next reveal, never folded
+ * into `CourseJoinLinkSummary`'s own list state.
+ */
+export interface RevealedCourseJoinLink {
+  secret: string
 }
 
 /**
@@ -314,7 +356,10 @@ export interface ChatCourse {
 
 /**
  * SRV-6/JOB-1..5 — a job's status and outcome, as `jobs.get` (dispatched
- * through the ordinary action route) hands it back. Mirrors
+ * through the ordinary action route) hands it back, and as each entry in
+ * `jobs.list`'s own array (JOB-2) is shaped too — both actions share the
+ * same `toJobStatus` mapping server-side (`packages/actions/src/actions/jobs.ts`'s
+ * own module comment), so one interface here mirrors both. Mirrors
  * `packages/actions/src/actions/jobs.ts`'s own `JobStatus` by hand, the
  * same "this app does not import `@bloombot/actions`" boundary this
  * file's own module comment already explains for every other shape here.
@@ -455,6 +500,19 @@ export interface TranscriptExport {
   updatedAt: number
 }
 
+/** ADMIN-2 — one row of a course's transcript-access audit trail, mirroring `@bloombot/actions`'s own `TranscriptAccessLogRow` by hand — a display name for both the reading account and, when the read was filtered, the student it named, never an email (`packages/actions/src/actions/transcripts.ts`'s own module comment on why). */
+export interface TranscriptAccessLogEntry {
+  id: string
+  actorAccountId: string
+  actorDisplayName: string
+  personId: string | null
+  personDisplayName: string | null
+  kind: 'read' | 'export'
+  startAt: number | null
+  endAt: number | null
+  createdAt: number
+}
+
 /** ADMIN-4 — `GET /admin/organizations`'s own per-organization row: usage only, never a course, a person or a message. */
 export interface AdminOrganizationSummary {
   organizationId: string
@@ -502,4 +560,127 @@ export interface TenantDeletion {
   deletedByAccountId: string
   summary: string
   deletedAt: number
+}
+
+/** COST-4 — one course's own usage, as `costLedger.organizationUsage` reports it. Mirrors `@bloombot/db`'s own `CourseUsageSummary` by hand, the same boundary this file's own module comment already explains. */
+export interface CourseUsageSummary {
+  courseId: string
+  courseTitle: string
+  costMicros: number
+  /** The portion of `costMicros` that came from an estimate rather than a measurement (COST-6) — see `pages/Usage.tsx`'s own module comment for what this changes about how a total is shown. */
+  estimatedCostMicros: number
+  callCount: number
+}
+
+/**
+ * COST-4 — one (course, person) pair whose count for a given day has
+ * reached a course's own near-limit threshold. Mirrors `@bloombot/db`'s own
+ * `usage.UsageNearLimit` by hand. `personDisplayName`, not the student's own
+ * email — the same "no genuine need to disambiguate by it" reasoning
+ * `api/types.ts#CourseEnrolment`'s own doc comment already gives for the
+ * identical case; `components/CoursePeople.tsx`'s own `label` fallback
+ * (`displayName ?? personId`) is what `pages/Usage.tsx` uses for this too.
+ */
+export interface UsageNearLimit {
+  courseId: string
+  courseTitle: string
+  personId: string
+  personDisplayName: string | null
+  count: number
+  maxRequestsPerDay: number
+}
+
+/** COST-4 — `costLedger.organizationUsage`'s own report: every course's usage in the caller's organization, its cap (if any), and which students are approaching a course's own daily limit. Mirrors `@bloombot/actions`' own `OrganizationUsageReport` by hand. */
+export interface OrganizationUsageReport {
+  organizationId: string
+  spendingCapMicros: number | null
+  totalCostMicros: number
+  totalEstimatedCostMicros: number
+  courses: CourseUsageSummary[]
+  studentsNearLimit: UsageNearLimit[]
+}
+
+/** COST-3 — `costLedger.setSpendingCap`'s own return: what is now stored, after the call. Mirrors `@bloombot/actions`' own `SetSpendingCapResult` by hand. */
+export interface SetSpendingCapResult {
+  organizationId: string
+  spendingCapMicros: number | null
+}
+
+/**
+ * ENRL-5 — one membership in the caller's organization, as `memberships.list`
+ * returns it. Mirrors `@bloombot/actions`' own `MembershipEntry` by hand, the
+ * same boundary this file's own module comment already explains.
+ * `displayName`/`grantedByDisplayName`, never an email — an account's
+ * `displayName` is never `null` (unlike a student's own, `CourseEnrolment`'s
+ * own doc comment), so there is no id fallback to render here the way
+ * `components/CoursePeople.tsx#label` needs one. `grantedByAccountId`/
+ * `grantedByDisplayName`/`grantedAt` are all `null` for the one membership
+ * nobody grants — the founding owner row `accounts.createAccount` writes
+ * inline at sign-up (`@bloombot/db`'s own `schema.ts`).
+ */
+export interface OrganizationMembership {
+  accountId: string
+  displayName: string
+  role: 'owner' | 'instructor' | 'assistant'
+  grantedByAccountId: string | null
+  grantedByDisplayName: string | null
+  grantedAt: number | null
+  createdAt: number
+}
+
+/**
+ * ENRL-5 — `memberships.grant`'s own return: `@bloombot/db`'s raw
+ * `memberships` row (`packages/db/src/repos/memberships.ts`'s own
+ * `Membership`), not `OrganizationMembership` above — the grant action
+ * hands back exactly what it wrote, with no display name attached (that
+ * enrichment is `memberships.list`'s own job, above). `components/Team.tsx`
+ * re-fetches the list after a grant rather than reading a display name off
+ * this, the same "refresh after a write" shape `pages/Usage.tsx`'s own
+ * `handleSave` already takes after `setSpendingCap`.
+ */
+export interface GrantMembershipResult {
+  organizationId: string
+  accountId: string
+  role: 'owner' | 'instructor' | 'assistant'
+  grantedByAccountId: string | null
+  grantedAt: number | null
+  createdAt: number
+}
+
+/**
+ * ENRL-10 — one invitation an organization has issued, as
+ * `membershipInvitations.list` returns it. Mirrors `@bloombot/actions`' own
+ * `MembershipInvitationSummary` by hand, the same boundary this file's own
+ * module comment already explains. Unlike `OrganizationMembership` above,
+ * `email` is present — an outstanding invitation has no account yet to
+ * attach a `displayName` to, and the address an owner typed is the only
+ * thing that identifies it (`membership-invitations.ts`'s own doc comment
+ * on why that omission is load-bearing for a granted role but not here).
+ * Never `secretHash` — that redeems the invitation, and only ever existed,
+ * in plaintext, at creation (`CreatedMembershipInvitation`, below).
+ */
+export interface MembershipInvitation {
+  id: string
+  email: string
+  role: 'owner' | 'instructor' | 'assistant'
+  expiresAt: number | null
+  revokedAt: number | null
+  redeemedAt: number | null
+  createdByAccountId: string
+  createdAt: number
+}
+
+/**
+ * ENRL-10 — what `membershipInvitations.create` hands back once, and only
+ * once: the plaintext secret itself. Mirrors `@bloombot/actions`' own
+ * `CreatedMembershipInvitation`. Never stored by this app past the
+ * component that renders it — a reload has nothing left to show, because
+ * the database itself does not either (`repos/membership-invitations.ts`'s
+ * own module comment), the same "shown once" shape
+ * `CreatedCourseJoinLink` already gives WEB-20's own join links.
+ */
+export interface CreatedMembershipInvitation {
+  invitationId: string
+  secret: string
+  expiresAt: number | null
 }

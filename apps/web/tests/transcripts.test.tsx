@@ -16,6 +16,7 @@ const {
   readTranscript,
   listTranscriptExports,
   exportTranscript,
+  listTranscriptAccessLog,
 } = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listCourses: vi.fn(),
@@ -23,6 +24,7 @@ const {
   readTranscript: vi.fn(),
   listTranscriptExports: vi.fn(),
   exportTranscript: vi.fn(),
+  listTranscriptAccessLog: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -37,6 +39,7 @@ vi.mock('../src/api/client.js', async () => {
     readTranscript,
     listTranscriptExports,
     exportTranscript,
+    listTranscriptAccessLog,
   }
 })
 
@@ -69,13 +72,20 @@ const COURSE = {
   createdAt: 0,
 }
 
-async function selectProjectAndCourse() {
+async function selectProjectAndCourse(
+  isOwner = false,
+  // ADMIN-2's own rows, when a caller wants specific ones (the `describe`
+  // block below) — every other caller gets the same empty default every
+  // other list here already takes.
+  accessLogEntries: unknown[] = []
+) {
   listProjects.mockResolvedValue([PROJECT])
   listCourses.mockResolvedValue([COURSE])
   listTranscriptStudents.mockResolvedValue([
     { personId: 'person-1', personDisplayName: 'Alice' },
   ])
   listTranscriptExports.mockResolvedValue([])
+  listTranscriptAccessLog.mockResolvedValue(accessLogEntries)
   readTranscript.mockResolvedValue({
     courseId: COURSE.id,
     courseTitle: COURSE.title,
@@ -90,7 +100,7 @@ async function selectProjectAndCourse() {
     ],
   })
 
-  render(<Transcripts organizationId="org-1" />)
+  render(<Transcripts organizationId="org-1" isOwner={isOwner} />)
 
   const projectSelect = await screen.findByLabelText('Project')
   const { fireEvent } = await import('@testing-library/react')
@@ -191,7 +201,7 @@ describe('Transcripts (ADMIN-1)', () => {
       entries: [],
     })
 
-    render(<Transcripts organizationId="org-1" />)
+    render(<Transcripts organizationId="org-1" isOwner={false} />)
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -255,7 +265,7 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" />)
+    render(<Transcripts organizationId="org-1" isOwner={false} />)
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -298,7 +308,7 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" />)
+    render(<Transcripts organizationId="org-1" isOwner={false} />)
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -337,7 +347,7 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" />)
+    render(<Transcripts organizationId="org-1" isOwner={false} />)
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -381,7 +391,7 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" />)
+    render(<Transcripts organizationId="org-1" isOwner={false} />)
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -392,5 +402,59 @@ describe('Transcripts (ADMIN-1)', () => {
 
     expect(await screen.findByText(/still queued/i)).toBeInTheDocument()
     expect(screen.getByText('npm run worker:dev')).toBeInTheDocument()
+  })
+})
+
+describe('Transcripts — Access log (ADMIN-2)', () => {
+  it('an owner sees the access log, naming who read what and when', async () => {
+    await selectProjectAndCourse(true, [
+      {
+        id: 'log-2',
+        actorAccountId: 'account-1',
+        actorDisplayName: 'Owner Person',
+        personId: 'person-1',
+        personDisplayName: 'Alice',
+        kind: 'read',
+        startAt: null,
+        endAt: null,
+        createdAt: Date.now(),
+      },
+      {
+        id: 'log-1',
+        actorAccountId: 'account-1',
+        actorDisplayName: 'Owner Person',
+        personId: null,
+        personDisplayName: null,
+        kind: 'read',
+        startAt: null,
+        endAt: null,
+        createdAt: Date.now() - 1000,
+      },
+    ])
+
+    expect(
+      await screen.findByRole('heading', { name: 'Access log' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('Owner Person read Alice')).toBeInTheDocument()
+    // An unfiltered read names nobody in particular.
+    expect(
+      screen.getByText('Owner Person read the whole course')
+    ).toBeInTheDocument()
+    expect(listTranscriptAccessLog).toHaveBeenCalledWith('org-1', COURSE.id)
+  })
+
+  // ADMIN-2's own restriction: `transcripts.listAccessLog` refuses anyone
+  // but an owner — this screen withholds the section (and the request)
+  // rather than rendering a control every click through which would
+  // refuse, the same discipline `pages/Usage.tsx`'s own `isOwner` gate
+  // already takes.
+  it('withholds the Access log section entirely for a non-owner, and never requests it', async () => {
+    await selectProjectAndCourse(false)
+
+    await screen.findByRole('heading', { name: 'Transcripts' })
+    expect(
+      screen.queryByRole('heading', { name: 'Access log' })
+    ).not.toBeInTheDocument()
+    expect(listTranscriptAccessLog).not.toHaveBeenCalled()
   })
 })

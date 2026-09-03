@@ -70,6 +70,10 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // organization resolves to nothing (TEN-5), the same as every other
   // scoped read in this table.
   'jobs.get': { resource: 'job', access: 'read' },
+  // JOB-2: no existing job to resolve on a list — the organization itself
+  // is the resource, read, the same "no existing record to resolve on a
+  // list" shape `projects.list`/`discordServers.list` both use above.
+  'jobs.list': { resource: 'organization', access: 'read' },
   // ROST-9: resolves the course a roster is imported into, write — the
   // same shape `discordServers.scaffold` uses above: `execute` reaches no
   // person or Discord state at all (it only enqueues), but the course it
@@ -106,6 +110,14 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // itself is the resource, read rather than written, the same shape
   // `discordServers.list`/`projects.list` already use above.
   'costLedger.organizationUsage': { resource: 'organization', access: 'read' },
+  // COST-3: no existing record of its own to resolve either — the same
+  // "organization itself is the resource" shape `costLedger.organizationUsage`
+  // uses immediately above, written rather than read. *Who* may call this
+  // (an existing owner, never any membership) is `execute`'s own check, not
+  // the policy's — the same split `memberships.grant`'s own row (below)
+  // documents for the identical reason: a policy cannot see the caller's
+  // account id at all (`policy.ts`'s own module comment).
+  'costLedger.setSpendingCap': { resource: 'organization', access: 'write' },
   // ENRL-3/ENRL-4: resolves the course a join link is issued against, write —
   // the same "the course it names is what a write grant already protects"
   // shape `roster.import`/`discordServers.scaffold` both use above.
@@ -122,6 +134,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // organization id in advance, which every dispatched action here is
   // given.
   'courseJoinLinks.revoke': { resource: 'courseJoinLink', access: 'write' },
+  // ENRL-12: resolves the link itself, write — literally `.revoke`'s own
+  // policy object (`actions/course-join-links.ts`'s own doc comment on
+  // `createRevealCourseJoinLinkAction`), reused rather than duplicated so
+  // the two gates cannot drift apart under a future edit to either alone.
+  'courseJoinLinks.reveal': { resource: 'courseJoinLink', access: 'write' },
   // ENRL-2: resolves the person whose enrolments are being listed, read.
   'enrolments.listForPerson': { resource: 'person', access: 'read' },
   // ENRL-2: the policy *is* the check — it resolves the active enrolment
@@ -148,6 +165,42 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // not the policy's — `policy.ts`'s own module comment on why a policy
   // cannot see the caller's account id at all.
   'memberships.grant': { resource: 'organization', access: 'write' },
+  // ENRL-5: no existing membership to resolve against either — the
+  // organization itself is the resource, read rather than written, the same
+  // shape `discordServers.list`/`costLedger.organizationUsage` use above.
+  // Unlike `memberships.grant`, *who* may call this is not further
+  // restricted in `execute` — this file's own module comment on
+  // `listMembershipsAction` has why a read needs no owner check.
+  'memberships.list': { resource: 'organization', access: 'read' },
+  // ENRL-11: resolves the target membership itself, write — a target
+  // belonging to another organization, or one already revoked, resolves to
+  // nothing (TEN-5), the same as every other scoped write in this table.
+  // *Who* may call this (an existing owner, and the peer-owner restriction)
+  // is `execute`'s own check, not the policy's, the same reason
+  // `memberships.grant`'s own row gives above.
+  'memberships.revoke': { resource: 'membership', access: 'write' },
+  // ENRL-10: no existing invitation to resolve on create either — the
+  // organization itself is the resource, the same "no existing record to
+  // resolve on create" shape `memberships.grant`/`projects.create` both use
+  // above. *Who* may call this (an existing owner) is `execute`'s own check,
+  // not the policy's, the same reason `memberships.grant`'s own row gives.
+  'membershipInvitations.create': { resource: 'organization', access: 'write' },
+  // ENRL-10: the organization itself again, read rather than written —
+  // unlike `memberships.list`, `execute` further restricts this to an
+  // existing owner (`membership-invitations.ts`'s own module comment on
+  // why an outstanding invitation's own email is not open to any member the
+  // way a granted role already is).
+  'membershipInvitations.list': { resource: 'organization', access: 'read' },
+  // ENRL-10: resolves the invitation itself, write — an invitation
+  // belonging to another organization resolves to nothing (TEN-5), the
+  // same as every other scoped write in this table. Redeeming an
+  // invitation is not an action at all (`actions/membership-invitations.ts`'s
+  // own module comment) — it needs no organization id in advance, which
+  // every dispatched action here is given.
+  'membershipInvitations.revoke': {
+    resource: 'membershipInvitation',
+    access: 'write',
+  },
   // ADMIN-1: resolves the course whose transcript is being read, read —
   // `execute` also writes an ADMIN-2 audit row, but that write happens
   // inside `@bloombot/db`'s own `readCourseTranscript` regardless of who
@@ -167,6 +220,13 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'transcripts.export': { resource: 'course', access: 'write' },
   // ADMIN-3: resolves the course an export list is scoped to, read.
   'transcripts.listExports': { resource: 'course', access: 'read' },
+  // ADMIN-2: resolves the course whose access log is being read, read —
+  // `execute` further restricts this to an existing owner
+  // (`transcripts.ts`'s own module comment on why this log is not open to
+  // every membership the way `.read`/`.listStudents`/`.listExports` above
+  // are), the same "restricted in execute, not the policy" split
+  // `costLedger.setSpendingCap`/`memberships.grant` both already take.
+  'transcripts.listAccessLog': { resource: 'course', access: 'read' },
 }
 
 describe('ACT-5 — access audit index', () => {

@@ -13,8 +13,8 @@ import { ErrorMessage } from '../components/ErrorMessage.js'
 
 export interface RedeemLinkProps {
   token: string
-  /** Called once redemption succeeds — the parent re-checks `/auth/me` and navigates to the shell (`App.tsx`), rather than this page assuming what comes next. */
-  onRedeemed: () => void
+  /** Called once redemption succeeds, with the destination the *token itself* carried (AUTH-6) — `undefined` for an ordinary sign-in with nowhere in particular to return to. The parent (`App.tsx`) re-checks `/auth/me` and navigates there (falling back to the shell), rather than this page assuming what comes next or where. */
+  onRedeemed: (destination: string | undefined) => void
 }
 
 type State = { kind: 'pending' } | { kind: 'error'; error: ApiError }
@@ -42,10 +42,14 @@ export function RedeemLink({ token, onRedeemed }: RedeemLinkProps) {
     if (redeemedTokenRef.current === token) return
     redeemedTokenRef.current = token
 
-    redeemSignInLink(token).then(onRedeemed, (caught: unknown) => {
-      if (caught instanceof ApiError) setState({ kind: 'error', error: caught })
-      else throw caught
-    })
+    redeemSignInLink(token).then(
+      (result) => onRedeemed(result.destination),
+      (caught: unknown) => {
+        if (caught instanceof ApiError)
+          setState({ kind: 'error', error: caught })
+        else throw caught
+      }
+    )
     // `token` is the only input this effect depends on — `onRedeemed` is a
     // stable callback from `App.tsx`, not state this page re-reads.
   }, [token])

@@ -1,0 +1,1 @@
+ALTER TABLE `sign_in_tokens` ADD `destination` text;

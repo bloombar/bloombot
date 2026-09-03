@@ -17,10 +17,11 @@ import {
   getJobAction,
   listCoursesAction,
   listDiscordServersAction,
+  listJobsAction,
   listProjectsAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionRefusedError } from '../src/errors.js'
+import { ActionInputError, ActionRefusedError } from '../src/errors.js'
 import {
   seedOrganizationWithBoundServer,
   seedOrganizationWithProject,
@@ -422,5 +423,143 @@ describe('jobs.get', () => {
         { organizationId: orgB, db: testDb.db }
       )
     ).rejects.toThrow(ActionRefusedError)
+  })
+})
+
+describe('jobs.list (JOB-2)', () => {
+  // The defect JOB-2 names directly: `jobs.get` needs an id the caller
+  // already holds, and a session that dispatched a job yesterday, then
+  // closed, holds none today. This test never calls `jobs.get` with the
+  // failed job's id at all — the only way this listing can name it is by
+  // actually listing the organization's jobs, the way a fresh session
+  // would have to.
+  it('a job that failed permanently in an earlier session appears, with its error and attempt count', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    const enqueued = jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'e2e-worker', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.markJobFailed(
+      organizationId,
+      claimed.id,
+      { owner: 'e2e-worker', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const result = await dispatch(
+      listJobsAction,
+      {},
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      id: enqueued.id,
+      status: 'failed',
+      attempts: 1,
+      maxAttempts: 1,
+      lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+
+  // JOB-6: no entry in a listing response carries a job's payload —
+  // asserted against the actual response shape, the same discipline
+  // `jobs.get`'s own equivalent tests above already hold themselves to,
+  // not merely inferred from the type.
+  it("never hands back a job's payload, for any job in the listing", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 5,
+      },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      listJobsAction,
+      {},
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result).toHaveLength(1)
+    expect(Object.keys(result[0]!)).not.toContain('payload')
+    expect(JSON.stringify(result)).not.toMatch(/ada@example\.edu/)
+  })
+
+  it("does not include another organization's jobs", async () => {
+    testDb = createTestDatabase()
+    const orgA = seedOrganizationWithProject(testDb.db, 'Org A').organizationId
+    const orgB = seedOrganizationWithProject(testDb.db, 'Org B').organizationId
+    jobs.enqueueJob(orgA, { kind: 'a', payload: {}, maxAttempts: 1 }, testDb.db)
+    jobs.enqueueJob(orgB, { kind: 'b', payload: {}, maxAttempts: 1 }, testDb.db)
+
+    const result = await dispatch(
+      listJobsAction,
+      {},
+      { organizationId: orgA, db: testDb.db }
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?.kind).toBe('a')
+  })
+
+  // Bounded, not merely defaulted — a caller cannot ask past
+  // `MAX_JOBS_LIST_LIMIT` and get everything anyway. Refused at input
+  // validation (`ActionInputError`), the same shape `costLedger.setSpendingCap`'s
+  // own `.max(MAX_SPENDING_CAP_AMOUNT)` already takes for an out-of-range
+  // number (`actions/cost-ledger.ts`).
+  it('refuses a limit above the maximum, rather than listing every job', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    jobs.enqueueJob(
+      organizationId,
+      { kind: 'a', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        listJobsAction,
+        { limit: 100_000 },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionInputError)
+  })
+
+  it('defaults to a bounded listing when no limit is given', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganizationWithProject(testDb.db).organizationId
+    for (let i = 0; i < 3; i++) {
+      jobs.enqueueJob(
+        organizationId,
+        { kind: `k${i}`, payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+    }
+
+    const result = await dispatch(
+      listJobsAction,
+      {},
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result).toHaveLength(3)
   })
 })

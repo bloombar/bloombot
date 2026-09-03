@@ -20,11 +20,14 @@ export interface SignInProps {
   googleClientId?: string | undefined
   /** Called once `/auth/google` returns a session — the parent re-checks `/auth/me` (`App.tsx`) rather than this component guessing what to show next. */
   onSignedIn: () => void
+  /** AUTH-6 — the same-origin path a redeemed sign-in link should return to, whichever browsing context redeems it: passed straight through to `requestSignInLink` (`api/client.ts`), which carries it on the issued token itself. `pages/JoinLink.tsx`, `pages/Connect.tsx` and `pages/Invitation.tsx` are this component's only three callers with anywhere in particular to return to (their own `/join/:secret`/`/connect/:organizationId`/`/invitations/:secret`); every other caller omits it. Not read by the Google path (`handleGoogle`, below) — that sign-in never leaves this tab, so it has nothing to carry a destination for. */
+  destination?: string
 }
 
 export function SignIn({
   googleClientId = import.meta.env['VITE_GOOGLE_CLIENT_ID'],
   onSignedIn,
+  destination,
 }: SignInProps) {
   const [email, setEmail] = useState('')
   const [linkRequested, setLinkRequested] = useState(false)
@@ -36,7 +39,7 @@ export function SignIn({
     setError(undefined)
     setSubmitting(true)
     try {
-      await requestSignInLink(email)
+      await requestSignInLink(email, destination)
       setLinkRequested(true)
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)

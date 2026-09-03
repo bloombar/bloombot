@@ -251,4 +251,113 @@ describe('sign-in-tokens repo (AUTH-1)', () => {
       ).toBe(false)
     })
   })
+
+  // AUTH-6 rework, must-fix 2 — `requestSignInLink`'s own anti-flood guard
+  // must not silently drop a repeat request's `destination`; this is the
+  // primitive that lets it update the already-outstanding row instead of
+  // issuing a second one.
+  describe('updateSignInTokenDestination', () => {
+    it('updates the destination of the active token for this address', () => {
+      testDb = createTestDatabase()
+      signInTokens.createSignInToken(
+        {
+          email: 'student@example.edu',
+          tokenHash: 'hash-active',
+          expiresAt: Date.now() + 60_000,
+          destination: '/connect/org-1',
+        },
+        testDb.db
+      )
+
+      const updated = signInTokens.updateSignInTokenDestination(
+        'student@example.edu',
+        '/join/secret-abc',
+        Date.now(),
+        testDb.db
+      )
+
+      expect(updated).toBe(true)
+      // Read back the way redemption actually would — off the hash, not a
+      // second, separate lookup this repo's own callers never use.
+      const consumed = signInTokens.consumeSignInToken(
+        'hash-active',
+        Date.now(),
+        testDb.db
+      )
+      expect(consumed?.destination).toBe('/join/secret-abc')
+    })
+
+    it('is case-insensitive on the address, the same way the rest of this repo is', () => {
+      testDb = createTestDatabase()
+      signInTokens.createSignInToken(
+        {
+          email: 'Student@Example.edu',
+          tokenHash: 'hash-active',
+          expiresAt: Date.now() + 60_000,
+        },
+        testDb.db
+      )
+
+      expect(
+        signInTokens.updateSignInTokenDestination(
+          'student@EXAMPLE.edu',
+          '/join/secret-abc',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(true)
+    })
+
+    it('returns false, and updates nothing, when no active token exists for this address', () => {
+      testDb = createTestDatabase()
+
+      expect(
+        signInTokens.updateSignInTokenDestination(
+          'nobody@example.edu',
+          '/join/secret-abc',
+          Date.now(),
+          testDb.db
+        )
+      ).toBe(false)
+    })
+
+    it('does not revive a consumed or expired token — only an active one is ever updated', () => {
+      testDb = createTestDatabase()
+      const now = Date.now()
+      signInTokens.createSignInToken(
+        {
+          email: 'consumed@example.edu',
+          tokenHash: 'hash-consumed',
+          expiresAt: now + 60_000,
+        },
+        testDb.db
+      )
+      signInTokens.consumeSignInToken('hash-consumed', now, testDb.db)
+      signInTokens.createSignInToken(
+        {
+          email: 'expired@example.edu',
+          tokenHash: 'hash-expired',
+          expiresAt: now - 1,
+        },
+        testDb.db
+      )
+
+      expect(
+        signInTokens.updateSignInTokenDestination(
+          'consumed@example.edu',
+          '/join/secret-abc',
+          now,
+          testDb.db
+        )
+      ).toBe(false)
+      expect(
+        signInTokens.updateSignInTokenDestination(
+          'expired@example.edu',
+          '/join/secret-abc',
+          now,
+          testDb.db
+        )
+      ).toBe(false)
+    })
+  })
 })

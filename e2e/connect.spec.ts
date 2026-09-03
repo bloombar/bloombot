@@ -97,8 +97,15 @@ test('the connect screen asks a signed-out visitor to sign in, then redeems an M
   const token = await readSignInToken(email)
 
   // 3. Redeeming the link returns the browser to this same organization's
-  //    own connect screen — not the ordinary shell (`App.tsx`'s own
-  //    `PENDING_CONNECT_ORG_KEY` handling, `pages/Connect.tsx`).
+  //    own connect screen — not the ordinary shell. AUTH-6 rework: the
+  //    destination is carried on the sign-in token itself now
+  //    (`pages/SignIn.tsx`'s own `destination` prop, set here by
+  //    `pages/Connect.tsx`), not a `sessionStorage` marker — regression
+  //    coverage for "Connect.tsx's own return trip still works after the
+  //    mechanism change," since this spec's own round trip stays in one tab
+  //    either way and cannot itself distinguish the two mechanisms;
+  //    `e2e/join-link.spec.ts`'s own cross-tab test is what actually proves
+  //    the difference.
   await page.goto(`/sign-in/${token}`)
   await expect(
     page.getByRole('heading', { name: 'Connect your account' })

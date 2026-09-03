@@ -42,6 +42,28 @@
  * moment `handleCreate` actually sends the request — never at the moment
  * the option was selected — so an instructor who pauses between choosing
  * and clicking never has the request's own value fall behind.
+ *
+ * **ENRL-12: a live link's secret can be shown again, per row, not only at
+ * creation.** `handleReveal` calls `revealCourseJoinLink`
+ * (`courseJoinLinks.reveal`) and keeps at most one revealed secret in
+ * memory at a time (`revealed`), the same "never stored past the moment it
+ * is needed" discipline `created` above already holds itself to — revealing
+ * a different link replaces it outright, and an explicit "Hide" control
+ * lets an instructor clear it from screen without navigating away or
+ * waiting for a reload. A row offers the control at all only when both
+ * `isLiveForReveal` (not revoked, not expired — the same two refusals
+ * `courseJoinLinks.reveal` itself gives, checked here so this screen never
+ * offers a control certain to fail) and `link.revealable` (WEB-20's own
+ * projection, `CourseJoinLinkSummary`) hold; a live but non-revealable link
+ * — created before ENRL-12 shipped, or while no encryption key was
+ * configured — gets a plain sentence explaining why in terms an instructor
+ * reads as an explanation, not an error, rather than a control that can
+ * only refuse. Copying a revealed secret is its own small copy handler
+ * (`handleCopyRevealed`), deliberately not `handleCopy` above: sharing one
+ * `copied`/`copyError` pair between the creation banner and a revealed row
+ * would flip both labels to "Copied!" (or both to a failure) on a single
+ * click in whichever one a caller actually used, which is wrong whenever
+ * both are on screen at once.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -50,13 +72,21 @@ import {
   ApiError,
   createCourseJoinLink,
   listCourseJoinLinks,
+  revealCourseJoinLink,
   revokeCourseJoinLink,
 } from '../api/client.js'
 import type {
   CourseJoinLinkSummary,
   CreatedCourseJoinLink,
+  RevealedCourseJoinLink,
 } from '../api/types.js'
-import { AddIcon, CopyIcon, DisableIcon, JoinLinkIcon } from '../icons.js'
+import {
+  AddIcon,
+  CopyIcon,
+  DisableIcon,
+  JoinLinkIcon,
+  RevealIcon,
+} from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
@@ -103,6 +133,20 @@ function formatExpiry(link: CourseJoinLinkSummary): string {
   return `Expires ${new Date(link.expiresAt).toLocaleString()}`
 }
 
+/**
+ * ENRL-12 — the same two refusals `courseJoinLinks.reveal` itself gives
+ * (revoked, or expired), checked here so this panel never renders a reveal
+ * control that is certain to fail. Deliberately distinct from the revoke
+ * button's own gate (`!link.revokedAt` alone, below) — an already-expired,
+ * never-revoked link still offers "Revoke" (WEB-23's own test), but reveal
+ * refuses it too, so this helper checks both.
+ */
+function isLiveForReveal(link: CourseJoinLinkSummary): boolean {
+  return (
+    !link.revokedAt && (link.expiresAt === null || link.expiresAt > Date.now())
+  )
+}
+
 export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
   const [links, setLinks] = useState<CourseJoinLinkSummary[] | undefined>(
     undefined
@@ -123,6 +167,25 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
   const [copyError, setCopyError] = useState<ApiError | undefined>(undefined)
   const [revokingId, setRevokingId] = useState<string | undefined>(undefined)
   const [revokeError, setRevokeError] = useState<ApiError | undefined>(
+    undefined
+  )
+  // ENRL-12 — the one link this screen has ever seen a *re*-revealed secret
+  // for, and only until the next reveal, an explicit hide, or this
+  // component unmounts — the same "never persisted, nothing could read it
+  // back" property `created` above already has (this file's own module
+  // comment). `revealingId` mirrors `revokingId`'s own per-row in-flight
+  // marker; `revealCopied`/`revealCopyError` are deliberately their own
+  // state, not shared with `copied`/`copyError` above (this file's own
+  // module comment on why sharing would cross-talk).
+  const [revealed, setRevealed] = useState<
+    { linkId: string; secret: string } | undefined
+  >(undefined)
+  const [revealingId, setRevealingId] = useState<string | undefined>(undefined)
+  const [revealError, setRevealError] = useState<ApiError | undefined>(
+    undefined
+  )
+  const [revealCopied, setRevealCopied] = useState(false)
+  const [revealCopyError, setRevealCopyError] = useState<ApiError | undefined>(
     undefined
   )
   // WEB-23: which `EXPIRY_OPTIONS` entry is selected for the *next* link —
@@ -216,12 +279,72 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
     setRevokingId(link.id)
     try {
       await revokeCourseJoinLink(organizationId, link.id)
+      // ENRL-12: nothing left to reveal again for a link this instructor
+      // just revoked — clears an already-open reveal panel for it rather
+      // than leaving a now-stale secret on screen after the refresh below
+      // updates its row.
+      if (revealed?.linkId === link.id) setRevealed(undefined)
       await refresh()
     } catch (caught) {
       if (caught instanceof ApiError) setRevokeError(caught)
       else throw caught
     } finally {
       setRevokingId(undefined)
+    }
+  }
+
+  // ENRL-12: show a live link's secret again — refuses (an ordinary
+  // `ApiError`) for anything `isLiveForReveal`/`link.revealable` (below)
+  // already exists to keep this screen from attempting in the first place;
+  // reaching this handler at all means either state, so a refusal here is
+  // still reported the same visible way every other one in this app is.
+  const handleReveal = async (link: CourseJoinLinkSummary) => {
+    setRevealError(undefined)
+    setRevealCopied(false)
+    setRevealCopyError(undefined)
+    setRevealingId(link.id)
+    try {
+      const result: RevealedCourseJoinLink = await revealCourseJoinLink(
+        organizationId,
+        link.id
+      )
+      // At most one revealed secret in memory at a time — revealing a
+      // different link replaces whichever was showing, the same "never
+      // stored past the moment it is needed" property `created` above
+      // already has.
+      setRevealed({ linkId: link.id, secret: result.secret })
+    } catch (caught) {
+      if (caught instanceof ApiError) setRevealError(caught)
+      else throw caught
+    } finally {
+      setRevealingId(undefined)
+    }
+  }
+
+  // ENRL-12: an instructor's own explicit "done looking" — clears the
+  // revealed secret from this component's state (and so from the DOM, the
+  // only place it was ever written) without waiting for a reveal of a
+  // different link, a refresh, or a reload to do it implicitly.
+  const handleHideRevealed = () => {
+    setRevealed(undefined)
+    setRevealCopied(false)
+    setRevealCopyError(undefined)
+    setRevealError(undefined)
+  }
+
+  // The same `navigator.clipboard`-may-be-`undefined` handling `handleCopy`
+  // above gives the creation banner's own secret (that function's own
+  // comment has the mechanics) — kept separate rather than shared so a copy
+  // of a revealed secret never flips the creation banner's own "Copy link"
+  // label, or vice versa, when both happen to be on screen at once (this
+  // file's own module comment).
+  const handleCopyRevealed = async (secret: string) => {
+    setRevealCopyError(undefined)
+    try {
+      await navigator.clipboard.writeText(joinUrl(secret))
+      setRevealCopied(true)
+    } catch {
+      setRevealCopyError(new ApiError(0, { error: 'clipboard_unavailable' }))
     }
   }
 
@@ -263,40 +386,114 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
 
       {links && links.length > 0 && (
         <ul className="flex flex-col gap-2">
-          {links.map((link) => (
-            <li
-              key={link.id}
-              className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
-            >
-              <div className="flex items-center gap-2">
-                <JoinLinkIcon
-                  aria-hidden="true"
-                  className="size-4 text-neutral-500"
-                />
-                <div>
-                  <p className="text-sm font-medium text-neutral-900">
-                    Created {new Date(link.createdAt).toLocaleString()}
-                  </p>
-                  <p className="text-sm text-neutral-500">
-                    {formatExpiry(link)}
-                  </p>
+          {links.map((link) => {
+            const createdLabel = new Date(link.createdAt).toLocaleString()
+            const live = isLiveForReveal(link)
+            const isRevealedHere = revealed?.linkId === link.id
+            return (
+              <li
+                key={link.id}
+                className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <JoinLinkIcon
+                      aria-hidden="true"
+                      className="size-4 text-neutral-500"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-neutral-900">
+                        Created {createdLabel}
+                      </p>
+                      <p className="text-sm text-neutral-500">
+                        {formatExpiry(link)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* ENRL-12: only when reaching `courseJoinLinks.reveal`
+                        could plausibly succeed — never a control certain to
+                        fail (this file's own module comment) — and only
+                        while its own panel is not already open below. */}
+                    {live && link.revealable && !isRevealedHere && (
+                      <Button
+                        variant="secondary"
+                        aria-label={`Show join link secret created ${createdLabel}`}
+                        icon={
+                          <RevealIcon aria-hidden="true" className="size-4" />
+                        }
+                        onClick={() => void handleReveal(link)}
+                        disabled={revealingId === link.id}
+                      >
+                        {revealingId === link.id ? 'Showing…' : 'Show secret'}
+                      </Button>
+                    )}
+                    {!link.revokedAt && (
+                      <Button
+                        variant="destructive"
+                        aria-label={`Revoke join link created ${createdLabel}`}
+                        icon={
+                          <DisableIcon aria-hidden="true" className="size-4" />
+                        }
+                        onClick={() => void handleRevoke(link)}
+                        disabled={revokingId === link.id}
+                      >
+                        {revokingId === link.id ? 'Revoking…' : 'Revoke'}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-              {!link.revokedAt && (
-                <Button
-                  variant="destructive"
-                  aria-label={`Revoke join link created ${new Date(link.createdAt).toLocaleString()}`}
-                  icon={<DisableIcon aria-hidden="true" className="size-4" />}
-                  onClick={() => void handleRevoke(link)}
-                  disabled={revokingId === link.id}
-                >
-                  {revokingId === link.id ? 'Revoking…' : 'Revoke'}
-                </Button>
-              )}
-            </li>
-          ))}
+
+                {/* ENRL-12: a live link with nothing encrypted to show —
+                    created before this shipped, or while no encryption key
+                    was configured — reads as an explanation, not an error;
+                    a revoked or expired link needs none, since
+                    `formatExpiry` above already says why. */}
+                {live && !link.revealable && (
+                  <p className="text-xs text-neutral-500">
+                    Bloombot didn&apos;t keep a recoverable copy of this
+                    link&apos;s secret, so it can&apos;t be shown again. Revoke
+                    it and create a new one if students still need a link.
+                  </p>
+                )}
+
+                {isRevealedHere && revealed && (
+                  <div
+                    role="status"
+                    className="flex flex-col gap-2 rounded-md border border-warning-600 bg-warning-50 p-3 text-sm text-warning-700"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <code
+                        data-testid="revealed-join-link-url"
+                        className="break-all rounded bg-white px-2 py-1 text-neutral-900"
+                      >
+                        {joinUrl(revealed.secret)}
+                      </code>
+                      <Button
+                        variant="secondary"
+                        icon={
+                          <CopyIcon aria-hidden="true" className="size-4" />
+                        }
+                        onClick={() => void handleCopyRevealed(revealed.secret)}
+                      >
+                        {revealCopied ? 'Copied!' : 'Copy link'}
+                      </Button>
+                      <Button variant="ghost" onClick={handleHideRevealed}>
+                        Hide
+                      </Button>
+                    </div>
+                    {revealCopyError && (
+                      <ErrorMessage error={revealCopyError} />
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
+
+      {revealError && <ErrorMessage error={revealError} />}
 
       {revokeError && <ErrorMessage error={revokeError} />}
 

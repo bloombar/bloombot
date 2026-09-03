@@ -14,7 +14,8 @@ const REQUEST: ModelRequest = {
   question: 'q',
   displayName: null,
   courseTitle: null,
-  personRef: null,
+  personIdentifier: null,
+  addressAs: null,
 }
 
 function fakeClient(answer: () => Promise<ModelAnswer>): ModelClient {

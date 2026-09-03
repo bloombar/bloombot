@@ -33,6 +33,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
   FileText,
   Hammer,
   Home,
@@ -89,6 +90,8 @@ export const ImportIcon = Upload
 export const CopyIcon = Copy
 /** A course join link itself (WEB-20). */
 export const JoinLinkIcon = Link2
+/** ENRL-12: show a live join link's secret again. */
+export const RevealIcon = Eye
 /** Leave this panel for another site (Discord's own consent screen, a footer link). */
 export const ExternalLinkIcon = ExternalLink
 /** A collapsible section, or a select control, is closed and can be opened. */

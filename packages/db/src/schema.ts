@@ -101,6 +101,25 @@ export const memberships = sqliteTable(
       () => accounts.id
     ),
     grantedAt: integer('granted_at'),
+    // ENRL-11 — who revoked this membership, and when. Both null for a row
+    // that has never been revoked — every row created before this slice,
+    // and every row this slice's own `grantMembershipRole` reactivates
+    // (`repos/memberships.ts`'s own comment on why a fresh grant clears
+    // both columns rather than leaving a stale revocation on a row it just
+    // brought back). Marking, not deleting, is this requirement's own
+    // choice: ENRL-5 already requires a grant be recorded on the row itself
+    // (`grantedByAccountId`/`grantedAt`, above), and a deleted row records
+    // nothing — "who revoked whom, and when" is exactly the kind of thing
+    // an institution has to account for, the same reasoning TEN-6 already
+    // gives `discord_server_bindings.removed_at`, immediately below.
+    // `repos/memberships.ts#getMembership` excludes a revoked row from its
+    // own `WHERE`, so a revoked membership stops conferring anything the
+    // moment this column is set — every authorization path in this
+    // platform already reaches a membership through that one function.
+    revokedByAccountId: text('revoked_by_account_id').references(
+      () => accounts.id
+    ),
+    revokedAt: integer('revoked_at'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -546,6 +565,16 @@ export const usageCounters = sqliteTable(
 // two concurrent redemptions of the same token cannot both succeed — the
 // same reasoning `discordServerBindings`' re-claim guard documents for
 // TEN-3.
+// AUTH-6 (this table's own rework): `destination` is the same-origin path
+// (`/join/:secret`, `/connect/:organizationId`, ...) this token's issuer
+// asked to return to once it is redeemed — `packages/auth`'s
+// `sign-in.ts#requestSignInLink` writes it, and `redeemSignInLink` reads it
+// back off the *token*, not off any tab, which is the whole point: the
+// intent belongs to the sign-in that was issued, not the browsing context
+// that requested it, so it survives an emailed link a mail client opens in a
+// fresh tab (see `docs/DECISIONS.md` D-55's own `sessionStorage` choice, and
+// this rework's own entry for why that stopped being enough). `null` for an
+// ordinary sign-in with nowhere in particular to return to.
 export const signInTokens = sqliteTable(
   'sign_in_tokens',
   {
@@ -554,6 +583,7 @@ export const signInTokens = sqliteTable(
     tokenHash: text('token_hash').notNull().unique(),
     expiresAt: integer('expires_at').notNull(),
     usedAt: integer('used_at'),
+    destination: text('destination'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [index('sign_in_tokens_email_idx').on(table.email)]
@@ -974,10 +1004,20 @@ export const enrolments = sqliteTable(
 )
 
 // ENRL-3/ENRL-4 — a course join link: an instructor-issued admission
-// decision a student redeems. `secretHash` only, never the plaintext value —
+// decision a student redeems. `secretHash` is what redemption looks up —
 // the same "returned once, stored only as a hash" shape `sign_in_tokens`
 // already uses (AUTH-1), for the same reason: a claim link is a bearer
-// secret, and a stolen database row must not be able to replay it.
+// secret, and a stolen database row must not be able to replay it. Hashing
+// is not searchable, so it cannot also be *shown back* to an instructor who
+// lost the link — ENRL-12 adds a second, independent copy for exactly that:
+// `secretCiphertext`/`secretNonce`/`secretAuthTag`, an AES-256-GCM
+// encryption of the same secret under a key that lives in the environment,
+// never this database (`@bloombot/actions`' `course-join-links.ts` is where
+// both the hash and the ciphertext are computed — this table only stores
+// what it is given). All three are nullable together, never independently:
+// null on every row created before this shipped (nothing to reveal, ENRL-12's
+// own deployment-compatibility promise) and on any row created while no key
+// was configured, regardless of how many rows *do* carry one.
 // `revokedAt` is nullable and never un-set — ENRL-4's "revoking does not
 // un-enrol anybody" is a fact about `repos/enrolments.ts` (it never reads
 // this table at all), not something this column has to express by itself;
@@ -993,6 +1033,14 @@ export const courseJoinLinks = sqliteTable('course_join_links', {
     .notNull()
     .references(() => courses.id),
   secretHash: text('secret_hash').notNull().unique(),
+  // ENRL-12 — base64: ciphertext, the 12-byte GCM nonce, and the 16-byte
+  // auth tag, each stored alongside rather than derived, since a nonce must
+  // never be regenerated (it would no longer match what encrypted the
+  // ciphertext) and the tag is what makes a tampered ciphertext fail to
+  // decrypt rather than silently return garbage.
+  secretCiphertext: text('secret_ciphertext'),
+  secretNonce: text('secret_nonce'),
+  secretAuthTag: text('secret_auth_tag'),
   // Nullable — a link with no expiry is valid until revoked, the same
   // "nullable means not configured" reading `courses.maxRequestsPerDay`'s
   // own comment gives a nullable column elsewhere in this schema.
@@ -1268,3 +1316,67 @@ export const tenantDeletions = sqliteTable('tenant_deletions', {
   summary: text('summary').notNull(),
   deletedAt: integer('deleted_at').notNull(),
 })
+
+// ENRL-10 — an invitation: the missing layer beneath ENRL-5's
+// `memberships.grant`, which only ever changes the role of an account that
+// already holds a membership in this organization
+// (`packages/actions/src/actions/memberships.ts`'s own module comment) —
+// nothing in production creates that first membership. Same shape as
+// `course_join_links`/`sign_in_tokens`: a bearer secret, returned once and
+// stored only as `secretHash`, revocable and optionally expiring. Unlike a
+// join link — deliberately shared with a whole class, admitting whoever
+// redeems it, repeatedly, until revoked — an invitation is addressed to one
+// `email` and is single-use: `redeemedAt`/`redeemedByAccountId` are the
+// claim, set the moment `repos/membership-invitations.ts#redeemMembershipInvitation`
+// consumes it, and never un-set. That single-use property, together with
+// binding the redeemer's own account email to `email` (that function's own
+// doc comment), is what ENRL-10 means by an invitation admitting "exactly
+// the person who received it" rather than whoever first gets hold of the
+// secret. `createdByAccountId` is the inviting owner — redemption stamps it
+// onto the granted membership's own `grantedByAccountId`, never the
+// redeemer, so a role stays traceable to the owner who actually decided to
+// extend it (ENRL-5's own "recorded" requirement).
+export const membershipInvitations = sqliteTable(
+  'membership_invitations',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    // Stored lowercased by the repo layer (`repos/membership-invitations.ts`),
+    // the same convention `accounts.email` already uses — an invitation
+    // addressed to `Foo@Bar.com` must still bind to an account stored as
+    // `foo@bar.com`.
+    email: text('email').notNull(),
+    role: text('role', { enum: MEMBERSHIP_ROLES }).notNull(),
+    secretHash: text('secret_hash').notNull().unique(),
+    // Nullable — an invitation with no expiry is valid until revoked or
+    // redeemed, the same "nullable means not configured" reading
+    // `courseJoinLinks.expiresAt` already gives.
+    expiresAt: integer('expires_at'),
+    revokedAt: integer('revoked_at'),
+    redeemedAt: integer('redeemed_at'),
+    redeemedByAccountId: text('redeemed_by_account_id').references(
+      () => accounts.id
+    ),
+    createdByAccountId: text('created_by_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // What `repos/membership-invitations.ts#listInvitations` filters an
+    // organization's own outstanding invitations by — the same
+    // "organization first" index shape most scoped tables in this file
+    // carry.
+    index('membership_invitations_organization_id_idx').on(
+      table.organizationId
+    ),
+    // Belt-and-suspenders on top of the TypeScript `enum` above, the same
+    // reasoning `memberships`' own identical CHECK gives.
+    check(
+      'membership_invitations_role_check',
+      sql`${table.role} in ('owner', 'instructor', 'assistant')`
+    ),
+  ]
+)

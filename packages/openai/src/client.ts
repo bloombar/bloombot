@@ -8,8 +8,11 @@
  * `ask` is the whole port. In order:
  *  1. Resolve the upstream conversation (MDL-4) — reuse `request.upstreamThreadId`
  *     when set, or create one when it is not, seeded with whatever of
- *     `displayName`/`courseTitle`/`personRef` the request carries (finding 1
- *     of the MDL-1 rework). Both the create call and the answer call get
+ *     `displayName`/`courseTitle`/`addressAs`/`personIdentifier` the request
+ *     carries (finding 1 of the MDL-1 rework; the latter two replace what
+ *     was one field, `personRef`, before CORE-7/CORE-8 split it —
+ *     `@bloombot/core`'s `ports.ts` has the fuller reasoning). Both the
+ *     create call and the answer call get
  *     MDL-5's transient retry (finding 3) — a 429 or 5xx on either is worth
  *     one retry, not just on the answer half.
  *  2. Build and send the Responses API call (MDL-2, MDL-3, MDL-5's bound and
@@ -154,7 +157,8 @@ export function createOpenAiModelClient(
           ...httpOptions,
           displayName: request.displayName,
           courseTitle: request.courseTitle,
-          personRef: request.personRef,
+          addressAs: request.addressAs,
+          personIdentifier: request.personIdentifier,
         }),
       logger
     )

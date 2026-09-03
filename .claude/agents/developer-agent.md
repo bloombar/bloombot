@@ -55,3 +55,19 @@ Keep it short and factual:
 
 An honest "this part does not work yet, here is the failing output" is worth far more than a confident
 summary that turns out to be wrong two slices later.
+
+## You are not alone in this working tree
+
+Another agent may be writing to the same checkout right now. You cannot see its uncommitted edits and
+`git` will not warn you.
+
+- `git status` before you commit, every time. **Stage only your own files, by path.** Never `git add -A`,
+  `git add .` or `git commit -a`.
+- Files in `git status` you did not touch are not yours. **Report before acting, not after** — a revert
+  cannot be undone, and the content may be the user's own work rather than another agent's. Do not
+  commit them, revert them, or tidy them.
+- **Never edit `docs/DEPLOY_DROPLET.md`** — the user maintains it.
+- A failing check in a file outside your slice is not yours to fix. Report it and stop — a `tsc` error
+  in someone else's half-written module means they are mid-edit, not that you have work to do.
+- Re-measure the baselines your brief quotes after your final pull. They go stale as soon as another
+  slice lands, and a report built on stale numbers misleads without looking wrong.

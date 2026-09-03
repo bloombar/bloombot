@@ -1,9 +1,11 @@
 /**
- * `components/JoinLinks.tsx` (WEB-20): the screen a course's join links
- * were missing entirely. Every case below is what that component's own
- * module comment promises: a created secret shown exactly once with a copy
- * control, a list that never repeats it, and a revoke that confirms first
- * and states both halves of ENRL-4.
+ * `components/JoinLinks.tsx` (WEB-20, ENRL-12): the screen a course's join
+ * links were missing entirely. Every case below is what that component's
+ * own module comment promises: a created secret shown exactly once with a
+ * copy control, a list that never repeats it, a revoke that confirms first
+ * and states both halves of ENRL-4, and — ENRL-12 — a live, revealable
+ * link's secret shown again on request, with the same copy affordance and
+ * copy-failure handling creation already offers.
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
@@ -14,12 +16,17 @@ import type { CourseJoinLinkSummary } from '../src/api/types.js'
 import { JoinLinks } from '../src/components/JoinLinks.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { createCourseJoinLink, listCourseJoinLinks, revokeCourseJoinLink } =
-  vi.hoisted(() => ({
-    createCourseJoinLink: vi.fn(),
-    listCourseJoinLinks: vi.fn(),
-    revokeCourseJoinLink: vi.fn(),
-  }))
+const {
+  createCourseJoinLink,
+  listCourseJoinLinks,
+  revealCourseJoinLink,
+  revokeCourseJoinLink,
+} = vi.hoisted(() => ({
+  createCourseJoinLink: vi.fn(),
+  listCourseJoinLinks: vi.fn(),
+  revealCourseJoinLink: vi.fn(),
+  revokeCourseJoinLink: vi.fn(),
+}))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
@@ -29,10 +36,16 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     createCourseJoinLink,
     listCourseJoinLinks,
+    revealCourseJoinLink,
     revokeCourseJoinLink,
   }
 })
 
+// ENRL-12: `revealable: true` by default — the shape a link created under
+// this slice, with an encryption key configured, actually has. Tests about
+// a link that predates ENRL-12 (or one created with no key) override this
+// explicitly, the same way a revoked or expired case already overrides
+// `revokedAt`/`expiresAt`.
 function link(
   overrides: Partial<CourseJoinLinkSummary> = {}
 ): CourseJoinLinkSummary {
@@ -43,6 +56,7 @@ function link(
     revokedAt: null,
     createdByAccountId: 'account-1',
     createdAt: Date.now(),
+    revealable: true,
     ...overrides,
   }
 }
@@ -232,6 +246,200 @@ describe('JoinLinks (WEB-20)', () => {
     await screen.findByText('No join links issued yet.')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create join link' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not found, or you do not have access to it.'
+    )
+  })
+})
+
+// ENRL-12: a live, revealable link's secret can be shown again, with the
+// same copy affordance (and copy-failure handling) creation already offers.
+describe('JoinLinks reveal (ENRL-12)', () => {
+  it("reveals a live link's secret, with a copy control matching creation's own", async () => {
+    listCourseJoinLinks.mockResolvedValue([link({ id: 'link-1' })])
+    revealCourseJoinLink.mockResolvedValue({ secret: 'the-revealed-secret' })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Show join link/ }))
+
+    await waitFor(() =>
+      expect(revealCourseJoinLink).toHaveBeenCalledWith('org-1', 'link-1')
+    )
+    const urlNode = await screen.findByTestId('revealed-join-link-url')
+    expect(urlNode).toHaveTextContent('/join/the-revealed-secret')
+    // The "Show secret" control retires once its own panel is open — one
+    // way to reach it per link, not two redundant ones.
+    expect(
+      screen.queryByRole('button', { name: /^Show join link/ })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }))
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        expect.stringContaining('/join/the-revealed-secret')
+      )
+    )
+  })
+
+  it('a revoked link offers no reveal control at all', async () => {
+    listCourseJoinLinks.mockResolvedValue([
+      link({ id: 'link-1', revokedAt: Date.now(), revealable: true }),
+    ])
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Revoked /)
+
+    expect(
+      screen.queryByRole('button', { name: /^Show join link/ })
+    ).not.toBeInTheDocument()
+  })
+
+  it('an expired link offers no reveal control at all, even though it still offers Revoke', async () => {
+    listCourseJoinLinks.mockResolvedValue([
+      link({
+        id: 'link-1',
+        expiresAt: Date.now() - 1000,
+        revealable: true,
+      }),
+    ])
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Expired /)
+
+    expect(
+      screen.queryByRole('button', { name: /^Show join link/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /^Revoke join link/ })
+    ).toBeInTheDocument()
+  })
+
+  // ENRL-12's own text: a link created before this shipped (or while no key
+  // was configured) explains itself in terms an instructor reads as an
+  // explanation, not an error — never a control that can only fail.
+  it('a live link with nothing encrypted to show explains itself, offering no control that would only fail', async () => {
+    listCourseJoinLinks.mockResolvedValue([
+      link({ id: 'link-1', revealable: false }),
+    ])
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+
+    expect(
+      screen.queryByRole('button', { name: /^Show join link/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/didn.t keep a recoverable copy of this link.s secret/)
+    ).toBeInTheDocument()
+    // Reads as an explanation, not an error — no alert role for a state
+    // this screen already knew about from the listing alone.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  // The revealed secret does not survive where it should not: revealing a
+  // second link replaces the first outright, and the DOM after that
+  // re-render carries only the new one.
+  it('revealing a different link replaces the previously revealed secret — it does not survive the re-render', async () => {
+    listCourseJoinLinks.mockResolvedValue([
+      link({ id: 'link-1' }),
+      link({ id: 'link-2' }),
+    ])
+    revealCourseJoinLink.mockImplementation((_organizationId, linkId) =>
+      Promise.resolve({ secret: `secret-for-${linkId}` })
+    )
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findAllByText(/^Created /)
+
+    const [showFirst, showSecond] = screen.getAllByRole('button', {
+      name: /^Show join link/,
+    })
+    fireEvent.click(showFirst as HTMLElement)
+    await screen.findByText(/secret-for-link-1/)
+
+    fireEvent.click(showSecond as HTMLElement)
+    await screen.findByText(/secret-for-link-2/)
+    expect(screen.queryByText(/secret-for-link-1/)).not.toBeInTheDocument()
+  })
+
+  // The same property, proven the other way: an explicit "Hide" clears the
+  // revealed secret from the DOM without revealing anything else.
+  it('hiding a revealed secret removes it from the DOM, and the reveal control returns', async () => {
+    listCourseJoinLinks.mockResolvedValue([link({ id: 'link-1' })])
+    revealCourseJoinLink.mockResolvedValue({ secret: 'the-revealed-secret' })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+    fireEvent.click(screen.getByRole('button', { name: /^Show join link/ }))
+    await screen.findByTestId('revealed-join-link-url')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+
+    expect(
+      screen.queryByTestId('revealed-join-link-url')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /^Show join link/ })
+    ).toBeInTheDocument()
+  })
+
+  // The revealed secret does not survive an unmount either — a fresh mount
+  // (standing in for navigating away and back, the same precedent
+  // `join-links.test.tsx`'s own "a fresh mount never shows a secret" case
+  // already uses for `created`) starts with nothing revealed, even though
+  // the underlying link is still just as revealable.
+  it('a fresh mount after revealing never shows the previously revealed secret', async () => {
+    listCourseJoinLinks.mockResolvedValue([link({ id: 'link-1' })])
+    revealCourseJoinLink.mockResolvedValue({ secret: 'the-revealed-secret' })
+
+    const first = renderWithModal(
+      <JoinLinks organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText(/^Created /)
+    fireEvent.click(screen.getByRole('button', { name: /^Show join link/ }))
+    await screen.findByTestId('revealed-join-link-url')
+    first.unmount()
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+
+    expect(
+      screen.queryByTestId('revealed-join-link-url')
+    ).not.toBeInTheDocument()
+  })
+
+  it('a clipboard that cannot be reached is reported for a revealed secret too, which stays visible to copy by hand', async () => {
+    listCourseJoinLinks.mockResolvedValue([link({ id: 'link-1' })])
+    revealCourseJoinLink.mockResolvedValue({ secret: 'the-revealed-secret' })
+    Object.assign(navigator, { clipboard: undefined })
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+    fireEvent.click(screen.getByRole('button', { name: /^Show join link/ }))
+    await screen.findByTestId('revealed-join-link-url')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not copy the link — copy it from the text above by hand.'
+    )
+    expect(screen.getByTestId('revealed-join-link-url')).toHaveTextContent(
+      '/join/the-revealed-secret'
+    )
+  })
+
+  it('a refused reveal renders the same ErrorMessage every other refusal in this app uses', async () => {
+    listCourseJoinLinks.mockResolvedValue([link({ id: 'link-1' })])
+    revealCourseJoinLink.mockRejectedValue(
+      new ApiError(404, { error: 'action_refused' })
+    )
+
+    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
+    await screen.findByText(/^Created /)
+    fireEvent.click(screen.getByRole('button', { name: /^Show join link/ }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'

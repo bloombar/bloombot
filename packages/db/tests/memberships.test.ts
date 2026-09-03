@@ -208,4 +208,244 @@ describe('memberships repo', () => {
       grantedAt: null,
     })
   })
+
+  // --- ENRL-11: revoking marks the row, and stops it counting anywhere ----
+
+  it('revokeMembership marks a membership revoked, recording who revoked it and when', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    const revoked = memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    expect(revoked).toMatchObject({
+      accountId: recipient.id,
+      revokedByAccountId: owner.id,
+    })
+    expect(revoked?.revokedAt).toEqual(expect.any(Number))
+  })
+
+  // The whole point of ENRL-11: a revoked membership stops being found by
+  // the function nearly every authorization check in the platform calls.
+  // Fails without the fix — before `getMembership`'s own `WHERE` excluded
+  // a revoked row, this returned the revoked row itself, `role` and all.
+  it('a revoked membership is no longer found by getMembership', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    expect(
+      memberships.getMembership(orgA, recipient.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('a revoked membership is excluded from listMembershipsForOrganization and listMembershipsForAccount', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    expect(
+      memberships
+        .listMembershipsForOrganization(orgA, testDb.db)
+        .map((m) => m.accountId)
+    ).not.toContain(recipient.id)
+    expect(
+      memberships
+        .listMembershipsForAccount(recipient.id, testDb.db)
+        .map((m) => m.organizationId)
+    ).not.toContain(orgA)
+  })
+
+  // TEN-5/TEN-2: revoking through the wrong organization affects nothing.
+  it('revoking through the wrong organization leaves the real membership intact', () => {
+    testDb = createTestDatabase()
+    const {
+      orgA,
+      orgB,
+      accountInB: recipient,
+    } = seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    const revoked = memberships.revokeMembership(
+      orgB,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    expect(revoked).toBeUndefined()
+    expect(
+      memberships.getMembership(orgA, recipient.id, testDb.db)
+    ).toMatchObject({ role: 'instructor' })
+  })
+
+  it('revoking an already-revoked membership is refused (undefined), not a second revoke', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    const secondAttempt = memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+
+    expect(secondAttempt).toBeUndefined()
+  })
+
+  // ENRL-11: "an organization always has an owner" — enforced here, below
+  // any action or screen, because this is the one place any caller of this
+  // function is forced through. Fails without the fix: dropping the
+  // `activeOwners.length <= 1` guard lets this revoke succeed, leaving
+  // `orgA` with zero owners.
+  it('the last owner cannot be revoked, even by another owner', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInA: soleOwner } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    const peerOwner = accounts.createAccount(
+      orgA,
+      { email: 'peer@example.edu', displayName: 'Peer', role: 'owner' },
+      testDb.db
+    )
+
+    const result = memberships.revokeMembership(
+      orgA,
+      { accountId: soleOwner.id, revokedByAccountId: peerOwner.id },
+      testDb.db
+    )
+
+    // `soleOwner` was the *original* founding owner; `peerOwner` is a
+    // second owner added afterward — two owners exist, so `soleOwner` is
+    // not actually the org's last one, and the revoke should succeed. This
+    // proves the guard counts correctly rather than refusing every owner.
+    expect(result).toMatchObject({ accountId: soleOwner.id })
+    expect(
+      memberships.getMembership(orgA, soleOwner.id, testDb.db)
+    ).toBeUndefined()
+    // `peerOwner`, the organization's only remaining owner, cannot revoke
+    // themselves either — that would leave zero.
+    expect(
+      memberships.revokeMembership(
+        orgA,
+        { accountId: peerOwner.id, revokedByAccountId: peerOwner.id },
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      memberships.getMembership(orgA, peerOwner.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  it('a non-last owner can be revoked, leaving the organization with its remaining owner', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInA: founder } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    const peerOwner = accounts.createAccount(
+      orgA,
+      { email: 'peer@example.edu', displayName: 'Peer', role: 'owner' },
+      testDb.db
+    )
+
+    const result = memberships.revokeMembership(
+      orgA,
+      { accountId: peerOwner.id, revokedByAccountId: founder.id },
+      testDb.db
+    )
+
+    expect(result).toMatchObject({ accountId: peerOwner.id })
+    expect(
+      memberships.getMembership(orgA, founder.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // ENRL-11: a fresh grant reactivates a row a previous revoke left behind
+  // — the composite primary key means there is no other way for the same
+  // (organization, account) pair to hold a membership again.
+  it('grantMembershipRole reactivates a previously revoked membership, clearing the revocation', () => {
+    testDb = createTestDatabase()
+    const { orgA, accountInB: recipient } =
+      seedTwoOrganizationsWithOneAccountEach(testDb)
+    memberships.createMembership(orgA, recipient.id, 'instructor', testDb.db)
+    const owner = accounts.createAccount(
+      orgA,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    memberships.revokeMembership(
+      orgA,
+      { accountId: recipient.id, revokedByAccountId: owner.id },
+      testDb.db
+    )
+    expect(
+      memberships.getMembership(orgA, recipient.id, testDb.db)
+    ).toBeUndefined()
+
+    const regranted = memberships.grantMembershipRole(
+      orgA,
+      {
+        accountId: recipient.id,
+        role: 'assistant',
+        grantedByAccountId: owner.id,
+      },
+      testDb.db
+    )
+
+    expect(regranted).toMatchObject({
+      role: 'assistant',
+      revokedAt: null,
+      revokedByAccountId: null,
+    })
+    expect(
+      memberships.getMembership(orgA, recipient.id, testDb.db)
+    ).toMatchObject({ role: 'assistant' })
+  })
 })

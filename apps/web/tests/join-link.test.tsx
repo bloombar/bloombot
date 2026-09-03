@@ -1,30 +1,33 @@
 /**
- * `pages/JoinLink.tsx` (ENRL-8) — a course join link. Signed out, it
- * renders `SignIn` and stashes the secret for `App.tsx`'s own
- * `returnToShell` to pick back up (`connect.test.tsx`'s own identical
- * scenario for `PENDING_CONNECT_ORG_KEY`). Signed in, it redeems once, on
- * mount, under `StrictMode` (`redeem-link.test.tsx`'s own reasoning for why
- * that matters — a single-use secret redeemed twice would surface
- * StrictMode's second, spurious call as the response rendered).
+ * `pages/JoinLink.tsx` (ENRL-8, WEB-25) — a course join link. Signed out, it
+ * renders `SignIn`, passing this page's own address as `SignIn`'s
+ * `destination` prop (AUTH-6) so a later sign-in redemption returns here
+ * regardless of which tab redeems it (`connect.test.tsx`'s own identical
+ * scenario for `pages/Connect.tsx`). Signed in, it redeems once, on mount,
+ * under `StrictMode` (`redeem-link.test.tsx`'s own reasoning for why that
+ * matters — a single-use secret redeemed twice would surface StrictMode's
+ * second, spurious call as the response rendered), and hands the server's
+ * own answer up to `onRedeemed` rather than discarding it.
  */
 
 import { StrictMode } from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { AccountSummary } from '../src/api/types.js'
-import { JoinLink, PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
+import { JoinLink } from '../src/pages/JoinLink.js'
 
-const { redeemCourseJoinLink } = vi.hoisted(() => ({
+const { redeemCourseJoinLink, requestSignInLink } = vi.hoisted(() => ({
   redeemCourseJoinLink: vi.fn(),
+  requestSignInLink: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, redeemCourseJoinLink }
+  return { ...actual, redeemCourseJoinLink, requestSignInLink }
 })
 
 const ACCOUNT: AccountSummary = {
@@ -42,11 +45,10 @@ const ACCOUNT: AccountSummary = {
 
 afterEach(() => {
   vi.resetAllMocks()
-  sessionStorage.clear()
 })
 
 describe('JoinLink — signed out', () => {
-  it('renders SignIn, and stashes the secret for a later sign-in redemption to pick back up', () => {
+  it('renders SignIn', () => {
     render(
       <JoinLink
         secret="secret-abc"
@@ -59,14 +61,47 @@ describe('JoinLink — signed out', () => {
     expect(
       screen.getByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeInTheDocument()
-    expect(sessionStorage.getItem(PENDING_JOIN_LINK_KEY)).toBe('secret-abc')
     expect(redeemCourseJoinLink).not.toHaveBeenCalled()
+  })
+
+  // AUTH-6: fails without the fix — before `destination` existed, this
+  // page's own return trip was a `sessionStorage` marker
+  // (`PENDING_JOIN_LINK_KEY`), which only ever survived a sign-in
+  // redemption completing in the same tab that set it.
+  it('requests a sign-in link with this page as the destination', async () => {
+    requestSignInLink.mockResolvedValue(undefined)
+
+    render(
+      <JoinLink
+        secret="secret-abc"
+        account={null}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'student@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() =>
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'student@example.edu',
+        '/join/secret-abc'
+      )
+    )
   })
 })
 
 describe('JoinLink — signed in', () => {
-  it('redeems the secret exactly once under StrictMode, and reports success', async () => {
-    redeemCourseJoinLink.mockResolvedValue({ courseId: 'course-1' })
+  it('redeems the secret exactly once under StrictMode, and reports what the server resolved', async () => {
+    redeemCourseJoinLink.mockResolvedValue({
+      courseId: 'course-1',
+      organizationId: 'org-1',
+      alreadyEnrolled: false,
+    })
     const onRedeemed = vi.fn()
 
     render(
@@ -85,24 +120,14 @@ describe('JoinLink — signed in', () => {
     // must not spend the link twice.
     expect(redeemCourseJoinLink).toHaveBeenCalledTimes(1)
     expect(redeemCourseJoinLink).toHaveBeenCalledWith('secret-abc')
-  })
-
-  it('clears a stale pending marker once signed in', async () => {
-    sessionStorage.setItem(PENDING_JOIN_LINK_KEY, 'some-other-secret')
-    redeemCourseJoinLink.mockResolvedValue({ courseId: 'course-1' })
-
-    render(
-      <JoinLink
-        secret="secret-abc"
-        account={ACCOUNT}
-        onSignedIn={vi.fn()}
-        onRedeemed={vi.fn()}
-      />
-    )
-
-    await vi.waitFor(() =>
-      expect(sessionStorage.getItem(PENDING_JOIN_LINK_KEY)).toBeNull()
-    )
+    // WEB-25: fails without the fix — before this, `onRedeemed` took no
+    // arguments at all, and the course id the server already resolved was
+    // simply thrown away.
+    expect(onRedeemed).toHaveBeenCalledWith({
+      courseId: 'course-1',
+      organizationId: 'org-1',
+      alreadyEnrolled: false,
+    })
   })
 
   // ENRL-4/ENRL-8: a refused redemption (never issued, revoked or expired —

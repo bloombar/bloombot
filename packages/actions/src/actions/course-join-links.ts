@@ -1,7 +1,8 @@
 /**
- * Actions over `packages/db`'s `course-join-links` repo (ENRL-3, ENRL-4):
- * `courseJoinLinks.create` and `.revoke`, dispatched the ordinary way — and
- * `redeemCourseJoinLink`, which is *not* a dispatched `Action` at all.
+ * Actions over `packages/db`'s `course-join-links` repo (ENRL-3, ENRL-4,
+ * ENRL-12): `courseJoinLinks.create`, `.revoke` and `.reveal`, dispatched
+ * the ordinary way — and `redeemCourseJoinLink`, which is *not* a dispatched
+ * `Action` at all.
  *
  * A redeemer presents only the secret from the link they were given, not an
  * organization id — `dispatch.ts`'s own `DispatchContext.organizationId` has
@@ -19,10 +20,30 @@
  * "two handlers, not a shared library either owns" reasoning
  * `apps/worker`'s `roster-import.ts` already gives for its own duplicated
  * `normalizeName`/`normalizeChannelName`.
+ *
+ * ENRL-12 — `courseJoinLinks.create` and `.reveal` are both built by a
+ * factory (`createCourseJoinLinkAction`/`createRevealCourseJoinLinkAction`)
+ * taking an optional AES-256-GCM key, the same "a dependency this package
+ * cannot construct for itself" shape `course-attachments.ts`'s own
+ * `createAttachCourseAttachmentAction` already takes an `AttachmentStorage`
+ * for: this package holds no dependency on `@bloombot/config` at all
+ * (`actions/index.ts`'s own module comment), so the key — a credential,
+ * CFG-5, read directly by `apps/api`'s own `main()` and never through that
+ * package's schema — has nowhere to come from except an explicit argument.
+ * `createPlatformRegistry` (`actions/index.ts`) is the one place that reads
+ * a real key and passes it in; a test that does not care about ENRL-12
+ * calls either factory with none, which reproduces exactly this platform's
+ * "no key configured" behaviour (this file's own `encryptSecret`/
+ * `decryptSecret` doc comments).
  */
 
 import { courseJoinLinks, courses, type Database } from '@bloombot/db'
-import { createHash, randomBytes } from 'node:crypto'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'node:crypto'
 import { z } from 'zod'
 
 import { ActionRefusedError } from '../errors.js'
@@ -41,6 +62,60 @@ function generateSecret(): string {
 /** The SHA-256 hash of a secret, hex-encoded, for storage and lookup. */
 function hashSecret(secret: string): string {
   return createHash('sha256').update(secret).digest('hex')
+}
+
+// ENRL-12 — the standard 96-bit GCM nonce length (NIST SP 800-38D): the
+// length every mainstream GCM implementation defaults to and optimizes for.
+const GCM_NONCE_BYTES = 12
+
+/** The AES-256-GCM encryption of `secret` under `key`, as three base64 strings — the exact shape `repos/course-join-links.ts#NewCourseJoinLink`'s own `secretCiphertext`/`secretNonce`/`secretAuthTag` store verbatim. A fresh, random nonce every call, never a caller-supplied one: reusing a nonce under the same key breaks AES-GCM's confidentiality guarantee outright, so there is no parameter here to reuse one by mistake. */
+function encryptSecret(
+  secret: string,
+  key: Buffer
+): { ciphertext: string; nonce: string; authTag: string } {
+  const nonce = randomBytes(GCM_NONCE_BYTES)
+  const cipher = createCipheriv('aes-256-gcm', key, nonce)
+  const ciphertext = Buffer.concat([
+    cipher.update(secret, 'utf8'),
+    cipher.final(),
+  ])
+  return {
+    ciphertext: ciphertext.toString('base64'),
+    nonce: nonce.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+  }
+}
+
+/**
+ * The inverse of `encryptSecret` — throws rather than returning anything if
+ * `key` does not match the one `ciphertext` was encrypted under, or if any
+ * of the three parts was altered after encryption: `decipher.final()` runs
+ * AES-GCM's own authentication check before it ever returns a byte of
+ * plaintext, so a tampered ciphertext is *rejected*, never silently
+ * decrypted into garbage — the property authenticated encryption exists to
+ * give, unlike a cipher mode with no integrity check of its own (this
+ * file's own module comment on why GCM, not a bare block cipher mode, was
+ * the point of using `node:crypto` here at all). Every caller in this file
+ * treats that throw exactly like "this link cannot be revealed" — see
+ * `createRevealCourseJoinLinkAction`, below.
+ */
+function decryptSecret(
+  ciphertext: string,
+  nonce: string,
+  authTag: string,
+  key: Buffer
+): string {
+  const decipher = createDecipheriv(
+    'aes-256-gcm',
+    key,
+    Buffer.from(nonce, 'base64')
+  )
+  decipher.setAuthTag(Buffer.from(authTag, 'base64'))
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.final(),
+  ])
+  return plaintext.toString('utf8')
 }
 
 /** Both `.save` and `.restore`-style actions in this package refuse the same way when `dispatch` was not given an authenticated caller — the same helper `course-instructions.ts` already defines for itself (module-private, not shared: `docs/DECISIONS.md` has the reasoning for keeping small helpers like this un-shared). */
@@ -82,42 +157,63 @@ export interface CreatedCourseJoinLink {
 /**
  * ENRL-3/ENRL-4: issue a new join link for a course. Resolves the course
  * itself (scoped to the caller's organization, ACT-2), generates a secret,
- * and stores only its hash (`repos/course-join-links.ts`) — the same
- * "returned once, stored only as a hash" shape `sign_in_tokens` already
- * uses for AUTH-1.
+ * and stores its hash (`repos/course-join-links.ts`) — the same "returned
+ * once, stored only as a hash" shape `sign_in_tokens` already uses for
+ * AUTH-1.
+ *
+ * ENRL-12 — a factory, not a plain object (this file's own module comment
+ * on why): `encryptionKey`, when supplied, also stores an AES-256-GCM
+ * encryption of the same secret (`encryptSecret`, above), so an instructor
+ * can ask to see it again later (`createRevealCourseJoinLinkAction`,
+ * below). Omitted — the "no key configured" deployment-compatibility
+ * promise — stores `null` for all three of `secretCiphertext`/
+ * `secretNonce`/`secretAuthTag`, exactly what a database migrated from
+ * before this shipped already has for every existing row: creation and the
+ * one-time reveal in this response are unaffected either way, the only
+ * difference is whether the secret can ever be shown again later.
  */
-export const createCourseJoinLinkAction: Action<
+export function createCourseJoinLinkAction(
+  encryptionKey?: Buffer
+): Action<
   'courseJoinLinks.create',
   CreateInput,
   Course,
   CreatedCourseJoinLink
-> = {
-  name: 'courseJoinLinks.create',
-  description:
-    'Create a course join link (ENRL-3): returns the secret to share with students exactly once — the database only ever stores its hash.',
-  inputSchema: createInputSchema,
-  policy: {
-    descriptor: { resource: 'course', access: 'write' },
-    resolve: (input, context) =>
-      courses.getCourse(context.organizationId, input.courseId, context.db),
-  },
-  execute: ({ organizationId, input, entity, accountId, db }) => {
-    const createdByAccountId = requireAccountId(accountId)
-    const secret = generateSecret()
+> {
+  return {
+    name: 'courseJoinLinks.create',
+    description:
+      'Create a course join link (ENRL-3): returns the secret to share with students exactly once. Stored as a hash for redemption, and — when the deployment has an encryption key configured (ENRL-12) — also encrypted, so an instructor may ask to see it again later via courseJoinLinks.reveal.',
+    inputSchema: createInputSchema,
+    policy: {
+      descriptor: { resource: 'course', access: 'write' },
+      resolve: (input, context) =>
+        courses.getCourse(context.organizationId, input.courseId, context.db),
+    },
+    execute: ({ organizationId, input, entity, accountId, db }) => {
+      const createdByAccountId = requireAccountId(accountId)
+      const secret = generateSecret()
+      const encrypted = encryptionKey
+        ? encryptSecret(secret, encryptionKey)
+        : undefined
 
-    const link = courseJoinLinks.createJoinLink(
-      organizationId,
-      {
-        courseId: entity.id,
-        secretHash: hashSecret(secret),
-        expiresAt: input.expiresAt ?? null,
-        createdByAccountId,
-      },
-      db
-    )
+      const link = courseJoinLinks.createJoinLink(
+        organizationId,
+        {
+          courseId: entity.id,
+          secretHash: hashSecret(secret),
+          secretCiphertext: encrypted?.ciphertext ?? null,
+          secretNonce: encrypted?.nonce ?? null,
+          secretAuthTag: encrypted?.authTag ?? null,
+          expiresAt: input.expiresAt ?? null,
+          createdByAccountId,
+        },
+        db
+      )
 
-    return { linkId: link.id, secret, expiresAt: link.expiresAt }
-  },
+      return { linkId: link.id, secret, expiresAt: link.expiresAt }
+    },
+  }
 }
 
 const listInputSchema = z.object({
@@ -138,6 +234,20 @@ type ListInput = z.infer<typeof listInputSchema>
  * course has ever issued, not only the one just created. `organizationId`
  * is also left out — implied by which organization the caller dispatched
  * this action in, and never needed by the panel's own list.
+ *
+ * `revealable` (ENRL-12) is capability metadata, not secret material — it
+ * says nothing a caller could not already infer by attempting
+ * `courseJoinLinks.reveal` and reading whether it refused, so listing it
+ * here carries none of the risk `secretHash`'s own omission (above) guards
+ * against; it exists so `apps/web`'s own panel can decide whether to offer
+ * a reveal control *without* offering one that is certain to fail. Computed
+ * from `secretCiphertext` alone (`Boolean(link.secretCiphertext)`), not from
+ * whether a key is configured *right now* — the two agree in the ordinary,
+ * non-rotating-key deployment this platform assumes (rotation is explicitly
+ * out of scope, `docs/DECISIONS.md` D-74's own "Out of scope"), and would
+ * only disagree if an operator configured a key, encrypted some links under
+ * it, and later removed the key — a real gap, but the same one `reveal`
+ * itself has (D-74's own "Limits"), not a new one this field introduces.
  */
 export interface CourseJoinLinkSummary {
   id: string
@@ -146,6 +256,7 @@ export interface CourseJoinLinkSummary {
   revokedAt: number | null
   createdByAccountId: string
   createdAt: number
+  revealable: boolean
 }
 
 function toSummary(link: JoinLink): CourseJoinLinkSummary {
@@ -156,6 +267,7 @@ function toSummary(link: JoinLink): CourseJoinLinkSummary {
     revokedAt: link.revokedAt,
     createdByAccountId: link.createdByAccountId,
     createdAt: link.createdAt,
+    revealable: Boolean(link.secretCiphertext),
   }
 }
 
@@ -223,6 +335,108 @@ export const revokeCourseJoinLinkAction: Action<
     courseJoinLinks.revokeJoinLink(organizationId, entity.id, db)
     return { revoked: true }
   },
+}
+
+const revealInputSchema = z.object({
+  linkId: z.string().min(1),
+})
+type RevealInput = z.infer<typeof revealInputSchema>
+
+/** `courseJoinLinks.reveal` hands back the plaintext secret it just decrypted, and nothing else — never the ciphertext, the nonce or the tag, none of which a caller has any use for. */
+export interface RevealedCourseJoinLink {
+  secret: string
+}
+
+/**
+ * ENRL-12: show a live link's secret again. Its own policy is exactly
+ * `courseJoinLinks.revoke`'s (above) — same descriptor, same `resolve` —
+ * rather than something new: the requirement names "the instructors of its
+ * own organization" as who may reveal, and `.revoke` is already the gate
+ * this codebase gives that phrase for a course join link (any member of the
+ * organization the link's course belongs to — owner, instructor or
+ * assistant, un-role-differentiated; `dispatch.ts`'s own `routes/actions.ts`
+ * caller already proved *that* much before `execute` here ever runs).
+ * Reusing the identical policy object, not merely an equivalent-looking
+ * one, is what keeps the two gates from drifting apart under a future edit
+ * to either action alone.
+ *
+ * Settled, not merely carried over: `.create`/`.list`/`.revoke` were
+ * already un-role-differentiated before this action existed, so narrowing
+ * `.reveal` alone to `owner`/`instructor` would build a boundary a caller
+ * already inside this action's own trust perimeter could walk straight
+ * around — anyone who may `.revoke` a link may also `.create` a fresh one
+ * and read its secret from the response the moment it is issued, so
+ * refusing that same caller `.reveal` on the *original* link protects
+ * nothing a revoke-and-reissue does not already defeat. If a future
+ * requirement narrows the other three to `owner`/`instructor`, `.reveal`
+ * should follow through this shared policy object, with no separate edit
+ * needed here. See `docs/DECISIONS.md` D-74 for the fuller record.
+ *
+ * A factory, the same reason `.create` (above) is one: decrypting needs the
+ * key `.create` encrypted under, and this package has no way to reach for
+ * one itself (this file's own module comment).
+ *
+ * Refuses — `ActionRefusedError`, ACT-3's single, byte-identical shape,
+ * indistinguishable from a plain not-found — on every one of these, and
+ * never says which: no key configured at all (this deployment's own
+ * "reveal is refused" promise, this file's own module comment on `.create`);
+ * the link is revoked or has expired ("no reason to hand back a secret that
+ * admits nobody," ENRL-12's own text); the link carries no ciphertext at
+ * all (a row from before this shipped, or one created while no key was
+ * configured); or decryption itself throws (`decryptSecret`'s own doc
+ * comment — a wrong key or a tampered ciphertext, indistinguishable from
+ * each other and from every other refusal here on purpose, the same
+ * "carries nothing about the record it protected" discipline
+ * `ActionRefusedError`'s own doc comment already holds every other refusal
+ * in this package to).
+ */
+export function createRevealCourseJoinLinkAction(
+  encryptionKey?: Buffer
+): Action<
+  'courseJoinLinks.reveal',
+  RevealInput,
+  JoinLink,
+  RevealedCourseJoinLink
+> {
+  return {
+    name: 'courseJoinLinks.reveal',
+    description:
+      "Show a live course join link's secret again (ENRL-12): refuses for a revoked or expired link, for a link with nothing encrypted to show (created before this shipped, or while no key was configured), or when this deployment has no encryption key configured at all.",
+    inputSchema: revealInputSchema,
+    policy: revokeCourseJoinLinkAction.policy,
+    execute: ({ entity }) => {
+      if (!encryptionKey) throw new ActionRefusedError()
+      const isLive =
+        !entity.revokedAt &&
+        (entity.expiresAt === null || entity.expiresAt > Date.now())
+      if (!isLive) throw new ActionRefusedError()
+      if (
+        !entity.secretCiphertext ||
+        !entity.secretNonce ||
+        !entity.secretAuthTag
+      ) {
+        throw new ActionRefusedError()
+      }
+
+      let secret: string
+      try {
+        secret = decryptSecret(
+          entity.secretCiphertext,
+          entity.secretNonce,
+          entity.secretAuthTag,
+          encryptionKey
+        )
+      } catch {
+        // A wrong key or a tampered ciphertext — `decryptSecret`'s own doc
+        // comment. Never rethrown as-is: the underlying `Error` carries no
+        // plaintext, but folding it into the same refusal every other
+        // branch here throws keeps this action's own promise that nothing
+        // it throws ever distinguishes *why*.
+        throw new ActionRefusedError()
+      }
+      return { secret }
+    },
+  }
 }
 
 /**

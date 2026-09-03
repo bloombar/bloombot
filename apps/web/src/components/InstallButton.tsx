@@ -13,11 +13,16 @@
  * (WEB-2's "nothing in the bundle stores a token" is about credentials,
  * not this).
  *
- * `outcome`/`installedServerId` come from the parent (`pages/Shell.tsx`),
- * which is what actually reads the callback's result once the browser
- * returns — this component only renders whatever state it is handed, per
- * WEB-4's "already installed shows as installed, with the option to
- * remove."
+ * `installedServerId` comes from the parent (`pages/Shell.tsx`), which
+ * resolves it two ways: the immediate, same-session signal once the
+ * browser returns from the callback, and — since TEN-8's own read of
+ * `discordServers.list` closed the gap this comment used to describe —
+ * `apps/web/src/api/client.ts#listDiscordServers`, a lookup against
+ * whatever is actually bound server-side, which is what makes a reload or
+ * a second device show the truth rather than only what this browser
+ * session happened to install. This component only renders whatever state
+ * it is handed, per WEB-4's "already installed shows as installed, with
+ * the option to remove."
  */
 
 import { useState } from 'react'
@@ -33,7 +38,7 @@ export const PENDING_INSTALL_ORG_KEY = 'bloombot:pendingInstallOrganizationId'
 
 export interface InstallButtonProps {
   organizationId: string
-  /** Set once `pages/DiscordCallback.tsx` has reported a bound server for this organization — `undefined` when nothing has been installed this session (see the module comment on why this app cannot know about an earlier session's install). */
+  /** The active binding's server id for this organization, or `undefined` when none is bound. Set either by `pages/DiscordCallback.tsx`'s same-session signal or by `pages/Shell.tsx`'s own `listDiscordServers` lookup (TEN-8) — see the module comment above for how the parent resolves the two. */
   installedServerId?: string
   onRemove: () => void
   removing: boolean

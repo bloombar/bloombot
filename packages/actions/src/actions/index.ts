@@ -43,11 +43,12 @@ import {
   removeDiscordServerAction,
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
-import { getJobAction } from './jobs.js'
+import { getJobAction, listJobsAction } from './jobs.js'
 import { importRosterAction } from './roster.js'
-import { organizationUsageAction } from './cost-ledger.js'
+import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
+  createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
 } from './course-join-links.js'
@@ -58,9 +59,19 @@ import {
   listEnrolmentsForPersonAction,
   reinstateEnrolmentAction,
 } from './enrolments.js'
-import { grantMembershipAction } from './memberships.js'
+import {
+  grantMembershipAction,
+  listMembershipsAction,
+  revokeMembershipAction,
+} from './memberships.js'
+import {
+  createMembershipInvitationAction,
+  listMembershipInvitationsAction,
+  revokeMembershipInvitationAction,
+} from './membership-invitations.js'
 import {
   exportTranscriptAction,
+  listTranscriptAccessLogAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
   readTranscriptAction,
@@ -95,20 +106,24 @@ export {
   removeDiscordServerAction,
   scaffoldDiscordServerAction,
 } from './discord-servers.js'
-export { getJobAction, type JobStatus } from './jobs.js'
+export { getJobAction, listJobsAction, type JobStatus } from './jobs.js'
 export { importRosterAction } from './roster.js'
 export {
   organizationUsageAction,
+  setSpendingCapAction,
   type OrganizationUsageReport,
+  type SetSpendingCapResult,
 } from './cost-ledger.js'
 export {
   createCourseJoinLinkAction,
+  createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
   type CreatedCourseJoinLink,
   type CourseJoinLinkSummary,
+  type RevealedCourseJoinLink,
 } from './course-join-links.js'
 export {
   checkEnrolmentAccessAction,
@@ -117,12 +132,27 @@ export {
   listEnrolmentsForPersonAction,
   reinstateEnrolmentAction,
 } from './enrolments.js'
-export { grantMembershipAction } from './memberships.js'
+export {
+  grantMembershipAction,
+  listMembershipsAction,
+  revokeMembershipAction,
+  type MembershipEntry,
+} from './memberships.js'
+export {
+  createMembershipInvitationAction,
+  listMembershipInvitationsAction,
+  revokeMembershipInvitationAction,
+  redeemMembershipInvitationForWebAccount,
+  type CreatedMembershipInvitation,
+  type MembershipInvitationSummary,
+} from './membership-invitations.js'
 export {
   exportTranscriptAction,
+  listTranscriptAccessLogAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
   readTranscriptAction,
+  type TranscriptAccessLogRow,
 } from './transcripts.js'
 
 /**
@@ -153,9 +183,22 @@ export {
  * value it reads once, at startup — so this default only ever runs for a
  * caller that supplied nothing, which today means only a test, and a test
  * belongs under `tmp/`, never `data/` (see `docs/DECISIONS.md` D-32).
+ *
+ * `joinLinkEncryptionKey` (ENRL-12) is the same class of dependency
+ * `attachmentStorageDir` above already is — a credential (CFG-5) this
+ * package has no way to read for itself (`course-join-links.ts`'s own
+ * module comment) — but, unlike `attachmentStorageDir`, has no fallback
+ * here: omitted, `createCourseJoinLinkAction`/`createRevealCourseJoinLinkAction`
+ * are simply built with no key, which is exactly the "no key configured"
+ * behaviour ENRL-12 requires (creation and the one-time reveal work as
+ * before; `courseJoinLinks.reveal` always refuses). `apps/api/src/index.ts`
+ * always threads its own decoded `JOIN_LINK_ENCRYPTION_KEY` through
+ * explicitly when one is set, the same as every other `CONFIG`/credential
+ * value it reads once and passes down.
  */
 export function createPlatformRegistry(options?: {
   attachmentStorageDir?: string
+  joinLinkEncryptionKey?: Buffer
 }): ActionRegistry {
   const attachmentStorage = createFilesystemAttachmentStorage(
     options?.attachmentStorageDir ?? './tmp/attachments'
@@ -176,6 +219,7 @@ export function createPlatformRegistry(options?: {
   registry.register(listDiscordServersAction)
   registry.register(scaffoldDiscordServerAction)
   registry.register(getJobAction)
+  registry.register(listJobsAction)
   registry.register(importRosterAction)
   registry.register(createAttachCourseAttachmentAction(attachmentStorage))
   registry.register(listCourseAttachmentsAction)
@@ -184,18 +228,28 @@ export function createPlatformRegistry(options?: {
   registry.register(listCourseInstructionRevisionsAction)
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
-  registry.register(createCourseJoinLinkAction)
+  registry.register(setSpendingCapAction)
+  registry.register(createCourseJoinLinkAction(options?.joinLinkEncryptionKey))
   registry.register(listCourseJoinLinksAction)
   registry.register(revokeCourseJoinLinkAction)
+  registry.register(
+    createRevealCourseJoinLinkAction(options?.joinLinkEncryptionKey)
+  )
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)
   registry.register(reinstateEnrolmentAction)
   registry.register(listEnrolmentsForCourseAction)
   registry.register(grantMembershipAction)
+  registry.register(listMembershipsAction)
+  registry.register(revokeMembershipAction)
+  registry.register(createMembershipInvitationAction)
+  registry.register(listMembershipInvitationsAction)
+  registry.register(revokeMembershipInvitationAction)
   registry.register(readTranscriptAction)
   registry.register(listTranscriptStudentsAction)
   registry.register(exportTranscriptAction)
   registry.register(listTranscriptExportsAction)
+  registry.register(listTranscriptAccessLogAction)
   return registry
 }

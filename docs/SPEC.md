@@ -747,6 +747,27 @@ nobody can log into. The development stand-in that writes to a file stays refuse
 production, and a process that is configured to send mail and cannot must fail where an
 operator sees it rather than accepting a sign-in it will silently drop.
 
+#### AUTH-6 Signing in returns you to what you were doing, in whatever tab you land in
+
+A visitor who follows a course join link or a connect link while signed out is asked to sign in
+first, and the app remembers where they were going in `sessionStorage` so the returning session lands
+back on it. That works only while the whole round trip stays in one browsing context, and it usually
+does not: a sign-in link arrives by email, and a mail client opens it in a new tab. That tab has no
+marker to read, so the visitor lands on the ordinary shell — enrolled in nothing, connected to
+nothing, with no explanation and no way back except the original link, which they may no longer have
+to hand.
+
+Where a visitor was going survives the sign-in round trip regardless of which tab completes it. The
+intent belongs to the sign-in that was issued, not to the tab that requested it, which is the same
+reasoning that puts a join link's own binding on the account rather than on the browser. Two
+mechanisms exist for this today (`PENDING_JOIN_LINK_KEY`, `PENDING_CONNECT_ORG_KEY`) and both have
+this defect; one mechanism replaces both rather than a third being added beside them.
+
+A returning destination is a place inside this application and is treated as untrusted input: it is
+validated as a same-origin path before anything navigates to it, so a sign-in link can never be made
+to carry someone to another origin. Redemption itself is unchanged — it still binds to the account
+that signed in, never to anything the link or the destination names.
+
 ### 15. Tenancy & Server Registration
 
 #### TEN-1 The tenant is an organization
@@ -1073,6 +1094,66 @@ it and when. It is deliberately not something the reinstated person can trigger,
 whole distinction ENRL-8's rework turns on — the person who was removed is exactly who must not be
 able to reverse it. Reinstating a person who is not currently ended changes nothing, the same
 idempotent no-op ending an already-ended enrolment gives.
+
+#### ENRL-10 An owner invites a colleague who is not yet in the organization
+
+ENRL-5 says a second instructor or a teaching assistant can be added to an organization, and
+`memberships.grant` plus the panel's team screen now change a role — but only for someone who
+already holds a membership in that organization, which nothing in production ever creates. The
+first membership any account gets is the `owner` row written at sign-up for its own personal
+organization. So the one thing ENRL-5 exists to make possible, adding a colleague, still cannot be
+done. That restriction is deliberate and should not simply be removed: `memberships.grant` refuses
+an address it cannot find so that it never becomes an oracle for which email addresses have
+accounts on this platform.
+
+An invitation resolves both. An owner invites an address to a role; the invitation is a bearer
+secret, returned once and stored only as a hash, revocable and optionally expiring — the shape
+`sign_in_tokens` and `course_join_links` already use, for the same reason. Redeeming it binds to
+the redeemer's own authenticated account, never to an address they supply, so it admits exactly the
+person who received it. Inviting an address that has no account is indistinguishable from inviting
+one that does, which is what keeps the oracle closed. An invitation grants a role and nothing else:
+it is not a sign-in, and redeeming one never creates an account or a session.
+
+#### ENRL-11 A membership can be revoked, and an organization always has an owner
+
+ENRL-5 grants a role and ENRL-10 invites a colleague who did not have one; neither takes anything
+away, and each deferred removal deliberately and said so. Together they create the gap: ENRL-10 is
+what first makes an outside account reachable as an owner, and once redeemed that owner can grant
+the original owner a lesser role with no recourse, because nothing revokes a membership and nothing
+distinguishes the account that created an organization from one invited into it. An owner who
+invites a colleague by mistake, or a colleague who leaves, cannot be removed at all — the only way
+out today is to have never let them in.
+
+A membership can be revoked by an owner, recorded the way granting already is. An organization
+never ends up with no owner: the last one cannot be revoked or demoted, and that is enforced where
+the write happens rather than trusted to the screen offering it. Revoking a membership removes
+staff authority and nothing else — it deletes no transcript and ends no enrolment, the same rule
+TEN-6 and ENRL-6 already hold to for the same reason. Whether an owner may be demoted by a peer at
+all, or only step down themselves, is the decision this requirement has to settle rather than leave
+to whichever screen is written first.
+
+#### ENRL-12 A live join link can be shown again to the instructor who owns it
+
+A course join link's secret is stored only as a SHA-256 hash, so the panel can show it once at
+creation and never again. That rule is right for `sign_in_tokens`, which prove one person's email
+address and are spent once. It fits a join link poorly: a join link is deliberately broadcast to a
+whole class, so the secrecy being protected has already been handed to everyone in it, while the
+cost falls entirely on the instructor — close the tab, or come back in week three to re-send the
+link, and the only way forward is to revoke and reissue, which breaks the link for every student who
+still holds the old one.
+
+A live link's secret is recoverable by the instructors of its own organization. It is stored
+encrypted at rest rather than in plaintext, so reading the database is not enough to enrol anybody:
+the key lives in the environment beside every other credential (CFG-5), never in the database, and
+the stored hash remains what redemption looks up — encryption is not searchable and must not become
+the lookup path.
+
+Showing a secret again is its own deliberate act, not a field that rides along on every listing: the
+links list continues to carry no secret at all, and revealing one is a separate, owner-or-instructor
+request for a single link. A revoked or expired link reveals nothing — there is no reason to hand
+back a secret that admits nobody. A deployment with no key configured keeps today's behaviour
+exactly: the secret is shown once at creation and the reveal is refused, rather than the platform
+failing to start or silently storing a secret it cannot protect.
 
 ### 20. Background Jobs & Admission
 
@@ -1542,6 +1623,34 @@ conversation. A failure to record is logged and does not prevent the person rece
 their answer: losing a transcript row is bad, and withholding a student's answer because
 of it is worse.
 
+#### CORE-7 How a person is addressed belongs to the surface, not to the core
+
+`answer.ts` builds `personRef` as `` `<@${identity.externalId}>` `` — Discord's own mention syntax,
+constructed in the one package that is meant to know nothing about any surface. The port's own
+documentation calls it "an opaque reference to the person", which it is not. On Discord this
+happens to be right. Everywhere else it is wrong, and visibly so: the web surface's identity is the
+account's own id, so a student asking a question through the panel is answered as
+`<@68690a1b-2ac2-4745-9f0a-ed680d9e7a58>- Hello` — a raw UUID wrapped in a syntax that renders as a
+mention on exactly one surface and as noise on every other.
+
+The core passes what it knows about the person — their display name, their first name, and the
+identity they hold on the surface the question arrived on — and each adapter decides how, or
+whether, to address them. That is the same split every other vendor concern in this repo already
+follows, and it is what stops the next surface inheriting the bug by default.
+
+#### CORE-8 A reply addresses the reader the way that surface expects
+
+Discord is a room with many people in it, so a reply names who it answers: the mention token, as
+the Python bot did and as the platform does today. That is unchanged, and it is not decoration —
+without it a student cannot tell which of several answers is theirs.
+
+The web chat is one person's own conversation, so a reply addresses nobody: naming the reader in a
+one-to-one thread is noise, and the panel already knows who is reading. A surface that needs a name
+and has no mention of its own uses the person's first name, falling back to what it actually has
+rather than inventing something — a display name, then nothing at all, never an internal id. No
+surface ever shows a person a raw account, person, or provider id: those are the platform's own
+bookkeeping, the same rule WEB-18 already applies to a course's vector store.
+
 ### 31. Model Adapter
 
 #### MDL-1 One package knows the vendor
@@ -1864,6 +1973,41 @@ has ended, says how each was admitted — a join link, a roster row, or a Discor
 instructor end an active enrolment or reinstate an ended one. Ending is behind a confirmation that
 says what it does and does not do: it stops that person asking this course, and it deletes neither
 their transcript nor the course's record of what was asked (ENRL-6).
+
+#### WEB-24 The chat composer stays put, and the thread follows the conversation
+
+The chat screen lays the thread and the composer out in ordinary flow: the thread has a minimum
+height and no maximum, so it grows with the conversation and the page scrolls, carrying the message
+box off the bottom of the window. A student partway through a long thread has to scroll back down
+to type, and the `scrollIntoView` that runs when messages change moves the whole page rather than
+the thread.
+
+The composer holds a fixed position above the footer, always reachable without scrolling. The
+thread occupies the main content area, scrolls within itself, and follows the conversation — moving
+to the newest message when the student sends one and when a reply arrives. Following the
+conversation means the newest message, not a jump that steals a reader's place: a student who has
+scrolled up to re-read something is not yanked back down, and is told there is something new
+instead. The page itself does not scroll horizontally at any width, and the composer never covers
+the last message.
+
+#### WEB-25 Redeeming a join link says it worked, and lands the student in the course
+
+A student who follows an instructor's join link is enrolled correctly and then dropped on the panel's
+home screen with nothing said. Nothing confirms the link worked, nothing names the course they just
+joined, and the one thing they came to do — ask that course a question — is several clicks away
+behind a course picker they have no reason to understand. `JoinLink.tsx` calls
+`redeemCourseJoinLink(secret).then(onRedeemed)` and discards the result, so the course id the server
+already resolved is thrown away in the browser.
+
+Redemption confirms itself, names the course by title, and takes the student straight to the web
+chat for that course with it already selected. A student who was already enrolled is told so plainly
+rather than shown an error — redeeming twice is a thing people do with a link they were sent, and it
+is not a failure. Confirmation is announced to a screen reader as well as shown, and it does not
+depend on the student noticing something that disappears on its own.
+
+The refusals ENRL-8 defines are untouched: a link that never existed, one that was revoked, and one
+that expired stay identical to each other, and none of them is allowed to become a message that says
+which it was.
 
 #### WEB-18 A course's knowledge files are managed in the panel
 

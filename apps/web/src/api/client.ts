@@ -36,17 +36,26 @@ import type {
   CourseSummary,
   CreatedCourseJoinLink,
   DiscordPersonLinkPreviewResponse,
+  DiscordServerBindingSummary,
   DuplicateProjectResult,
   InstallBeginResponse,
   InstallCallbackResponse,
   JobStatus,
+  CreatedMembershipInvitation,
+  GrantMembershipResult,
   McpPersonLinkPreviewResponse,
   MeResponse,
+  MembershipInvitation,
   OrganizationDeletionPreview,
+  OrganizationMembership,
+  OrganizationUsageReport,
   PersonLinkBeginResponse,
   Project,
+  RevealedCourseJoinLink,
+  SetSpendingCapResult,
   SignedInResponse,
   TenantDeletion,
+  TranscriptAccessLogEntry,
   TranscriptExport,
   TranscriptReadResult,
   TranscriptStudent,
@@ -123,11 +132,24 @@ async function request<T>(
   return parsed as T
 }
 
-/** AUTH-1: request a sign-in link. Always resolves — the API answers the same way whether or not the address has an account. */
-export function requestSignInLink(email: string): Promise<void> {
+/**
+ * AUTH-1: request a sign-in link. Always resolves — the API answers the
+ * same way whether or not the address has an account.
+ *
+ * `destination` (AUTH-6): the same-origin path this sign-in should return to
+ * once redeemed, whichever tab redeems it — `pages/JoinLink.tsx`/
+ * `pages/Connect.tsx` pass their own page's own path through
+ * `pages/SignIn.tsx`'s own prop of the same name. `undefined` for the
+ * ordinary "email me a link" screen, which has nowhere in particular to
+ * return to.
+ */
+export function requestSignInLink(
+  email: string,
+  destination?: string
+): Promise<void> {
   return request<void>('/auth/request-link', {
     method: 'POST',
-    body: { email },
+    body: { email, destination },
   })
 }
 
@@ -159,11 +181,22 @@ export function signOut(): Promise<void> {
  * `join_link_not_found`) identically for a secret that was never issued,
  * one that is revoked, and one that has expired (ENRL-4) — never a
  * different status or message across the three.
+ *
+ * WEB-25: `organizationId` and `alreadyEnrolled` travel alongside `courseId`
+ * — the server already resolved all three, and discarding the extra two was
+ * exactly what left `pages/JoinLink.tsx` unable to say which course a
+ * redeemer just joined, or open the panel there directly.
  */
-export function redeemCourseJoinLink(
-  secret: string
-): Promise<{ courseId: string }> {
-  return request<{ courseId: string }>('/join-links/redeem', {
+export function redeemCourseJoinLink(secret: string): Promise<{
+  courseId: string
+  organizationId: string
+  alreadyEnrolled: boolean
+}> {
+  return request<{
+    courseId: string
+    organizationId: string
+    alreadyEnrolled: boolean
+  }>('/join-links/redeem', {
     method: 'POST',
     body: { secret },
   })
@@ -192,6 +225,26 @@ export function completeDiscordInstall(
   return request<InstallCallbackResponse>(
     `/organizations/${organizationId}/discord-servers/install/callback`,
     { method: 'POST', body: input }
+  )
+}
+
+/**
+ * TEN-8: every Discord server binding `organizationId` has ever held,
+ * active or removed — `discordServers.list`'s own action
+ * (`packages/actions`), reached through `dispatchAction` the same way
+ * `discordServers.remove` already is. What `pages/Shell.tsx` reads on
+ * mount (and after an organization switch) so the panel's install state
+ * reflects what is actually bound server-side, not only what this browser
+ * session happened to install (`beginDiscordInstall`/`completeDiscordInstall`
+ * above only ever learn about *this* session's own callback).
+ */
+export function listDiscordServers(
+  organizationId: string
+): Promise<DiscordServerBindingSummary[]> {
+  return dispatchAction<DiscordServerBindingSummary[]>(
+    organizationId,
+    'discordServers.list',
+    {}
   )
 }
 
@@ -565,6 +618,25 @@ export function revokeCourseJoinLink(
 }
 
 /**
+ * ENRL-12: show a live join link's secret again. Refuses — the same
+ * `action_refused` `ApiError` every other refusal in this app already
+ * throws — for a revoked or expired link, one with nothing encrypted to
+ * show, or when this deployment has no encryption key configured at all;
+ * `CourseJoinLinkSummary.revealable` is what `components/JoinLinks.tsx`
+ * reads to avoid calling this for a link certain to refuse.
+ */
+export function revealCourseJoinLink(
+  organizationId: string,
+  linkId: string
+): Promise<RevealedCourseJoinLink> {
+  return dispatchAction<RevealedCourseJoinLink>(
+    organizationId,
+    'courseJoinLinks.reveal',
+    { linkId }
+  )
+}
+
+/**
  * WEB-22 — a course's own people, active and ended alike, and the two acts
  * an instructor may take on one: end an active enrolment (ENRL-6) or
  * reinstate an ended one (ENRL-9). Thin wrappers over `dispatchAction`, the
@@ -625,6 +697,159 @@ export function getJobStatus(
   jobId: string
 ): Promise<JobStatus> {
   return dispatchAction<JobStatus>(organizationId, 'jobs.get', { jobId })
+}
+
+/** JOB-2: every job the caller's organization has run, newest activity first — including one that failed permanently in a session this browser never held the id for. `pages/Jobs.tsx` is what calls this. */
+export function listJobs(organizationId: string): Promise<JobStatus[]> {
+  return dispatchAction<JobStatus[]>(organizationId, 'jobs.list', {})
+}
+
+/**
+ * COST-3/COST-4 — an instructor's own usage read and their organization's
+ * spending cap, each a thin wrapper over `dispatchAction`, the same generic
+ * action route every other screen in this app already reaches through.
+ * What `pages/Usage.tsx` calls.
+ */
+
+/** COST-4: usage cost per course in the caller's own organization, plus which students are approaching a course's own daily limit, for `day` (`YYYY-MM-DD`). */
+export function fetchOrganizationUsage(
+  organizationId: string,
+  day: string
+): Promise<OrganizationUsageReport> {
+  return dispatchAction<OrganizationUsageReport>(
+    organizationId,
+    'costLedger.organizationUsage',
+    { day }
+  )
+}
+
+/** COST-3: set the organization's spending cap to `capAmount` (a currency amount, e.g. `12.5` for $12.50 — never micros; `costLedger.setSpendingCap`'s own input schema converts), or clear it entirely with `null`. Only an existing owner may call this — refused (404, `action_refused`) for anyone else. */
+export function setSpendingCap(
+  organizationId: string,
+  capAmount: number | null
+): Promise<SetSpendingCapResult> {
+  return dispatchAction<SetSpendingCapResult>(
+    organizationId,
+    'costLedger.setSpendingCap',
+    { capAmount }
+  )
+}
+
+/**
+ * ENRL-5 — an owner's own team screen: who already holds a membership role
+ * in the caller's organization, and granting one to a second instructor or a
+ * teaching assistant. Thin wrappers over `dispatchAction`, the same shape
+ * every other pair above already uses. `components/Team.tsx` is what calls
+ * these.
+ */
+
+/** ENRL-5: every membership role held in the caller's organization — the role, who granted it, and when. Open to any member, not only an owner (`memberships.list`'s own description). */
+export function listMemberships(
+  organizationId: string
+): Promise<OrganizationMembership[]> {
+  return dispatchAction<OrganizationMembership[]>(
+    organizationId,
+    'memberships.list',
+    {}
+  )
+}
+
+/** ENRL-5: grant `role` to the account already in this organization under `email` — never on the caller's own account, and only an existing owner may call this (refused, 404, `action_refused`, for anyone else — the same not-found shape every other refusal in this app takes). */
+export function grantMembership(
+  organizationId: string,
+  email: string,
+  role: 'owner' | 'instructor' | 'assistant'
+): Promise<GrantMembershipResult> {
+  return dispatchAction<GrantMembershipResult>(
+    organizationId,
+    'memberships.grant',
+    { email, role }
+  )
+}
+
+/**
+ * ENRL-11: revoke the membership held by `accountId` — only an existing
+ * owner may call this; an owner's own membership may only ever be revoked
+ * by that owner stepping down, never by a peer; and the organization's
+ * last owner can never be revoked (refused, 404, `action_refused`,
+ * identically to every other refusal this action can give — see
+ * `memberships.revoke`'s own description).
+ */
+export function revokeMembership(
+  organizationId: string,
+  accountId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'memberships.revoke', { accountId })
+}
+
+/**
+ * ENRL-10 — inviting a colleague who is not yet in the organization: issuing
+ * an invitation (the secret is the response's own, one-time payload —
+ * nothing about it is ever fetched again), the outstanding list (never a
+ * secret among them), and revoking one. Each a thin wrapper over
+ * `dispatchAction`, the same route every other action in this app already
+ * reaches through — only an existing owner may call any of the three
+ * (`membership-invitations.ts`'s own module comment on why `.list` is
+ * owner-only here, unlike `memberships.list` above).
+ */
+
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `createCourseJoinLink`'s own optional `expiresAt`. */
+export function createMembershipInvitation(
+  organizationId: string,
+  email: string,
+  role: 'owner' | 'instructor' | 'assistant',
+  expiresAt?: number | null
+): Promise<CreatedMembershipInvitation> {
+  return dispatchAction<CreatedMembershipInvitation>(
+    organizationId,
+    'membershipInvitations.create',
+    {
+      email,
+      role,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    }
+  )
+}
+
+/** ENRL-10: every invitation the caller's organization has ever issued, newest first — never a secret among them. */
+export function listMembershipInvitations(
+  organizationId: string
+): Promise<MembershipInvitation[]> {
+  return dispatchAction<MembershipInvitation[]>(
+    organizationId,
+    'membershipInvitations.list',
+    {}
+  )
+}
+
+/** ENRL-10: revoke an invitation — stops it admitting anyone, ever again. */
+export function revokeMembershipInvitation(
+  organizationId: string,
+  invitationId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'membershipInvitations.revoke', {
+    invitationId,
+  })
+}
+
+/**
+ * ENRL-10: redeem an invitation, bound to the caller's own signed-in
+ * session — `apps/api`'s own `routes/membership-invitations.ts` never
+ * accepts anything beyond the secret itself in the request body. Throws
+ * `ApiError` (404, `membership_invitation_not_found`) identically for a
+ * secret that was never issued, one that is revoked, one that has expired,
+ * one that was already redeemed, one whose account email does not match the
+ * invited address, and one for an account that already holds a membership
+ * in that organization — never a different status or message across any of
+ * the six.
+ */
+export function redeemMembershipInvitation(
+  secret: string
+): Promise<{ organizationId: string; role: string }> {
+  return request<{ organizationId: string; role: string }>(
+    '/membership-invitations/redeem',
+    { method: 'POST', body: { secret } }
+  )
 }
 
 /**
@@ -734,6 +959,18 @@ export function listTranscriptExports(
   return dispatchAction<TranscriptExport[]>(
     organizationId,
     'transcripts.listExports',
+    { courseId }
+  )
+}
+
+/** ADMIN-2: a course's transcript-access audit trail, most recent first — who read or exported whose conversation, and when. Only an existing owner may call this (refused, 404, `action_refused`, for anyone else — the same not-found shape every other refusal in this app takes). */
+export function listTranscriptAccessLog(
+  organizationId: string,
+  courseId: string
+): Promise<TranscriptAccessLogEntry[]> {
+  return dispatchAction<TranscriptAccessLogEntry[]>(
+    organizationId,
+    'transcripts.listAccessLog',
     { courseId }
   )
 }

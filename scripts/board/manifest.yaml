@@ -2898,7 +2898,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 17
-  status: In progress
+  status: In review
   review: false
 - id: QA-9
   title: The end-to-end suite is a gate, not a coin flip
@@ -2915,7 +2915,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 17
-  status: In progress
+  status: In review
   review: false
 - id: WEB-23
   title: A join link's expiry is chosen when it is issued
@@ -2931,5 +2931,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 17
-  status: In progress
+  status: In review
   review: false

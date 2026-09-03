@@ -91,9 +91,15 @@ const app = buildApp({
   // at `0` (its own `NO_PRICING_CONFIGURED` fallback, logged as a warning
   // every time it fires) — a gap this harness had already, found while
   // writing `usage-panel.spec.ts` (COST-4): a real conversation's own cost
-  // never reached the ledger for *any* spec in this suite, silently. The
-  // documented default rates (`@bloombot/config#getModelPricingTable`, no
-  // argument), the same table `apps/api/src/index.ts` builds in
+  // never reached the ledger for any spec that talks to this API-hosted
+  // process, silently. (Not "any spec in this suite" — a narrower claim
+  // than an earlier version of this comment made: `course-configuration.spec.ts`
+  // dispatches through `packages/discord#handleMention` in-process, with
+  // its own separate dependency object and no `pricing` field of its own
+  // either, a distinct gap this rework did not chase — see
+  // `docs/DECISIONS.md` D-66.) The documented default rates
+  // (`@bloombot/config#getModelPricingTable`, no argument), the same table
+  // `apps/api/src/index.ts` builds in
   // production from `CONFIG.MODEL_PRICING_JSON` — real pricing, not a
   // fixture, since `FakeModelClient` reports no token usage either way and
   // `computeCost` estimates from the request/answer text's own length

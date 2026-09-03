@@ -93,6 +93,24 @@ export const organizationUsageAction: Action<
   },
 }
 
+/**
+ * The largest cap an instructor may set, in dollars — rework finding (a
+ * post-merge review of this slice): the schema below used to accept any
+ * nonnegative finite number, and `1e300` was verified to reach
+ * `organizations.setSpendingCap` unrejected, landing in `spending_cap_micros`
+ * (an `INTEGER` column) as a SQLite `REAL` with no throw — a cap that then
+ * never fires, silently. The panel's own input can never produce a value
+ * anywhere near this (a plain `<input type="text">`, parsed by
+ * `pages/Usage.tsx#parseCapAmount`), but "the form validates it" is not a
+ * defence for an HTTP route COST-3 now claims as a real write path — this
+ * bounds it server-side instead. $10,000,000 is arbitrary but generous:
+ * ordinary cumulative spend across an organization's whole lifetime is
+ * expected to be a small fraction of it, and `10_000_000 * 1_000_000` is
+ * `1e13`, comfortably inside `Number.MAX_SAFE_INTEGER` (~9.007e15) with
+ * room to spare.
+ */
+const MAX_SPENDING_CAP_AMOUNT = 10_000_000
+
 const setSpendingCapInputSchema = z.object({
   /**
    * The cap, in the organization's own currency — not micros. This
@@ -103,8 +121,23 @@ const setSpendingCapInputSchema = z.object({
    * (`toMicros`/`execute`, below, and `@bloombot/db`'s own
    * `hasReachedSpendingCap`, whose tri-state reads `null` as "no cap at
    * all" and `0` as "a cap that blocks every call").
+   *
+   * `.multipleOf(0.01)` — the same rework finding `MAX_SPENDING_CAP_AMOUNT`'s
+   * own comment describes: `1e-7` used to be accepted and rounded down to
+   * `0` by `toMicros` below, a total block on every student in the
+   * organization from a value an owner might reasonably read as "close
+   * enough to no limit." A currency amount has cents and nothing finer;
+   * this schema now agrees with the panel's own `^\d+(\.\d{1,2})?$`
+   * (`pages/Usage.tsx#parseCapAmount`) rather than merely trusting it.
+   * `.max(MAX_SPENDING_CAP_AMOUNT)` closes the other half — see that
+   * constant's own comment.
    */
-  capAmount: z.number().nonnegative().nullable(),
+  capAmount: z
+    .number()
+    .nonnegative()
+    .max(MAX_SPENDING_CAP_AMOUNT)
+    .multipleOf(0.01)
+    .nullable(),
 })
 type SetSpendingCapInput = z.infer<typeof setSpendingCapInputSchema>
 

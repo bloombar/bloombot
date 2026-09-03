@@ -199,6 +199,36 @@ describe('Usage (COST-3/COST-4)', () => {
     )
   })
 
+  // Rework finding — the "Clear cap" test above dispatches `handleClear`,
+  // which sends `null` directly and never runs `parseCapAmount` at all;
+  // nothing pinned its own blank-field branch. Blanking the field and
+  // clicking *Save* is the path that actually calls `parseCapAmount('')` —
+  // if that branch ever returned `{ ok: true, value: 0 }` instead of
+  // `null`, this is what would still pass with `handleClear`'s own test
+  // green, while an owner who meant to remove the cap silently set it to
+  // `0` and blocked every student's next question instead.
+  it('blanking the field and clicking Save cap clears the cap through parseCapAmount, not by sending 0', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({ spendingCapMicros: 5_000_000 })
+    )
+    setSpendingCap.mockResolvedValue({
+      organizationId: 'org-1',
+      spendingCapMicros: null,
+    })
+
+    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+    await screen.findByText(/Cap set at \$5\.00/)
+
+    fireEvent.change(screen.getByLabelText('Spending cap ($)'), {
+      target: { value: '' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save cap' }))
+
+    await waitFor(() =>
+      expect(setSpendingCap).toHaveBeenCalledWith('org-1', null)
+    )
+  })
+
   it('a malformed cap amount is refused client-side, next to the field, without calling setSpendingCap', async () => {
     fetchOrganizationUsage.mockResolvedValue(report())
 

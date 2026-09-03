@@ -21,7 +21,7 @@ import {
   setSpendingCapAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionRefusedError } from '../src/errors.js'
+import { ActionInputError, ActionRefusedError } from '../src/errors.js'
 import {
   seedOrganization,
   seedOrganizationWithProject,
@@ -196,6 +196,90 @@ describe('costLedger.setSpendingCap (COST-3)', () => {
       organizations.getOrganizationById(organizationId, testDb.db)
         ?.spendingCapMicros
     ).toBe(12_500_000)
+  })
+
+  // Rework finding — `toMicros` (`actions/cost-ledger.ts`) rounds once, at
+  // the end, rather than truncating; every value the rest of this file
+  // uses (12.5, 5, 5.25, 0) happens to be exactly representable once
+  // multiplied by `1_000_000`, so none of them can tell `Math.round` apart
+  // from `Math.floor`. `2.01` can: `2.01 * 1_000_000` is
+  // `2009999.999999998` in IEEE 754 double precision, so `Math.floor`
+  // would store `2_009_999` — a cap an instructor never asked for, off by
+  // a whole micro-cent — while `Math.round` (what this action actually
+  // does) stores the exact `2_010_000` `$2.01` means.
+  it('rounds a cap amount that floating-point cannot represent exactly, rather than truncating it', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      setSpendingCapAction,
+      { capAmount: 2.01 },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    expect(result.spendingCapMicros).toBe(2_010_000)
+  })
+
+  // Rework finding — `setSpendingCapInputSchema` used to accept any
+  // nonnegative finite number. `1e-7` reached `toMicros` and rounded down
+  // to `0` — a cap an owner never intended (a value that reads as "close
+  // to no limit") that blocks every student's next question the instant
+  // it is set, since `hasReachedSpendingCap`'s `spent >= cap` is `0 >= 0`
+  // before anyone has spent anything at all. `.multipleOf(0.01)` refuses
+  // it before it ever reaches `toMicros`.
+  it('refuses a cap amount finer than a cent, rather than silently rounding it down to a total block', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        setSpendingCapAction,
+        { capAmount: 0.0000001 },
+        { organizationId, db: testDb.db, accountId: owner.id }
+      )
+    ).rejects.toThrow(ActionInputError)
+    expect(
+      organizations.getOrganizationById(organizationId, testDb.db)
+        ?.spendingCapMicros
+    ).toBeNull()
+  })
+
+  // Rework finding — verified directly against a real SQLite database:
+  // `1e300` reached `organizations.setSpendingCap` unrejected and landed in
+  // `spending_cap_micros` (an `INTEGER` column) as a SQLite `REAL`, with no
+  // throw — a cap that then never fires, silently, since `spent >= cap` is
+  // never true against a number this large. `.max(MAX_SPENDING_CAP_AMOUNT)`
+  // refuses it before it ever reaches the repo.
+  it('refuses a cap amount past the documented ceiling, rather than storing an unusable value', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        setSpendingCapAction,
+        { capAmount: 1e300 },
+        { organizationId, db: testDb.db, accountId: owner.id }
+      )
+    ).rejects.toThrow(ActionInputError)
+    expect(
+      organizations.getOrganizationById(organizationId, testDb.db)
+        ?.spendingCapMicros
+    ).toBeNull()
   })
 
   // COST-3's own text: "clearing the cap ... must be possible and must be

@@ -206,8 +206,12 @@ outstanding until the surface exists.
 - **TEN-8, WEB-4** — the panel derives Discord install state from a prop set only by an OAuth
   callback in the same browser session, so a reload offers "Install" for a server already bound.
   That is the sentence TEN-8 was written to make true, and `discordServers.list` exists to serve it.
-- **COST-3** — `setSpendingCap` has no caller and the column has no default, so every organization's
-  cap is `NULL` forever and `hasReachedSpendingCap` can never fire. The enforcement half is real.
+- **COST-3** — `setSpendingCap` has no caller, so every organization's cap is `NULL` forever and
+  `hasReachedSpendingCap` can never fire. The enforcement half is real. (`spendingCapMicros`'s own
+  `NULL` default is correct, not part of this defect — a rework review agreed it is the tri-state "no
+  cap at all" `hasReachedSpendingCap` already documents, and inventing a nonzero default would change
+  behaviour for every existing organization; see `docs/DECISIONS.md` D-66. An earlier version of this
+  entry named the missing default as outstanding alongside the missing caller, which was not correct.)
 - **COST-4** — the platform-administrator view exists; the instructor's own view of their courses'
   spend and the students near their limits does not.
 - **ENRL-5** — an owner has no way to add a second instructor or a teaching assistant. The MCP

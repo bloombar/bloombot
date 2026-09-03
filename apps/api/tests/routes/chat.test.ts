@@ -502,10 +502,20 @@ describe('routes/chat.ts (WEB-10)', () => {
 
     const app = await buildTestApp(testDb.db, { model })
 
-    // A first question costs something real: `FakeModelClient` reports no
-    // token usage, so `computeCost` estimates and prices it from the
-    // request/answer text's own length (`@bloombot/core`'s own
-    // `pricing.ts`), never `0` (COST-6).
+    // A first question is recorded — but not at a magnitude this test can
+    // claim. Rework finding (a review of this slice caught it): the comment
+    // here used to say "costs something real … never 0 (COST-6)", which is
+    // false in this harness specifically — `buildTestApp`
+    // (`apps/api/tests/helpers/build-test-app.ts`) wires no `pricing`
+    // either, so `answerQuestion` falls through to its own
+    // `NO_PRICING_CONFIGURED` fallback (`@bloombot/core#answer.ts`, an
+    // all-zero rate table) and this call is genuinely priced at `costMicros:
+    // 0`. What this test actually proves is COST-3's own `spent >= cap`
+    // boundary at its edge (`0 >= 0`, below) — the same boundary a cap of
+    // `0` fires against with no spend recorded at all — not that a real
+    // magnitude was priced; that end-to-end claim belongs to (and is
+    // exercised by) `e2e/usage-panel.spec.ts` instead, which reads a
+    // genuinely nonzero `cost_micros` back from a real pricing table.
     const first = await request(app)
       .post(
         `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`

@@ -18,7 +18,18 @@
  *    this run). `FakeModelClient` reports no token usage, so the cost
  *    this spec reads back is `@bloombot/core#pricing.ts`'s own estimate
  *    (COST-6) — real money was still "spent" by this platform's own
- *    accounting, just not a real provider bill.
+ *    accounting, just not a real provider bill. **Rework finding:** a
+ *    single fixture-sized reply prices under a cent (a real run recorded
+ *    `cost_micros: 133`) — `pages/Usage.tsx#formatMicros` rounds to two
+ *    decimal places, so the panel legitimately still shows `$0.00` for
+ *    it, and a `toContainText` assertion against that display cannot
+ *    tell "priced at a genuine sub-cent amount" apart from "priced at
+ *    `0`, the exact bug the pricing table below exists to close" —
+ *    proven directly here: deleting `pricing: getModelPricingTable()`
+ *    from `e2e/support/start-api.ts` left every assertion in this file
+ *    passing. Step 5, below, reads `cost_ledger_entries.cost_micros`
+ *    back from the database instead, the same directness
+ *    `spending-cap.spec.ts` already uses for `spending_cap_micros`.
  *  - **Same LINK-1/enrolment caveat `chat.spec.ts`'s own module comment
  *    states** — `enrolments.enrolViaRoster` is called on the account's own
  *    connected web person, not a `discord`-surface one; see that spec's
@@ -36,6 +47,7 @@ import { expect, test } from '@playwright/test'
 import {
   accounts,
   closeDatabase,
+  costLedger,
   courses,
   enrolments,
   memberships,
@@ -122,13 +134,18 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    module comment explains why this, not a fresh person, is what makes
   //    the browser's own chat request resolve to an active enrolment).
   let personId: string
+  // Hoisted out of the `try` block below: step 5 reads the ledger back
+  // directly by this same id, the way `spending-cap.spec.ts` already reads
+  // `spending_cap_micros` back directly rather than trusting the panel's
+  // own display.
+  let organizationId: string
   const db = openDatabase(E2E_DATABASE_PATH)
   try {
     const account = accounts.getAccountByEmail(email, db)
     if (!account) throw new Error('setup failed: account not found')
     const [membership] = memberships.listMembershipsForAccount(account.id, db)
     if (!membership) throw new Error('setup failed: membership not found')
-    const organizationId = membership.organizationId
+    organizationId = membership.organizationId
 
     const project = projects
       .listProjects(organizationId, db)
@@ -185,14 +202,33 @@ test("an instructor sees their course's spend and a student approaching its dail
   // does, regardless of what precedes it.
   await expect(thread.locator('strong')).toHaveText('fixture')
 
-  // 5. Back on the Usage screen: this course now shows a real, nonzero
-  //    spend and one call — never $0.00, since COST-6's own estimate prices
-  //    a call the provider reported no usage for rather than leaving it
-  //    free.
+  // 5. Back on the Usage screen: this course's own call count moved from 0
+  //    to 1 — real, visible proof a conversation was recorded. The dollar
+  //    figure next to it is not a reliable signal for *this* assertion
+  //    (this file's own module comment on why: a single fixture-sized
+  //    reply prices under a cent, and `formatMicros` rounds to two decimal
+  //    places, so `$0.00` here is not the bug this spec exists to catch).
   await page.getByRole('button', { name: 'Usage' }).click()
   await expect(usageByCourse).toContainText(courseTitle)
-  await expect(usageByCourse).not.toContainText('$0.00 · 0 calls')
-  await expect(usageByCourse).toContainText(/\$\d+\.\d{2} · 1 call/)
+  await expect(usageByCourse).toContainText('1 call')
+  await expect(usageByCourse).not.toContainText('0 calls')
+
+  // What actually proves COST-6's own estimate priced this call rather
+  // than leaving it free: the ledger row itself, read back directly —
+  // never `0`, the exact value `e2e/support/start-api.ts`'s own
+  // `NO_PRICING_CONFIGURED` fallback would have recorded before its
+  // `pricing:` field was wired through.
+  const usageReadDb = openDatabase(E2E_DATABASE_PATH)
+  let recordedCostMicros: number
+  try {
+    recordedCostMicros = costLedger.getOrganizationSpentMicros(
+      organizationId,
+      usageReadDb
+    )
+  } finally {
+    closeDatabase(usageReadDb)
+  }
+  expect(recordedCostMicros).toBeGreaterThan(0)
 
   // 6. And the student who just asked is now shown as approaching the
   //    course's own daily limit — by person id, never a name or an email

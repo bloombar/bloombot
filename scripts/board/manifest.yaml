@@ -2915,7 +2915,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 17
-  status: In progress
+  status: In review
   review: false
 - id: QA-9
   title: The end-to-end suite is a gate, not a coin flip

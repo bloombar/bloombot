@@ -78,6 +78,37 @@ function requireEnv(name: string): string {
   return value
 }
 
+/**
+ * ENRL-12 — `JOIN_LINK_ENCRYPTION_KEY`, base64-encoded 32 bytes for
+ * AES-256-GCM. Optional, unlike `requireEnv` above: an unset key is a
+ * supported deployment, not a startup failure — `docs/SPEC.md`'s own text,
+ * "a deployment with no key configured keeps today's behaviour exactly."
+ * A *set but malformed* value is different: silently ignoring it would
+ * leave an operator believing reveal works when it never will, so this
+ * fails loudly at startup instead, the same "a bad environment fails
+ * immediately" discipline `packages/config/src/env.ts`'s own module comment
+ * holds the schema-validated half of the environment to — this one just
+ * cannot go through that schema, since it is a credential (CFG-5).
+ */
+function readJoinLinkEncryptionKey(): Buffer | undefined {
+  const value = process.env['JOIN_LINK_ENCRYPTION_KEY']
+  if (!value) return undefined
+  let key: Buffer
+  try {
+    key = Buffer.from(value, 'base64')
+  } catch {
+    throw new Error(
+      'apps/api: JOIN_LINK_ENCRYPTION_KEY is set but is not valid base64 (see env.example)'
+    )
+  }
+  if (key.byteLength !== 32) {
+    throw new Error(
+      `apps/api: JOIN_LINK_ENCRYPTION_KEY must decode to 32 bytes for AES-256-GCM, got ${key.byteLength} (see env.example)`
+    )
+  }
+  return key
+}
+
 async function main(): Promise<void> {
   // CFG-5: credentials live in `.env`; load it before anything reads CONFIG,
   // which validates the whole environment on first access.
@@ -143,6 +174,10 @@ async function main(): Promise<void> {
   // own doc comment just above for why a missing key degrades chat rather
   // than stopping this whole process from starting.
   const openaiApiKey = process.env['OPENAI_API_KEY']
+  // ENRL-12 — read once here, alongside every other credential this process
+  // reads at startup; `readJoinLinkEncryptionKey`'s own doc comment has the
+  // "optional, but fails loudly if malformed" reasoning.
+  const joinLinkEncryptionKey = readJoinLinkEncryptionKey()
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -184,6 +219,7 @@ async function main(): Promise<void> {
     logger,
     publicAppUrl,
     attachmentStorageDir,
+    ...(joinLinkEncryptionKey ? { joinLinkEncryptionKey } : {}),
     // Must-fix 1 of the API-1..6 rework: refuses outright rather than
     // silently logging sign-in links in production — see
     // `logging-email-sender.ts`.

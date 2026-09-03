@@ -48,6 +48,7 @@ import { importRosterAction } from './roster.js'
 import { organizationUsageAction, setSpendingCapAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
+  createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
 } from './course-join-links.js'
@@ -115,12 +116,14 @@ export {
 } from './cost-ledger.js'
 export {
   createCourseJoinLinkAction,
+  createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
   type CreatedCourseJoinLink,
   type CourseJoinLinkSummary,
+  type RevealedCourseJoinLink,
 } from './course-join-links.js'
 export {
   checkEnrolmentAccessAction,
@@ -180,9 +183,22 @@ export {
  * value it reads once, at startup — so this default only ever runs for a
  * caller that supplied nothing, which today means only a test, and a test
  * belongs under `tmp/`, never `data/` (see `docs/DECISIONS.md` D-32).
+ *
+ * `joinLinkEncryptionKey` (ENRL-12) is the same class of dependency
+ * `attachmentStorageDir` above already is — a credential (CFG-5) this
+ * package has no way to read for itself (`course-join-links.ts`'s own
+ * module comment) — but, unlike `attachmentStorageDir`, has no fallback
+ * here: omitted, `createCourseJoinLinkAction`/`createRevealCourseJoinLinkAction`
+ * are simply built with no key, which is exactly the "no key configured"
+ * behaviour ENRL-12 requires (creation and the one-time reveal work as
+ * before; `courseJoinLinks.reveal` always refuses). `apps/api/src/index.ts`
+ * always threads its own decoded `JOIN_LINK_ENCRYPTION_KEY` through
+ * explicitly when one is set, the same as every other `CONFIG`/credential
+ * value it reads once and passes down.
  */
 export function createPlatformRegistry(options?: {
   attachmentStorageDir?: string
+  joinLinkEncryptionKey?: Buffer
 }): ActionRegistry {
   const attachmentStorage = createFilesystemAttachmentStorage(
     options?.attachmentStorageDir ?? './tmp/attachments'
@@ -213,9 +229,12 @@ export function createPlatformRegistry(options?: {
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
   registry.register(setSpendingCapAction)
-  registry.register(createCourseJoinLinkAction)
+  registry.register(createCourseJoinLinkAction(options?.joinLinkEncryptionKey))
   registry.register(listCourseJoinLinksAction)
   registry.register(revokeCourseJoinLinkAction)
+  registry.register(
+    createRevealCourseJoinLinkAction(options?.joinLinkEncryptionKey)
+  )
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)

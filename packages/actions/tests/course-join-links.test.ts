@@ -1,15 +1,21 @@
 /**
  * ENRL-3, ENRL-4: `courseJoinLinks.create`/`.revoke` (dispatched actions)
  * and `redeemCourseJoinLink` (a plain function — see that file's own module
- * comment for why it is not dispatched).
+ * comment for why it is not dispatched). ENRL-12's own `courseJoinLinks.reveal`
+ * is below, in its own `describe` block.
  */
 
-import { enrolments, people } from '@bloombot/db'
-import { createHash, randomUUID } from 'node:crypto'
+import {
+  courseJoinLinks as courseJoinLinksRepo,
+  enrolments,
+  people,
+} from '@bloombot/db'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   createCourseJoinLinkAction,
+  createRevealCourseJoinLinkAction,
   listCourseJoinLinksAction,
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
@@ -34,7 +40,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     )
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: course.id },
       { organizationId, db: testDb.db, accountId: ownerId }
     )
@@ -65,7 +71,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     const person = people.createPerson(organizationId, {}, testDb.db)
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: course.id },
       { organizationId, db: testDb.db, accountId: ownerId }
     )
@@ -88,7 +94,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     const second = people.createPerson(organizationId, {}, testDb.db)
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: course.id },
       { organizationId, db: testDb.db, accountId: ownerId }
     )
@@ -135,7 +141,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
 
     await expect(
       dispatch(
-        createCourseJoinLinkAction,
+        createCourseJoinLinkAction(),
         { courseId: course.id, expiresAt: Date.now() - 1000 },
         { organizationId, db: testDb.db, accountId: ownerId }
       )
@@ -151,7 +157,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     const tooLate = people.createPerson(organizationId, {}, testDb.db)
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: course.id },
       { organizationId, db: testDb.db, accountId: ownerId }
     )
@@ -189,7 +195,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     const accountId = randomUUID()
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: course.id },
       { organizationId, db: testDb.db, accountId: ownerId }
     )
@@ -218,7 +224,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
         testDb.db
       )
       await dispatch(
-        createCourseJoinLinkAction,
+        createCourseJoinLinkAction(),
         { courseId: course.id },
         { organizationId, db: testDb.db, accountId: ownerId }
       )
@@ -247,7 +253,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
         course: courseB,
       } = seedOrganizationWithCourse(testDb.db)
       await dispatch(
-        createCourseJoinLinkAction,
+        createCourseJoinLinkAction(),
         { courseId: courseB.id },
         { organizationId: orgB, db: testDb.db, accountId: ownerB }
       )
@@ -272,7 +278,7 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     } = seedOrganizationWithCourse(testDb.db)
 
     const created = await dispatch(
-      createCourseJoinLinkAction,
+      createCourseJoinLinkAction(),
       { courseId: courseB.id },
       { organizationId: orgB, db: testDb.db, accountId: ownerB }
     )
@@ -280,6 +286,268 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     await expect(
       dispatch(
         revokeCourseJoinLinkAction,
+        { linkId: created.linkId },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+})
+
+describe('courseJoinLinks.reveal (ENRL-12)', () => {
+  // A live link's secret is recoverable by the instructors of its own
+  // organization — proved by *redeeming* the revealed secret, not merely by
+  // comparing it against the one `.create` returned: a reveal that decrypted
+  // to the wrong bytes but happened to satisfy a naive string check would
+  // still pass a weaker assertion.
+  it("reveals a live link's secret again, and the revealed secret actually redeems", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    const revealed = await dispatch(
+      createRevealCourseJoinLinkAction(key),
+      { linkId: created.linkId },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(revealed.secret).toBe(created.secret)
+    const enrolment = redeemCourseJoinLink(
+      revealed.secret,
+      person.id,
+      testDb.db
+    )
+    expect(enrolment?.personId).toBe(person.id)
+  })
+
+  // Mutation this pins down: putting the ciphertext (or its nonce/tag) in
+  // `toSummary` would leak a live bearer secret's own encrypted form into
+  // every list response for a course's links, not only the one just
+  // created — checked against the actual serialized body, not merely that
+  // the parsed object lacks the field (`toHaveProperty` would miss a caller
+  // that spread the raw row through under a different key).
+  it('listing never carries secretCiphertext, secretNonce or secretAuthTag, even with a key configured', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+
+    await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    const listed = await dispatch(
+      listCourseJoinLinksAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(listed).toHaveLength(1)
+    const serialized = JSON.stringify(listed)
+    expect(serialized).not.toContain('secretCiphertext')
+    expect(serialized).not.toContain('secretNonce')
+    expect(serialized).not.toContain('secretAuthTag')
+    expect(serialized).not.toMatch(/secret_(ciphertext|nonce|auth_tag)/)
+  })
+
+  it('a revoked link refuses to reveal its secret — "no reason to hand back a secret that admits nobody"', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    await dispatch(
+      revokeCourseJoinLinkAction,
+      { linkId: created.linkId },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    await expect(
+      dispatch(
+        createRevealCourseJoinLinkAction(key),
+        { linkId: created.linkId },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  it('an expired link refuses to reveal its secret', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id, expiresAt: Date.now() + 1000 },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    // The row this test needs (expired, but not revoked) cannot be produced
+    // through the dispatched action alone — `createInputSchema`'s own
+    // `.refine` (this file's own "refuses ... already in the past" test)
+    // means only a value already past by the time it is read back gets
+    // this row here, so the expiry is written directly, the same "seed
+    // exactly the state under test, through the repo, not the action"
+    // convention `docs/DECISIONS.md`'s migration tests already use.
+    testDb.db.$client
+      .prepare('update course_join_links set expires_at = ? where id = ?')
+      .run(Date.now() - 1000, created.linkId)
+
+    await expect(
+      dispatch(
+        createRevealCourseJoinLinkAction(key),
+        { linkId: created.linkId },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // ENRL-12's own deployment-compatibility promise: no key configured is
+  // not a failure to start, and never blocks creation or the one-time
+  // reveal `.create` already gives — only asking to see the secret *again*
+  // is refused.
+  it('with no encryption key configured, creation still returns the secret once, and reveal is refused', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    expect(created.secret).toBeTruthy()
+
+    await expect(
+      dispatch(
+        createRevealCourseJoinLinkAction(),
+        { linkId: created.linkId },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // A row from before this shipped has no ciphertext at all — redemption is
+  // unaffected (the hash is untouched), and reveal is refused exactly like
+  // any other link with nothing encrypted to show, even when a key is
+  // configured *now*.
+  it('a link created before this shipped (no ciphertext) still redeems, and its reveal is refused', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const secret = 'pre-existing-link-secret'
+
+    const link = courseJoinLinksRepo.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: createHash('sha256').update(secret).digest('hex'),
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        createRevealCourseJoinLinkAction(key),
+        { linkId: link.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    const enrolment = redeemCourseJoinLink(secret, person.id, testDb.db)
+    expect(enrolment?.personId).toBe(person.id)
+  })
+
+  // Authenticated encryption's whole point: a tampered ciphertext is
+  // rejected outright, never silently decrypted into garbage a caller could
+  // mistake for the real secret — and the refusal this throws carries
+  // nothing that could leak the real one either.
+  it('tampered ciphertext is rejected rather than decrypted to garbage', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const key = randomBytes(32)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    const stored = testDb.db.$client
+      .prepare(
+        'select secret_auth_tag as secretAuthTag from course_join_links where id = ?'
+      )
+      .get(created.linkId) as { secretAuthTag: string }
+    // Flip one bit of the tag's own decoded bytes, then re-encode — decoded,
+    // not the base64 text itself, so the tampered value stays valid base64
+    // of the same 16-byte length; any single-bit change is enough for GCM's
+    // authentication check to fail.
+    const tagBytes = Buffer.from(stored.secretAuthTag, 'base64')
+    tagBytes[0] = (tagBytes[0] ?? 0) ^ 0xff
+    const tampered = tagBytes.toString('base64')
+    testDb.db.$client
+      .prepare('update course_join_links set secret_auth_tag = ? where id = ?')
+      .run(tampered, created.linkId)
+
+    let caught: unknown
+    try {
+      await dispatch(
+        createRevealCourseJoinLinkAction(key),
+        { linkId: created.linkId },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(ActionRefusedError)
+    // The real secret never appears anywhere in what this throws — the
+    // plaintext must not leak into an error body even on the path that
+    // exists precisely because decryption failed.
+    expect(JSON.stringify(caught)).not.toContain(created.secret)
+    expect((caught as Error).message).not.toContain(created.secret)
+  })
+
+  it("revealing refuses another organization's link, identically to a missing one", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithCourse(testDb.db)
+    const {
+      organizationId: orgB,
+      ownerId: ownerB,
+      course: courseB,
+    } = seedOrganizationWithCourse(testDb.db)
+    const key = randomBytes(32)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: courseB.id },
+      { organizationId: orgB, db: testDb.db, accountId: ownerB }
+    )
+
+    await expect(
+      dispatch(
+        createRevealCourseJoinLinkAction(key),
         { linkId: created.linkId },
         { organizationId: orgA, db: testDb.db }
       )

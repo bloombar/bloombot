@@ -12,6 +12,12 @@
  * Every function here operates on the link's *hash*. The plaintext secret is
  * generated and returned to the caller exactly once, by `@bloombot/actions`'
  * `course-join-links.ts` — this file never sees it and never writes it.
+ * ENRL-12 adds a second copy of the secret, `secretCiphertext`/`secretNonce`/
+ * `secretAuthTag` — that stays true of *those* too: this file stores and
+ * returns them exactly as it stores and returns `secretHash`, opaque bytes
+ * it never decrypts, encrypts, or otherwise interprets. `@bloombot/actions`
+ * is where the AES-256-GCM key lives, and the only place plaintext is ever
+ * produced or read back.
  */
 
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
@@ -37,6 +43,16 @@ export interface NewCourseJoinLink {
   courseId: string
   /** SHA-256 hash of the secret; see `@bloombot/actions`' `course-join-links.ts`. */
   secretHash: string
+  /**
+   * ENRL-12 — the same secret `secretHash` hashes, encrypted (AES-256-GCM)
+   * so an instructor can see it again. Omitted (stored `null`) whenever no
+   * encryption key was configured at creation time — `secretNonce`/
+   * `secretAuthTag` follow the same all-or-nothing rule; a caller that
+   * supplies one is expected to supply all three.
+   */
+  secretCiphertext?: string | null
+  secretNonce?: string | null
+  secretAuthTag?: string | null
   /** `null`/omitted: no expiry, valid until revoked. */
   expiresAt?: number | null
   createdByAccountId: string
@@ -55,6 +71,9 @@ export function createJoinLink(
       organizationId,
       courseId: input.courseId,
       secretHash: input.secretHash,
+      secretCiphertext: input.secretCiphertext ?? null,
+      secretNonce: input.secretNonce ?? null,
+      secretAuthTag: input.secretAuthTag ?? null,
       expiresAt: input.expiresAt ?? null,
       createdByAccountId: input.createdByAccountId,
       createdAt: Date.now(),

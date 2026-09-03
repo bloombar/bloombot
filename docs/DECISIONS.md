@@ -7854,3 +7854,188 @@ Final counts after the correction above: 90 node:test (unchanged), 2184 vitest a
 `packages/actions/tests/memberships.test.ts` — no new file), 27 e2e (unchanged — the correction is action-level,
 driven through tests, not the screen, per the follow-up brief). `npx drizzle-kit check` (from `packages/db`):
 clean — this correction touched no schema.
+
+---
+
+## D-74 — `packages/db`/`packages/actions`/`apps/api`: ENRL-12 — a live join link's secret is recoverable by the instructors of its own organization, encrypted at rest under a key that lives only in the environment
+
+**Problem.** `sign_in_tokens` and `course_join_links` both stored a bearer secret as only a SHA-256 hash — right
+for a sign-in link, which proves one person's email and is spent once, but wrong for a join link: D-67's own
+"Out of scope, deliberately" carried this forward twice (D-73's own entry, above, and D-68's) without ever
+naming it as anything but future work. A join link is deliberately broadcast to a whole class, so the secrecy a
+hash protects is already handed to everyone the instructor shared it with, while the cost of losing it — a
+closed tab, a mid-term re-send — falls entirely on the instructor, whose only recourse today is
+`courseJoinLinks.revoke` followed by a fresh `.create`, which breaks the link for every student still holding
+the old one. `docs/SPEC.md`'s own ENRL-12 names the shape: encrypted at rest, the key in the environment beside
+every other credential (CFG-5), the hash still the lookup path, revealing a separate request rather than a list
+field, and a deployment with no key behaving exactly as it does today.
+
+**Choice — the hash stays the lookup path; a second, independent copy is added for reveal, never a
+replacement.** `course_join_links` gains three nullable columns, `secret_ciphertext`/`secret_nonce`/
+`secret_auth_tag` (`packages/db/migrations/0020_curvy_marauders.sql`, three plain `ALTER TABLE ... ADD`
+statements — no backfill, so no dedicated `migrate.test.ts` case beyond adding the new column names to that
+file's own `expect(schema.course_join_links)` assertion, which did not exist before this slice and now does,
+the same "pin the columns a slice adds" convention `memberships`'/`sign_in_tokens`' own entries in that test
+already follow). `redeemJoinLink`/`redeemJoinLinkForWebAccount` (`packages/db/src/repos/course-join-links.ts`)
+are untouched — still `WHERE secret_hash = ?` — because encryption is not searchable and was never proposed as
+the lookup path; proved by mutation, not merely stated: pointing `findLiveJoinLinkByHash`'s own `WHERE` at
+`secretCiphertext` instead of `secretHash` turned fifteen tests red across both `packages/db/tests/` and
+`packages/actions/tests/`, including every pre-existing redemption test this slice did not otherwise touch.
+
+**Choice — encryption and decryption both live in `packages/actions/src/actions/course-join-links.ts`, never in
+`packages/db`.** That file's own module comment already claimed "the plaintext secret never sees this file" for
+`secretHash`; this slice keeps that claim true for the ciphertext too by construction, not merely by discipline
+— `repos/course-join-links.ts` stores and returns `secretCiphertext`/`secretNonce`/`secretAuthTag` exactly as it
+already did `secretHash`, opaque bytes it never encrypts, decrypts, or reads the meaning of; that file's own
+module comment is updated to say so explicitly. `encryptSecret`/`decryptSecret` (module-private, `node:crypto`'s
+`createCipheriv`/`createDecipheriv`, AES-256-GCM) sit beside `hashSecret`/`generateSecret`, the same file D-34
+already put those in for the identical "this package has no dependency on `@bloombot/auth`, and duplicating a
+handful of lines costs less than a new cross-package dependency" reasoning.
+
+**Choice — a fresh, random 96-bit nonce every call, stored alongside the ciphertext it encrypted, never derived
+or reused.** GCM's confidentiality guarantee is broken outright by reusing a nonce under the same key, so
+`encryptSecret` takes no nonce parameter a caller could supply or reuse by mistake — it always calls
+`randomBytes(12)` itself. The auth tag is likewise stored, not recomputed: `decryptSecret` calls
+`decipher.setAuthTag(...)` before `decipher.final()`, so a tampered ciphertext, nonce, or tag throws before a
+single byte of plaintext is returned — GCM's own authentication check running inside `final()` is what
+authenticated encryption is for, over a bare block-cipher mode with no integrity check of its own. Proved by
+mutation: flipping one bit of a stored auth tag's own decoded bytes (not the base64 text — a text-level edit
+risks producing invalid base64 that decodes to a different length rather than the same bytes with one bit
+wrong, a weaker proof) and calling `courseJoinLinks.reveal` throws `ActionRefusedError`, never returns garbage;
+skipping `setAuthTag`/`final()` entirely (returning only `decipher.update`'s own output — GCM's stream-cipher
+half, which decrypts before the tag is ever checked) made the tampered-ciphertext test fail, confirming the tag
+check is what the test actually pins down, not an incidental side effect of some other check.
+
+**Choice — the key is threaded as an explicit argument, never read by `packages/actions` itself.** This package
+holds no dependency on `@bloombot/config` at all (`actions/index.ts`'s own module comment, `packages/core`'s
+identical discipline per `docs/DECISIONS.md`) — `createCourseJoinLinkAction`/`createRevealCourseJoinLinkAction`
+are both factories taking an optional `Buffer`, the same "a dependency this package cannot construct for
+itself" shape `course-attachments.ts`'s own `createAttachCourseAttachmentAction` already takes an
+`AttachmentStorage` for. `createCourseJoinLinkAction` itself changes shape — from a plain exported object to a
+zero-or-one-argument factory — which is why its own name did not have to change: the factory-naming convention
+this codebase already uses (`create<Verb><Noun>Action` for an action named `<noun>.<verb>`) happens to spell the
+same identifier for an action whose own verb is "create". Every existing call site (`packages/actions/tests/
+course-join-links.test.ts`) changed from `createCourseJoinLinkAction` to `createCourseJoinLinkAction()` — nine
+call sites, zero behaviour change, since none of them cared about ENRL-12. `apps/api/src/index.ts` reads
+`JOIN_LINK_ENCRYPTION_KEY` directly (a credential, CFG-5 — never through `packages/config`'s schema, the same
+`BOT_TOKEN`/`DISCORD_CLIENT_SECRET`/`OPENAI_API_KEY` treatment), decodes it as base64, and requires it decode to
+exactly 32 bytes or refuses to start — unlike `BOT_TOKEN`, an _unset_ key is not a startup failure (ENRL-12's
+own deployment-compatibility promise), but a key that is _set and malformed_ is: silently ignoring it would let
+an operator believe reveal works when it never will, the same "a bad environment fails immediately" discipline
+`packages/config/src/env.ts`'s own module comment holds the schema-validated half of the environment to.
+Threaded through `apps/api/src/server.ts`'s `ServerDependencies.joinLinkEncryptionKey` and
+`createPlatformRegistry`'s own new `joinLinkEncryptionKey` option, the same path `attachmentStorageDir` already
+takes — omitted anywhere along that chain, both factories build with no key, which reproduces the "no key
+configured" behaviour exactly: `courseJoinLinks.create` still returns the secret once, and
+`courseJoinLinks.reveal` refuses unconditionally, proved directly (not merely by omission) by a dedicated test
+and by mutation (skipping the `if (!encryptionKey) throw ...` line was not separately mutation-tested, since
+every "no key" test already exercises the un-mutated code path — the deployment-compatibility promise is what
+the test asserts, not a line coverage target).
+
+**Choice — who may reveal: `courseJoinLinks.reveal`'s policy is `courseJoinLinks.revoke`'s policy object,
+reused, not a second one that happens to look the same.** ENRL-12's own text says "the instructors of its own
+organization" — this codebase's existing gate for that phrase, for this exact resource, is `.revoke`'s
+`{ resource: 'courseJoinLink', access: 'write' }` descriptor with `resolve` scoped to the link's own
+organization: any member (owner, instructor or assistant — `.create`'s identical policy already permits all
+three, un-role-differentiated) of the organization the link's course belongs to, the same set `.create`/`.list`/
+`.revoke` already permit, and no wider. Reusing the literal policy object (`policy: revokeCourseJoinLinkAction.policy`),
+not a duplicate with the same two field values, is what keeps the two gates from drifting apart under a future
+edit to either action alone. A non-member (an account whose own session belongs to a different organization
+entirely, or no session at all) is refused before `dispatch` ever runs `courseJoinLinks.reveal`'s own `execute`
+— `apps/api/src/routes/actions.ts`'s own membership check, the same gate every other action-route call already
+passes through, and — since `courseJoinLinks.reveal` is registered into `createPlatformRegistry` and reachable
+only through that one generic route — exercised automatically by `apps/api/tests/tenant-isolation.test.ts`'s own
+derived matrix (foreign-organization session, no session, disabled-account session) with no new test written by
+hand. A caller _within_ the right organization but for a link belonging to a different one is refused by
+`resolve` itself, the identical TEN-5 shape `.revoke`'s own "refuses another organization's link, identically to
+a missing one" test already pins — mirrored for `.reveal` in this slice.
+
+**What an instructor sees for a link issued before this shipped.** Its row carries `null` for all three of
+`secret_ciphertext`/`secret_nonce`/`secret_auth_tag` — the migration adds the columns with no backfill, so every
+existing row reads exactly like a row created today with no key configured. Redemption is unaffected (it never
+reads these columns at all); `courseJoinLinks.reveal` refuses, identically to a revoked or expired link — proved
+directly by a dedicated test that creates such a row through the repo's own `createJoinLink` with the ciphertext
+fields omitted, confirms the reveal refuses, and confirms the same secret still redeems through
+`redeemCourseJoinLink` unchanged.
+
+**How this sits beside D-71's own `sign_in_tokens.destination`.** That entry records a join-link redemption's
+own return address — which, for the join-link flow specifically, is the join link's URL, secret and all —
+living in `sign_in_tokens.destination` as plaintext for the token's own fifteen-minute life. That is a real,
+already-accepted plaintext exposure of the identical class of secret this entry now encrypts at rest — not a
+contradiction, because the two rows answer different questions under different trust boundaries. A sign-in
+token is single-use, expires in fifteen minutes, and is deleted from relevance the moment it is consumed
+(`consumeSignInToken` marks `usedAt`); its `destination` is read back exactly once, by the same request that
+proved the recipient controls the mailed address, and nothing about ENRL-12 changes that row, that flow, or its
+own already-recorded tradeoff. A join link's own `course_join_links` row is the opposite shape on every axis
+that matters here: long-lived (valid until revoked, sometimes for a whole term), read by nobody but the
+instructor who asks to see it again, and reachable by an entirely different, ordinary membership-scoped
+`dispatch` call rather than a token consumed once at redemption. Encrypting the row a join link's secret lives
+in for the long run, while leaving a fifteen-minute, single-use, already-scoped-down token row alone, is the
+same "match the durability of the protection to the durability of the exposure" reasoning this build applies
+elsewhere (D-2's integer money, D-32's `tmp/`-not-`data/` test isolation) — not a gap the two entries leave
+between them.
+
+**Judgment call — "who may reveal" resolved to "any member," not narrowed to `owner`/`instructor`.** The brief's
+own text ("the instructors of its own organization... `courseJoinLinks.create` is already gated; match it")
+reads two ways: "instructor" as the `MEMBERSHIP_ROLES` value, or "instructor" as this SPEC's own loose shorthand
+for organization staff generally, the reading `courseJoinLinks.create`'s own un-role-differentiated policy
+already commits to. Chosen: match `.create`'s actual gating exactly, not a stricter one it does not itself
+enforce — a `.create`/`.list`/`.revoke`/`.reveal` quartet that suddenly disagreed about which roles may act on
+the same link would be a harder-to-explain platform than one where all four agree. An inference, not a measured
+fact: this repository has no existing place ENRL-3's "instructor" is cashed out as a `MEMBERSHIP_ROLES` role
+check, so there is nothing to measure it against beyond the sibling actions' own, already-shipped behaviour.
+Revisit if a future requirement narrows `.create`/`.list`/`.revoke` themselves to `owner`/`instructor` — `.reveal`
+should follow, via the shared policy object, with no separate edit.
+
+**Out of scope, deliberately.** Redemption's authorization and binding (unchanged — this slice added no new
+caller of `redeemJoinLink`/`redeemJoinLinkForWebAccount`, and neither function's own signature or behaviour
+changed). `memberships.grant`/`.revoke` — untouched. The chat surface, and MCP's tool surface —
+`apps/mcp/src/tool-surface.ts`'s own allowlist does not name `courseJoinLinks.reveal`, so it is unreachable from
+a model caller by construction, the same as every action that file's own module comment already reasons about
+omitting; this slice adds no entry there. Rotating or re-encrypting a link's own ciphertext under a new key —
+raised in the brief as a question, not a requirement: nothing here reads `JOIN_LINK_ENCRYPTION_KEY` more than
+once per process lifetime, and changing its value between deployments leaves every previously-encrypted row
+undecryptable under the new key (its own reveal now behaves like a tampered-ciphertext refusal, byte-identical
+to every other refusal this action gives) while redemption — the property that actually matters to a student —
+stays unaffected throughout, since it never touches this key at all. If key rotation becomes a real operational
+need, it reads like its own requirement (a re-encryption job, keyed identically to `apps/worker`'s other
+background jobs, JOB-1), not a change to this entry's own design. No `apps/web` change accompanies this slice:
+the brief's own "files and interfaces involved" names only `packages/db`, `packages/actions` and `apps/api`, and
+`components/JoinLinks.tsx` has no affordance today to reveal a secret from, the same "a UI enhancement the
+brief did not ask for" reasoning D-73's own entry gives for `components/Team.tsx`. `courseJoinLinks.reveal` is
+reachable today only by direct dispatch or through `POST /organizations/:id/actions/courseJoinLinks.reveal` —
+a real, tested, authorized capability with no panel affordance yet, the same shape several actions in this
+codebase already sat in before their own panel screen landed.
+
+**A carried-over cheap-fix, closed in the same slice.** `membershipInvitations.create`'s own `expiresAt`
+`.refine` (`packages/actions/src/actions/membership-invitations.ts`) already existed — its own doc comment even
+claimed it "mirrors `courseJoinLinks.create`'s own `expiresAt` exactly, including its own... refinement" — but
+carried no test of its own, unlike `courseJoinLinks.create`'s identical refinement, which
+`packages/actions/tests/course-join-links.test.ts`'s own "refuses creating a join link whose expiresAt is
+already in the past" already pinned. Confirmed live over the shape the brief described:
+`POST /organizations/<id>/actions/membershipInvitations.create` with `{"email":"x@y.edu","role":"instructor",
+"expiresAt":1}` would have answered `200` with a plaintext secret no invitee could ever redeem, indistinguishable
+from success to the owner who sent it, until this slice added the missing test. Mutated and confirmed red (the
+`.refine(...)` call removed entirely, leaving only `.number().int().positive()`) before restoring it, byte for
+byte (`diff` against a saved copy, confirmed identical). `courseJoinLinks.create`'s own equivalent was already
+pinned; no change needed there.
+
+**Evidence.** Every mutation this entry names above was tried directly against the real source, confirmed to
+turn a specific, named test red, then reverted and confirmed byte-identical to before (`diff` against a saved
+copy in every case): the hash-vs-ciphertext lookup swap (fifteen tests, both packages), the revoked/expired
+liveness check short-circuited to `true` (two tests, one each), the auth-tag check skipped (one test), and
+`toSummary` widened to include `secretCiphertext` (one test). The `membershipInvitations.create` refinement
+removal is recorded separately, just above.
+
+Final counts: 90 node:test (unchanged), 2197 vitest across 183 files (baseline at `ed3cfea` was 2184/183 — +13,
+no new file: +8 in `packages/actions/tests/course-join-links.test.ts`'s own new `courseJoinLinks.reveal (ENRL-12)`
+describe block, +1 in `packages/actions/tests/membership-invitations.test.ts`, +3 derived in `apps/api/tests/
+tenant-isolation.test.ts`'s own foreign-session/no-session/disabled-account matrix for the new route, +1 derived
+in `packages/actions/tests/access-audit.test.ts`'s own per-descriptor loop; `catalog.test.ts` gained a name in
+an existing array, no new case), 27 e2e (unchanged — this slice is backend-only, per the "out of scope" note
+above). `npx drizzle-kit check` (from `packages/db`): clean, no drift.
+
+**Limits.** The judgment call above (who may reveal) is exactly as firm as `.create`'s own existing gating —
+if a future slice tightens that, this one should tighten in step, via the shared policy object. Key rotation is
+named but not built (above). No panel affordance exists yet for an instructor to actually click "show again" —
+the backend capability is complete and tested; the screen is not this slice's own scope.

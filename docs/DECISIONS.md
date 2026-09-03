@@ -6093,3 +6093,233 @@ cases; (2) the new `packages/db/tests/enrolments.test.ts` merge-collision case; 
 for the `role="status"` live region's own announced text (a hole a prior review pass left: deleting the region
 entirely left every existing test green) — verified failing the same way, by temporarily removing the region and
 rerunning.
+
+## D-61 — `packages/db`/`packages/actions`/`packages/jobs`: JOB-6 — a finished job stops carrying the personal data it was given, `payload` clears only from a state no retry follows, and `jobs.get` drops the field outright
+
+**Problem.** A security review of the roster-import panel found that `roster.import`'s own job payload — an
+entire roster CSV, real names, emails and Discord handles — was never cleared once the import finished, and
+`jobs.get` handed the parsed payload back to any member of the organization for the life of the row. Correctly
+tenant-scoped, crossing no privilege boundary (anyone who could read it could have dispatched the import
+themselves), but a retention gap on exactly the class of data `data/*.db`/`logs/*.log`/`results/*.csv`/
+`rosters/*.csv` are hook-protected for, sitting in the one place nothing protects.
+
+**Which states clear `payload`, and why exactly those two.** `repos/jobs.ts#completeJob` (`succeeded`) and
+`#markJobFailed` (`failed`, attempts exhausted or a permanent error) both null the column in the same write that
+records the terminal status — clearing it as a separate pass would leave a window where a crash between the two
+writes lands a terminal job that still carries its payload, defeating the guarantee as surely as never clearing
+it. `#rescheduleJobForRetry` (the job returns to `pending`, a retry still ahead of it) deliberately leaves
+`payload` untouched: JOB-2's retry and JOB-3's once-only execution across a worker restart both re-read it for
+the next attempt. `claimNextJob`'s own `eligible()` is what makes this safe — it only ever claims a `pending` row
+or a `running` one whose lease lapsed, never a `succeeded` or `failed` one, so a terminal row is never reclaimed
+and its payload is never needed again.
+
+**Schema.** `jobs.payload` moved from `text('payload').notNull()` to nullable (`schema.ts`). Two migrations:
+`0015` (drizzle-kit generated, the SQLite 12-step table rebuild the column-nullability change requires) and a
+hand-written `0016` — `UPDATE jobs SET payload = NULL WHERE status IN ('succeeded', 'failed')` — backfilling
+every row that reached a terminal state before this shipped. Written narrowly on purpose: only `payload`, only
+`succeeded`/`failed` rows, the same WHERE clause the repo layer itself now enforces going forward, stated in the
+migration's own comment so a future reader does not have to re-derive what it touches from the SQL alone.
+
+**`jobs.get` stops returning `payload` outright, not merely once it is cleared.** Two options: hide the field
+once the row's own `payload` happens to be `null`, or drop it from the action's response unconditionally. Chose
+the latter. Nothing that calls this action today reads `payload` off the response — `ScaffoldButton.tsx` and
+`RosterImport.tsx` (checked directly, not assumed) only ever read `status`/`lastError`/`result`, and
+`apps/web/src/api/types.ts`'s own hand-mirrored `JobStatus` interface already omitted `payload` before this
+slice touched it, for the same reason `apps/mcp/src/tool-surface.ts`'s own allowlist already excludes it: a
+completed `roster.import` job's *report* carries a subset of the same PII in several of its own fields, which is
+exactly why `roster.import` itself is deliberately kept off the MCP tool surface. Returning `payload` only while
+a job is still `pending`/`running` would have closed less than the platform-level read action stopping
+entirely — a caller belonging to the organization can read a roster CSV back through `jobs.get` for as long as
+the row is queued, before this slice's own retention write ever runs, which is the same PII exposure through a
+narrower window rather than a closed one. `result` (the outcome — SRV-6..8) is untouched; this action still
+returns the handler's own report, which is the whole point of the "way to see the outcome" `jobs.get` exists for.
+
+**The runner's own defensive branch, and why it earned a test.** `runNextJob` (`packages/jobs`) parses
+`job.payload` for whatever handler claimed the row; once the column's type is `string | null`, `JSON.parse`
+alone would silently treat a `null` payload as the JSON value `null` (JavaScript coerces `JSON.parse`'s argument
+to the string `"null"` first, so this does not even throw) rather than failing loudly. Added an explicit guard —
+a claimed job with a `null` payload fails immediately with a named reason, the same "defensive, not a case this
+function's contract expects a caller to hit" shape the existing missing-handler branch already uses. Per the
+reasoning above this should be structurally unreachable (`eligible()` never reclaims a terminal row), but it is
+cheap to prove and it is exactly the kind of invariant a future edit could quietly break, so
+`packages/jobs/tests/runner.test.ts` reaches past the repo layer (the same device the existing "a payload that
+will not parse" test already uses) to null a claimed row's payload directly and asserts the guard fires.
+
+**Tests, failing-then-passing.** Verified by stashing only the three source edits (`repos/jobs.ts`,
+`actions/jobs.ts`, `runner.ts`) with the schema/migration/test changes still in place, rerunning, and restoring:
+all seven new assertions failed cleanly (a still-populated `payload` where `null` was expected, `payload`
+present in `jobs.get`'s own response, and the retry-then-succeed regression still succeeding when the defensive
+guard test expected it to fail) with no other test affected, then passed once the stash was restored.
+`packages/db/tests/jobs.test.ts` proves `completeJob`/`markJobFailed` clear `payload` and
+`rescheduleJobForRetry` does not, at the repo layer; `packages/jobs/tests/runner.test.ts` proves the regression
+that matters most — a job that fails but has attempts left is retried through two real `runNextJob` calls, and
+the second attempt's handler still receives the same payload the first one did — plus the succeeded-clears-
+payload case and the null-payload defensive branch, both through the real runner rather than an assertion about
+a column; `packages/actions/tests/reads.test.ts` proves `jobs.get`'s own response — pending or finished — never
+carries `payload`, asserted against the actual response shape (`Object.keys`, a `JSON.stringify` scan for the
+seeded student's email/handle), not against the repo function. `apps/web/tests/roster-import.test.tsx`'s
+existing "a finished report names every unparseable row" case, and the `roster-import-panel.spec.ts` e2e,
+needed no change and still pass — the panel's own `JobStatus` type never declared a `payload` field to begin
+with, so nothing in `apps/web` read the field this slice removes.
+
+## D-62 — `playwright.config.ts`/`e2e/support`: QA-9 — the e2e suite fails under its own parallelism, `workers: 1` over a database per spec file
+
+**Problem.** `npm run e2e` failed intermittently — `SQLITE_BUSY`/`database is locked`, raised from inside
+transactions in specs unrelated to one another. Reproduced on purpose before changing anything: five consecutive
+baseline runs at the commit this slice started from failed three of five, each time a different spec, each
+failure a UI timeout after a panel action silently never completed. `e2e/tmp/logs/e2e-api.log` named the actual
+cause underneath the UI timeout: `SqliteError: database is locked`, `code: SQLITE_BUSY` from
+`course-join-links.ts#redeemJoinLinkForWebAccount`'s transaction, and separately `code: SQLITE_BUSY_SNAPSHOT`
+from `courses.ts#createCourse`'s — both inside `apps/api`'s own single process, both from real, concurrently
+committing connections, not a single slow one.
+
+**Diagnosis, confirmed rather than assumed.** `playwright.config.ts`'s existing `fullyParallel: false` only
+serialises tests *within* one spec file; it set no `workers` limit, so Playwright's default pool (half the
+machine's CPUs — 4, on this machine's 8) ran separate spec files concurrently, in separate worker processes, all
+driving the one `apps/api` process (`e2e/support/start-api.ts`) against the one SQLite file at
+`E2E_DATABASE_PATH`. The second half of the mechanism, checked directly rather than inferred: ten of the twelve
+spec files (`course-configuration.spec.ts` among them) also open their *own* direct
+`openDatabase(E2E_DATABASE_PATH)` connection — a second, independent connection to the same file, live at the
+same moment as the API's, used to seed state past the browser or assert past the API's own read actions. With
+more than one worker, a spec's own direct write and a *different*, concurrently running spec's request landing
+on the API can commit at the same moment, and SQLite answers one of them `SQLITE_BUSY` (ordinary lock
+contention) or `SQLITE_BUSY_SNAPSHOT` (a deferred transaction's read snapshot invalidated by someone else's
+concurrent commit). The brief's warning proved out exactly: `busy_timeout` (already 5000ms, `packages/db/src/
+client.ts`) only helps the first of those two — a `SQLITE_BUSY_SNAPSHOT` transaction cannot be waited out, it has
+to restart, so raising the timeout further would not have touched the failures actually observed in the log.
+
+**Fix chosen: `workers: 1`, not a database per spec file.** Both were viable — the diagnosis is genuine
+multi-*process* concurrency, and either "stop sharing the database" or "stop running concurrently" removes it
+(SPEC's own QA-9 phrasing names both). Chose `workers: 1`: it removes the *cross-spec* concurrency — with one
+worker, Playwright runs one spec file to completion before starting the next, so no other spec's own direct
+`openDatabase` connection is ever open at the same time — it needs no new machinery (no per-worker API process,
+no per-worker database path plumbed through `env.ts`, `start-api.ts` and every direct `openDatabase` call), and
+the cost is small: the suite's own wall clock went from ~11-12s to ~20-26s across ten runs (`npm run e2e`
+includes `pree2e`'s build; `npx playwright test` alone measured ~21s). A database per spec file was rejected as
+materially more machinery — a distinct API process per worker, a distinct database path threaded through
+everywhere a spec currently imports `E2E_DATABASE_PATH` — to buy back roughly ten seconds on a fourteen-test
+suite. If this suite grows enough that ten seconds compounds into a real cost, that machinery is the next move;
+nothing here forecloses it.
+
+**Correction: this was first written as "removes the concurrent connection entirely," which overreaches — the
+fix is circumstantial, not structural.** `workers: 1` only rules out one spec file's connection racing a
+*different* spec file's. It does nothing to the two-connections-on-one-file design *within* a single spec: two
+specs hold their own spec-owned `openDatabase(E2E_DATABASE_PATH)` handle open *across* browser interactions that
+themselves drive real API writes to the same file — `roster-import-panel.spec.ts` (`workerDb` stays open while
+the page clicks "Import roster", and `claimAndRunRosterImportJob(workerDb, …)` writes while the panel polls) and
+`course-knowledge-files.spec.ts` (the same shape, around `claimAndRunJob`). If that helper's own commit lands at
+the same moment the browser's poll makes the API commit, SQLite still returns `SQLITE_BUSY` to one of them, with
+the identical symptom this record already describes — and `require-single-worker.ts`'s own module comment
+previously told the next diagnostician that could not happen. Both that comment and this record now say plainly
+that the remaining window is those two specs, not a claim that no window remains. The "second failure signature"
+paragraph below is the supporting evidence this correction rests on — read that paragraph's own caveat about
+what was and was not actually verified there before treating it as more than a symptom-level match: it is exactly
+why "removes the concurrent connection entirely" overreached, since a UI-element-never-appeared failure is not
+provably a `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` instance, only consistent in shape with one, which means the
+parallelism hazard was never fully characterised by the transaction story alone. QA-9's own implementation is
+unchanged by this correction; if the residual window in those two specs is judged worth closing, that is real
+work scoped separately, not folded into this comment-and-record fix.
+
+**Made hard to silently undo.** `workers: 1` alone is a config line indistinguishable, to a contributor chasing
+suite speed, from an arbitrary default — nothing stops it being raised back without anyone learning why, and the
+failure that follows (intermittent, in an unrelated-looking spec) would not obviously point back at the change
+that caused it. `e2e/support/require-single-worker.ts`, wired in as `globalSetup`, reads Playwright's own
+*resolved* worker count — after every CLI override, not just the config file — and throws immediately, naming
+QA-9 and this record, if it is ever anything but `1`. Verified directly: `npx playwright test --workers=4` now
+fails before any process starts, with that message.
+
+**Rejected: `retries`.** Not considered a fix at all — `playwright.config.ts`'s own existing comment on
+`retries: 0` already states the reasoning ("a flake here should be diagnosed, not hidden by Playwright's own
+retry loop") and this slice's brief repeated it; re-running a real API and database until one attempt gets lucky
+is exactly the "coin flip" QA-9 is about not being.
+
+**Verification.** Ten consecutive `npm run e2e` runs post-fix, each one `14 passed`, zero `SQLITE_BUSY`/
+`SQLITE_BUSY_SNAPSHOT` lines appended to `e2e/tmp/logs/e2e-api.log` across any of them (the three present in that
+file are timestamped during the pre-fix baseline reproduction, ~7 minutes earlier than the first post-fix run).
+`npm run lint && npx prettier --check . && npm run typecheck && npm test` all pass unchanged
+(90 node:test, 1926 vitest across 172 files, matching this slice's stated baseline).
+
+**A second failure signature, observed pre-fix, added here so a recurrence is not misdiagnosed.** The JOB-6
+rework's own reviewer hit a 13/14 failure at `e2e/course-people-panel.spec.ts:108`
+(`getByTestId('organization-switcher')` never appearing) in a worktree still at `f094665` — before this
+record's own `workers: 1` had landed there. **What was actually observed, and by what means, stated precisely
+so this is not read as more than it is:** the reviewer read Playwright's own reporter output — a locator
+timeout, not the `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` assertion text this record's baseline reproduction hit —
+and did not open `e2e/tmp/logs/e2e-api.log` for that run. Whether that log carried a `SQLITE_BUSY`/
+`SQLITE_BUSY_SNAPSHOT` line is therefore unverified, not established either way, and this record does not claim
+to have ruled a database-level cause in or out for that specific instance. What *is* true: a UI element never
+appearing after a panel action is the same *symptom* this record's own baseline reproduction described ("a UI
+timeout after a panel action silently never completed"), consistent in shape with the same root cause (a
+concurrent worker's own request or direct database connection interleaving with this spec's) rather than proven
+to be a distinct defect — multiple specs open their own direct `openDatabase(E2E_DATABASE_PATH)` connection
+(this record's own "Diagnosis" paragraph), and `course-people-panel.spec.ts` is one of them. Recorded as a
+second signature rather than a new entry because `require-single-worker.ts` (this record's own "Made hard to
+silently undo" paragraph) is exactly what rules it out going forward: a worktree that predates that guard is
+not evidence against the fix, but a reader who only knows the `SQLITE_BUSY` text would not recognise this one as
+the same class of failure if it recurred. Not reproduced against the fixed suite — ten consecutive `workers: 1`
+runs (the paragraph above) stayed at `14 passed`, and QA-9's own implementation is unchanged by this note.
+
+## D-63 — `apps/web`: WEB-23 — a relative-duration control for a join link's expiry, not a datetime field
+
+**Problem.** `courseJoinLinks.create` has always accepted an optional `expiresAt`, but
+`components/JoinLinks.tsx` never offered it, so every link the panel issued was permanent and its own
+`formatExpiry` could only ever print "No expiry" — dead text on a column WEB-20 required to mean something.
+
+**Control chosen: a small set of relative durations (`EXPIRY_OPTIONS`), not a raw datetime picker.** The
+brief's own reasoning held up: an instructor issuing a link for a term is thinking in weeks, not timestamps,
+and `createInputSchema`'s own refusal (`expiresAt` must be strictly `> Date.now()`, `packages/actions/src/
+actions/course-join-links.ts`) is exactly the failure mode a datetime field invites — a picker lets someone
+select today's date with no time component and land on a value already in the past by the time the request
+lands. A `<select>` of durations (`Never`, `1 day`, `1 week`, `1 month`, `1 term (16 weeks)`) cannot produce
+that: every non-`Never` value is `Date.now() + durationMs`, computed the moment the request is actually sent
+(`handleCreate`), never at the moment the option was selected — so a pause between choosing and clicking
+never lets the value fall behind. `Never` (`durationMs: null`) is the default and sends no third argument at
+all, matching `createCourseJoinLink`'s existing "omitted means no expiry" and leaving an instructor who never
+touches the control with exactly today's unchanged behaviour.
+
+**Wording: "Never", not "No expiry", in the select.** The list already reads a link with no expiry as "No
+expiry" (`formatExpiry`, asserted by both `join-links.test.tsx` and `join-links-panel.spec.ts`). Labelling the
+select's own default option identically would put two elements carrying that same text on screen at once the
+moment a link with no expiry exists — a real strict-mode collision for any test (or screen reader Get-by-text
+navigation) that looks for "No expiry" without first scoping to the list. `Never` says the same thing without
+colliding with the list's own established string.
+
+**Expired is distinct from revoked.** `formatExpiry` already branched on `revokedAt` before `expiresAt`; this
+slice added a third branch — `expiresAt <= Date.now()` and not revoked reads "Expired …", never folded into
+"Revoked …". The two are different causes (the clock, versus an instructor's own act) and ENRL-9/WEB-22's own
+distinction between an ended and a revoked state (D-59/D-60) is exactly this same discipline applied here: an
+expired-but-not-revoked link still offers a "Revoke" control, since expiry stopping *new* admissions is not
+the same act as an instructor choosing to stop it.
+
+**Recorded, not previously stated: the expiry select resets to "Never" after a successful create.**
+`handleCreate` calls `setExpiryOption('none')` alongside `setCreated(result)` — an instructor who just issued a
+one-day link and then clicks "Create join link" again for an unrelated second link starts from "Never" again,
+not from "1 day" carried over. This was a deliberate choice, not an oversight left undocumented by accident:
+this is the same shape `created`'s own reset already takes (nothing about the just-issued link persists forward
+into the form for the next one), and *not* resetting risks the opposite, quieter mistake — a duration set once
+for a short-lived trial link silently reused on a later, unrelated link the instructor never meant to expire at
+all, admitting nobody past a day they never chose. Starting each new link from the same default (`'none'`, this
+control's own stated default above) is also the smaller behavioural surface: every created link's own row in the
+list already shows its own actual expiry once `refresh()` returns, so nothing about a just-issued link's choice
+is lost, only *not carried forward* to the next, distinct one. The trade is real either way — this file records
+it rather than leaving a future reader to guess whether it was considered.
+
+**Verification.** New tests fail on the pre-change component (`git stash` of `JoinLinks.tsx` alone, tests
+kept): 3 of 12 in `join-links.test.tsx` failed — choosing an expiry, recomputing it at send time rather than
+selection time, and expired-vs-revoked — the other 9 (pre-existing WEB-20 cases) stayed green throughout,
+confirming they exercise this slice's own change rather than something already there. `npm run lint && npx
+prettier --check . && npm run typecheck && npm test` all pass: 1930 vitest across 172 files (baseline 1926 —
+four new cases, no new files), 90 node:test unchanged. `npm run e2e`: 15 passed (baseline 14 plus one new
+WEB-23 case), no intermittent failures.
+
+**QA-9 rework (cheap-fixes 3 and 4).** Two gaps an independent review found in this slice's own tests, closed
+without changing `JoinLinks.tsx`'s behaviour: (3) the "choosing an expiry" test above only bounded `1w`'s own
+value (`> before`, `<= before + a week + 1000ms`), so any duration up to a week — including a mistyped `16 * 7`
+as `16 * 6` in `EXPIRY_OPTIONS` — shipped green; `join-links.test.tsx` now has a table-driven case pinning every
+timed option (`1d`/`1w`/`1mo`/`1term`) to its exact millisecond duration off a frozen clock, confirmed to fail
+against exactly that mutation and to leave the other 16 cases green. (4) the expired-vs-revoked case above used
+one expired-not-revoked link and one revoked-with-null-expiry link, never one that is both, so moving
+`formatExpiry`'s `expiresAt <= Date.now()` branch above its `revokedAt` one survived every existing assertion;
+a new case seeds a link with both fields set in the past and asserts it still reads "Revoked …", confirmed to
+fail against exactly that reordering. `join-links.test.tsx` now has 17 cases (12 WEB-20 plus 5 WEB-23, up from
+4); `apps/web`'s own `web` vitest project passed all 17 both times.

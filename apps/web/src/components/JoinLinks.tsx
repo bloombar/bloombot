@@ -28,6 +28,20 @@
  * label. The URL stays on screen regardless (`created` is never cleared by
  * a copy attempt), so a failed copy always leaves the secret still
  * copyable by hand.
+ *
+ * **WEB-23: an expiry is chosen at issue, not left to default forever.**
+ * `createCourseJoinLink`/`courseJoinLinks.create` have always accepted an
+ * `expiresAt`, but nothing before this offered it, so every link this
+ * panel issued was permanent and `formatExpiry` below could only ever print
+ * "No expiry" for one. The control is a small set of relative durations
+ * (`EXPIRY_OPTIONS`), not a raw datetime field: an instructor issuing a
+ * link for a term is thinking in weeks, not timestamps, and a picker
+ * invites exactly the past-value refusal `createInputSchema` exists to
+ * catch (`packages/actions/src/actions/course-join-links.ts`'s own comment
+ * on why). The chosen duration is only ever added to `Date.now()` at the
+ * moment `handleCreate` actually sends the request — never at the moment
+ * the option was selected — so an instructor who pauses between choosing
+ * and clicking never has the request's own value fall behind.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -45,6 +59,7 @@ import type {
 import { AddIcon, CopyIcon, DisableIcon, JoinLinkIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
+import { FormField } from './FormField.js'
 import { useModal } from './modal/ModalProvider.js'
 
 export interface JoinLinksProps {
@@ -57,10 +72,34 @@ function joinUrl(secret: string): string {
   return `${window.location.origin}/join/${secret}`
 }
 
+// WEB-23: the durations this panel offers, in place of a raw datetime field
+// — see the module comment above for why. `durationMs: null` is "no
+// expiry", the default and today's unchanged behaviour; every other value
+// is added to `Date.now()` at send time, never stored as an absolute
+// timestamp before then.
+const EXPIRY_OPTIONS: {
+  value: string
+  label: string
+  durationMs: number | null
+}[] = [
+  { value: 'none', label: 'Never', durationMs: null },
+  { value: '1d', label: '1 day', durationMs: 24 * 60 * 60 * 1000 },
+  { value: '1w', label: '1 week', durationMs: 7 * 24 * 60 * 60 * 1000 },
+  { value: '1mo', label: '1 month', durationMs: 30 * 24 * 60 * 60 * 1000 },
+  {
+    value: '1term',
+    label: '1 term (16 weeks)',
+    durationMs: 16 * 7 * 24 * 60 * 60 * 1000,
+  },
+]
+
+/** A link this panel has never seen redeemed against is still either "not yet due" or "past due" — `revokedAt` is a distinct, instructor-caused state from an expiry the clock alone produced, so the two must never read the same way (WEB-23). */
 function formatExpiry(link: CourseJoinLinkSummary): string {
   if (link.revokedAt)
     return `Revoked ${new Date(link.revokedAt).toLocaleString()}`
   if (link.expiresAt === null) return 'No expiry'
+  if (link.expiresAt <= Date.now())
+    return `Expired ${new Date(link.expiresAt).toLocaleString()}`
   return `Expires ${new Date(link.expiresAt).toLocaleString()}`
 }
 
@@ -86,6 +125,10 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
   const [revokeError, setRevokeError] = useState<ApiError | undefined>(
     undefined
   )
+  // WEB-23: which `EXPIRY_OPTIONS` entry is selected for the *next* link —
+  // `'none'` (no expiry) is the default, so an instructor who never touches
+  // this control gets exactly today's behaviour.
+  const [expiryOption, setExpiryOption] = useState('none')
   const { confirm } = useModal()
 
   const refresh = useCallback(
@@ -112,8 +155,24 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
     setCopied(false)
     setCreating(true)
     try {
-      const result = await createCourseJoinLink(organizationId, courseId)
+      // WEB-23: the chosen duration is added to `Date.now()` right here, at
+      // send time, never earlier — this file's own module comment has the
+      // reasoning. `durationMs: null` (the default, "Never") sends no third
+      // argument at all, matching `createCourseJoinLink`'s own "omitted
+      // means no expiry" and leaving today's behaviour exactly unchanged.
+      const durationMs = EXPIRY_OPTIONS.find(
+        (option) => option.value === expiryOption
+      )?.durationMs
+      const result =
+        durationMs == null
+          ? await createCourseJoinLink(organizationId, courseId)
+          : await createCourseJoinLink(
+              organizationId,
+              courseId,
+              Date.now() + durationMs
+            )
       setCreated(result)
+      setExpiryOption('none')
       await refresh()
     } catch (caught) {
       if (caught instanceof ApiError) setCreateError(caught)
@@ -241,7 +300,26 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
 
       {revokeError && <ErrorMessage error={revokeError} />}
 
-      <div>
+      <div className="flex flex-wrap items-end gap-2">
+        {/* WEB-23: "Never" (no expiry) is the default option, so this
+            control offers an expiry without an instructor having to
+            dismiss anything to get today's behaviour by leaving it
+            alone. */}
+        <div className="w-40">
+          <FormField label="Expiry">
+            <select
+              value={expiryOption}
+              onChange={(event) => setExpiryOption(event.target.value)}
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
+            >
+              {EXPIRY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+        </div>
         <Button
           variant="secondary"
           icon={<AddIcon aria-hidden="true" className="size-4" />}

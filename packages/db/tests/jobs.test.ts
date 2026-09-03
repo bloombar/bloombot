@@ -100,7 +100,9 @@ describe('enqueueJob (JOB-1)', () => {
     expect(job.maxAttempts).toBe(5)
     expect(job.claimedBy).toBeNull()
     expect(job.claimExpiresAt).toBeNull()
-    expect(JSON.parse(job.payload)).toEqual({ hello: 'world' })
+    // `payload` is only ever `null` on a terminal row (JOB-6) —
+    // `enqueueJob` always populates it, so the assertion below is safe.
+    expect(JSON.parse(job.payload!)).toEqual({ hello: 'world' })
   })
 
   // JOB-1's own worked example: a job carries its organization, and a
@@ -120,7 +122,9 @@ describe('enqueueJob (JOB-1)', () => {
       { kind: 'noop', payload: { courseId: courseB.id }, maxAttempts: 5 },
       testDb.db
     )
-    const payload = JSON.parse(job.payload) as { courseId: string }
+    // `payload` is only ever `null` on a terminal row (JOB-6) —
+    // `enqueueJob` always populates it, so the assertion below is safe.
+    const payload = JSON.parse(job.payload!) as { courseId: string }
 
     // The handler this job would run reads its own organization off the
     // claimed row (JOB-1's discipline: never trust an id inside a payload
@@ -133,6 +137,25 @@ describe('enqueueJob (JOB-1)', () => {
     )
 
     expect(resolved).toBeUndefined()
+  })
+
+  // JOB-6 rework note — before `payload` became nullable, `undefined` was
+  // refused by the column's own `NOT NULL` constraint at insert time; that
+  // safety net is gone now that a terminal row's own `null` payload is
+  // normal, so `enqueueJob` refuses it explicitly instead of silently
+  // inserting a job that looks, at claim time, exactly like one this
+  // slice's own retention write already cleared.
+  it('refuses an undefined payload rather than silently inserting a job with none', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    expect(() =>
+      jobs.enqueueJob(
+        orgA,
+        { kind: 'noop', payload: undefined, maxAttempts: 3 },
+        testDb.db
+      )
+    ).toThrow(/payload must not be undefined/)
   })
 })
 
@@ -518,6 +541,118 @@ describe('completing and failing a claimed job', () => {
       claimedBy: null,
       claimExpiresAt: null,
       lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+})
+
+// JOB-6: a job that has reached a terminal state stops carrying the
+// personal data it was given — proved directly against the database, the
+// same "assert against the database, not a return value" discipline this
+// file's own module comment already holds every other claim here to.
+describe('JOB-6: payload retention', () => {
+  it('completeJob clears payload in the same write that records success, while its result stays readable', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { peopleCreated: 1 }
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('succeeded')
+    expect(row?.payload).toBeNull()
+    // The outcome is not what this slice clears — a report is still readable.
+    expect(JSON.parse(row?.result ?? 'null')).toEqual({ peopleCreated: 1 })
+  })
+
+  it('markJobFailed clears payload in the same write that records a permanent failure', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('failed')
+    expect(row?.payload).toBeNull()
+    // The reason it stopped is not what this slice clears.
+    expect(row?.lastError).toBe('exhausted attempts: upstream timed out')
+  })
+
+  // The regression that matters most (this slice's own brief): a job that
+  // failed but will be retried must keep its payload — JOB-2's retry and
+  // JOB-3's once-only execution across a worker restart both re-read it.
+  it('rescheduleJobForRetry leaves payload untouched — the next attempt still needs it', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.rescheduleJobForRetry(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      { reason: 'upstream timed out', nextAttemptAt: Date.now() + 1000 },
+      testDb.db
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('pending')
+    expect(JSON.parse(row?.payload ?? 'null')).toEqual({
+      courseId: 'course-1',
+      csvText: 'Ada,ada@example.edu',
     })
   })
 })

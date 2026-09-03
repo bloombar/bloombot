@@ -179,3 +179,15 @@ it as yourself, upload a roster with its format stated on the screen — and mak
 course you are taught through enough to be enrolled in it, whichever role carried you there.
 
 **In scope:** ENRL-7/8/9, WEB-20/21/22
+
+## Phase 17 — Retention, reliability and the last admission gap
+
+Three things Phase 16 surfaced without fixing. A roster import leaves the whole class list —
+names, emails, Discord handles — sitting in the `jobs` table for the life of the database, and
+readable back over the API; that is the data the protected-paths rule exists to guard, kept in the
+one place nothing guards. The end-to-end suite fails intermittently under its own parallelism, so
+it has to be re-run until it passes, which is not a gate. And a join link's expiry can be set by
+the action but by no screen, leaving WEB-20's "when each expires" column permanently reading "No
+expiry".
+
+**In scope:** JOB-6, QA-9, WEB-23

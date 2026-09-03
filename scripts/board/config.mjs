@@ -21,7 +21,7 @@ export const REPO = 'bloombar/bloombot'
 // docs/ROADMAP.md. Adding a phase to the roadmap means adding it here too, so
 // sync.mjs creates its milestone.
 export const PHASES = [
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
 ]
 export const MILESTONE_TITLE = {
   0: 'Phase 0 — Shipped baseline',
@@ -42,6 +42,7 @@ export const MILESTONE_TITLE = {
   14: 'Phase 14 — Admin console, transcripts, audit & export',
   15: 'Phase 15 — Production hardening',
   16: 'Phase 16 — Course admission surfaces',
+  17: 'Phase 17 — Retention, reliability and the last admission gap',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

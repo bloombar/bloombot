@@ -194,13 +194,13 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
       { organizationId, db: testDb.db, accountId: ownerId }
     )
 
-    const enrolment = redeemCourseJoinLinkForWebAccount(
+    const result = redeemCourseJoinLinkForWebAccount(
       created.secret,
       accountId,
       testDb.db
     )
 
-    expect(enrolment?.source).toBe('join_link')
+    expect(result?.enrolment.source).toBe('join_link')
     const person = people.resolveIdentity(
       organizationId,
       { surface: 'web', externalId: accountId },

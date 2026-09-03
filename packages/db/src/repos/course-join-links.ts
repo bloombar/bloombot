@@ -326,13 +326,25 @@ export function redeemJoinLink(
  * or expired secret (this function's own "no oracle" shape, above). No
  * branch here reveals that a match was found; the caller only ever learns
  * "redeeming this link did not work."
+ *
+ * WEB-25 — the return value also reports `alreadyEnrolled`, alongside the
+ * enrolment itself, so a caller (`apps/web`'s own join-link screen) can say
+ * "you're already enrolled" for a link redeemed a second time, rather than
+ * a plain success indistinguishable from the first. Read *before*
+ * `enrolments.enrolViaJoinLink` runs, not inferred from its result:
+ * `enrolViaJoinLink` (`admit`'s own doc comment) is itself idempotent and
+ * returns the *existing* row unchanged either way, so nothing about its
+ * return value alone tells a fresh admission apart from a repeat one. This
+ * changes nothing about which refusal a caller sees or when — it is read
+ * only on the path that already leads to a successful admission, never
+ * consulted for `!link` or a refused resolve-or-create above.
  */
 export function redeemJoinLinkForWebAccount(
   secretHash: string,
   accountId: string,
   now: number,
   db: Database
-): enrolments.Enrolment | undefined {
+): { enrolment: enrolments.Enrolment; alreadyEnrolled: boolean } | undefined {
   return db.transaction((tx) => {
     const link = findLiveJoinLinkByHash(secretHash, now, tx)
     if (!link) return undefined
@@ -389,10 +401,27 @@ export function redeemJoinLinkForWebAccount(
       person = created
     }
 
-    return enrolments.enrolViaJoinLink(
+    // WEB-25 — read before `enrolViaJoinLink`, not after; see this
+    // function's own doc comment on why the enrolment it returns cannot
+    // itself distinguish a fresh admission from a repeat one. A person just
+    // created (the branch above) can never already hold one — `getActiveEnrolment`
+    // is scoped to `person.id`, a brand-new id nothing could have enrolled
+    // yet — so this is only ever `true` for an existing, previously-resolved
+    // person redeeming the same link again.
+    const alreadyEnrolled =
+      enrolments.getActiveEnrolment(
+        link.organizationId,
+        link.courseId,
+        person.id,
+        tx
+      ) !== undefined
+
+    const enrolment = enrolments.enrolViaJoinLink(
       link.organizationId,
       { courseId: link.courseId, personId: person.id },
       tx
     )
+    if (!enrolment) return undefined
+    return { enrolment, alreadyEnrolled }
   })
 }

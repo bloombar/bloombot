@@ -111,6 +111,12 @@ export interface ShellProps {
   account: AccountSummary
   /** Set by `App.tsx` once `pages/DiscordCallback.tsx` reports a bound server — carries across the round trip through Discord's own consent screen (see that page's module comment). `undefined` until an install completes in this browser session — this is only the *immediate* signal; `discordBindingState` (this file's own module comment, TEN-8) is what the panel actually trusts once it has fetched, via `api/client.ts#listDiscordServers`, so a reload or a second device shows the truth too. */
   justInstalled?: { organizationId: string; serverId: string }
+  /** WEB-25 — set by `App.tsx` once `pages/JoinLink.tsx` reports a redeemed course join link (fresh or already-enrolled), the same "carried across this one remount" shape `justInstalled` (above) already uses for the Discord install round trip. Prefers this organization for the initial active one and opens straight to the Chat tab with this course already selected (`activeOrganizationId`/`activeTab`'s own initializers, and the `Chat` render, below) — a redeemer's whole point in following the link was to ask this exact course something, not to land on Projects and have to find it themselves. */
+  joinedCourse?: {
+    organizationId: string
+    courseId: string
+    alreadyEnrolled: boolean
+  }
   onSignedOut: () => void
 }
 
@@ -144,7 +150,12 @@ export function Shell(props: ShellProps) {
   )
 }
 
-function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
+function ShellInner({
+  account,
+  justInstalled,
+  joinedCourse,
+  onSignedOut,
+}: ShellProps) {
   const { guardedNavigate } = useNavigationGuard()
   // WEB-3/WEB-4 — an install navigates the whole browser away to Discord and
   // back (`components/InstallButton.tsx`'s own module comment), so the
@@ -159,7 +170,26 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // organization the install belonged to, so `installedServerId` below
   // actually matches on the first render rather than only after a manual
   // switch.
+  //
+  // WEB-25 — `joinedCourse` is checked first: a course join link admits a
+  // redeemer as a *connected person*, not necessarily a member (LINK-10), so
+  // this also checks `connectedOrganizations`, unlike `justInstalled`'s own
+  // membership-only check (an install can only ever target an organization
+  // this account already administers).
   const [activeOrganizationId, setActiveOrganizationId] = useState(() => {
+    if (
+      joinedCourse &&
+      (account.memberships.some(
+        (membership) =>
+          membership.organizationId === joinedCourse.organizationId
+      ) ||
+        account.connectedOrganizations.some(
+          (connection) =>
+            connection.organizationId === joinedCourse.organizationId
+        ))
+    ) {
+      return joinedCourse.organizationId
+    }
     if (
       justInstalled &&
       account.memberships.some(
@@ -210,9 +240,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // mocks, added there rather than left implicit by defaulting elsewhere).
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
+  //
+  // WEB-25 — `joinedCourse` overrides that default to `'chat'`: a redeemer
+  // followed this link to ask a course something, not to see Projects.
   const [activeTab, setActiveTab] = useState<
     'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team' | 'jobs'
-  >('projects')
+  >(() => (joinedCourse ? 'chat' : 'projects'))
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
   // same thing as a connected person (LINK-3's proof) — a student who has
@@ -482,9 +515,25 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
         // already holds itself to — a course selected in the previous
         // organization must not linger once a different one is active.
+        //
+        // WEB-25 — `joinedCourse` is only ever passed through when it names
+        // *this* active organization: a redeemer who has since switched to a
+        // different one, then back, sees the same confirmation again on
+        // return (this component holds no separate "already shown" flag),
+        // which is accurate, if not the tersest possible UI — see this
+        // slice's own report for why that tradeoff was left as is.
         <Chat
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          {...(joinedCourse &&
+          joinedCourse.organizationId === activeOrganizationId
+            ? {
+                initialCourseId: joinedCourse.courseId,
+                joinConfirmation: {
+                  alreadyEnrolled: joinedCourse.alreadyEnrolled,
+                },
+              }
+            : {})}
         />
       ) : effectiveTab === 'transcripts' ? (
         // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning

@@ -60,6 +60,8 @@ export interface MeResponse {
 /** `POST /auth/redeem`, `POST /auth/google`. */
 export interface SignedInResponse {
   accountId: string
+  /** AUTH-6 — set only by `/auth/redeem`, and only when the token that produced this session was issued with one (`pages/SignIn.tsx`'s own `destination` prop): the same-origin path this sign-in should return to, regardless of which tab redeemed the link. `/auth/google` never sets this — see `pages/RedeemLink.tsx`'s own module comment for why only the emailed-link path needs one at all. */
+  destination?: string
 }
 
 /** `POST /organizations/:organizationId/discord-servers/install/begin`. */

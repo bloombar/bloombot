@@ -62,18 +62,30 @@ export function buildJoinLinksRouter(
       return
     }
     try {
-      const enrolment = redeemCourseJoinLinkForWebAccount(
+      const redeemed = redeemCourseJoinLinkForWebAccount(
         parsed.data.secret,
         req.session.accountId,
         deps.db
       )
-      if (!enrolment) {
+      if (!redeemed) {
         // ENRL-4's own "no oracle" shape: never issued, revoked and expired
         // all land here, identically — see this file's own module comment.
+        // `alreadyEnrolled` (WEB-25, below) never enters this branch at
+        // all — it is only ever computed on a *successful* redemption, so
+        // there is nothing here that could leak it into a refusal.
         res.status(404).json({ error: 'join_link_not_found' })
         return
       }
-      res.status(200).json({ courseId: enrolment.courseId })
+      // WEB-25 — the server already resolved which organization and course
+      // this redeemed, and whether the account was already enrolled before
+      // this call; handing all three back is what lets `apps/web`'s own
+      // `JoinLink.tsx` open the panel directly on this course instead of
+      // discarding the answer and leaving the student to find it themselves.
+      res.status(200).json({
+        courseId: redeemed.enrolment.courseId,
+        organizationId: redeemed.enrolment.organizationId,
+        alreadyEnrolled: redeemed.alreadyEnrolled,
+      })
     } catch (error) {
       next(error)
     }

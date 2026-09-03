@@ -92,3 +92,88 @@ describe('Chat (WEB-10)', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument()
   })
 })
+
+// WEB-25: redemption confirms itself, names the course, and lands the
+// student in chat with it already selected — `pages/JoinLink.tsx` discarded
+// all three before this rework (that page's own module comment); `Shell.tsx`
+// wires the server's own answer into `initialCourseId`/`joinConfirmation`,
+// proven here directly against `Chat` itself.
+describe('Chat — join-link confirmation (WEB-25)', () => {
+  it('a fresh join preselects the joined course and confirms it by title, announced to a screen reader', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+      { id: 'course-2', title: 'Advanced Testing' },
+    ])
+
+    render(
+      <Chat
+        organizationId="org-1"
+        initialCourseId="course-2"
+        joinConfirmation={{ alreadyEnrolled: false }}
+      />
+    )
+
+    // Fails without the fix: `selectedCourseId` used to always default to
+    // the *first* course the list happened to return (`course-1`), not the
+    // one this redemption actually named.
+    expect(await screen.findByRole('combobox', { name: 'Course' })).toHaveValue(
+      'course-2'
+    )
+    const status = await screen.findByTestId('join-confirmation')
+    expect(status).toHaveAttribute('role', 'status')
+    expect(status).toHaveTextContent("You're enrolled in Advanced Testing.")
+  })
+
+  // ENRL-8/WEB-25: redeeming twice is a confirmation, not an error — this is
+  // what distinguishes it in the browser, the same way `alreadyEnrolled`
+  // distinguishes it over HTTP (`apps/api/tests/routes/join-links.test.ts`).
+  it('an already-enrolled redemption says so, plainly, rather than the fresh-join wording', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+    ])
+
+    render(
+      <Chat
+        organizationId="org-1"
+        initialCourseId="course-1"
+        joinConfirmation={{ alreadyEnrolled: true }}
+      />
+    )
+
+    expect(await screen.findByTestId('join-confirmation')).toHaveTextContent(
+      "You're already enrolled in Intro to Testing."
+    )
+  })
+
+  // Confirmation "does not depend on the student noticing something that
+  // disappears on its own" (`docs/SPEC.md`'s own WEB-25) — still present
+  // after the transcript itself has loaded and rendered, not merely on the
+  // first paint.
+  it('the confirmation is still present once the rest of the screen has finished loading', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+    ])
+
+    render(
+      <Chat
+        organizationId="org-1"
+        initialCourseId="course-1"
+        joinConfirmation={{ alreadyEnrolled: false }}
+      />
+    )
+
+    await screen.findByTestId('chat-thread')
+    expect(screen.getByTestId('join-confirmation')).toBeInTheDocument()
+  })
+
+  it('no joinConfirmation prop, no banner — the ordinary case', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+    ])
+
+    render(<Chat organizationId="org-1" />)
+
+    await screen.findByText('Intro to Testing')
+    expect(screen.queryByTestId('join-confirmation')).not.toBeInTheDocument()
+  })
+})

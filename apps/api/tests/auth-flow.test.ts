@@ -480,3 +480,83 @@ describe('GET /auth/me — connectedOrganizations (LINK-10)', () => {
     expect(account!.connectedOrganizations).toEqual([])
   })
 })
+
+// AUTH-6: a sign-in link's own `destination` — the same-origin path to
+// return to once redeemed, carried on the token itself so it survives to
+// whichever browsing context actually redeems it (`packages/auth`'s
+// `sign-in.ts`/`tokens.ts` own the mechanism; this file proves it through
+// the HTTP surface `apps/web` actually calls).
+describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)', () => {
+  it('a destination supplied at request time comes back on redeem', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const app = await buildTestApp(testDb.db, { emailSender })
+
+    const requested = await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'destined@example.edu', destination: '/join/abc123' })
+    expect(requested.status).toBe(204)
+
+    const emailedLink = emailSender.sent[0]!.body
+    const token = emailedLink.split('/sign-in/')[1]?.trim()
+
+    const redeemed = await request(app)
+      .post('/auth/redeem')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ token })
+    expect(redeemed.status).toBe(200)
+    expect((redeemed.body as { destination?: string }).destination).toBe(
+      '/join/abc123'
+    )
+  })
+
+  // The ordinary case — no destination supplied at all — must not grow one
+  // from nowhere, and the field is omitted rather than sent as `null`
+  // (`routes/auth.ts`'s own comment: `JSON.stringify` drops `undefined`).
+  it('omits destination when none was supplied', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const app = await buildTestApp(testDb.db, { emailSender })
+
+    await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'undestined@example.edu' })
+    const emailedLink = emailSender.sent[0]!.body
+    const token = emailedLink.split('/sign-in/')[1]?.trim()
+
+    const redeemed = await request(app)
+      .post('/auth/redeem')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ token })
+    expect(redeemed.status).toBe(200)
+    expect(
+      Object.prototype.hasOwnProperty.call(redeemed.body, 'destination')
+    ).toBe(false)
+  })
+
+  // AUTH-6's own hard constraint: a destination is untrusted input, and must
+  // be validated as a same-origin path before it is ever stored — this is
+  // the mutation the brief calls for: drop `isSameOriginPath` from the
+  // schema's own `.refine` and this becomes a 204 that quietly stores
+  // `https://evil.example`.
+  it('refuses a destination that is not a same-origin path, the same 400 shape a malformed email already gets', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+
+    for (const destination of [
+      'https://evil.example/steal',
+      '//evil.example',
+      '/\\evil.example',
+      'not-a-path-at-all',
+    ]) {
+      const response = await request(app)
+        .post('/auth/request-link')
+        .set('Origin', TEST_PUBLIC_APP_URL)
+        .send({ email: 'attacked@example.edu', destination })
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({ error: 'invalid_request' })
+    }
+  })
+})

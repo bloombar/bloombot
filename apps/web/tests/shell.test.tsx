@@ -212,6 +212,61 @@ describe('Shell (WEB-3, WEB-4)', () => {
     )
   })
 
+  // WEB-25 — a redeemed join link opens directly on the joined course's own
+  // organization and the Chat tab, not wherever this account's own first
+  // membership happens to be (`CONNECTED_NON_MEMBER_ACCOUNT`'s own
+  // `personal-org` — TEN-1's own personal organization, created for every
+  // account, and exactly the organization that used to strand a redeemer on
+  // Projects with nothing relevant there: `docs/SPEC.md`'s own WEB-25 names
+  // this precise defect, "several clicks away behind a course picker they
+  // have no reason to understand"). `joinedCourse.organizationId` is only
+  // ever a *connected* organization here (LINK-10: a join-link redemption
+  // enrols a person, not a membership), so this also proves the initializer
+  // checks `connectedOrganizations`, not only `memberships` the way
+  // `justInstalled`'s own check (above) does.
+  it('a redeemed join link opens directly on that organization and the Chat tab, not the first membership', async () => {
+    renderWithModal(
+      <Shell
+        account={CONNECTED_NON_MEMBER_ACCOUNT}
+        joinedCourse={{
+          organizationId: 'institution-org',
+          courseId: 'course-1',
+          alreadyEnrolled: false,
+        }}
+        onSignedOut={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
+      'institution-org'
+    )
+    // Fails without the fix: this shell's own default tab is 'projects',
+    // which this connected-only organization cannot even offer.
+    expect(
+      await screen.findByRole('heading', { name: 'Chat' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('join-confirmation')).toHaveTextContent(
+      "You're enrolled in A Course."
+    )
+  })
+
+  it('a joinedCourse organization the account can neither administer nor reach is ignored, defensively, in favour of the first membership', () => {
+    renderWithModal(
+      <Shell
+        account={MULTI_MEMBERSHIP_ACCOUNT}
+        joinedCourse={{
+          organizationId: 'org-9',
+          courseId: 'course-1',
+          alreadyEnrolled: false,
+        }}
+        onSignedOut={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
+      'org-1'
+    )
+  })
+
   it('carries the actively selected organization into every request, not the one Shell mounted with (WEB-3)', async () => {
     beginDiscordInstall.mockResolvedValue({
       authorizationUrl: 'https://discord.test/oauth2/authorize?state=abc',

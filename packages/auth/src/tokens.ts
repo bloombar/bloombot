@@ -39,6 +39,42 @@ export interface IssuedSignInToken {
   expiresAt: number
 }
 
+// AUTH-6: same-origin means "begins with exactly one `/`" — never `//` or
+// `/\`, both of which a browser resolves as protocol-relative (an *off*-origin
+// address, `//evil.example` behaving exactly like `https://evil.example`
+// despite looking like a path). This is deliberately conservative: the only
+// values this ever has to admit are the handful of paths `apps/web`'s own
+// pages issue a sign-in link for (`/join/:secret`, `/connect/:organizationId`),
+// never an arbitrary caller's.
+const SAME_ORIGIN_PATH_PREFIX = /^\/(?!\/|\\)/
+
+/**
+ * AUTH-6 — whether `value` is safe to carry as a sign-in token's own
+ * `destination` and, later, to navigate a browser to once redeemed.
+ * `apps/web` has no router and treats every path it is handed as trusted
+ * (`App.tsx`'s own `history.replaceState`), so this is the one gate between
+ * "a caller-supplied string" and "the browser's own address bar" — a
+ * `destination` this codebase must treat as untrusted input the same way
+ * any other caller-supplied redirect target would be, spec'd explicitly in
+ * `docs/SPEC.md`'s own AUTH-6.
+ *
+ * Beyond `SAME_ORIGIN_PATH_PREFIX` (above), this also refuses any character
+ * at or below `0x20` — every whitespace character and every C0 control
+ * character in one comparison — that a URL parser further down the line
+ * could reinterpret; a plain char-code loop rather than folding the range
+ * into the regex itself, which `eslint`'s own `no-control-regex` refuses a
+ * literal control character inside (for the same reason this function
+ * exists: a raw control character is exactly the kind of thing worth a
+ * second look, not a pattern to suppress the linter over).
+ */
+export function isSameOriginPath(value: string): boolean {
+  if (!SAME_ORIGIN_PATH_PREFIX.test(value)) return false
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) <= 0x20) return false
+  }
+  return true
+}
+
 /**
  * Issue a new sign-in token for an email address.
  *
@@ -52,18 +88,39 @@ export interface IssuedSignInToken {
  * for less than the default still gets exactly what it asked for; only a
  * request for *more* than the ceiling is capped.
  *
+ * `destination` (AUTH-6): the same-origin path this token should return to
+ * once redeemed, carried on the row itself rather than in the browser tab
+ * that requested it (`schema.ts`'s own comment on `sign_in_tokens.destination`
+ * has why). Rejected outright, the same way a malformed `email` already is,
+ * rather than stored and only discovered bad later — `apps/api`'s own route
+ * validates the same way before this ever runs (`isSameOriginPath`, this
+ * file's own export), so reaching here with a bad one should not happen; this
+ * still refuses it rather than assuming that validation always ran.
+ *
  * @throws {z.ZodError} if `email` is not a syntactically valid address.
+ * @throws {Error} if `destination` is supplied and is not a same-origin path.
  */
 export function issueSignInToken(
   email: string,
   db: Database,
-  ttlMs: number = DEFAULT_TOKEN_TTL_MS
+  ttlMs: number = DEFAULT_TOKEN_TTL_MS,
+  destination?: string
 ): IssuedSignInToken {
   emailSchema.parse(email)
+  if (destination !== undefined && !isSameOriginPath(destination)) {
+    throw new Error(
+      `issueSignInToken: destination must be a same-origin path, got ${JSON.stringify(destination)}`
+    )
+  }
   const token = generateSecret()
   const expiresAt = Date.now() + Math.min(ttlMs, MAX_TOKEN_TTL_MS)
   signInTokens.createSignInToken(
-    { email, tokenHash: hashSecret(token), expiresAt },
+    {
+      email,
+      tokenHash: hashSecret(token),
+      expiresAt,
+      destination: destination ?? null,
+    },
     db
   )
   return { token, expiresAt }
@@ -72,6 +129,8 @@ export function issueSignInToken(
 /** What a redeemed token resolves to. */
 export interface ConsumedSignInToken {
   email: string
+  /** AUTH-6 — the same-origin path this token was issued to return to, if any; `undefined` for an ordinary sign-in, or for a stored value that (should never, but) fails `isSameOriginPath` on the way back out — see `consumeSignInToken`'s own comment on why this is checked again here, not only at issue time. */
+  destination: string | undefined
 }
 
 /**
@@ -87,6 +146,15 @@ export interface ConsumedSignInToken {
  * Returns `undefined` for a token that never existed, one already redeemed,
  * and one that has expired — identically in all three cases, so a caller
  * cannot use the response to tell replay apart from a wrong guess.
+ *
+ * `destination` is re-validated with `isSameOriginPath` here, not merely
+ * trusted off the row — `issueSignInToken` already refused to store a bad
+ * one, so this should never actually fire, but this is the one function
+ * standing between "whatever this column holds" and a caller
+ * (`sign-in.ts#redeemSignInLink`) that hands it straight to a browser to
+ * navigate to; "defended, not assumed" the same way every other
+ * should-be-unreachable case in this codebase is guarded rather than
+ * trusted.
  */
 export function consumeSignInToken(
   token: string,
@@ -97,7 +165,14 @@ export function consumeSignInToken(
     Date.now(),
     db
   )
-  return consumed ? { email: consumed.email } : undefined
+  if (!consumed) return undefined
+  return {
+    email: consumed.email,
+    destination:
+      consumed.destination !== null && isSameOriginPath(consumed.destination)
+        ? consumed.destination
+        : undefined,
+  }
 }
 
 /**

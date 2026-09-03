@@ -121,9 +121,17 @@ describe('routes/join-links.ts (ENRL-8)', () => {
       .send({ secret })
 
     expect(redeemResponse.status).toBe(200)
-    expect((redeemResponse.body as { courseId: string }).courseId).toBe(
-      courseId
-    )
+    expect(
+      redeemResponse.body as {
+        courseId: string
+        organizationId: string
+        alreadyEnrolled: boolean
+      }
+    ).toEqual({
+      courseId,
+      organizationId: issuer.organizationId,
+      alreadyEnrolled: false,
+    })
 
     // The integration this slice's brief calls for: not a second unit test
     // that merely assumes `enrolments.getActiveEnrolment` would find this
@@ -137,6 +145,41 @@ describe('routes/join-links.ts (ENRL-8)', () => {
     expect(chatResponse.status).toBe(200)
     const body = chatResponse.body as { courses: { id: string }[] }
     expect(body.courses.map((course) => course.id)).toEqual([courseId])
+  })
+
+  // WEB-25: redeeming twice is a confirmation, not an error — the same
+  // secret, presented again by the same caller (people re-click links they
+  // were sent), still returns 200 with the course, but says so. Fails
+  // without the fix: before `alreadyEnrolled` existed, this response was
+  // indistinguishable from the first, genuinely-new redemption above.
+  it('redeeming the same link a second time still succeeds, reporting alreadyEnrolled', async () => {
+    testDb = createTestDatabase()
+    const issuer = seedSignedInCaller(testDb.db)
+    const redeemer = seedSignedInCaller(testDb.db)
+    const { courseId, secret } = seedJoinLink(testDb.db, issuer)
+
+    const app = await buildTestApp(testDb.db)
+    const first = await request(app)
+      .post('/join-links/redeem')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .set('Cookie', redeemer.cookieHeader)
+      .send({ secret })
+    expect(first.status).toBe(200)
+    expect((first.body as { alreadyEnrolled: boolean }).alreadyEnrolled).toBe(
+      false
+    )
+
+    const second = await request(app)
+      .post('/join-links/redeem')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .set('Cookie', redeemer.cookieHeader)
+      .send({ secret })
+    expect(second.status).toBe(200)
+    expect(second.body).toEqual({
+      courseId,
+      organizationId: issuer.organizationId,
+      alreadyEnrolled: true,
+    })
   })
 
   // ENRL-8: a body-supplied `personId` must not redirect the enrolment to

@@ -131,11 +131,24 @@ async function request<T>(
   return parsed as T
 }
 
-/** AUTH-1: request a sign-in link. Always resolves — the API answers the same way whether or not the address has an account. */
-export function requestSignInLink(email: string): Promise<void> {
+/**
+ * AUTH-1: request a sign-in link. Always resolves — the API answers the
+ * same way whether or not the address has an account.
+ *
+ * `destination` (AUTH-6): the same-origin path this sign-in should return to
+ * once redeemed, whichever tab redeems it — `pages/JoinLink.tsx`/
+ * `pages/Connect.tsx` pass their own page's own path through
+ * `pages/SignIn.tsx`'s own prop of the same name. `undefined` for the
+ * ordinary "email me a link" screen, which has nowhere in particular to
+ * return to.
+ */
+export function requestSignInLink(
+  email: string,
+  destination?: string
+): Promise<void> {
   return request<void>('/auth/request-link', {
     method: 'POST',
-    body: { email },
+    body: { email, destination },
   })
 }
 
@@ -167,11 +180,22 @@ export function signOut(): Promise<void> {
  * `join_link_not_found`) identically for a secret that was never issued,
  * one that is revoked, and one that has expired (ENRL-4) — never a
  * different status or message across the three.
+ *
+ * WEB-25: `organizationId` and `alreadyEnrolled` travel alongside `courseId`
+ * — the server already resolved all three, and discarding the extra two was
+ * exactly what left `pages/JoinLink.tsx` unable to say which course a
+ * redeemer just joined, or open the panel there directly.
  */
-export function redeemCourseJoinLink(
-  secret: string
-): Promise<{ courseId: string }> {
-  return request<{ courseId: string }>('/join-links/redeem', {
+export function redeemCourseJoinLink(secret: string): Promise<{
+  courseId: string
+  organizationId: string
+  alreadyEnrolled: boolean
+}> {
+  return request<{
+    courseId: string
+    organizationId: string
+    alreadyEnrolled: boolean
+  }>('/join-links/redeem', {
     method: 'POST',
     body: { secret },
   })

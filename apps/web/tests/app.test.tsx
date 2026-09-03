@@ -18,7 +18,6 @@ import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
 import { PENDING_INVITATION_KEY } from '../src/pages/Invitation.js'
-import { PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
 
 // `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
 // — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
@@ -230,14 +229,21 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // LINK-6 rework — a sign-in redemption used to always return to the
+  // AUTH-6 rework — a sign-in redemption used to always return to the
   // shell; a visitor who arrived at `/connect/:organizationId` signed out
-  // (stashing `PENDING_CONNECT_ORG_KEY`, `pages/Connect.tsx`'s own doc
-  // comment) needs that redemption to land back on the connect screen they
-  // actually came for, not the shell they have no other reason to see yet.
-  it('a sign-in redemption returns to the pending connect organization, not the shell', async () => {
-    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
-    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+  // needs that redemption to land back on the connect screen they actually
+  // came for, not the shell they have no other reason to see yet. The
+  // destination now comes off the redeemed token itself (`Connect.tsx`'s own
+  // `destination` prop to `SignIn`), not a `sessionStorage` marker this test
+  // would otherwise have to stash — proving, incidentally, that this no
+  // longer depends on anything this same browsing context wrote earlier
+  // (`app.test.tsx`'s own stand-in for AUTH-6's cross-tab case; the real
+  // thing is `e2e/join-link.spec.ts`'s own two-tab scenario).
+  it('a sign-in redemption returns to the connect organization the token itself named, not the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/connect/org-1',
+    })
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -320,7 +326,6 @@ describe('App — /join/:secret (ENRL-8)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeInTheDocument()
-    expect(sessionStorage.getItem(PENDING_JOIN_LINK_KEY)).toBe('secret-abc')
   })
 
   it('signed in, redeems the link rather than rendering the ordinary shell', async () => {
@@ -358,16 +363,17 @@ describe('App — /join/:secret (ENRL-8)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // ENRL-8, the same LINK-6 rework reasoning as `/connect/:organizationId`
-  // above: a visitor who arrived at `/join/:secret` signed out
-  // (`JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY`) must return to that same
-  // link, not the shell, once a sign-in redemption completes — proved here
-  // by the join link actually being redeemed (with the pending secret),
-  // which could only happen if the browser landed back on `JoinLink`
-  // rather than going straight to the ordinary shell.
-  it('a sign-in redemption returns to the pending join link, not straight to the shell', async () => {
-    sessionStorage.setItem(PENDING_JOIN_LINK_KEY, 'secret-abc')
-    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+  // AUTH-6, the same rework reasoning as `/connect/:organizationId` above: a
+  // visitor who arrived at `/join/:secret` signed out must return to that
+  // same link, not the shell, once a sign-in redemption completes — proved
+  // here by the join link actually being redeemed (with the secret the
+  // *token* itself named), which could only happen if the browser landed
+  // back on `JoinLink` rather than going straight to the ordinary shell.
+  it('a sign-in redemption returns to the join link the token itself named, not straight to the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/join/secret-abc',
+    })
     redeemCourseJoinLink.mockReturnValue(new Promise(() => undefined))
     fetchMe.mockResolvedValue({
       account: {

@@ -62,6 +62,11 @@
  * once at creation; an import's format description, progress and per-row
  * report). This file only decides where the two sit, keeping this already
  * large form's own growth to that.
+ *
+ * WEB-22/ENRL-9: a course's people — everyone it has ever enrolled, active
+ * and ended alike, with ending (ENRL-6) and reinstating (ENRL-9) both
+ * offered — are `components/CoursePeople.tsx`'s own screen, embedded below
+ * on the same "existing record only" gate as everything else in this list.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -73,6 +78,7 @@ import type { Course, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
+import { CoursePeople } from '../components/CoursePeople.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { FormField } from '../components/FormField.js'
@@ -733,6 +739,24 @@ export function CourseEditor({
             private Discord channel.
           </p>
           <RosterImport organizationId={organizationId} courseId={courseId} />
+        </section>
+      )}
+
+      {/* WEB-22/ENRL-9: a course's people — everyone it has ever enrolled,
+          active and ended alike, with ending and reinstating both offered.
+          Same "existing record only" gate as the sections above: an
+          enrolment belongs to an existing course. */}
+      {courseId !== undefined && (
+        <section aria-label="People" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            People
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Everyone this course has ever enrolled, however they were admitted.
+            Ending stops someone asking this course without deleting their
+            transcript; reinstating undoes an end.
+          </p>
+          <CoursePeople organizationId={organizationId} courseId={courseId} />
         </section>
       )}
 

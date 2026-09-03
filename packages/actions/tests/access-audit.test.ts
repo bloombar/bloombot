@@ -130,6 +130,17 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'enrolments.checkAccess': { resource: 'enrolment', access: 'read' },
   // ENRL-6: resolves the enrolment being ended, write.
   'enrolments.end': { resource: 'enrolment', access: 'write' },
+  // ENRL-9: resolves the enrolment being reinstated, write — `execute` also
+  // requires an authenticated `accountId` (refused without one), but *who*
+  // may call this at all is enforced one level up, structurally, not by
+  // this descriptor (`actions/enrolments.ts`'s own module comment on
+  // `reinstateEnrolmentAction`).
+  'enrolments.reinstate': { resource: 'enrolment', access: 'write' },
+  // WEB-22: resolves the course an enrolment list is scoped to, read — the
+  // same shape `courseAttachments.list`/`courseJoinLinks.list` use above;
+  // unlike `enrolments.listForPerson`, this lists both active and ended
+  // enrolments.
+  'enrolments.listForCourse': { resource: 'course', access: 'read' },
   // ENRL-5: no existing membership to resolve on a first grant — the
   // organization itself is the resource, the same "no existing record to
   // resolve on create" shape `projects.create` uses above. *Who* may call

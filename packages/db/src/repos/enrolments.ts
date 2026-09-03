@@ -1,5 +1,5 @@
 /**
- * Repository for `enrolments` (ENRL-1..6).
+ * Repository for `enrolments` (ENRL-1..6, ENRL-9).
  *
  * Which courses a person may ask, as a stored relation (ENRL-1) rather than
  * something inferred per message. Every function here is scoped by
@@ -31,7 +31,7 @@
  * already resolved; this file makes no Discord call of its own.
  */
 
-import { and, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import * as courses from './courses.js'
@@ -212,6 +212,80 @@ export function listPeopleForCourse(
 }
 
 /**
+ * WEB-22 — one row of `listEnrolmentsForCourse`'s own listing: everything
+ * the panel needs to tell people apart and decide what to do about each of
+ * them, and nothing more. `displayName`, not the full `Person` row
+ * `listPeopleForCourse` above returns — no email (this file's own caller,
+ * the panel's people screen, has no genuine need to disambiguate by it: a
+ * `null` `displayName` is already told apart from another by `personId`,
+ * the same fallback `Transcripts.tsx#personDisplayName` already uses in
+ * `apps/web` for the identical "person never named itself" case).
+ */
+export interface CourseEnrolmentEntry {
+  id: string
+  personId: string
+  displayName: string | null
+  source: EnrolmentSource
+  createdAt: number
+  endedAt: number | null
+  reinstatedByAccountId: string | null
+  reinstatedAt: number | null
+}
+
+/**
+ * WEB-22: every enrolment `courseId` has ever had — active and ended alike
+ * — for the panel's own people screen. Unlike `listPeopleForCourse` above
+ * (active only, and every other existing caller's own scenario:
+ * `redeemJoinLink`'s duplicate-admission check, `roster-import.ts`'s
+ * idempotent re-sync), this is the first caller that needs an ended
+ * enrolment to be visible at all — the panel cannot offer "reinstate" over
+ * a person it cannot even list. `listPeopleForCourse` itself is left
+ * unchanged: every one of its own existing callers wants active-only, and
+ * widening its own return shape would touch call sites this slice has no
+ * reason to.
+ *
+ * Ordered by `displayName`, then `personId` as the tiebreaker — the same
+ * order `transcript-access.ts#listPeopleWithTranscript` already uses for
+ * the identical "a name can repeat or be absent" reason; the panel itself
+ * is what actually splits active from ended into two visually distinct
+ * lists (this file's own module comment on why: a status column here is
+ * too easy to misread right before removing somebody), not this query.
+ */
+export function listEnrolmentsForCourse(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): CourseEnrolmentEntry[] {
+  return db
+    .select({
+      id: enrolments.id,
+      personId: enrolments.personId,
+      displayName: people.displayName,
+      source: enrolments.source,
+      createdAt: enrolments.createdAt,
+      endedAt: enrolments.endedAt,
+      reinstatedByAccountId: enrolments.reinstatedByAccountId,
+      reinstatedAt: enrolments.reinstatedAt,
+    })
+    .from(enrolments)
+    .innerJoin(
+      people,
+      and(
+        eq(people.id, enrolments.personId),
+        eq(people.organizationId, organizationId)
+      )
+    )
+    .where(
+      and(
+        eq(enrolments.organizationId, organizationId),
+        eq(enrolments.courseId, courseId)
+      )
+    )
+    .orderBy(asc(people.displayName), asc(enrolments.personId))
+    .all()
+}
+
+/**
  * ENRL-6: end an enrolment — stops the person asking; deletes nothing (not
  * the row itself, and nothing this file ever touches otherwise, since it
  * owns no transcript). Returns the number of rows changed: `0` for an
@@ -233,6 +307,63 @@ export function endEnrolment(
         eq(enrolments.id, enrolmentId),
         eq(enrolments.organizationId, organizationId),
         isNull(enrolments.endedAt)
+      )
+    )
+    .run()
+  return result.changes
+}
+
+/**
+ * ENRL-9: reinstate an enrolment an instructor previously ended (ENRL-6) —
+ * the one thing every `enrolVia*`'s `reviveEnded: false` deliberately no
+ * longer does (this file's own module comment on the ENRL-6/ENRL-8 rework,
+ * and each `enrolVia*`'s own doc comment). Clears `endedAt`, restoring
+ * exactly the access `getActiveEnrolment`/`checkEnrolmentAccessAction` read,
+ * and stamps `reinstatedByAccountId`/`reinstatedAt` — ENRL-9's own "who did
+ * it and when," the same "record it on the row itself" shape
+ * `memberships.grantMembershipRole` already uses for `grantedByAccountId`/
+ * `grantedAt` (`schema.ts`'s own comment on both pairs has the fuller
+ * reasoning, including why this is columns on the row rather than a
+ * separate history table).
+ *
+ * Returns the number of rows changed, the same convention `endEnrolment`
+ * above sets: `0` for an enrolment that does not exist, belongs to a
+ * different organization (TEN-5), or is not currently ended — reinstating a
+ * person who is not ended changes nothing, the identical idempotent no-op
+ * `endEnrolment` gives a caller ending an already-ended one. Never revives
+ * a *different* row for the same `(course, person)` pairing — this
+ * function, like `endEnrolment`, acts on the one row named by
+ * `enrolmentId`, and (`admit`'s own module comment) there is never more
+ * than one row for a given pairing once any `enrolVia*` has run, since a
+ * prior ended row now blocks every one of them.
+ *
+ * `reinstatedByAccountId` is not read from the row's own `organizationId`
+ * (there is nothing to trust there — this parameter is who the *caller*
+ * says is reinstating) but the caller (`@bloombot/actions`'
+ * `enrolments.reinstate`) resolves it from `dispatch`'s own authenticated
+ * `accountId`, never from request input, the same "never read out of the
+ * action's own input" discipline every other author-stamping action in this
+ * platform already holds itself to (`course-instructions.ts`'s own module
+ * comment).
+ */
+export function reinstateEnrolment(
+  organizationId: string,
+  enrolmentId: string,
+  input: { reinstatedByAccountId: string },
+  db: Database
+): number {
+  const result = db
+    .update(enrolments)
+    .set({
+      endedAt: null,
+      reinstatedByAccountId: input.reinstatedByAccountId,
+      reinstatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(enrolments.id, enrolmentId),
+        eq(enrolments.organizationId, organizationId),
+        isNotNull(enrolments.endedAt)
       )
     )
     .run()
@@ -355,12 +486,14 @@ function admit(
  * a shared link) must not undo an instructor's decision on its own — so
  * this function now makes the same choice, for the same reason: a person an
  * instructor has explicitly ended stays ended until an instructor
- * re-admits them through a caller that actually means to (see
- * `docs/DECISIONS.md` for this rework's own record, and this file's
- * "Limits": nothing in this package currently exposes that
- * instructor-initiated re-admission action — a future one should call
- * `admit` with `reviveEnded: true` explicitly, the same way every choice in
- * this file is stated, not assumed).
+ * re-admits them through a caller that actually means to — `reinstateEnrolment`
+ * (ENRL-9, below), the instructor-initiated act this rework's own note used
+ * to describe only as a future possibility (see `docs/DECISIONS.md` for
+ * this rework's own record). `reinstateEnrolment` does not call `admit` at
+ * all — see its own doc comment for why clearing `endedAt` directly, rather
+ * than routing through `admit`'s `reviveEnded: true`, is what actually
+ * fits an instructor's own act of reinstating one named row, not a fresh
+ * admission through any of the three sources above.
  */
 export function enrolViaJoinLink(
   organizationId: string,
@@ -389,9 +522,16 @@ export function enrolViaJoinLink(
  * instructor who explicitly ends one (`endEnrolment`, ENRL-6) — routine
  * roster hygiene, not a mistake — would find that student silently
  * re-admitted the moment the next import ran. Leaving it ended here is what
- * keeps "ended" meaning ended until something that actually means to
- * re-admit this person calls one of the other two `enrolVia*` functions
- * instead.
+ * keeps "ended" meaning ended until an instructor actually means to
+ * re-admit this person — ENRL-9's `reinstateEnrolment`, below, its own
+ * distinct, instructor-initiated act. (Stale as of the ENRL-9 slice: this
+ * paragraph used to point here at "one of the other two `enrolVia*`
+ * functions instead" — false even at the time it was written, for the same
+ * reason `enrolViaDiscordRole`'s own doc comment already corrected itself
+ * (the ENRL-6/ENRL-8 rework's D-57): neither of the other two ever revived
+ * anyone either, once both were reversed to `reviveEnded: false`.
+ * `reinstateEnrolment` is the one function in this file that actually
+ * does.)
  */
 export function enrolViaRoster(
   organizationId: string,
@@ -455,11 +595,11 @@ export function enrolViaRoster(
  * instructor, so `enrolViaJoinLink` was reversed to `reviveEnded: false` too
  * (its own doc comment has the full reasoning) — and `enrolViaRoster`
  * already was. All three `enrolVia*` functions in this file now refuse to
- * revive an ended enrolment. **No function in this package re-admits anyone
- * today.** `enrolViaJoinLink`'s own "Limits" note already says this
- * plainly: a future instructor-initiated re-admission action would call
- * `admit` with `reviveEnded: true` explicitly, the same way every choice in
- * this file is stated, not assumed.
+ * revive an ended enrolment. (Stale as of the ENRL-9 slice: this paragraph
+ * used to end here with "no function in this package re-admits anyone
+ * today," true only until `reinstateEnrolment`, below — ENRL-9's own
+ * instructor-initiated act, deliberately not routed through `admit` at
+ * all; see that function's own doc comment for why.)
  *
  * None of the above ever turned on *which* role the caller held — an
  * admins-role holder's

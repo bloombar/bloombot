@@ -30,6 +30,7 @@ import type {
   ChatMessageEntry,
   Course,
   CourseAttachmentSummary,
+  CourseEnrolment,
   CourseInstructionRevisionSummary,
   CourseJoinLinkSummary,
   CourseSummary,
@@ -561,6 +562,44 @@ export function revokeCourseJoinLink(
   linkId: string
 ): Promise<{ revoked: boolean }> {
   return dispatchAction(organizationId, 'courseJoinLinks.revoke', { linkId })
+}
+
+/**
+ * WEB-22 — a course's own people, active and ended alike, and the two acts
+ * an instructor may take on one: end an active enrolment (ENRL-6) or
+ * reinstate an ended one (ENRL-9). Thin wrappers over `dispatchAction`, the
+ * same shape `createCourseJoinLink`/`listCourseJoinLinks`/
+ * `revokeCourseJoinLink` above already use.
+ */
+
+/** WEB-22: every enrolment a course has ever had, active and ended alike — `enrolments.listForCourse`'s own projection, `@bloombot/actions`. */
+export function listCourseEnrolments(
+  organizationId: string,
+  courseId: string
+): Promise<CourseEnrolment[]> {
+  return dispatchAction<CourseEnrolment[]>(
+    organizationId,
+    'enrolments.listForCourse',
+    { courseId }
+  )
+}
+
+/** ENRL-6: end an enrolment — stops that person asking this course; deletes neither their transcript nor the course's record of what was asked. */
+export function endCourseEnrolment(
+  organizationId: string,
+  enrolmentId: string
+): Promise<{ ended: boolean }> {
+  return dispatchAction(organizationId, 'enrolments.end', { enrolmentId })
+}
+
+/** ENRL-9: reinstate an enrolment an instructor previously ended — restores the access `endCourseEnrolment` removed. A no-op, not an error, on an enrolment that is not currently ended. */
+export function reinstateCourseEnrolment(
+  organizationId: string,
+  enrolmentId: string
+): Promise<{ reinstated: boolean }> {
+  return dispatchAction(organizationId, 'enrolments.reinstate', {
+    enrolmentId,
+  })
 }
 
 /**

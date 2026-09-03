@@ -1,5 +1,6 @@
 /**
- * ENRL-2, ENRL-6: `enrolments.listForPerson`, `.checkAccess` and `.end`.
+ * ENRL-2, ENRL-6, ENRL-9, WEB-22: `enrolments.listForPerson`,
+ * `.checkAccess`, `.end`, `.reinstate` and `.listForCourse`.
  */
 
 import { enrolments, people } from '@bloombot/db'
@@ -8,7 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
+  listEnrolmentsForCourseAction,
   listEnrolmentsForPersonAction,
+  reinstateEnrolmentAction,
 } from '../src/actions/enrolments.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionRefusedError } from '../src/errors.js'
@@ -146,5 +149,199 @@ describe('enrolments.listForPerson/.checkAccess/.end (ENRL-2, ENRL-6)', () => {
     expect(
       enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
     ).toBeDefined()
+  })
+
+  // --- ENRL-9: enrolments.reinstate ---------------------------------------
+
+  it('enrolments.reinstate restores access after enrolments.end removed it, and records who and when', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    await dispatch(
+      endEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db }
+    )
+    await expect(
+      dispatch(
+        checkEnrolmentAccessAction,
+        { personId: person.id, courseId: course.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    const result = await dispatch(
+      reinstateEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    expect(result).toEqual({ reinstated: true })
+
+    const access = await dispatch(
+      checkEnrolmentAccessAction,
+      { personId: person.id, courseId: course.id },
+      { organizationId, db: testDb.db }
+    )
+    expect(access).toEqual({ courseId: course.id, personId: person.id })
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      reinstatedByAccountId: ownerId,
+      reinstatedAt: expect.any(Number),
+    })
+  })
+
+  it('enrolments.reinstate refuses without an authenticated accountId — never recorded as reinstated by nobody', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    await dispatch(
+      endEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db }
+    )
+
+    // No `accountId` in the dispatch context at all — the same shape a
+    // caller with no authenticated session would leave `dispatch` (`dispatch.ts`'s
+    // own `DispatchContext.accountId` doc comment).
+    await expect(
+      dispatch(
+        reinstateEnrolmentAction,
+        { enrolmentId: enrolment.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: expect.any(Number),
+      reinstatedByAccountId: null,
+    })
+  })
+
+  it('enrolments.reinstate on an enrolment that is not ended is a no-op', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    const result = await dispatch(
+      reinstateEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    expect(result).toEqual({ reinstated: true })
+    // Never ended, so nothing to reinstate — the row is untouched.
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({ reinstatedByAccountId: null, reinstatedAt: null })
+  })
+
+  it("enrolments.reinstate refuses another organization's enrolment (TEN-5)", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb.db)
+    const { organizationId: orgB, ownerId: ownerB } =
+      seedOrganizationWithCourse(testDb.db)
+    const person = people.createPerson(orgA, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    await dispatch(
+      endEnrolmentAction,
+      { enrolmentId: enrolment.id },
+      { organizationId: orgA, db: testDb.db }
+    )
+
+    await expect(
+      dispatch(
+        reinstateEnrolmentAction,
+        { enrolmentId: enrolment.id },
+        { organizationId: orgB, db: testDb.db, accountId: ownerB }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // --- WEB-22: enrolments.listForCourse -----------------------------------
+
+  it('enrolments.listForCourse lists both an active and an ended enrolment', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+    const activePerson = people.createPerson(organizationId, {}, testDb.db)
+    const endedPerson = people.createPerson(organizationId, {}, testDb.db)
+    enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: activePerson.id },
+      testDb.db
+    )
+    const endedEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: endedPerson.id },
+      testDb.db
+    )
+    if (!endedEnrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, endedEnrolment.id, testDb.db)
+
+    const listed = await dispatch(
+      listEnrolmentsForCourseAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(listed.map((row) => row.personId).sort()).toEqual(
+      [activePerson.id, endedPerson.id].sort()
+    )
+  })
+
+  it("enrolments.listForCourse refuses another organization's course, byte-identically to a missing one (TEN-5)", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb.db)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb.db)
+
+    const foreignError: unknown = await dispatch(
+      listEnrolmentsForCourseAction,
+      { courseId: courseA.id },
+      { organizationId: orgB, db: testDb.db }
+    ).catch((error: unknown) => error)
+    const missingError: unknown = await dispatch(
+      listEnrolmentsForCourseAction,
+      { courseId: 'does-not-exist' },
+      { organizationId: orgA, db: testDb.db }
+    ).catch((error: unknown) => error)
+
+    expect(foreignError).toBeInstanceOf(ActionRefusedError)
+    expect(missingError).toBeInstanceOf(ActionRefusedError)
+    expect(serializeError(foreignError)).toBe(serializeError(missingError))
   })
 })

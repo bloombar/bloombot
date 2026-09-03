@@ -54,7 +54,9 @@ import {
 import {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
+  listEnrolmentsForCourseAction,
   listEnrolmentsForPersonAction,
+  reinstateEnrolmentAction,
 } from './enrolments.js'
 import { grantMembershipAction } from './memberships.js'
 import {
@@ -111,7 +113,9 @@ export {
 export {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
+  listEnrolmentsForCourseAction,
   listEnrolmentsForPersonAction,
+  reinstateEnrolmentAction,
 } from './enrolments.js'
 export { grantMembershipAction } from './memberships.js'
 export {
@@ -186,6 +190,8 @@ export function createPlatformRegistry(options?: {
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)
+  registry.register(reinstateEnrolmentAction)
+  registry.register(listEnrolmentsForCourseAction)
   registry.register(grantMembershipAction)
   registry.register(readTranscriptAction)
   registry.register(listTranscriptStudentsAction)

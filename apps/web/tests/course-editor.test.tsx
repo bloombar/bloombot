@@ -23,6 +23,7 @@ const {
   listCourseInstructionRevisions,
   saveCourseInstructions,
   listCourseJoinLinks,
+  listCourseEnrolments,
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
@@ -32,6 +33,7 @@ const {
   listCourseInstructionRevisions: vi.fn(),
   saveCourseInstructions: vi.fn(),
   listCourseJoinLinks: vi.fn(),
+  listCourseEnrolments: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -48,15 +50,17 @@ vi.mock('../src/api/client.js', async () => {
     listCourseInstructionRevisions,
     saveCourseInstructions,
     listCourseJoinLinks,
+    listCourseEnrolments,
   }
 })
 
-// WEB-18/WEB-19/WEB-20: every "existing course" case in this file renders
-// `components/CourseAttachments.tsx`, `components/CourseInstructions.tsx`
-// and `components/JoinLinks.tsx` too, each of which fetches on mount — an
-// empty list by default so none of those requests ever goes un-stubbed
-// here; `tests/course-attachments.test.tsx`, `tests/course-instructions.test.tsx`
-// and `tests/join-links.test.tsx` are what actually exercise those
+// WEB-18/WEB-19/WEB-20/WEB-22: every "existing course" case in this file
+// renders `components/CourseAttachments.tsx`, `components/CourseInstructions.tsx`,
+// `components/JoinLinks.tsx` and `components/CoursePeople.tsx` too, each of
+// which fetches on mount — an empty list by default so none of those
+// requests ever goes un-stubbed here; `tests/course-attachments.test.tsx`,
+// `tests/course-instructions.test.tsx`, `tests/join-links.test.tsx` and
+// `tests/course-people.test.tsx` are what actually exercise those
 // components' own behaviour. `components/RosterImport.tsx` fetches nothing
 // on mount (it only ever calls out once an instructor picks a file and
 // clicks Import), so it needs no stub here.
@@ -64,6 +68,7 @@ beforeEach(() => {
   listCourseAttachments.mockResolvedValue([])
   listCourseInstructionRevisions.mockResolvedValue([])
   listCourseJoinLinks.mockResolvedValue([])
+  listCourseEnrolments.mockResolvedValue([])
 })
 
 const PROJECT: Project = {

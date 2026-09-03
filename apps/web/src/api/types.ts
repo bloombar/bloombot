@@ -281,6 +281,31 @@ export interface CreatedCourseJoinLink {
   expiresAt: number | null
 }
 
+/**
+ * WEB-22 — one enrolment in a course's own people screen, active or ended,
+ * as `enrolments.listForCourse` returns it. Mirrors
+ * `packages/db/src/repos/enrolments.ts`'s own `CourseEnrolmentEntry` by
+ * hand, the same "not imported from the workspace" discipline this file's
+ * own module comment already explains. `displayName`, not the person's own
+ * email — the same "no genuine need to disambiguate by it" reasoning that
+ * repo function's own doc comment gives; a `null` `displayName` is told
+ * apart from another by `personId` instead (`components/EnrolmentsPanel.tsx`'s
+ * own fallback, the same one `Transcripts.tsx` already uses for the
+ * identical case). `endedAt`/`reinstatedByAccountId`/`reinstatedAt` are all
+ * `null` for an enrolment that has never been ended (ENRL-6) or, having
+ * been ended, never reinstated (ENRL-9).
+ */
+export interface CourseEnrolment {
+  id: string
+  personId: string
+  displayName: string | null
+  source: 'join_link' | 'discord_role' | 'roster'
+  createdAt: number
+  endedAt: number | null
+  reinstatedByAccountId: string | null
+  reinstatedAt: number | null
+}
+
 /** WEB-10 — `GET /organizations/:organizationId/chat/courses`'s own entries: just enough to pick one, not `CourseSummary`'s full instructor-facing shape. */
 export interface ChatCourse {
   id: string

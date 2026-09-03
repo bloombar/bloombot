@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accounts,
   conversations,
   courses,
   enrolments,
@@ -309,11 +310,13 @@ describe('enrolments repo (ENRL-1..6)', () => {
         'enrolViaJoinLink',
         'enrolViaRoster',
         'endEnrolment',
+        'reinstateEnrolment',
         'getActiveEnrolment',
         'getEnrolment',
         'hasEndedEnrolment',
         'listCoursesForPerson',
         'listPeopleForCourse',
+        'listEnrolmentsForCourse',
       ].sort()
     )
   })
@@ -558,6 +561,205 @@ describe('enrolments repo (ENRL-1..6)', () => {
     expect(
       enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
     ).toBe(0)
+  })
+
+  // --- ENRL-9: reinstating an ended enrolment -----------------------------
+
+  it('reinstates an ended enrolment, restoring active access and recording who and when', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      enrolment.id,
+      { reinstatedByAccountId: instructor.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(1)
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeDefined()
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: null,
+      reinstatedByAccountId: instructor.id,
+      reinstatedAt: expect.any(Number),
+    })
+  })
+
+  it('reinstating an enrolment that is not ended is an idempotent no-op — nothing changes', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor2@example.edu',
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    const changed = enrolments.reinstateEnrolment(
+      organizationId,
+      enrolment.id,
+      { reinstatedByAccountId: instructor.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(0)
+    // Never-ended, never-reinstated — this call left it exactly as it was.
+    expect(
+      enrolments.getEnrolment(organizationId, enrolment.id, testDb.db)
+    ).toMatchObject({
+      endedAt: null,
+      reinstatedByAccountId: null,
+      reinstatedAt: null,
+    })
+  })
+
+  it("reinstateEnrolment refuses another organization's enrolment (TEN-5)", () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(orgA, {}, testDb.db)
+    const outsider = accounts.createAccount(
+      orgB,
+      { email: 'outsider@example.edu', displayName: 'Outsider', role: 'owner' },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(orgA, enrolment.id, testDb.db)
+
+    const changed = enrolments.reinstateEnrolment(
+      orgB,
+      enrolment.id,
+      { reinstatedByAccountId: outsider.id },
+      testDb.db
+    )
+
+    expect(changed).toBe(0)
+    expect(
+      enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // --- WEB-22: the panel's own listing, active and ended alike -----------
+
+  it('listEnrolmentsForCourse includes both an active and an ended enrolment, with source and endedAt', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const active = people.createPerson(
+      organizationId,
+      { displayName: 'Ada Lovelace' },
+      testDb.db
+    )
+    const ended = people.createPerson(
+      organizationId,
+      { displayName: 'Bob Babbage' },
+      testDb.db
+    )
+    const activeEnrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: active.id },
+      testDb.db
+    )
+    const endedEnrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: ended.id,
+        roleNames: [course.studentsRole],
+      },
+      testDb.db
+    )
+    if (!activeEnrolment || !endedEnrolment) {
+      throw new Error('setup failed: no enrolment')
+    }
+    enrolments.endEnrolment(organizationId, endedEnrolment.id, testDb.db)
+
+    const listed = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(listed).toHaveLength(2)
+    const activeRow = listed.find((row) => row.personId === active.id)
+    const endedRow = listed.find((row) => row.personId === ended.id)
+    expect(activeRow).toMatchObject({
+      source: 'roster',
+      endedAt: null,
+    })
+    expect(endedRow).toMatchObject({
+      source: 'discord_role',
+      endedAt: expect.any(Number),
+    })
+  })
+
+  it("listEnrolmentsForCourse is scoped to this organization's course — a foreign organization sees none of it", () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(orgA, {}, testDb.db)
+    enrolments.enrolViaRoster(
+      orgA,
+      { courseId: courseA.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(
+      enrolments.listEnrolmentsForCourse(orgB, courseA.id, testDb.db)
+    ).toEqual([])
+    expect(
+      enrolments.listEnrolmentsForCourse(orgA, courseA.id, testDb.db)
+    ).toHaveLength(1)
   })
 
   // --- Tenant scoping (TEN-2/TEN-5) ---------------------------------------

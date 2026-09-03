@@ -124,6 +124,41 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     expect(status).toHaveTextContent("You're enrolled in Advanced Testing.")
   })
 
+  // Rework finding (must-fix) — reproduced exactly as reported: a student
+  // already enrolled in a second course redeems a link for the one named
+  // here, then switches the picker to check the other course. The banner,
+  // which has no dismissal, must keep naming the *joined* course, not
+  // whichever one the switch just selected — fails without the fix, since
+  // the banner used to derive its title from `selectedCourseId` (the same
+  // state the picker's own `onChange` rewrites), asserting a fresh-join
+  // claim about a course the student has actually been in for weeks.
+  it('switching the course picker away from the joined course does not change who the banner names', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+      { id: 'course-2', title: 'Advanced Testing' },
+    ])
+
+    render(
+      <Chat
+        organizationId="org-1"
+        initialCourseId="course-2"
+        joinConfirmation={{ alreadyEnrolled: false }}
+      />
+    )
+
+    await screen.findByTestId('join-confirmation')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Course' }), {
+      target: { value: 'course-1' },
+    })
+
+    expect(screen.getByRole('combobox', { name: 'Course' })).toHaveValue(
+      'course-1'
+    )
+    expect(screen.getByTestId('join-confirmation')).toHaveTextContent(
+      "You're enrolled in Advanced Testing."
+    )
+  })
+
   // ENRL-8/WEB-25: redeeming twice is a confirmation, not an error — this is
   // what distinguishes it in the browser, the same way `alreadyEnrolled`
   // distinguishes it over HTTP (`apps/api/tests/routes/join-links.test.ts`).

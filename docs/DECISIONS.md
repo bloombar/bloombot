@@ -7440,3 +7440,108 @@ identically to `Invitation.tsx`'s own `requestSignInLink` call. Nothing about th
 sign-in-and-redeem round trip against the running e2e API with `curl` alone, bypassing the browser, while
 diagnosing the mutation above: every call resolved correctly and in milliseconds, which is what first pointed
 away from a backend defect and eventually toward the tree's own uncommitted state instead.
+
+---
+
+**Rework — a second independent review found two must-fix defects, a cheap-fix, and two notes; this closes all
+five, and corrects a claim this entry's own earlier "Limits" made.**
+
+**Must-fix 1 — `pages/Chat.tsx`'s join confirmation named whichever course was *currently selected*, not the
+one that was joined.** `joinedCourseTitle` derived from `selectedCourseId`, the same state the course
+`<select onChange>` rewrites on every switch — and the banner has no dismissal, so it kept asserting a fact
+about whatever the student most recently looked at, for as long as the mount lived. Reproduced exactly as the
+review described it: a student already enrolled in one course redeems a link for a second, sees the correct
+banner, then switches the picker to check the first — and the banner now reads a fresh-join (or, on the
+`alreadyEnrolled` path, an "already enrolled") claim about a course they have been in for weeks, or about the
+one the link never named at all. Fixed by deriving the title from `initialCourseId` instead — the one prop this
+component never reassigns after mount, unlike `selectedCourseId`, which is exactly why it is the correct key
+for a banner about a one-time event rather than the current selection. `apps/web/tests/chat.test.tsx` gained a
+case that switches the picker after the banner renders and asserts the joined course's own name survives the
+switch — neither existing case caught this, since both asserted before any switch ever happened.
+
+**Must-fix 2 — the anti-flood guard silently discarded a repeat request's own `destination`, and this entry's
+own "Limits" (above) understated what that meant.** `requestSignInLink` returns early on
+`hasActiveSignInToken` before `issueSignInToken` ever runs, and that check is keyed on `(email, usedAt IS NULL,
+expiresAt > now)` alone — it never consulted, and nothing ever updated, the outstanding row's own
+`destination`. Reproduced over real HTTP: `POST /auth/request-link` with `{ email }`, then again inside the
+token's own fifteen-minute TTL with `{ email, destination: '/join/SECRET' }` — `204`, one email sent, and
+redeeming the only link that exists carried no destination at all: exactly the "lands on the empty shell,
+enrolled in nothing" outcome AUTH-6 exists to prevent, and `docs/SPEC.md`'s own AUTH-6 states unconditionally
+("regardless of which tab completes it"). The record needs correcting, not merely the code: this entry's own
+"Limits" called it "a narrow, pre-existing edge case this slice did not widen." That is wrong on the history.
+Under `ef1f8f0`, `JoinLink.tsx` wrote `PENDING_JOIN_LINK_KEY` to `sessionStorage` **on mount**, before any
+network call at all — the same-tab return trip was immune to this guard entirely, since nothing about setting a
+`sessionStorage` key goes anywhere near `hasActiveSignInToken`. Retiring that marker in favour of the
+token-carried destination (this entry's own first "Choice," above) moved the return address behind a code path
+the anti-flood guard can skip — a straight regression for the same-tab case, and silent in both directions:
+neither an error nor a different response distinguishes "the destination was recorded" from "an earlier,
+outstanding token answered instead." Fixed by updating the outstanding token's own `destination`
+(`packages/db/src/repos/sign-in-tokens.ts#updateSignInTokenDestination`, called through a same-named,
+re-validating wrapper in `packages/auth/src/tokens.ts`, from `requestSignInLink`'s own anti-flood branch) rather
+than issuing a second token — re-issuing on every repeat request would defeat the anti-flood control this guard
+exists to be; updating the row instead costs neither a new token nor a new email, since the already-emailed
+link's own token value never changes, only what its eventual redemption reads back. A request that omits
+`destination` never clears one an earlier, still-outstanding request already set — only a *supplied* value ever
+overwrites the column, so a later, less specific request cannot silently downgrade a more specific one still in
+flight. Covered at every layer the first pass covered `alreadyEnrolled` at: `packages/db/tests/sign-in-tokens.test.ts`
+(the repo primitive, including that a consumed or expired row is never revived by this), `packages/auth/tests/tokens.test.ts`
+and `sign-in.test.ts` (the validating wrapper and `requestSignInLink`'s own branch, including the
+exact anti-flood-preserving shape — still one email, one row), and `apps/api/tests/auth-flow.test.ts` (the
+review's own HTTP-level reproduction, verbatim).
+
+**Cheap-fix — three of `isSameOriginPath`'s four enforcement points were unpinned.** The full suite stayed
+green under each of: deleting `consumeSignInToken`'s own redemption-time re-validation, deleting
+`issueSignInToken`'s own write-time throw, and reducing `App.tsx#returnToShell`'s own
+`if (destination && isSameOriginPath(destination))` to `if (destination)`. All three are defence-in-depth
+against the identical mistake, and the two implementations (`packages/auth`'s own, and `apps/web`'s deliberately
+duplicated copy) already agreed — so nothing was exploitable — but nothing pinned that agreement, and
+`App.tsx`'s copy is the one its own comment calls "the one gate between a caller-supplied string and the
+browser's own address bar." Closed with two shared adversarial values (`//evil.example`, `/\evil.example` —
+both resolve *off* origin despite looking like a path) asserted in both `packages/auth/tests/tokens.test.ts`
+(pinning the write-time throw and the redemption-time re-check, the latter by writing a bad value directly
+through `@bloombot/db`'s own repo — the only way to reach a row `issueSignInToken` itself would never have
+produced) and `apps/web/tests/app.test.tsx` (pinning `App.tsx`'s own copy, by mocking `redeemSignInLink` to
+resolve with each value and asserting the app lands on the ordinary shell rather than attempting to navigate to
+either).
+
+**Note, addressed — `routes/auth.ts`'s `destination` schema had no length bound.**
+`z.string().refine(isSameOriginPath)` accepted (and would have stored) an arbitrarily long path on an
+unauthenticated endpoint; the anti-flood guard limits *rate*, not *size*, so a single request was still a
+single, unbounded write. `.max(256)` now sits beside the `.refine()` — generous against every real path this
+app issues a link for (`/join/:secret`, `/connect/:organizationId`, `/invitations/:secret`, each at most a few
+dozen characters), and small enough to refuse a `10_000`-character same-origin-shaped destination with the
+ordinary `400` this route already answers for every other malformed input (`apps/api/tests/auth-flow.test.ts`'s
+own new case — sized well under `express.json()`'s own default 100kb body limit, so it is `requestLinkInputSchema`'s
+`.max()` being proven, not the body parser refusing an oversized request outright with an unrelated `413`).
+
+**Note, recorded — `sign_in_tokens.destination` trades away a property `course_join_links` deliberately
+keeps.** `course_join_links` stores only `secretHash` (`repos/course-join-links.ts`'s own module comment) so
+that reading the database alone never lets anyone redeem a link — a live secret is never at rest in plaintext.
+`sign_in_tokens.destination` now stores a live join-link secret (the `/join/:secret` path itself) in plaintext,
+for that token's own fifteen-minute life, partially undoing that property for whatever fraction of a
+token's lifetime it is unredeemed. The exposure this accepts is small — the secret is already class-shared (an
+entire roster holds the same one) and already travels in the clear by URL and by email, the two places this
+column's own value came from in the first place — but it is a real trade this entry did not previously write
+down, and the same trade now applies identically to `updateSignInTokenDestination`'s own write path (must-fix
+2, above), which touches the same column with the same kind of value. Flagged explicitly for ENRL-12, which
+plans to store join-link secrets encrypted at rest in `course_join_links`: whoever builds it should decide
+whether `sign_in_tokens.destination` needs the same treatment, or whether the short lifetime and existing
+exposure (URL, email) make it a deliberately accepted gap instead — this entry takes no position on which, only
+that the interaction exists and someone building that slice should see it before deciding.
+
+**Evidence.** Mutated and confirmed red, then reverted, five further properties, the same discipline this
+entry's own first "Evidence" (above) already held itself to: (1) the Chat banner — reverting to
+`selectedCourseId` turned the new switch-then-assert case red while leaving every pre-existing case green
+(neither asserted after a switch); (2) the anti-flood/destination fix — reverting `requestSignInLink`'s own
+branch to a bare early return turned red the new cases in `sign-in-tokens.test.ts`, `tokens.test.ts`,
+`sign-in.test.ts` and `auth-flow.test.ts` alike; (3)–(5) each of the three newly-pinned `isSameOriginPath`
+enforcement points — deleting each guard in turn (`consumeSignInToken`'s re-check, `issueSignInToken`'s throw,
+`App.tsx`'s own `&&` clause) turned exactly the test written for that point red, and no other test in the
+affected file, confirming each test pins the specific layer it claims to and not some other one already
+covering for it.
+
+Final counts after this rework: 90 node:test (unchanged), 2146 vitest across 183 files (this entry's own prior
+rework left 2128/183; +18 tests, no new file), 25 e2e (unchanged — this rework touched no e2e file; the
+`isSameOriginPath` cheap-fix and the anti-flood must-fix are both pinned at the unit/integration level, not
+through a third browser round trip). `npx drizzle-kit check` (from `packages/db`): clean, no drift — this
+rework added no migration.

@@ -29,6 +29,7 @@ import {
   issueSignInToken,
   consumeSignInToken,
   discardSignInToken,
+  updateSignInTokenDestination,
   DEFAULT_TOKEN_TTL_MS,
 } from './tokens.js'
 import {
@@ -328,7 +329,11 @@ export interface RequestSignInLinkDeps {
  * browsing context redeems it — `undefined` for the ordinary "email me a
  * link" request, which has nowhere in particular to return to.
  * `issueSignInToken` (`tokens.ts`) is what actually validates and stores it;
- * this function does not re-check it.
+ * this function does not re-check it. When the anti-flood guard below finds
+ * an active token already outstanding, this updates *that* token's own
+ * `destination` instead of discarding the one this call was given — see the
+ * guard's own comment for why silently dropping it was a real regression,
+ * not a hypothetical one.
  *
  * @throws whatever `deps.emailSender.send` throws — see the `catch` below
  *   for why this is not swallowed.
@@ -352,7 +357,28 @@ export async function requestSignInLink(
   // the same way whether or not the address has an account, and answering
   // differently here would give a flooding caller an oracle for "is a link
   // already outstanding" that AUTH-1 gives nobody today.
+  //
+  // AUTH-6 rework, must-fix 2 — this guard firing must not also silently
+  // discard `destination`. The original AUTH-6 slice missed this: under
+  // `ef1f8f0`, the return address was a `sessionStorage` marker
+  // `pages/JoinLink.tsx` wrote on *mount*, before any network call, so a
+  // same-tab return trip was immune to this guard entirely — retiring that
+  // marker in favour of a server-carried destination moved the return
+  // address behind a path this guard can skip, a straight regression for
+  // the same-tab case and the reason AUTH-6 exists at all for the
+  // cross-tab one. Reproduced over real HTTP: request a link with no
+  // destination, then request again inside the token's own TTL with one —
+  // before this fix, the second call's `204` carried no signal that
+  // anything had changed, and the one email actually sent (from the first
+  // call) redeemed to nowhere in particular. Updating the outstanding
+  // token's own `destination` — not issuing a second token, which would
+  // defeat the anti-flood control this guard exists to be — is what closes
+  // it: the already-emailed link's own token value never changes, only what
+  // its eventual redemption reads back.
   if (signInTokensRepo.hasActiveSignInToken(email, Date.now(), deps.db)) {
+    if (destination !== undefined) {
+      updateSignInTokenDestination(email, destination, deps.db)
+    }
     return
   }
   const { token } = issueSignInToken(

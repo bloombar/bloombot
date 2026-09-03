@@ -536,6 +536,53 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
     ).toBe(false)
   })
 
+  // AUTH-6 rework, must-fix 2 — the exact reproduction the review named,
+  // over real HTTP: an ordinary request, then a repeat request carrying a
+  // destination, inside the first token's own TTL. Fails without the fix:
+  // the second `POST` used to answer `204` having silently discarded the
+  // destination, and the only link actually emailed (the first request's)
+  // redeemed to nowhere in particular — exactly the "lands on the empty
+  // shell, enrolled in nothing" outcome AUTH-6 exists to prevent, and
+  // `docs/SPEC.md`'s own AUTH-6 states unconditionally ("regardless of
+  // which tab completes it") — the request that supplied it never even
+  // reached that tab.
+  it('a repeat request with a destination updates the outstanding token, over real HTTP — not a second email', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const app = await buildTestApp(testDb.db, { emailSender })
+
+    const first = await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email: 'flooded-destined@example.edu' })
+    expect(first.status).toBe(204)
+
+    const second = await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({
+        email: 'flooded-destined@example.edu',
+        destination: '/join/SECRET',
+      })
+    expect(second.status).toBe(204)
+
+    // The anti-flood property itself: still only the one email sent.
+    expect(emailSender.sent).toHaveLength(1)
+
+    // The one link actually mailed now redeems to the second request's own
+    // destination, not nowhere.
+    const emailedLink = emailSender.sent[0]!.body
+    const token = emailedLink.split('/sign-in/')[1]?.trim()
+    const redeemed = await request(app)
+      .post('/auth/redeem')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ token })
+    expect(redeemed.status).toBe(200)
+    expect((redeemed.body as { destination?: string }).destination).toBe(
+      '/join/SECRET'
+    )
+  })
+
   // AUTH-6's own hard constraint: a destination is untrusted input, and must
   // be validated as a same-origin path before it is ever stored — this is
   // the mutation the brief calls for: drop `isSameOriginPath` from the
@@ -558,5 +605,34 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
       expect(response.status).toBe(400)
       expect(response.body).toMatchObject({ error: 'invalid_request' })
     }
+  })
+
+  // AUTH-6 rework, cheap-fix (note 4) — `isSameOriginPath` alone shapes a
+  // string, it never bounds its length: an unauthenticated caller could
+  // otherwise post an oversized `destination` and have it stored, every
+  // time, unthrottled by anything the anti-flood guard limits (rate, not
+  // size). Well under `express.json()`'s own default 100kb body limit
+  // (`server.ts`) — the point is `requestLinkInputSchema`'s own `.max(256)`
+  // refusing this, not the body parser refusing an even larger body outright
+  // (a `413`, not the `400` this route answers for every other malformed
+  // input). Fails without the fix: a syntactically valid same-origin path
+  // (`/` followed by ordinary characters), just far longer than any real one
+  // this app issues a link for, sailed through `isSameOriginPath` — which
+  // has no notion of length at all — and was accepted as a 204.
+  it('refuses a destination far beyond any real path this app issues a link for, even one that is otherwise same-origin-shaped', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+
+    const oversizedDestination = `/join/${'a'.repeat(10_000)}`
+    const response = await request(app)
+      .post('/auth/request-link')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({
+        email: 'attacked-with-size@example.edu',
+        destination: oversizedDestination,
+      })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ error: 'invalid_request' })
   })
 })

@@ -54,10 +54,21 @@ export interface AuthRouterDependencies {
 // back out. Refusing a bad one here, the same `400` shape `email` already
 // gets, is cheap and immediate — the alternative is discovering it only once
 // something tries to navigate a browser there.
+//
+// AUTH-6 rework, cheap-fix — `.max(256)` bounds the *size* `isSameOriginPath`
+// alone does not: that check only shapes a string, never limits its length,
+// so a caller could otherwise post a destination hundreds of kilobytes long
+// on this unauthenticated route and have it stored (`sign_in_tokens.destination`,
+// no column-level limit of its own). This route is behind no session, and
+// the anti-flood guard (`requestSignInLink`) limits *rate*, not *size* — a
+// single request is still one write, however large. 256 is generous against
+// every real path this app issues a link for (`/join/:secret`,
+// `/connect/:organizationId` — at most a few dozen characters).
 const requestLinkInputSchema = z.object({
   email: z.email(),
   destination: z
     .string()
+    .max(256)
     .refine(isSameOriginPath, 'destination must be a same-origin path')
     .optional(),
 })

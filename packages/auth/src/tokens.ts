@@ -126,6 +126,47 @@ export function issueSignInToken(
   return { token, expiresAt }
 }
 
+/**
+ * AUTH-6 rework, must-fix 2 — update the `destination` already-issued,
+ * still-active token for `email`, instead of issuing a new one.
+ * `requestSignInLink`'s own anti-flood guard (`@bloombot/db`'s
+ * `hasActiveSignInToken`) declines a *second* token/email while an earlier
+ * one for the same address is still live — correct for the flood case, but
+ * a repeat request can legitimately carry a *different* destination than the
+ * first one did (a visitor who requested an ordinary link, then followed a
+ * join link with the same address before the first link expired, say), and
+ * silently dropping it left the account signed in through the already-live
+ * token, correct but bound for wherever the first request named — or
+ * nowhere. This updates the row the anti-flood guard already found, so the
+ * next redemption of that same, already-emailed token reads back the
+ * caller's most recent destination, without a second token or a second
+ * email — the property the anti-flood guard exists to hold onto (re-issuing
+ * on every repeat request would defeat it outright).
+ *
+ * Validated the same way `issueSignInToken` validates one at write time —
+ * this is the *other* write path onto the same column, and needs the
+ * identical guard.
+ *
+ * @throws {Error} if `destination` is not a same-origin path.
+ */
+export function updateSignInTokenDestination(
+  email: string,
+  destination: string,
+  db: Executor
+): boolean {
+  if (!isSameOriginPath(destination)) {
+    throw new Error(
+      `updateSignInTokenDestination: destination must be a same-origin path, got ${JSON.stringify(destination)}`
+    )
+  }
+  return signInTokens.updateSignInTokenDestination(
+    email,
+    destination,
+    Date.now(),
+    db
+  )
+}
+
 /** What a redeemed token resolves to. */
 export interface ConsumedSignInToken {
   email: string

@@ -17,31 +17,38 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
-import { PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
 
 // `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
 // — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
 // 'projects' (`docs/DECISIONS.md` D-25), so the shell this file renders now
 // mounts `ProjectsPanel` on first render, not only when a test opts into the
-// Projects tab.
+// Projects tab. `listDiscordServers` is mocked for the same reason (TEN-8):
+// `Shell.tsx` now reads it on every mount, not only once the Discord tab is
+// opened, so the one test below that renders the shell needs a resolved
+// value or the fetch reaches this test's own unmocked `fetch` and fails as
+// a genuine network error.
 const {
   fetchMe,
   completeDiscordInstall,
   listProjects,
+  listDiscordServers,
   fetchAdminOrganizations,
   redeemSignInLink,
   previewDiscordPersonLink,
   confirmDiscordPersonLink,
   redeemCourseJoinLink,
+  redeemMembershipInvitation,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
   listProjects: vi.fn(),
+  listDiscordServers: vi.fn(),
   fetchAdminOrganizations: vi.fn(),
   redeemSignInLink: vi.fn(),
   previewDiscordPersonLink: vi.fn(),
   confirmDiscordPersonLink: vi.fn(),
   redeemCourseJoinLink: vi.fn(),
+  redeemMembershipInvitation: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -53,11 +60,13 @@ vi.mock('../src/api/client.js', async () => {
     fetchMe,
     completeDiscordInstall,
     listProjects,
+    listDiscordServers,
     fetchAdminOrganizations,
     redeemSignInLink,
     previewDiscordPersonLink,
     confirmDiscordPersonLink,
     redeemCourseJoinLink,
+    redeemMembershipInvitation,
   }
 })
 
@@ -78,6 +87,19 @@ describe('App (WEB-1..4)', () => {
     sessionStorage.setItem(PENDING_INSTALL_ORG_KEY, 'org-2')
     completeDiscordInstall.mockResolvedValue({ serverId: 'guild-99' })
     listProjects.mockResolvedValue([])
+    // TEN-8: `Shell.tsx` reads this back too, now, not only `justInstalled`
+    // — resolved with the same binding the callback just reported, so this
+    // assertion (below) proves the two agree, not merely that the
+    // *immediate* signal alone renders something.
+    listDiscordServers.mockResolvedValue([
+      {
+        serverId: 'guild-99',
+        organizationId: 'org-2',
+        installedByAccountId: 'account-1',
+        installedAt: Date.now(),
+        removedAt: null,
+      },
+    ])
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -206,14 +228,21 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // LINK-6 rework — a sign-in redemption used to always return to the
+  // AUTH-6 rework — a sign-in redemption used to always return to the
   // shell; a visitor who arrived at `/connect/:organizationId` signed out
-  // (stashing `PENDING_CONNECT_ORG_KEY`, `pages/Connect.tsx`'s own doc
-  // comment) needs that redemption to land back on the connect screen they
-  // actually came for, not the shell they have no other reason to see yet.
-  it('a sign-in redemption returns to the pending connect organization, not the shell', async () => {
-    sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
-    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+  // needs that redemption to land back on the connect screen they actually
+  // came for, not the shell they have no other reason to see yet. The
+  // destination now comes off the redeemed token itself (`Connect.tsx`'s own
+  // `destination` prop to `SignIn`), not a `sessionStorage` marker this test
+  // would otherwise have to stash — proving, incidentally, that this no
+  // longer depends on anything this same browsing context wrote earlier
+  // (`app.test.tsx`'s own stand-in for AUTH-6's cross-tab case; the real
+  // thing is `e2e/join-link.spec.ts`'s own two-tab scenario).
+  it('a sign-in redemption returns to the connect organization the token itself named, not the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/connect/org-1',
+    })
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -286,6 +315,55 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
   })
 })
 
+// AUTH-6 rework, cheap-fix — `returnToShell`'s own `isSameOriginPath` check
+// (`App.tsx`, its own module comment calls this "the one gate between a
+// caller-supplied string and the browser's own address bar") is pinned
+// directly here, against the same two adversarial values
+// `packages/auth/tests/tokens.test.ts` asserts its own copy of the check
+// against — deliberately shared, not two independently invented examples:
+// the point is that both copies of `isSameOriginPath` refuse the same
+// inputs. Fails without the fix if this component ever navigates to a
+// server-supplied `destination` without checking it first.
+describe('App — a redeemed destination that is not a same-origin path is refused before navigating (AUTH-6)', () => {
+  it.each(['//evil.example', '/\\evil.example'])(
+    'does not navigate to an off-origin destination (%s) — falls back to the ordinary shell instead',
+    async (destination) => {
+      redeemSignInLink.mockResolvedValue({
+        accountId: 'account-1',
+        destination,
+      })
+      listProjects.mockResolvedValue([])
+      listDiscordServers.mockResolvedValue([])
+      fetchMe.mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'student@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Student',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      window.history.pushState(null, '', '/sign-in/a-token')
+
+      renderWithModal(<App />)
+
+      // The ordinary shell — not the off-origin address, and not left on
+      // `/sign-in/a-token` either (redemption itself still ran and
+      // succeeded; only the *navigation* it would otherwise have taken is
+      // refused).
+      expect(
+        await screen.findByTestId('organization-switcher')
+      ).toBeInTheDocument()
+      expect(window.location.pathname).toBe('/')
+    }
+  )
+})
+
 describe('App — /join/:secret (ENRL-8)', () => {
   it('signed out, renders the join-link screen own sign-in prompt rather than the ordinary shell', async () => {
     fetchMe.mockResolvedValue({ account: null })
@@ -296,7 +374,6 @@ describe('App — /join/:secret (ENRL-8)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeInTheDocument()
-    expect(sessionStorage.getItem(PENDING_JOIN_LINK_KEY)).toBe('secret-abc')
   })
 
   it('signed in, redeems the link rather than rendering the ordinary shell', async () => {
@@ -334,16 +411,17 @@ describe('App — /join/:secret (ENRL-8)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // ENRL-8, the same LINK-6 rework reasoning as `/connect/:organizationId`
-  // above: a visitor who arrived at `/join/:secret` signed out
-  // (`JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY`) must return to that same
-  // link, not the shell, once a sign-in redemption completes — proved here
-  // by the join link actually being redeemed (with the pending secret),
-  // which could only happen if the browser landed back on `JoinLink`
-  // rather than going straight to the ordinary shell.
-  it('a sign-in redemption returns to the pending join link, not straight to the shell', async () => {
-    sessionStorage.setItem(PENDING_JOIN_LINK_KEY, 'secret-abc')
-    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+  // AUTH-6, the same rework reasoning as `/connect/:organizationId` above: a
+  // visitor who arrived at `/join/:secret` signed out must return to that
+  // same link, not the shell, once a sign-in redemption completes — proved
+  // here by the join link actually being redeemed (with the secret the
+  // *token* itself named), which could only happen if the browser landed
+  // back on `JoinLink` rather than going straight to the ordinary shell.
+  it('a sign-in redemption returns to the join link the token itself named, not straight to the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/join/secret-abc',
+    })
     redeemCourseJoinLink.mockReturnValue(new Promise(() => undefined))
     fetchMe.mockResolvedValue({
       account: {
@@ -367,5 +445,91 @@ describe('App — /join/:secret (ENRL-8)', () => {
       expect(redeemCourseJoinLink).toHaveBeenCalledWith('secret-abc')
     )
     expect(window.location.pathname).toBe('/join/secret-abc')
+  })
+})
+
+describe('App — /invitations/:secret (ENRL-10)', () => {
+  it('signed out, renders the invitation screen own sign-in prompt rather than the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({ account: null })
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
+    ).toBeInTheDocument()
+  })
+
+  it('signed in, redeems the invitation rather than rendering the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'colleague@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Colleague',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    // Never resolves in this test — the same "assert the pending state
+    // without racing the navigate-away" reasoning `/join/:secret`'s own
+    // identical case gives, above.
+    redeemMembershipInvitation.mockReturnValue(new Promise(() => undefined))
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
+    )
+    expect(
+      screen.queryByRole('combobox', { name: 'Organization' })
+    ).not.toBeInTheDocument()
+  })
+
+  // AUTH-6, rework — found in review: this used to be the one entry point
+  // AUTH-6 left behind, still returning through a same-tab-only
+  // `sessionStorage` marker (`PENDING_INVITATION_KEY`) this test used to
+  // stash itself before rendering. Rewritten to the identical shape
+  // `/connect/:organizationId` and `/join/:secret` above already prove
+  // AUTH-6 by: no `sessionStorage` write happens anywhere in this test at
+  // all — `destination` comes only from the redeemed token
+  // (`redeemSignInLink`'s own mocked response), which is exactly what
+  // proves this no longer depends on anything this same browsing context
+  // wrote earlier (this file's own stand-in for AUTH-6's cross-tab case;
+  // the real thing is `e2e/membership-invitation-panel.spec.ts`'s own
+  // two-tab scenario, below).
+  it('a sign-in redemption returns to the invitation the token itself named, not straight to the shell', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/invitations/secret-abc',
+    })
+    redeemMembershipInvitation.mockReturnValue(new Promise(() => undefined))
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'colleague@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Colleague',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
+    )
+    expect(window.location.pathname).toBe('/invitations/secret-abc')
   })
 })

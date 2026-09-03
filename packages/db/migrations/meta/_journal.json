@@ -120,6 +120,34 @@
       "when": 1788415155646,
       "tag": "0016_job_payload_retention_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1788434406576,
+      "tag": "0017_equal_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1788455694111,
+      "tag": "0018_ordinary_paibok",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1788464366027,
+      "tag": "0019_normal_patriot",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1788467273896,
+      "tag": "0020_curvy_marauders",
+      "breakpoints": true
     }
   ]
 }

@@ -19,8 +19,8 @@
  *   3. `sessionMiddleware` (API-2) — attaches `req.session`, or not.
  *   4. The routes themselves (API-1) — `routes/auth.ts`, `routes/actions.ts`,
  *      `routes/discord-servers.ts` (TEN-4), `routes/chat.ts` (WEB-10),
- *      `routes/join-links.ts` (ENRL-8), and this process's own `GET /health`
- *      (API-6).
+ *      `routes/join-links.ts` (ENRL-8), `routes/membership-invitations.ts`
+ *      (ENRL-10), and this process's own `GET /health` (API-6).
  *   5. `errorMiddleware` (API-4 / ACT-4) — last, so every thrown error from
  *      every route above lands here and nowhere else.
  */
@@ -52,6 +52,7 @@ import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
 import { buildJoinLinksRouter } from './routes/join-links.js'
+import { buildMembershipInvitationsRouter } from './routes/membership-invitations.js'
 import {
   buildPersonLinkRouter,
   type PendingDiscordConnect,
@@ -70,6 +71,8 @@ export interface ServerDependencies {
   registry?: ActionRegistry
   /** FILE-1..5 — where a course attachment's own bytes are written; threaded to `createPlatformRegistry` when `registry` above is not itself overridden. `src/index.ts` always supplies `CONFIG.ATTACHMENT_STORAGE_DIR` explicitly, the same as every other `CONFIG` value it reads once and passes down — omitting this is only ever a test's own choice, and falls through to `createPlatformRegistry`'s own `'./tmp/attachments'` default (never `data/`, a rework finding — see `docs/DECISIONS.md` D-32). */
   attachmentStorageDir?: string
+  /** ENRL-12 — the decoded `JOIN_LINK_ENCRYPTION_KEY`, threaded to `createPlatformRegistry` the same way `attachmentStorageDir` above is, when `registry` is not itself overridden. `src/index.ts` reads and validates the raw environment value once, at startup (a credential, CFG-5, never through `@bloombot/config`'s schema); omitted here — the deployment-compatibility default — a join link's secret is still shown once at creation, and `courseJoinLinks.reveal` always refuses. */
+  joinLinkEncryptionKey?: Buffer
   /** ADMIN-5 rework, round four — a test-only seam: the same port `attachmentStorageDir` above builds an instance of, but handed in already-constructed, so a test can wrap one call (typically `remove`) with an observable or a deterministic side effect without reaching inside this file's own closure. Ordinary callers (`src/index.ts`) never set this; `attachmentStorageDir` (or its own `'./tmp/attachments'` fallback) governs every real deployment. */
   attachmentStorage?: AttachmentStorage
   /** TEN-4's install flow — the real Discord REST client in production, a loopback fake in a test (`@bloombot/discord-rest`'s port). */
@@ -108,6 +111,9 @@ export function buildApp(deps: ServerDependencies): Express {
     createPlatformRegistry({
       ...(deps.attachmentStorageDir !== undefined
         ? { attachmentStorageDir: deps.attachmentStorageDir }
+        : {}),
+      ...(deps.joinLinkEncryptionKey !== undefined
+        ? { joinLinkEncryptionKey: deps.joinLinkEncryptionKey }
         : {}),
     })
   // ADMIN-3/ADMIN-5 — a second `AttachmentStorage` instance over the same
@@ -163,6 +169,12 @@ export function buildApp(deps: ServerDependencies): Express {
   // comment has why): a redeemer presents only the secret, not an
   // organization id.
   app.use('/join-links', buildJoinLinksRouter({ db: deps.db }))
+  // ENRL-10 — unscoped, for the identical reason `/join-links` is above
+  // (`routes/membership-invitations.ts`'s own module comment).
+  app.use(
+    '/membership-invitations',
+    buildMembershipInvitationsRouter({ db: deps.db })
+  )
   app.use(
     '/organizations/:organizationId/actions',
     buildActionsRouter(registry, deps.db)

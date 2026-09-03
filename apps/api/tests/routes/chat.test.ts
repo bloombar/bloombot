@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
+import type { ModelAnswer, ModelClient, ModelRequest } from '@bloombot/core'
 import {
   conversations,
   courses,
@@ -413,6 +414,124 @@ describe('routes/chat.ts (WEB-10)', () => {
     })
   })
 
+  // CORE-7/CORE-8 — this route's own `addressPersonForWeb` (`routes/chat.ts`)
+  // is the surface's own decision, exercised here through the real router
+  // rather than a unit test of a private function this file cannot import:
+  // a first name wins when the account has one, a display name is the
+  // fallback, and neither ever falls back to this platform's own person id
+  // — `model.calls` is an intermediate value (`@bloombot/core#answer.ts`'s
+  // own `ModelRequest`), legitimate here because this test is about *which*
+  // fact wins, not about what a student ultimately reads (that is
+  // `answer.test.ts`'s own "reply text a student sees" regression, one
+  // layer down).
+  it('addresses a connected caller by first name, falling back to display name, then to nobody — never an id (CORE-7, CORE-8)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: 'Ada', displayName: 'Ada L.' },
+      testDb.db
+    )
+    const model = new FakeModelClient('ok')
+
+    const app = await buildTestApp(testDb.db, { model })
+    const firstNameResponse = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(firstNameResponse.status).toBe(200)
+    expect(model.calls[0]?.addressAs).toBe('Ada')
+
+    // No first name — the display name is next in CORE-8's own order.
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: null, displayName: 'Ada L.' },
+      testDb.db
+    )
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(model.calls[1]?.addressAs).toBe('Ada L.')
+
+    // Neither known — CORE-8's own last resort: nobody, never this
+    // platform's own person id, even though `discordPersonId` is right
+    // here and would otherwise be the easiest thing to reach for.
+    people.overwriteRosterFields(
+      caller.organizationId,
+      discordPersonId,
+      { firstName: null, displayName: null },
+      testDb.db
+    )
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+    expect(model.calls[2]?.addressAs).toBeNull()
+    expect(model.calls[2]?.addressAs).not.toBe(discordPersonId)
+  })
+
+  /**
+   * CORE-7/CORE-8, over HTTP — the reported defect, reproduced and proven
+   * fixed against the exact response body a browser reads, not an
+   * intermediate value. Rework, found in review: `e2e/chat.spec.ts`'s own
+   * two assertions on this look like they pin the fix but do not —
+   * `e2e/support/fake-model-client.ts` is a static fixture that ignores
+   * `request.addressAs` entirely, so those assertions pass with the defect
+   * fully present (confirmed: reverting `answer.ts`'s `addressAs`
+   * computation and rerunning that spec still passes). This test is the
+   * cheaper, genuine proof at the HTTP layer this app's own test suite can
+   * give — an `EchoingModelClient` that behaves the way a course prompt
+   * written for Discord actually does (addresses the reader at the front of
+   * its own reply, the same mechanism `packages/core/tests/answer.test.ts`'s
+   * own CORE-7/CORE-8 block uses one layer down).
+   */
+  class EchoingModelClient implements ModelClient {
+    calls: ModelRequest[] = []
+    async ask(request: ModelRequest): Promise<ModelAnswer> {
+      this.calls.push(request)
+      const prefix = request.addressAs ? `${request.addressAs} - ` : ''
+      return { text: `${prefix}Hello`, upstreamThreadId: null, model: 'echo' }
+    }
+  }
+
+  it('a web reply contains no mention token and no raw account id, in the HTTP response body a student actually receives (CORE-7, CORE-8)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new EchoingModelClient()
+
+    const app = await buildTestApp(testDb.db, { model })
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'When is the midterm?' })
+
+    expect(response.status).toBe(200)
+    const body = response.body as { result: { text: string } }
+    expect(body.result.text).toBe('Hello')
+    expect(body.result.text).not.toContain('<@')
+    expect(body.result.text).not.toContain(caller.accountId)
+    expect(body.result.text).not.toContain(discordPersonId)
+  })
+
   it('an empty question is refused as invalid input before it ever reaches the model', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
@@ -479,6 +598,83 @@ describe('routes/chat.ts (WEB-10)', () => {
       .send({ text: 'a'.repeat(4000) })
 
     expect(response.status).toBe(200)
+    expect(model.calls).toHaveLength(1)
+  })
+
+  // COST-3, end to end through this same pipeline — proves the cap is real,
+  // not merely storable. Before `costLedger.setSpendingCap` existed,
+  // `organizations.setSpendingCap` (`@bloombot/db`) had zero non-test
+  // callers anywhere in the monorepo (`docs/ROADMAP.md`'s "Audit —
+  // surfaces that were never built"): the enforcement below
+  // (`hasReachedSpendingCap`, `@bloombot/core#answer.ts`) was always real,
+  // but nothing could ever put a cap in front of it in a real deployment.
+  // This dispatches the ordinary action route, unmodified — the same one
+  // `pages/Usage.tsx` calls in the panel — and proves the very next
+  // question over this route's own `answerQuestion` pipeline is refused,
+  // never reaching the model a second time.
+  it('a spending cap set through the action layer actually refuses the next question, over the same answerQuestion pipeline (COST-3)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('# Welcome\n\nAsk away.')
+
+    const app = await buildTestApp(testDb.db, { model })
+
+    // A first question is recorded — but not at a magnitude this test can
+    // claim. Rework finding (a review of this slice caught it): the comment
+    // here used to say "costs something real … never 0 (COST-6)", which is
+    // false in this harness specifically — `buildTestApp`
+    // (`apps/api/tests/helpers/build-test-app.ts`) wires no `pricing`
+    // either, so `answerQuestion` falls through to its own
+    // `NO_PRICING_CONFIGURED` fallback (`@bloombot/core#answer.ts`, an
+    // all-zero rate table) and this call is genuinely priced at `costMicros:
+    // 0`. What this test actually proves is COST-3's own `spent >= cap`
+    // boundary at its edge (`0 >= 0`, below) — the same boundary a cap of
+    // `0` fires against with no spend recorded at all — not that a real
+    // magnitude was priced; that end-to-end claim belongs to (and is
+    // exercised by) `e2e/usage-panel.spec.ts` instead, which reads a
+    // genuinely nonzero `cost_micros` back from a real pricing table.
+    const first = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+    expect(first.status).toBe(200)
+    expect((first.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+    expect(model.calls).toHaveLength(1)
+
+    // A cap of $0 — already reached the moment anything has been spent at
+    // all (`hasReachedSpendingCap`'s own `spent >= cap`, and the question
+    // above spent something real) — set through the ordinary action route,
+    // exactly the way an owner reaches it from the panel.
+    const setCap = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/actions/costLedger.setSpendingCap`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ capAmount: 0 })
+    expect(setCap.status).toBe(200)
+
+    // The next question is refused before the model is ever asked again —
+    // `declined-over-cap`, not a generic failure (COST-3's own text) — and
+    // the fake model client proves it: still exactly one call, not two.
+    const second = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'What is on the syllabus?' })
+    expect(second.status).toBe(200)
+    expect((second.body as { result: { kind: string } }).result.kind).toBe(
+      'declined-over-cap'
+    )
     expect(model.calls).toHaveLength(1)
   })
 

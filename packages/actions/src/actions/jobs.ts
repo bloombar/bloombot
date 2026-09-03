@@ -20,9 +20,36 @@
  * no reader that needed it. `repos/jobs.ts`'s own `completeJob`/
  * `markJobFailed` are what actually clear the column once a job is
  * terminal; this action simply never surfaces it, terminal or not.
+ *
+ * **`jobs.list` (JOB-2).** An audit (`docs/ROADMAP.md`'s "Audit — surfaces
+ * that were never built") found `jobs.get` was the *only* read this
+ * package offered — it needs an id the caller already holds, and every
+ * caller that reaches it (`RosterImport.tsx`, `ScaffoldButton.tsx`,
+ * `CourseAttachments.tsx`, `Transcripts.tsx`) only ever holds one for a job
+ * it enqueued in the current browser session. A roster import that
+ * exhausted its attempts yesterday, in a session nobody has open anymore,
+ * was therefore invisible to everyone, forever — JOB-2's own "a job that
+ * keeps failing is visible" held at the data layer (the row is never
+ * deleted) and failed everywhere a person could actually look.
+ * `listJobsAction` closes that: every job in the caller's organization,
+ * newest activity first (`repos/jobs.ts#listJobsForOrganization`'s own doc
+ * comment has the ordering), reusing this file's own `toJobStatus` so a
+ * listing entry and a single `jobs.get` read share exactly one mapping —
+ * `payload` is absent from a listing entry for the identical reason it is
+ * absent from `jobs.get`'s, not a second decision made separately for this
+ * action.
+ *
+ * `MAX_JOBS_LIST_LIMIT`/`DEFAULT_JOBS_LIST_LIMIT` are this action's own
+ * bound, not merely a suggestion `repos/jobs.ts` happens to honour — a
+ * listing that returned every job an organization has ever run would grow
+ * without limit as a tenant's history does, which is a different thing
+ * from a screen an instructor checks in on to see what needs attention
+ * today. The input schema clamps `limit` to `MAX_JOBS_LIST_LIMIT`
+ * regardless of what a caller asks for, and `execute` falls back to
+ * `DEFAULT_JOBS_LIST_LIMIT` when a caller asks for nothing at all.
  */
 
-import { jobs } from '@bloombot/db'
+import { jobs, organizations } from '@bloombot/db'
 import { z } from 'zod'
 
 import type { Action } from '../types.js'
@@ -78,4 +105,47 @@ export const getJobAction: Action<'jobs.get', JobIdInput, Job, JobStatus> = {
       jobs.getJob(context.organizationId, input.jobId, context.db),
   },
   execute: ({ entity }) => toJobStatus(entity),
+}
+
+type Organization = ReturnType<typeof organizations.getOrganizationById>
+
+/** JOB-2's own bound — an instructor checking in on the queue, not a full history export. See this file's own module comment. */
+const DEFAULT_JOBS_LIST_LIMIT = 50
+const MAX_JOBS_LIST_LIMIT = 200
+
+const listJobsInputSchema = z.object({
+  /** How many jobs to return, newest activity first — clamped to `MAX_JOBS_LIST_LIMIT` regardless of what a caller asks for; omitted entirely, this action falls back to `DEFAULT_JOBS_LIST_LIMIT`. */
+  limit: z.number().int().positive().max(MAX_JOBS_LIST_LIMIT).optional(),
+})
+type ListJobsInput = z.infer<typeof listJobsInputSchema>
+
+/**
+ * List the caller's organization's own jobs (JOB-2), newest activity
+ * first, bounded (this file's own module comment on why, and the exact
+ * bound). No existing job to resolve against on a list — the organization
+ * itself is the resource, read rather than written, the same
+ * "no existing record to resolve on a list" shape `projects.list`/
+ * `discordServers.list` already use.
+ */
+export const listJobsAction: Action<
+  'jobs.list',
+  ListJobsInput,
+  NonNullable<Organization>,
+  JobStatus[]
+> = {
+  name: 'jobs.list',
+  description:
+    "List the caller's organization's own jobs (JOB-2), newest activity first, bounded by limit (default 50, max 200) — never a job's payload, the same JOB-6 guarantee jobs.get already holds.",
+  inputSchema: listJobsInputSchema,
+  policy: {
+    descriptor: { resource: 'organization', access: 'read' },
+    resolve: (_input, context) =>
+      organizations.getOrganizationById(context.organizationId, context.db),
+  },
+  execute: ({ organizationId, input, db }) => {
+    const limit = input.limit ?? DEFAULT_JOBS_LIST_LIMIT
+    return jobs
+      .listJobsForOrganization(organizationId, limit, db)
+      .map(toJobStatus)
+  },
 }

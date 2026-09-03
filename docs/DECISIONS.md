@@ -6510,3 +6510,1626 @@ rule ("If a future package adds HTTP tests over supertest, it needs the same `st
 this entry exists because that rule was stated once and not enforced anywhere a second app could violate it
 silently — no lint rule or repo-wide grep currently catches a new `request(app)` call site against a bare
 Express app. That stays a manual discipline, not a structural guarantee, unless a future slice adds one.
+
+---
+
+## D-65 — `apps/web`: TEN-8/WEB-4 — D-23 closed the action layer, not the surface; the panel now reads its own organization's Discord binding instead of trusting only a same-session prop
+
+**Problem.** An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built," dated 2026-09-03) found
+`pages/Shell.tsx` still deriving `installedServerId` purely from `justInstalled`, a prop `App.tsx` sets only
+once — when a Discord OAuth callback completes in that same browser tab. A reload, or a second device, or an
+install from an earlier session, all leave `justInstalled` `undefined`, so the Discord tab renders "Install"
+for a server that is already bound, and `handleRemove`'s own `if (!installedServerId) return` makes WEB-4's
+"with the option to remove it" unreachable for exactly the accounts who did not just click through the OAuth
+flow in this tab. Both TEN-8 and WEB-4 were marked Done before this was noticed.
+
+**This is not a new gap — it is D-22's gap 2, restated.** D-22 named it directly: "a page reload, or a second
+device, sees no installed server at all even when one exists, which is a real gap in WEB-4's 'a server already
+installed shows as installed.'" D-23's own text is careful about what it claims to have done about that:
+"`discordServers.list` … exists and is exercised by that package's own tests, but no `apps/api` route reaches
+it" (D-22's own wording, restated as the gap D-23 closes) became, in D-23, five *actions* including
+`discordServers.list`, reachable through the existing generic `POST /organizations/:organizationId/actions/:name`
+route with no `apps/api` route change needed at all. That is real, and it is correctly recorded — D-23 is not
+being rewritten here, and this entry adds to it rather than correcting it. But closing the action layer is not
+the same claim as closing the gap D-22 described, which was specifically about what `pages/Shell.tsx` renders:
+the action existed and was dispatchable from the moment D-23 landed, and nothing in `apps/web` ever called it.
+`components/InstallButton.tsx`'s own module comment and `ShellProps.justInstalled`'s own doc both still asserted
+"there is no route today to look up an organization's existing bindings" after D-23 shipped — an assertion this
+slice found still committed, still false, and corrected here (this project's own repeated finding: a comment
+asserting the opposite of the code gets caught in review, eventually, but had not been yet). The audit is what
+finally traced "the action exists" all the way out to "and is called by nothing," which is the distinction this
+entry exists to record for the next person who reads D-23 and reasonably concludes WEB-4's gap is closed.
+
+**Choice, a client wrapper (`api/client.ts#listDiscordServers`) plus a fetch in `Shell.tsx`, not a new component.**
+The same shape every other read in this app already takes (`listProjects`, `listCourseAttachments`, etc.) —
+`dispatchAction(organizationId, 'discordServers.list', {})`, typed against a hand-mirrored
+`DiscordServerBindingSummary` (`api/types.ts`, this file's own module comment on why client types are mirrored
+rather than imported from `packages/actions`). No new component: `InstallButton.tsx` already renders whatever
+`installedServerId` it is handed: the fix is entirely in what `Shell.tsx` computes for that prop, not in what
+renders it.
+
+**Choice, `justInstalled` is consulted only while the fetch is `'loading'`, never after.** `discordBindingState`
+(`'loading' | 'ready' | 'error'`) starts `'loading'` on every mount and on every organization switch. While it
+is `'loading'`, `justInstalled` — known synchronously, no round trip needed — stands in for it, so a fresh
+install's own banner shows immediately rather than flickering through a loading state it does not need. Once the
+fetch resolves, one way or the other, `discordBindingState` is the only thing either `installedServerId` or
+`handleRemove` trust — a stale same-session signal must not outlive the server-truth read that supersedes it.
+The alternative — keeping `justInstalled` as a fallback on a failed lookup too, not only while one is in flight —
+was rejected, corrected per review: the fallback's own `justInstalled?.organizationId === activeOrganizationId`
+guard means it can only ever apply immediately after a successful install in *this* tab, never more broadly — an
+earlier draft of this entry overstated the alternative's blast radius as "every other reason a lookup can fail,"
+which is not what the guard actually admits. The real argument is narrower and still holds: even in that one
+case, a failed refetch is itself a fact worth telling the caller (a Discord-reachability problem, a session
+about to expire, whatever it is), and WEB-5's "the panel adds no interpretation the API did not give it" argues
+for saying so plainly (`ErrorMessage`, the same path every other refusal in this app renders) over silently
+sitting on the last known-good value and letting the caller find out the lookup is broken some other way.
+
+**Choice, fetched on `Shell.tsx` mount and on every organization switch, not gated behind opening the Discord
+tab.** `ProjectsPanel` already fetches unconditionally on mount for the same reason (`Shell.tsx`'s own module
+comment, D-25's accounting of what that costs the test file) — switching *into* a tab that has already fetched
+costs no further round trip. The alternative (fetch only once the Discord tab is actually opened) was rejected
+because it would reintroduce exactly the loading-state trade this slice is careful about, once per tab open
+rather than once per mount, for no offsetting benefit.
+
+**What this does not touch.** The OAuth+PKCE install flow itself, `apps/api/src/routes/discord-servers.ts`, and
+`discordServers.remove`'s own behaviour are all unchanged — this slice makes Remove *reachable* whenever a
+binding exists, it does not change what removing one does.
+
+**Correction, TEN-8/WEB-4 rework: a removed binding could come back on an organization switch, and nothing
+pinned the switch behaviour that fixes it.** Review found the `'loading'` fallback above was written to consult
+`justInstalled` on the *first* `'loading'` state only, in the author's own head, but the code actually consults
+it on *every* `'loading'` state — and `discordBindingState` returns to `'loading'` on every organization switch,
+not only on mount (the previous paragraph's own point). Sequence: install into org-1, remove it (correctly
+returns to "Install to Discord"), switch to org-2, switch back to org-1 with no reload in between — the effect
+re-runs, `discordBindingState` is `'loading'` again, `justInstalled.organizationId === activeOrganizationId`
+still holds (`justInstalled` never changes after mount), and nothing recorded that this exact server had already
+been removed, so "Installed — server guild-42" rendered again, live Remove button included, until the refetch
+resolved a moment later and corrected it — clicking that Remove button in the interim got a real `404
+action_refused` from `discordServers.remove`'s own policy, correctly refusing a binding that is no longer
+active. Momentary and self-healing, but the brief's own reasoning against a momentary "Install" flash applies
+unchanged to a momentary "Installed" one: a bug that clears itself in one round trip is still the bug. Fixed by
+restoring the record the pre-slice code already kept and this rework had dropped: `removedServerId`
+(`pages/Shell.tsx`), set once in `handleRemove` and never cleared, checked alongside
+`justInstalled.organizationId === activeOrganizationId` in the fallback — a `'loading'` render only trusts
+`justInstalled` when its own server id has not already been removed this session, on any organization switch,
+not only the one immediately following the removal.
+
+Separately: stubbing the effect's own dependency array down to `[]` (fetch on mount only, never on an
+organization switch) left the full suite green — no test asserted `listDiscordServers` was ever called again
+with a newly selected organization, or that the panel's own Discord-tab content changed across a switch at all.
+That gap is exactly where the regression above lived, which is presumably why it shipped unnoticed. Both are now
+pinned directly: `tests/shell.test.tsx`'s "TEN-8 rework: coordinator review findings" describe block reproduces
+the reviewer's own repro for the resurrection bug, asserts `listDiscordServers` is called with the newly active
+organization on every switch, and separately pins three mutants that survived the original suite without any
+test noticing — `bindings.find((b) => b.removedAt === null)` swapped for `bindings[0]`, `discordFetchId.current++`
+deleted from `handleRemove`, and the effect's own `if (!isMember) return` guard deleted — each confirmed to fail
+against its own specific mutation before being left in place, not merely asserted correct by inspection.
+
+## D-66 — `packages/actions`/`packages/db`/`apps/web`/`e2e`: COST-3/COST-4 — a spending cap that can actually be set, and an instructor's own usage screen
+
+**Problem.** The same audit that produced D-65 (`docs/ROADMAP.md`'s "Audit — surfaces that were never built")
+found two more requirements marked Done that were not, both in the cost ledger. COST-3: `organizations.setSpendingCap`
+(`@bloombot/db`) had zero non-test callers anywhere in the monorepo, and `spendingCapMicros` carried no
+column default, so `hasReachedSpendingCap`'s real, correctly-placed enforcement (`@bloombot/core#answer.ts`)
+could never actually fire in production — there was no way to set a cap outside a test. COST-4:
+`costLedger.organizationUsage` (`@bloombot/actions`) existed and was correctly tenant-scoped, but its only
+caller was `apps/mcp`'s own tool surface; nothing in the panel — where an instructor does everything else —
+ever called it, and `pages/Admin.tsx` covers only COST-4's *other* half (a platform administrator's own read).
+
+**Choice, restricted to an owner, not any membership.** `routes/actions.ts` admits any membership regardless of
+role, and `policy.ts`'s own module comment is explicit that a descriptor documents access, it does not enforce
+it — so nothing stops an `assistant` or `instructor` membership from calling `costLedger.setSpendingCap`
+unless something checks. Measured, not assumed: a spending cap is the one control in this slice that can stop
+the assistant answering for *every course in the organization at once* the moment it is set below what has
+already been spent — a blast radius closer to `memberships.grant`'s own "grants organization-wide authority"
+than to an ordinary per-course write like `courses.save`. `setSpendingCapAction#execute` reads `accountId` and
+checks `memberships.getMembership(...).role === 'owner'`, the identical shape `memberships.grant` already
+uses and for the identical reason its own doc comment gives: `PolicyContext` carries no caller identity at
+all, so *who* may call this can only ever be `execute`'s own job, not the policy's.
+
+**Choice, a currency amount converted to micros, not micros typed by hand, and `Math.round` once, at the
+end.** COST-3's own text and every existing money surface (`pages/Admin.tsx#formatMicros`,
+`packages/core/src/pricing.ts#computeCost`) treat micros as an internal accounting unit, never something a
+person types or reads directly. `costLedger.setSpendingCap`'s own input schema takes `capAmount: number |
+null` (dollars — `$12.50` is `12.5`) and converts with `Math.round(capAmount * 1_000_000)`, the same "round
+once, at the very end, not on every intermediate step" discipline `pricing.ts#computeCost`'s own doc comment
+holds itself to for D-2's "money as INTEGER micros": `10.1 * 1_000_000` is `10099999.999999998` in IEEE 754
+double precision, and `Math.round` is what turns that back into the exact `10100000` a decimal input actually
+meant, rather than trusting a caller to send an already-integer value or letting the drift reach storage
+unrounded.
+
+**Choice, `null` clears, `0` blocks — the same tri-state `hasReachedSpendingCap` already reads.**
+`setSpendingCapInputSchema`'s `capAmount` is `z.number().nonnegative().nullable()`, not merely optional: an
+instructor's blank field sends `null` (clears the cap, `organizations.spendingCapMicros` becomes `null` again,
+`hasReachedSpendingCap` reads that as "no cap at all" — its own doc comment already gives this reading), while
+typing `0` and saving sends `0` explicitly (`hasReachedSpendingCap`'s `spent >= cap` is `0 >= 0`, true the
+instant anything at all has been spent). The panel additionally offers an explicit "Clear cap" button
+alongside "Save cap", rather than requiring an instructor to discover that blanking the field and saving is
+the way to clear it — the two are genuinely different actions with different consequences, and one control
+per action reads more honestly than one overloaded field.
+
+**Choice, `setSpendingCap`'s own doc comment corrected, not merely left.** The brief named this directly: the
+function's doc comment used to state, as fact, "there is no action layer wired to this in this slice ... it
+exists so a test, or a future admin action, can configure a cap" — true when written, never revisited once an
+action existed to call it. `docs/ROADMAP.md`'s audit and D-65 both record this project's own recurring
+finding — a comment asserting the opposite of the code is what a reviewer eventually catches, but had not
+been yet — so the comment is rewritten here to point at the action that now wires it, rather than left as
+one more example of the same defect.
+
+**Choice, the cap-setting form withheld for a non-owner, not merely disabled.** `pages/Shell.tsx` computes
+`isOwner` (the caller's own membership role in the active organization) and threads it to `pages/Usage.tsx`,
+which renders the whole "Spending cap" form only when it is `true` — the same `isMember`/tab-withholding shape
+`Shell.tsx` already uses for LINK-10 (its own module comment: "the server's own refusal ... is what actually
+makes any of this safe ... this only decides what the panel offers"). The read (`costLedger.organizationUsage`)
+stays open to any membership, matching that action's own unrestricted policy — only the write is gated.
+
+**Choice, "cap reached" derived client-side, not a fourth field the read has to carry.** COST-3's UI
+requirement is that a cap that is set, a cap with no cap at all, and "cap reached" (the state that stops the
+assistant answering) must all be visually distinct. `getOrganizationUsageSummary`'s own report already carries
+both `spendingCapMicros` and `totalCostMicros` — `pages/Usage.tsx` compares them with the identical `spent >=
+cap` `@bloombot/db#hasReachedSpendingCap` itself uses, rather than adding a `capReached: boolean` field to the
+action's own return that would only ever restate a comparison the caller already has both halves of.
+
+**Choice, `personDisplayName ?? personId`, never email, for a near-limit student.** Matches
+`components/CoursePeople.tsx#label`'s own precedent exactly, for the same reason its own doc comment gives: a
+`null` display name is already told apart from another by a distinct id, and these are real students'
+addresses — shown only where a screen genuinely cannot tell two people apart without one, which this screen
+is not.
+
+**Finding — `e2e/support/start-api.ts` never wired a pricing table through to `buildApp` at all.** Writing
+`usage-panel.spec.ts` (COST-4's own e2e proof that a real conversation's cost shows up on the instructor's own
+screen) surfaced a pre-existing gap in the shared e2e harness, not introduced by this slice: `deps.pricing`
+(`@bloombot/core#answer.ts`) was left `undefined`, so every chat conversation that talks to this API-hosted
+process — not only this slice's own new specs — has been priced at `0` since the harness was written, logging
+`answerQuestion`'s own "no pricing table configured" warning every time, unnoticed because nothing before this
+slice ever asserted a nonzero cost end to end. Fixed in place, one line
+(`pricing: getModelPricingTable()`, `@bloombot/config`'s own documented default table, the same one
+`apps/api/src/index.ts` builds in production from `CONFIG.MODEL_PRICING_JSON`) rather than worked around by
+seeding a ledger row directly — an e2e spec's own point is that a real pipeline actually did the thing, and a
+pipeline that has silently never priced anything in this harness is a defect the next COST-anything e2e spec
+would have hit regardless of who wrote it first. **Not closed everywhere, and this entry originally overclaimed
+that it was** (a rework review caught the overclaim, below): `course-configuration.spec.ts` dispatches through
+`packages/discord#handleMention` in-process, with its own separate dependency object and no `pricing` field of
+its own either — a second, distinct instance of the identical gap, on a path this harness's own `apps/api`
+process never touches. Left open deliberately rather than chased in the same rework that found it: fixing it
+means threading a pricing table through a second, unrelated harness entry point for a gap this one fix does not
+reach, which is its own piece of work, not a one-line correction to this one.
+
+**Rework, same day — a review of the fix above found it unpinned, plus three related gaps in this slice's own
+COST-3 write path.** Four cheap fixes and one promoted to a fix:
+
+1. **The pricing fix had no assertion that would fail without it.** `usage-panel.spec.ts` asserted against the
+   panel's own dollar display (`toContainText(/\$\d+\.\d{2} · 1 call/)`), which a real run showed passing at
+   `cost_micros: 133` — `$0.000133`, which `pages/Usage.tsx#formatMicros` rounds to `"$0.00"` at two decimal
+   places. Deleting `pricing: getModelPricingTable()` from `start-api.ts` left the assertion passing regardless,
+   because the call-count half of the same regex matched on its own. The spec now reads
+   `cost_ledger_entries.cost_micros` back from the database directly (`costLedger.getOrganizationSpentMicros`),
+   the same directness `spending-cap.spec.ts` already uses for `spending_cap_micros` — proven to fail against
+   the same deletion.
+2. **`apps/api/tests/routes/chat.test.ts`'s own COST-3 integration test asserted a magnitude claim its own
+   harness cannot back.** `buildTestApp` (`apps/api/tests/helpers/build-test-app.ts`) wires no `pricing` either,
+   so the "costs something real … never `0` (COST-6)" comment was false there too — the recorded cost actually
+   is `0`, and the test (still valid) exercises COST-3's `0 >= 0` boundary, not a magnitude. Comment corrected
+   to say so.
+3. **`pages/Usage.tsx#parseCapAmount`'s blank-input branch (`'' → null`) had no test that could not also pass
+   with `'' → 0`.** The existing "Clear cap" test dispatches `handleClear`, which sends `null` directly and never
+   calls `parseCapAmount` at all. A new test blanks the field and clicks *Save* instead — the path that actually
+   exercises the branch — proven to fail against a `'' → { ok: true, value: 0 }` mutation. The consequence named
+   in review: an owner who blanks the field meaning to remove the cap would instead store `0` and block every
+   student in the organization on their very next question.
+4. **`toMicros`'s `Math.round` was unpinned.** Every value any existing test used (`12.5`, `5`, `5.25`, `0`) has
+   an exactly representable product with `1_000_000`, so `Math.floor` would have passed every one of them too.
+   `2.01` does not (`2.01 * 1_000_000` is `2009999.999999998` in IEEE 754 double precision) — a new test pins
+   `Math.round`'s own `2_010_000`, proven to fail against a `Math.floor` mutation.
+5. **Promoted from a note to a fix — the HTTP route accepted values the form cannot produce, with severe
+   consequences.** `setSpendingCapInputSchema` accepted any nonnegative finite number: `1e-7` rounded down to
+   `0` (a total block on every student, from a value an owner might reasonably read as "essentially no limit"),
+   and `1e300` was verified to reach `organizations.setSpendingCap` and land in `spending_cap_micros` (an
+   `INTEGER` column) as a SQLite `REAL` with no throw — a cap that then never fires. "The form validates it"
+   (`pages/Usage.tsx#parseCapAmount`'s own `^\d+(\.\d{1,2})?$`) is not a defence for an API the form is not the
+   only caller of. The schema now carries `.multipleOf(0.01)` (agreeing with the form's own two-decimal-place
+   limit) and `.max(MAX_SPENDING_CAP_AMOUNT)` (`$10,000,000` — arbitrary but generous, and `* 1_000_000` stays
+   comfortably inside `Number.MAX_SAFE_INTEGER`), each pinned by a test proving both the previous unrestricted
+   schema accepted the value and the new one refuses it.
+
+**Out of scope, deliberately.** `hasReachedSpendingCap` and the enforcement path in `answer.ts` — this slice
+makes the cap settable, it does not change what a cap does once reached. `spendingCapMicros`'s own missing
+column default (every organization is created with `NULL`, not some documented ceiling) is reported, not
+fixed — changing it changes behaviour for every existing row, a decision this slice's brief explicitly reserved
+for whoever owns that call.
+
+## D-67 — `packages/actions`/`apps/web`/`e2e`: ENRL-5 — an owner can grant a membership role, and see who holds one
+
+**Problem.** The same class of audit that produced D-65/D-66 (`docs/ROADMAP.md`'s "Audit — surfaces that were
+never built") found `memberships.grant` (`packages/actions/src/actions/memberships.ts`) had no caller outside
+its own package's tests — no route, no panel screen — and `listMembershipsForOrganization`
+(`packages/db/src/repos/memberships.ts`) had no caller at all, anywhere. The consequence, stated plainly in
+the audit note: an owner had no actual way to add a second instructor or a teaching assistant to their
+organization, and the only membership row that has ever existed in production is the founding owner's own,
+written inline by `accounts.createAccount` at sign-up. The MCP omission is unrelated and stays: `apps/mcp/src/
+tool-surface.ts`'s own module comment already reasons about it, deliberately, and this slice does not touch
+that file — `MCP_TOOL_SURFACE` is an explicit allowlist, so a new action registered anywhere never reaches a
+model caller unless a reviewer adds its name there by hand (that file's own module comment).
+
+**Choice, `memberships.list` restricted to no role at all — any member may read it, unlike `memberships.grant`.**
+`costLedger.organizationUsage`/`.setSpendingCap` (D-66) already establish the shape this slice reuses: a read
+needs no extra check beyond an ordinary membership (which `routes/actions.ts` already requires of every action
+route), a write with organization-wide consequence does. Measured, not assumed: seeing who already holds a
+staff role carries none of a grant's own consequence — it changes nothing, and an assistant or instructor
+knowing their own colleagues' roles is not a fact this platform treats as sensitive anywhere else (`courses.list`,
+`discordServers.list` and `costLedger.organizationUsage` are all open to any membership the same way). Granting
+stays owner-only, unchanged — `grantMembershipAction`'s own check, already in place before this slice, is
+exercised by this slice's own new tests (`packages/actions/tests/memberships.test.ts`) but not altered.
+
+**Choice, `z.strictObject`, not `z.object`, on `memberships.grant`'s own input.** `grantInputSchema` used to be
+a plain `z.object({ email, role })`, which silently drops a key it does not declare rather than refusing it —
+`execute` never read `input.grantedByAccountId` regardless (both `grantedByAccountId` and `grantedAt` are
+always stamped from the session's own `accountId`, per ENRL-5's own "recorded" half), so this was never an
+actual hole, but a caller attempting to supply either deserved an explicit `action_input_invalid` refusal
+rather than silent disregard indistinguishable from never having tried. Measured by mutation: reverting to a
+plain `z.object` (with `grantedByAccountId` added back as an accepted, ignored field) was tried directly
+against this slice's own new "refuses a grant whose body supplies grantedByAccountId" test — it fails without
+`z.strictObject`, confirming the schema, not merely `execute`'s own indifference to the field, is what a test
+now pins.
+
+**Choice, the grant target still identified by email, and the list still never shows one.** ENRL-5's own text
+says roles are "granted only by an existing owner" — nothing about how the owner names who receives one.
+`grantMembershipAction`'s own input has always been `email` (unchanged by this slice), because an owner
+granting a role to somebody not yet visible in `memberships.list`'s own roster has nothing else to hand — no
+account id a screen could offer to pick from. `components/Team.tsx`'s own grant form is the one place in this
+app's whole membership surface that takes an email as text; the roster itself follows `components/CoursePeople.tsx#label`'s
+"never email" precedent exactly, showing `displayName` for every row (never `null` here — unlike a student's
+own, `accounts.displayName` is `NOT NULL`, `schema.ts`) and never persisting the typed email once a grant
+succeeds (`Team.tsx`'s `handleGrant` clears it and re-fetches the list rather than rendering anything back from
+`grantMembershipAction`'s own return, which is `@bloombot/db`'s raw `Membership` row and carries no display
+name at all — `api/types.ts#GrantMembershipResult`, distinct from `OrganizationMembership`, the enriched shape
+`memberships.list` returns).
+
+**Known limitation, inherited, not fixed by this slice.** `grantMembershipAction#execute` — before this slice,
+untouched by it — refuses a grant unless the target account *already holds a membership in this organization*
+(that function's own "rework finding 1" comment: without this check, the action was a cross-tenant
+account-existence oracle, and a successful call would have enrolled a stranger's account into an organization
+they never consented to join). No production path creates a *first* membership for an account in a second
+organization — `memberships.createMembership` (`packages/db/src/repos/memberships.ts`) has no caller outside a
+test, same as `deleteMembership` — so in practice, today, `memberships.grant` can only ever change the role of
+somebody who is, by some other means, already a member of the organization in question; it cannot yet be how
+an owner brings a genuinely new person onto their staff for the first time. That function's own doc comment
+already names this as "a distinct feature, left to a later slice," and this slice's own brief scoped the same
+way — building the missing surface over the grant this platform actually has, not extending what it grants.
+`e2e/team-panel.spec.ts` seeds its own second account directly through `accounts.createAccount` for exactly
+this reason, and says so in its own module comment, rather than implying a real invitation flow exists.
+
+**Out of scope, deliberately, stated rather than left ambiguous.** Demoting or removing a membership — including
+an organization ending up with no owner at all — is not built here. `deleteMembership` (`packages/db/src/repos/
+memberships.ts`) remains uncalled, exactly as this slice found it; nothing in `components/Team.tsx` offers a
+way to remove a row. A role can be *changed* (granting a different role to an existing member, including
+granting a second `'owner'`) but never revoked through this screen. The brief named this choice explicitly as
+open; closing it — and deciding what, if anything, stops the last owner removing themselves — is left for
+whoever picks it up next.
+
+---
+
+## D-68 — `packages/db`/`packages/actions`/`apps/api`/`apps/web`/`e2e`: ENRL-10 — an owner invites a colleague who is not yet in the organization
+
+**Problem.** D-67's own "known limitation, inherited, not fixed by this slice" is the reason this slice
+exists: `grantMembershipAction` refuses a target with no existing membership in the caller's own organization,
+deliberately — closing that check any other way was already shown to make the action a cross-tenant
+account-existence oracle. Nothing in production created a *first* membership for a second instructor or
+teaching assistant, so an owner genuinely had no way to add a colleague. `membership-invitations.ts` (a new
+table, `packages/db`; new actions and a new bespoke redemption route, mirroring `course_join_links`/
+`sign_in_tokens` exactly) is that path.
+
+**Choice, single-use, not multi-use.** A join link is deliberately shared with a whole class (ENRL-3); an
+invitation is addressed to one person. Read literally, ENRL-10's "admits exactly the person who received it"
+could mean either "single-use" alone or "single-use *and* bound to the addressed identity" — I chose both,
+measured against the actual attack this closes: a bearer secret that leaked (forwarded, screenshotted) would,
+under single-use alone, still let whoever redeemed it *first* become staff of a stranger's organization — not
+"the person who received it," merely "whoever got there first." `redeemMembershipInvitation`
+(`packages/db/src/repos/membership-invitations.ts`) therefore also requires the redeeming account's own email
+to equal the invitation's own `email` column, both already-lowercased facts (`accounts.email`'s own repo
+comment; this table's own `createInvitation`) — refused identically to every other reason, so the check itself
+adds no new oracle. The consequence: an invitee with no account yet at the invited address cannot redeem
+until one exists at that address — consistent with SPEC's own "redeeming one never creates an account or a
+session" — they sign in first (which creates the account, ordinarily) and only then follow the link back.
+
+**Choice, an invitation refuses a redeemer who already holds any membership in that organization, rather than
+silently changing their role.** The brief named this as mine to decide. `memberships.grant` (ENRL-5) already
+exists, is owner-only, and is recorded — it is the one path this platform gives for changing an *existing*
+member's role. Letting an invitation redemption also change a role would be the identical write reachable two
+ways with two different confirmation UIs and two different "what does this mean" strings (`Team.tsx`'s own
+grant confirmation vs. `MembershipInvitations.tsx`'s own invite confirmation) — a second, quieter path to the
+same consequence. Refusing keeps the boundary exactly where D-67 already drew it: an invitation is the
+first-membership admission path, `memberships.grant` is the role-change path, and neither one's own doc
+comment has to hedge about the other doing its job too.
+
+**Choice, the recorded grantor is the inviting owner, never the redeemer.** ENRL-5 requires a role be
+"recorded" — who granted it. `redeemMembershipInvitation` stamps `grantMembershipRole`'s own
+`grantedByAccountId` from `invitation.createdByAccountId`, never from the redeeming `accountId` the function
+is otherwise acting as. Measured by mutation: swapping the two (`grantedByAccountId: accountId`) was tried
+directly against this slice's own "records the inviting owner ... not the redeemer" tests (both
+`packages/db/tests/membership-invitations.test.ts` and `packages/actions/tests/membership-invitations.test.ts`)
+— both fail without the fix.
+
+**Choice, an owner may invite at the `owner` role, and this slice cannot cause an organization to lose its
+last owner.** `Team.tsx`'s own `GRANTABLE_ROLES` already lets an owner grant a second `owner` through
+`memberships.grant` (D-67, unchanged) — `MembershipInvitations.tsx`'s own `INVITABLE_ROLES` mirrors it, for the
+same reason: nothing about *inviting* is different for the owner role than for any other. Because this slice
+only ever grants — it has no removal or demotion path, and does not touch `deleteMembership`, which D-67 left
+uncalled and this slice leaves uncalled still — no organization can lose an owner through anything built here,
+last one or otherwise. Removal/demotion, and what should stop an organization losing its last owner, are
+exactly the same open questions D-67 left, unchanged by this slice.
+
+**Choice, `membershipInvitations.list` is owner-only, unlike `memberships.list`.** D-67's own choice was that
+seeing who already holds a role carries none of a grant's own consequence, so that read stays open to any
+member. An *outstanding* invitation is a different fact: it carries an email nobody but the inviting owner has
+consented to have visible in this organization yet — closer to the sensitivity `Team.tsx`'s own grant form
+already treats an owner-typed email with (never rendered back, never shown to another member) than to a
+granted role's own, already-public membership row. Measured, not merely asserted: `.create`/`.list`/`.revoke`
+all share one `requireOwner` helper (`membership-invitations.ts`, `packages/actions`), and mutation-testing it
+down to "authenticated, any role" was tried directly against this slice's own three "refuses a caller who is
+not an owner" tests — all three fail without the role check.
+
+**Choice, the outstanding-invitations list is a history, not only a queue.** `listInvitations`
+(`packages/db`) returns every invitation an organization has ever issued, live, revoked and redeemed alike —
+the same "history, not only what is currently live" shape `course-join-links.ts#listJoinLinks` already gives
+WEB-20's own join-link screen, rather than a narrower reading of "outstanding" that would only show pending
+ones. `MembershipInvitations.tsx` withholds the Revoke control once an invitation is no longer live
+(`redeemedAt`/`revokedAt`/`expiresAt`, in that priority order — a redeemed invitation reads as redeemed
+regardless of what either other column holds, single-use having nothing further for `revokedAt` to protect
+against).
+
+**The migration (`0017_equal_stranger.sql`), and why `packages/db/tests/migrate.test.ts` gained a dedicated
+case rather than only the top-level table-list assertion.** `membership_invitations` is a brand-new table —
+generated by `drizzle-kit generate` off `schema.ts`, not written by hand — so its column shape is already
+pinned by that file's existing "applies every migration to an empty database" assertion (extended with this
+table's own row, the same light touch `course_join_links` originally got). What that assertion cannot see is
+*behaviour* a plain column list does not express: the `membership_invitations_role_check` `CHECK` and the
+unique index on `secret_hash`. `0017 — membership_invitations` (new `describe` block) inserts directly through
+`db.$client` — an out-of-range role, and two rows sharing a hash — and asserts both throw, the same class of
+gap `0015`/`0016`'s own dedicated test already closes for `jobs`.
+
+**Finding — three census tests exist precisely to catch a new action arriving unannounced, and did.**
+`packages/actions/tests/access-audit.test.ts`, `catalog.test.ts` and `apps/api/tests/tenant-isolation.test.ts`
+all derive their own expectations from `createPlatformRegistry()`, so registering
+`membershipInvitations.create`/`.list`/`.revoke` failed all three immediately, by design — each was updated
+with the new action's own descriptor/name/route, and `tenant-isolation.test.ts`'s own derived (a)/(b)/(c)
+matrix (foreign session / no session / disabled account) now exercises the three new routes for free, the
+same TEN-5 coverage every other action already gets, with no route-specific code added to that file at all.
+
+**Finding — the API proxy allowlist is a fourth place a new bespoke route has to be named, and this slice
+missed it on the first pass.** `apps/web/vite.config.ts`'s own `proxy` object lists every top-level path
+`apps/api` actually serves; `/join-links` was already there for ENRL-8, but `/membership-invitations` was not
+added in the same pass as `apps/api/src/server.ts`'s own mount, and the gap was invisible to every unit and
+action-level test (`apps/api/tests/routes/membership-invitations.test.ts` talks to `buildApp` directly, never
+through Vite's proxy) — only `e2e/membership-invitation-panel.spec.ts`, run through the real `vite preview`
+server, actually exercises the browser's own same-origin path and caught it: a real Chromium redemption
+attempt 404'd with an empty body (Vite's own "no route, no proxy match" response, not `apps/api`'s JSON
+`membership_invitation_not_found`), which `describeApiError`'s `default` case rendered as "Something went
+wrong. Try again." — plausible enough to read as a genuine server error rather than a missing proxy entry.
+Fixed by adding the entry (`vite.config.ts`), mirroring `/join-links`'s own comment on why a proxied API path
+and a page path (`/invitations/:secret`) must never share one top-level segment. Recorded here because the
+class of gap — a new bespoke, unscoped route needs *four* places updated (`server.ts`'s mount,
+`vite.config.ts`'s proxy, `App.tsx`'s own page route, and whichever tests derive from the registry) and only
+one of those four is checked by anything short of a real browser — is exactly the kind of thing worth a future
+slice's own audit, the same way `docs/ROADMAP.md`'s "Audit — surfaces that were never built" already caught
+`memberships.grant`/`memberships.list` having no caller at all.
+
+**Finding — `getByLabel`'s substring matching meant a second form on the same screen needed care twice, not
+once.** `Team.tsx`'s existing "Grant a role" form already labels its own fields "Email"/"Role" — mounting
+`MembershipInvitations.tsx` alongside it with the same labels would have made both React Testing Library's
+`getByLabelText` (jsdom) and Playwright's `getByLabel` (a real browser) resolve to two elements for a plain,
+un-anchored query. Distinct labels ("Invite email"/"Invite role") fixed the jsdom side outright — neither
+string is a substring of the other in either direction — but Playwright's own default matching is
+case-insensitive *substring*, not exact, so `e2e/team-panel.spec.ts`'s own pre-existing `getByLabel('Email')`
+(added for ENRL-5, before this slice) still matched "Invite email" too, since "email" is a substring of it.
+That existing spec needed `{ exact: true }` added to both its own `getByLabel('Email')` and (already present,
+for the identical "Role" collision `costLedger.setSpendingCap`'s own form never had) `getByLabel('Role', {
+exact: true })` — an edit to a file this slice's brief did not name, made necessary by mounting a second form
+in the same tree, not scope creep.
+
+**Mutation testing — what was tried, and what survived (report the brief itself asked for).** Beyond the
+findings recorded above (grantor swapped to the redeemer, the owner check dropped, `z.strictObject` reverted
+to `z.object` on both the redemption route's and the create action's own input, `revokedAt` dropped from
+`findLiveInvitationByHash`), two mutations are recorded here because the first attempt at a test did *not*
+catch them, and a better one had to be built rather than merely asserted passing:
+
+  1. *Dropping `revokedAt` from `findLiveInvitationByHash`'s own `WHERE`* still made every "no oracle"
+     assertion pass, because `claimInvitation`'s own re-check (the "a write whose own `WHERE` re-checks the
+     condition its read relied on" pattern `repos/memberships.ts#grantMembershipRole`'s own `updated` branch
+     already uses) still refused a revoked secret correctly — one step later, after doing strictly more work
+     first (an account lookup, an email comparison, a membership check) than a never-issued secret's own
+     immediate refusal does. Return-value equality could not see that extra work; it is itself a timing
+     oracle a sufficiently careful attacker could measure. Closed by a stronger assertion, not a weaker
+     mutation tolerance: `accounts.getAccountById` is spied on and asserted *never called* for any of the four
+     refusal reasons, proving they share the same immediate exit rather than merely agreeing on the eventual
+     answer.
+  2. *Splitting `redeemMembershipInvitation`'s single `db.transaction(...)` into two — one for the claim, one
+     for the grant* — passed the required "a concurrent revoke beats an in-flight redemption" test unchanged,
+     because that race is what `claimInvitation`'s own `WHERE` guards, not the surrounding transaction. The
+     transaction's own, different job — that a claim and its grant commit or roll back *together* — had no
+     test at all until one was added: `grantMembershipRole` mocked to throw once, after the claim already
+     ran, asserting the invitation reads as still live afterward (not claimed, not redeemed) and is still
+     genuinely redeemable — this is what actually fails against the split-transaction mutation, and would
+     have failed against this slice's very first draft had that draft ever shipped un-mutated.
+
+No other mutation tried (see the list above) survived any test in this slice's own suite.
+
+**Out of scope, deliberately, unchanged from what the brief named.** ADMIN-2/JOB-2 (a separate slice).
+`memberships.grant`'s own existing behaviour and its anti-oracle refusal (untouched — `packages/actions/src/
+actions/memberships.ts`'s own doc comment is corrected to point at the invitation path that now exists,
+nothing about `execute` itself changes). Removal/demotion of a membership (D-67's own open question, restated
+above rather than silently narrowed). MCP's tool surface (`apps/mcp/src/tool-surface.ts`'s own module comment
+already reasons about the omission; `MCP_TOOL_SURFACE` is a hand-maintained allowlist this slice does not
+touch, so the three new actions are unreachable from a model caller by construction). Emailing the invitation —
+an owner copies a link and sends it however they like, exactly as ENRL-3's own join link already works; if the
+mail transport should send it instead, that is a different slice's call.
+
+## D-69 — `packages/db`/`packages/actions`/`apps/web`/`e2e`: ADMIN-2/JOB-2 — a job listing bounded by what needs attention, and an access log restricted to an owner
+
+**Problem.** An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found two capabilities
+complete in the data layer and unreachable from any surface: `transcriptAccess.listAccessLogForCourse`
+(`packages/db`) had zero callers outside a test, so ADMIN-2's own "an institution has to be able to account
+for" a transcript read never actually held past the write; and there was no `jobs.list` action or route at
+all, so a job that exhausted its attempts in a session nobody still had open — the exact case JOB-2 names —
+was invisible to everyone, forever, even though the row itself was never deleted.
+
+**Choice, `transcripts.listAccessLog` is restricted to an owner, not open to any membership the way `.read`
+itself is.** The brief named this as mine to decide, and to say deliberately. Two readings of "an institution
+has to be able to account for" were live: the same population `.read` already admits (any membership —
+`policy.ts`'s own "a descriptor documents, it does not enforce" means today any owner/instructor/assistant can
+already read a course's raw transcript), or the narrower population this platform already holds accountable
+for organization-wide consequences. I chose the narrower one, measured against what the log actually adds
+over what `.read` already discloses: `.read`'s own content is the sensitive thing, and any membership can
+already see it — the access log is *metadata about who else has been looking*, which is oversight of that same
+staff population, not a fact a member is otherwise entitled to about their colleagues. That is the same shape
+`memberships.ts`'s own module comment already draws for `memberships.grant` and `costLedger.setSpendingCap`:
+"authority over a tenant's courses, transcripts and spending" is what a role carries, and an owner is who this
+platform already holds accountable for the tenant as a whole, not a course's own instructor auditing a peer.
+`ADMIN-4`'s "sees tenants, not conversations" was also weighed and rejected for the *reader*, not merely the
+surface: a platform administrator is kept out of a tenant's transcripts entirely, and this log names courses
+and (sometimes) students — closer to that boundary than to the usage totals ADMIN-4 actually shows — so
+`pages/Admin.tsx` was never a candidate; the only real choice was "any member" versus "owner alone" within the
+tenant's own panel. Measured by mutation, not merely asserted: `transcripts.ts`'s own inline `role !== 'owner'`
+check was weakened to "any existing membership" and run directly against `packages/actions/tests/transcripts.test.ts`'s
+own "refuses a non-owner membership" test — it fails without the check, the way every other owner-only action
+in this package (`memberships.grant`, `costLedger.setSpendingCap`) is already proven the same way.
+
+**Choice, the log never carries an email, on either side.** `actorAccountId`/`personId` are both resolved to a
+display name (`accounts.getAccountById`/`people.getPerson`, falling back to the id itself — the identical
+"defensive, do not trust a foreign key blindly" shape `memberships.list`'s own `listMembershipsAction` already
+takes), never to the underlying `email` column. Measured by mutation: swapping the actor's own
+`displayName` for `email` in the mapping was tried directly against this slice's own "an owner reads the log
+... never an email" test (`packages/actions/tests/transcripts.test.ts`) — it fails without the fix, catching
+the leaked address in the response body itself, not merely in a type.
+
+**Choice, `jobs.list` orders by `updatedAt`, not `createdAt`, and is bounded rather than unbounded.** JOB-2's
+own text ("a job that keeps failing is visible") is about what needs attention *now* — a job stuck retrying
+for an hour is what an instructor checking in on the queue wants to see first, not a job that finished cleanly
+a minute after being enqueued. `repos/jobs.ts#listJobsForOrganization` orders `desc(updatedAt), desc(createdAt)`
+(the second only a deterministic tiebreaker, not a meaningful one — this file adds no new `sequence` column for
+it, unlike `transcript_access_log`/`transcript_exports`, since a bounded, unpaginated listing does not need a
+tiebreaker that survives a schema migration, only one that survives one query). `MAX_JOBS_LIST_LIMIT` (200) is
+enforced by the input schema's own `.max()` — a caller asking above it is refused (`ActionInputError`), not
+silently clamped, the same shape `costLedger.setSpendingCap`'s own `.max(MAX_SPENDING_CAP_AMOUNT)` already
+takes for an out-of-range number. Measured by mutation: the `organizationId` argument passed to
+`listJobsForOrganization` was swapped for a literal string, and the payload-omission was removed from
+`toJobStatus`'s own mapping — both tried directly against this slice's own suite (`packages/actions/tests/reads.test.ts`);
+both fail without the fix, the tenant-scoping one against three separate assertions ("does not include another
+organization's jobs" and the two tests that depend on seeing the seeded organization's own rows at all) and the
+payload one against both `jobs.get`'s pre-existing JOB-6 tests and this slice's own new listing-shaped one —
+confirming `payload` omission is genuinely shared through `toJobStatus`, not duplicated per action.
+
+**Choice, `jobs.list` carries no owner restriction, unlike the access log.** `jobs.get` itself has never been
+role-restricted — any member of the organization may poll any job's own status — and a listing is the same
+read, plural. Nothing about knowing that a `roster.import` job failed is the kind of oversight-over-staff fact
+the access log's own restriction is about; it is operational status any member dispatching work already needs.
+
+**Choice, surface placement: a new "Jobs" tab (`pages/Jobs.tsx`), and the access log inside the existing
+Transcripts screen, not a new one.** The brief left both open. Jobs span the whole organization, not one
+course — the same shape Usage/Team already take as their own tabs (`pages/Shell.tsx`'s own module comment on
+each) — so a seventh tab, not a subsection of an existing one, is what that shape calls for. The access log is
+inescapably course-scoped (ADMIN-2's own "who read whose conversation" is per-course, the same as the
+transcript it is about) and already has exactly the screen where a course is selected and where ADMIN-1's own
+read happens — adding a second, course-picking screen for a fact about the first would duplicate the picker for
+no reader's benefit, so it is a new section inside `pages/Transcripts.tsx`, gated on `isOwner` the same way
+`pages/Usage.tsx`/`components/Team.tsx` already gate their own owner-only sections — withheld entirely, not
+merely disabled, so a non-owner is never offered a control that would refuse.
+
+**Schema.** No migration. `transcriptAccess.listAccessLogForCourse` (`packages/db`) already existed, correctly
+scoped, with a caller added by this slice rather than a shape changed; `jobs.listJobsForOrganization` is new but
+reads the existing `jobs` table with no new column. `drizzle-kit check` confirms no drift.
+
+**Tests, failing-then-passing.** Every new assertion (`packages/db/tests/jobs.test.ts`'s own
+`listJobsForOrganization` block; `packages/actions/tests/reads.test.ts`'s own `jobs.list` block;
+`packages/actions/tests/transcripts.test.ts`'s own `transcripts.listAccessLog` block; `apps/web/tests/jobs.test.tsx`,
+new; `apps/web/tests/transcripts.test.tsx`'s own new "Access log" block; `apps/web/tests/shell.test.tsx`'s own new
+Jobs-tab case) was run against the implementation with the mutations above applied and confirmed failing before
+being reverted and confirmed passing — see each mutation paragraph for which test caught it.
+
+**Rework — a flaky ordering test, and a real tie the original design left unstated.** A verify run after this
+slice first landed caught `packages/db/tests/jobs.test.ts`'s own "orders by most recently updated" case failing
+intermittently (`expected 'dd06e749-…' to be 'f307bce5-…'`): `enqueueJob` reads `Date.now()` once per call, and
+on a fast machine the test's own three writes (enqueue `older`, enqueue `newer`, claim-and-complete `older`) can
+all land inside one millisecond, tying `updatedAt` — the diagnosis was that the *ordering* was correct and the
+*test* could not reliably observe it, not a bug in `listJobsForOrganization` itself. Fixed by controlling the
+clock rather than the assertion: `vi.useFakeTimers()`/`vi.setSystemTime()` around each of the three steps, one
+millisecond apart, the identical device `membership-invitations.test.ts`'s own "lists invitations newest first"
+case already uses for the same hazard (that test's own comment is what named the precedent). Checked every other
+new assertion in this slice for the same class of dependency: every other `jobs.list`/`listJobsForOrganization`
+test asserts length or single-row content, never relative position among two-or-more real, clock-derived
+timestamps, so none of them shared the hazard; `transcripts.listAccessLog`'s own "most recent first" assertion
+(`packages/actions/tests/transcripts.test.ts`) does not either — that ordering comes from
+`transcript_access_log.sequence`, a real per-transaction counter, not a timestamp, which is exactly why that
+column exists (`schema.ts`'s own comment). The e2e specs were checked the same way: `jobs-panel.spec.ts` seeds
+one job, `transcript-access-log.spec.ts` asserts two access-log rows are each visible somewhere, never their
+relative position — neither depends on two timestamps differing.
+
+**The tiebreak question this raised, answered rather than left implicit.** `updatedAt desc, createdAt desc`
+still leaves a *real* tie possible, not merely a testing artifact: a batch enqueue (several `enqueueJob` calls
+issued back to back) reads the clock once per call and can genuinely share both columns, at which point SQLite
+gives no guaranteed order among the tied rows. Left unstated, that means the Jobs tab's own "Refresh" button
+(`pages/Jobs.tsx`) could show a tied pair swap positions between two polls with no activity in between — the
+queue appearing to reorder itself for no reason, which undermines exactly the legibility JOB-2 is about.
+Chose to close it rather than leave it: `id` ascending is a third, final `ORDER BY` key
+(`listJobsForOrganization`, `packages/db/src/repos/jobs.ts`) — deterministic, not itself meaningful, the same
+role `createdAt` already plays as the second key, and it costs nothing (no schema change; `id` already exists on
+every row). Proved by a new test, not merely asserted: three jobs enqueued under one frozen timestamp (so both
+`updatedAt` and `createdAt` genuinely tie, checked directly before trusting the rest of the test), then the same
+listing query run twice — the order matches `id` ascending, and the second call returns the identical order the
+first did.
+
+`npm run lint && npx prettier --check . && npm run typecheck && npm test && npm run e2e && npx drizzle-kit check`
+all pass: 90 node:test, 2096 vitest across 182 files (this slice's original baseline was 2065/181; +31 tests
+overall, +1 file — `apps/web/tests/jobs.test.tsx`; the rework itself added one test, for the tie, and changed no
+other file's test count), 22 e2e (baseline 20; +2 — `e2e/jobs-panel.spec.ts`, `e2e/transcript-access-log.spec.ts`).
+`packages/db/tests/jobs.test.ts` alone run 15 times consecutively post-fix, `25 passed` every time — the file's
+own baseline before this slice was 20, +4 for the original `listJobsForOrganization` block, +1 for the tie test
+this rework added.
+
+**Out of scope, deliberately, unchanged from what the brief named.** Job retry/cancel controls — listing is
+what JOB-2 asks for; a "retry this job" button is a new capability this record does not build. Changing what
+`readCourseTranscript` writes, or JOB-6's retention rules (both untouched — `listJobsForOrganization` reads the
+same `payload`-may-already-be-null column JOB-6 already clears, on the same schedule). MCP's tool surface
+(neither new action is added to `apps/mcp/src/tool-surface.ts`'s own allowlist).
+
+---
+
+## D-70 — `packages/core`/`packages/openai`/`packages/discord`/`apps/api`: CORE-7/CORE-8 — a person's own address is split from their opaque identity, and the surface decides one of them
+
+**Problem.** `answer.ts` built `personRef` as `` `<@${identity.externalId}>` `` — Discord's own mention token,
+constructed inside `packages/core`, the one package the rest of this build already holds to "no vendor SDK,
+nothing vendor-shaped" (CORE-4). `ports.ts` documented the field as "an opaque reference to the person", which
+was false: on Discord the token happened to render correctly; on the web the identity is the account's own id,
+so a student asking through the panel was answered with that id wrapped in Discord's own syntax — live,
+user-reported behaviour, not a theoretical one. Worse than the literal defect: the field carried Discord's
+syntax into the seeded opening item, content the model itself reads and, on a course whose prompt was written
+for Discord, echoes back at the front of its own reply — which is the actual mechanism the bug report showed
+(`<@68690a1b-…>- Hello`), not merely an unused value sitting in a request object.
+
+**Choice — one field becomes two, not one field renamed.** `ModelRequest.personRef` is replaced by
+`personIdentifier` (`person_identities.externalId`, unchanged in *value* for Discord, embedded only in the
+upstream conversation's own `metadata.user_id`, never in content the model reads) and `addressAs` (embedded in
+the opening item alongside `displayName`, and the only one of the two a model can ever echo into a reply).
+Splitting them is what lets `ports.ts`'s own "opaque reference" claim be true of `personIdentifier` rather than
+false of both: metadata is bookkeeping a later transcript read can use to trace a stored conversation to a
+person, never part of what the model is asked, so a raw identity is genuinely safe there regardless of surface
+— which is also why Discord's own metadata value changed from the wrapped token to the bare snowflake (an
+*internal*, non-observable change; nothing renders `metadata` to a Discord user, and
+`packages/openai/tests/conversations.test.ts`/`client.test.ts` were updated, not merely kept passing by
+accident, to assert the two fields are sourced independently).
+
+**Choice — who decides `addressAs`, and how "cannot inherit the bug by doing nothing" is made structural, not
+conventional.** `AnswerDependencies` gained an *optional* `addressPerson(person, identity)` function, not a
+required one. A required field was considered and rejected: every existing test across `packages/core`,
+`packages/discord` and `apps/api` that builds an `AnswerDependencies`-shaped object (well over a hundred call
+sites, measured by how many broke on a required-field trial edit) would have had to be touched for a decision
+almost none of them are about, which is exactly the kind of unrelated churn `docs/CONTRIBUTING.md` asks a
+slice to avoid — and it would have bought no more safety than the alternative actually taken: `deps.addressPerson`
+defaults to `NO_ADDRESS`, a function that always returns `null`, the same "expose the seam, default to the
+*safe* choice rather than a merely convenient one" discipline `NO_ADMISSION_LIMIT`/`NO_PRICING_CONFIGURED`
+(`answer.ts`, pre-existing) already hold themselves to for concurrency and cost. A surface that never wires
+`addressPerson` — including one not yet written — addresses nobody, never an id: the dangerous behaviour (build
+an id-shaped reference and hand it to the model) is unreachable by omission, proved by mutation, not merely
+documented (below).
+
+`identity` is still resolved inside `answer.ts` itself (`people.getPersonIdentity`, unchanged call site),
+not pushed out to each surface to re-derive: a review of `people.ts#getPersonIdentity`'s own doc comment
+found it already names a known, deliberate imprecision for a person with more than one identity on the same
+surface (a roster-handle-matched Discord student whose real snowflake has not yet been promoted onto their
+identity row) and says fixing it would require "the calling surface to pass its own already-known external id
+through" — precisely what moving identity resolution to each surface would have done. Doing that here would
+have silently changed which identity Discord's own mention resolves to in that one edge case, violating this
+slice's own "the Discord path must be unchanged in observable behaviour" constraint to fix a bug outside this
+slice's scope. Left alone, `addressPerson` receives whatever `getPersonIdentity` resolves, exactly as
+`personRef` did before this slice — the multi-identity imprecision is unchanged, not newly introduced.
+
+**Choice — the web surface implements CORE-8's fallback order for real, not merely `null`.** CORE-8's text
+reads two ways: "the web chat … addresses nobody" (literal, always) and "a surface that needs a name and has
+none of its own uses [a fallback order]" (general, and the web chat is exactly such a surface). Reconciled by
+implementing the general order (`person.firstName ?? person.displayName ?? null`) in `apps/api/src/routes/
+chat.ts#addressPersonForWeb`, on the reading that "addresses nobody" describes today's *empirical* outcome, not
+a rule against ever using a name: measured directly against `@bloombot/auth#sign-in.ts`, a web person is
+created via `createPerson(organizationId, {}, db)` — no roster fields at all — so `firstName`/`displayName` are
+both `null` for the account this build's e2e harness and every real account today ends up with, unless a
+later roster import merges one in by matching email (PPL-3's own path, unconnected to a name a future
+WEB-24/WEB-25 profile screen might one day let someone set — both out of this slice's scope). "Addresses
+nobody" is therefore what happens today, not a case this code special-cases; a name greeting a one-to-one
+thread is not the noise CORE-8's own reasoning is actually about (a Discord-style *mention*, naming who a reply
+is for in a room of many), so this reading does not undercut it. Recorded here as an inference, not a
+certainty, since the SPEC text does not itself disambiguate the two readings.
+
+**Not chosen — a surface-supplied plain string on `AnswerQuestionInput`.** The brief's own design notes offered
+this as an option: the caller computes `addressAs` itself, before calling `answerQuestion`, and passes it as
+data. Rejected because Discord's own snowflake is not something `handleMention` can safely recompute from
+`input.authorId` alone without risking exactly the multi-identity divergence the previous choice above declines
+to touch — `identity.externalId`, as `getPersonIdentity` resolves it today, is not always `input.authorId` (the
+roster-handle case). A function closes over `answer.ts`'s own resolution of `identity` instead of asking every
+surface to duplicate (and possibly diverge from) it.
+
+**Tests, failing-then-passing, and every mutation tried.** `packages/core/tests/no-vendor-sdk.test.ts` gained a
+guard scanning every `packages/core/src/**/*.ts` file for the literal two-character token `<@` — confirmed to
+fail (both this guard and the new CORE-7/CORE-8 web-defect test in `answer.test.ts`) when `answer.ts`'s
+`addressAs` computation was reverted to build the mention token directly, ignoring `deps.addressPerson`
+entirely; passes with the fix. `NO_ADDRESS` mutated to return `person.id` instead of `null` — three existing
+`answer.test.ts` assertions failed (the two `personIdentifier`/`addressAs`-null cases and the new web-defect
+test), proving the *default itself* leaking an id is caught, not only an explicit surface choice to do so.
+`apps/api/src/routes/chat.ts#addressPersonForWeb` mutated twice against its own new `chat.test.ts` case: dropped
+the first-name preference (`displayName ?? null`) — failed on the first assertion; fell back to `person.id`
+instead of `null` — failed on the third. `packages/discord/src/handle-mention.ts`'s own `addressPerson` wiring
+commented out — failed a new `handle-mention.test.ts` case asserting the real `handleMention` (not a duplicate
+of the function) still produces the mention token end to end. Every mutation was reverted and the suite
+reconfirmed green afterward.
+
+The reported defect itself is proven at the level CORE-7's own brief asked for — the reply text a person
+actually reads, not an intermediate request field — via a new `EchoingModelClient` in `answer.test.ts` that
+mimics the actual mechanism (a model echoing `addressAs` at the front of its own reply, the way a
+Discord-tuned prompt does): a Discord answer still reads `<@snowflake-1> - Hello`, unchanged; a web answer
+reads plain `Hello`, containing neither a mention token nor the account's own id. `e2e/chat.spec.ts` gained a
+matching assertion against the real browser-rendered reply — honestly scoped in its own comment as *not*
+exercising the echo mechanism itself (`e2e/support/fake-model-client.ts` is a static fixture, shared across
+several other specs that assert its exact text, so it was deliberately left unchanged rather than made dynamic
+and risking a collision with them), only that nothing in real rendering/serialization independently leaks the
+id.
+
+Final counts: 90 node:test (unchanged), 2107 vitest across 182 files (baseline 2096/182 — +11 tests, no new
+file), 22 e2e (unchanged — an existing spec was extended, not a new one added).
+
+**Out of scope, deliberately.** WEB-24, WEB-25, AUTH-6, ENRL-11, ENRL-12 (later slices, per the brief). The MCP
+surface — it has no `answerQuestion` caller anywhere in this codebase yet, so CORE-7/CORE-8 do not reach it;
+nothing "fell out for free" because there is nothing there yet to fall out onto. What a transcript stores,
+`conversations`' shape, and the web chat's layout (`Chat.tsx` itself was not touched — addressing did not
+require it). The `person_identities` multi-identity-per-surface imprecision `people.ts#getPersonIdentity`'s own
+doc comment already names (see the second choice above) — a pre-existing, documented limitation this slice
+inherits rather than fixes.
+
+**Rework round — three findings from an independent review, none a design change.**
+
+1. **The e2e assertion did not pin the fix.** `e2e/chat.spec.ts`'s own two `not.toContain` lines against the
+   rendered thread pass with the reported defect fully present — verified directly: `answer.ts`'s `addressAs`
+   computation was reverted to Discord's own mention token for every surface, `apps/web` was rebuilt, and the
+   spec still passed, because `e2e/support/fake-model-client.ts` answers with a fixed string that never reads
+   `request.addressAs` at all. The spec's own comment already said the mechanism was not real, but read as
+   though the assertion still proved the fix; a reader would reasonably believe otherwise. Fixed two ways: the
+   comment was rewritten to say plainly, up front, that this assertion passes with the defect present and is not
+   a regression test for it; and `apps/api/tests/routes/chat.test.ts` gained the cheap, genuine proof this
+   package's own test suite can give — an `EchoingModelClient` (the same device `packages/core/tests/answer.test.ts`'s
+   own CORE-7/CORE-8 block already uses) asserted against the actual HTTP response body a browser reads, which
+   does fail with the defect restored. `e2e/support/fake-model-client.ts` was deliberately left static rather
+   than made to echo `addressAs`: that file is shared by several other specs which assert its exact fixed text,
+   and making it dynamic risked a defect in an unrelated spec for a proof already available more cheaply one
+   layer down.
+2. **The guard caught only the literal token, and covered only one of two packages that could reintroduce it.**
+   Writing the same mention as `'<' + '@' + identity.externalId + '>'` in `packages/core/src/answer.ts` passes
+   `no-vendor-sdk.test.ts`'s own scan cleanly — verified; only the behavioural CORE-7/CORE-8 tests in
+   `answer.test.ts` caught it. That guard's own comment now says so directly: it is the cheap, fast layer for
+   the obvious case, not the platform's only defence — the behavioural tests are. Separately, the guard scanned
+   `packages/core/src` only, and `packages/openai/src` is equally able to hard-code a surface's syntax (it is
+   the package `addressAs`/`personIdentifier` actually land in) — `packages/openai/tests/no-surface-syntax.test.ts`
+   is a new, analogous guard for that package, the same shape `no-vendor-hostname.test.ts` already takes for
+   MDL-7, copied rather than added as a second responsibility to an existing file (this package's own
+   established one-guard-per-file convention). Two doc comments in `packages/openai/src/conversations.ts` quoted
+   the literal token to describe `response_bot.py`'s own f-string; both were rephrased in prose so the new guard
+   needs no comment-vs-code exception to stay a plain substring scan.
+3. **Three comments described a value that no longer matched, after this slice's own change.** Discord's
+   upstream `metadata.user_id` changed from the wrapped mention token to the bare snowflake (deliberate,
+   documented above: metadata is never part of the content a model reads, so a raw identifier is safe there
+   regardless of surface, and more useful for a later lookup). `ports.ts`'s `ModelRequest.personIdentifier`,
+   `conversations.ts`'s `CreateUpstreamConversationOptions.personIdentifier`, and — untouched by this slice
+   originally, but wrong for the identical reason — `people.ts#getPersonIdentity`'s own doc comment all still
+   claimed this value matches `response_bot.py`'s (`response_bot.py:269` sends the mention token itself). All
+   three now say plainly that the *field* matches and the *value* does not, and name the operational
+   consequence in the one place an operator would actually read it (`ports.ts`): filtering the provider's own
+   dashboard by a legacy, mention-shaped `user_id` will not match a conversation created from this slice on.
+
+Final counts after the rework: 90 node:test (unchanged), 2128 vitest across 183 files (this rework's own
+baseline, `efbc729`, was 2119/182 — +9 tests, +1 file, `no-surface-syntax.test.ts`), 25 e2e (baseline 24 — no
+new spec from this round; the count changed by D-71's own rework, below, not this one).
+
+---
+
+## D-71 — `packages/db`/`packages/auth`/`apps/api`/`apps/web`/`e2e`: AUTH-6/WEB-25 — a sign-in's own destination survives whichever tab redeems it, and a join-link redemption confirms itself and lands the student in the joined course
+
+**Problem.** `pages/JoinLink.tsx` and `pages/Connect.tsx` each stashed their own return address in
+`sessionStorage` (`PENDING_JOIN_LINK_KEY`, `PENDING_CONNECT_ORG_KEY`) for `App.tsx#returnToShell` to read back
+once a sign-in redemption completed — D-55's own choice, correct at the time, but `sessionStorage` is scoped
+per browsing context, and a sign-in link arrives by email: a mail client that opens it in a fresh tab (the
+ordinary case, not an edge one) leaves that tab with no marker to read, landing the visitor on the plain shell,
+enrolled in nothing, with no explanation. Separately, `JoinLink.tsx` called
+`redeemCourseJoinLink(secret).then(onRedeemed)` and discarded the result outright — `onRedeemed` took no
+arguments — so the course id, organization id and enrolment outcome the server had already resolved were
+thrown away, and a redeemer was dropped on whichever screen this account's own first membership happened to
+default to (nearly always its own personal organization, TEN-1), never told the link worked, never shown which
+course, and never taken to it.
+
+**Choice — the destination lives on the sign-in token row itself, not a `?next=` URL parameter, and not
+`sessionStorage`.** `sign_in_tokens` gains a nullable `destination` column
+(`packages/db/migrations/0018_ordinary_paibok.sql`), written by `issueSignInToken`
+(`packages/auth/src/tokens.ts`) when `requestSignInLink`'s own caller supplies one, and read back by
+`consumeSignInToken`/`redeemSignInLink` and returned to the browser on `POST /auth/redeem`. The token is
+already a row with a lifetime, tied to the sign-in itself rather than to any tab — exactly the reasoning the
+brief named directly, and it is what makes the AUTH-6 e2e's own cross-tab case work at all: `pages/RedeemLink.tsx`
+hands the destination straight to `onRedeemed`, and `App.tsx#returnToShell` navigates there before it ever
+looks at `sessionStorage`. A `?next=` URL parameter was the brief's other named option; not chosen, since it
+would put the same untrusted-input burden (validate before navigating) on every caller that builds the sign-in
+link's own URL, where the token-carried version puts it in exactly one place. `isSameOriginPath`
+(`packages/auth/src/tokens.ts`) is that validation, applied twice — once at issue time (`apps/api`'s own
+`routes/auth.ts`, the same `400` shape a malformed `email` already gets) and once again at redemption
+(`consumeSignInToken`, "defended, not assumed," the same discipline this codebase already holds every
+should-be-unreachable case to) — and duplicated a third time, deliberately, in `apps/web/src/App.tsx`, since
+PLAT-2 forbids that app importing `@bloombot/auth` at all; the same "small, deliberately duplicated pure
+function" trade D-34 already chose for `repos/course-join-links.ts`'s own `hashSecret`. The regex itself avoids
+a literal control character inside a character class (`eslint`'s own `no-control-regex`, which exists for
+exactly this kind of check) by pairing a short prefix regex with a plain char-code loop instead — a `boolean`
+inference note, not a measured one: this is a style choice a reviewer could reasonably make differently.
+
+**Choice — one mechanism replaces both, and `PENDING_JOIN_LINK_KEY` is deleted outright.**
+`pages/JoinLink.tsx`/`pages/Connect.tsx` now pass their own page's own address as `pages/SignIn.tsx`'s new
+`destination` prop; neither stashes anything in `sessionStorage` for the sign-in round trip any more.
+`PENDING_CONNECT_ORG_KEY` survives, narrowed: `pages/Connect.tsx`'s `handleConnectDiscord` still uses it to
+carry the organization across the Discord OAuth redirect, a *same-tab*, `window.location.assign` round trip
+`DiscordCallback.tsx` reads back — genuinely unaffected by AUTH-6, since that redirect never leaves the tab
+that started it. `pages/Invitation.tsx`'s `PENDING_INVITATION_KEY` is untouched — ENRL-10 was not named in this
+slice's brief, it carries the identical latent defect, and `App.tsx#returnToShell` still falls back to it
+(after the token-carried destination) for exactly that reason: a third device beside the retired two was
+explicitly forbidden, but a brief that names two of three defects does not authorize fixing the third
+un-asked-for. Flagged here for whoever picks up ENRL-10 next.
+
+**Choice — `redeemJoinLinkForWebAccount`'s return shape changes from a bare `Enrolment | undefined` to
+`{ enrolment, alreadyEnrolled } | undefined`.** `enrolments.ts#admit` is itself idempotent — a second redemption
+returns the *existing* active row unchanged, so nothing about the enrolment alone distinguishes "just admitted"
+from "already was." `alreadyEnrolled` is computed with `enrolments.getActiveEnrolment` *before*
+`enrolViaJoinLink` runs, inside the same transaction, and only on the path that already leads to a successful
+admission — every refusal branch (`!link`, the ENRL-6/ENRL-8 rework's own `wasRemoved` check, a foreign course
+or person) still returns a bare `undefined`, unchanged, so ENRL-4's "no oracle" property (never-issued, revoked
+and expired stay byte-identical, and none of them ever becomes distinguishable by an `alreadyEnrolled` leaking
+into a refusal) holds exactly as it did before this slice — proven by mutation, not merely argued: forcing
+`alreadyEnrolled` to a constant `false` turns red every one of the repo-, action- and route-level "already
+enrolled" tests and the e2e's own second-redemption case, while every existing "byte-identical refusal" test
+(unit and e2e) stays green throughout, since none of them touch the success path at all. `POST /join-links/redeem`
+now answers `{ courseId, organizationId, alreadyEnrolled }` on success — `organizationId` is what
+`pages/Shell.tsx` needs to open on the right organization (a join-link redeemer is a *connected person*,
+LINK-10, not necessarily a member, so the account's own first membership is usually the wrong default);
+`alreadyEnrolled` is what lets the browser say "you're already enrolled" rather than repeat the fresh-join
+wording. Existing tests that destructured the old shape directly (`packages/db/tests/course-join-links.test.ts`,
+`packages/actions/tests/course-join-links.test.ts`) were updated to the new one; none of their own assertions
+changed in substance.
+
+**Choice — WEB-25's confirmation lives on `pages/Chat.tsx` itself, not a separate interstitial screen.**
+`pages/JoinLink.tsx` no longer renders anything once redemption succeeds — it hands `{ organizationId, courseId,
+alreadyEnrolled }` to `onRedeemed` and lets `App.tsx` carry it into `pages/Shell.tsx`'s new `joinedCourse` prop
+(the same "carried across this one remount" shape `justInstalled` already uses for the Discord install round
+trip). `Shell` prefers `joinedCourse.organizationId` for the initial active organization (checking
+*both* `memberships` and `connectedOrganizations` — unlike `justInstalled`'s membership-only check, since a
+join-link redemption never grants a membership), defaults `activeTab` to `'chat'`, and passes
+`initialCourseId`/`joinConfirmation` through to `Chat`, which seeds `selectedCourseId` from it (so a redeemer
+already enrolled in more than one course in that organization still lands on the one just joined, not
+whichever `listChatCourses` happens to return first) and renders a `role="status"` banner naming the course by
+title — read back from its own already-fetched `courses` list, not a second round trip — and distinguishing
+"You're enrolled in…" from "You're already enrolled in…". The banner is inline, not a toast: nothing ever
+removes it, satisfying the brief's "must not depend on noticing something that disappears on its own" by
+construction rather than by timing a dismissal correctly. Chosen over carrying the confirmation on
+`JoinLink.tsx`'s own screen (which the redirect to the shell would have made exactly the kind of transient
+thing the brief warns against) and over the join-links route itself resolving a course title (which would have
+pulled a fresh dependency — `courses.getCourse` — into `repos/course-join-links.ts`, a file whose own redemption
+path several review rounds have already hardened; `Chat.tsx` already holds an authorized, per-account course
+read for exactly this organization, so reusing it costs nothing new to trust).
+
+**Rework finding — `App.tsx`'s own `refreshSession()` had to be sequenced *before* the navigation that mounts
+`Shell`, not fired alongside it, and this was caught by the e2e, not reasoned out in advance.** The first draft
+of the join-link `onRedeemed` handler set `joinedCourse` and called `goToRoot()`/`setPath('/')`/`refreshSession()`
+all in the same tick — `pages/Shell.tsx`'s own `activeOrganizationId` is a `useState` lazy initializer, which
+runs exactly once, on `ShellInner`'s first mount, off whatever `account.connectedOrganizations` that render
+already has. The join-link redemption that produces `joinedCourse` is the very thing that adds the institution
+to that list, reachable only once a *fresh* `/auth/me` read reflects it — and firing `refreshSession()`
+alongside the navigation let `path` reach `/`, and `Shell` mount, off the *stale* `session` still on hand from
+before redemption (or, on the sign-in-round-trip path, from immediately after sign-in but before the join link
+itself was redeemed). The panel opened on the account's own personal organization regardless of what
+`joinedCourse` said, and a later, resolved `session` update did not retroactively re-run an initializer that
+had already run. `e2e/join-link.spec.ts`'s own main scenario failed on exactly this — the organization switcher
+listed the joined institution as an option but never selected it — before the fix, which now chains the
+navigation off `refreshSession()`'s own returned promise (a small addition: `refreshSession` now returns the
+promise it always silently discarded, changing nothing about its existing fire-and-forget callers).
+
+**Evidence.** Mutated and confirmed red, then reverted, three properties: (1) the destination mechanism —
+disabling the token-carried branch in `App.tsx#returnToShell` turned every `e2e/join-link.spec.ts` test red,
+including the never-issued-secret one (which still depends on the sign-in round trip landing back on the join
+link at all); (2) `alreadyEnrolled` — forcing it to a constant `false` in
+`repos/course-join-links.ts#redeemJoinLinkForWebAccount` turned red the repo-, route- and e2e-level
+"already enrolled" tests, while every refusal test (byte-identical across never-issued/revoked/expired) stayed
+green, confirming the no-oracle property was never touched; (3) the same-origin check — dropping
+`isSameOriginPath` from `routes/auth.ts`'s own `zod` schema turned the "refuses a non-same-origin destination"
+test red (it surfaced as a `500`, not a silent `204`, since `issueSignInToken`'s own defended-not-assumed check
+still fired — belt-and-braces holding even with the belt cut).
+
+Final counts: 90 node:test (unchanged), 2119 vitest across 182 files (baseline at `ef1f8f0` was 2107/182 — +12
+tests, no new file), 24 e2e (baseline 22 — `e2e/join-link.spec.ts` gained two tests: the AUTH-6 cross-tab case
+and the WEB-25 already-enrolled case; `e2e/connect.spec.ts` unchanged in test count, its own module comment
+updated).
+
+**Limits.** `pages/Invitation.tsx`'s identical `sessionStorage` defect (ENRL-10) is untouched — see the second
+choice above. The `hasActiveSignInToken` anti-flood check (`requestSignInLink`, AUTH-1's "also worth doing")
+can silently decline to issue a *second* token — and so silently drop a *different* destination — while an
+earlier, undestined one for the same address is still outstanding (within its fifteen-minute lifetime); a
+narrow, pre-existing edge case this slice did not widen and did not attempt to close, since doing so would mean
+mutating an already-issued, unconsumed token, a different (and larger) change than this slice's own brief
+asked for.
+
+**Rework — closing this entry's own named limit: `pages/Invitation.tsx` was the one entry point this slice
+left behind.** An owner's invited colleague (ENRL-10) is emailed a membership invitation exactly the way a
+join link is, so it carried the identical defect this entry's own "Problem" already fixed for join links and
+Discord connect: `Invitation.tsx` still stashed `PENDING_INVITATION_KEY` in `sessionStorage`, which a mail
+client opening the sign-in link in a fresh tab cannot read, stranding the colleague on the plain shell with no
+membership and no explanation. Fixed the identical way this entry's own two paths were: `Invitation.tsx` now
+passes its own address as `SignIn`'s `destination` prop, carried on the sign-in token itself
+(`isSameOriginPath`/`consumeSignInToken`, already generic — no change needed to `packages/auth` or
+`routes/auth.ts` to accept a third caller); `App.tsx#returnToShell`'s own `sessionStorage` fallback branch is
+now dead code with all three paths converted, and was removed rather than left unreachable.
+`PENDING_INVITATION_KEY` is retired the same way `PENDING_JOIN_LINK_KEY` already was; `PENDING_CONNECT_ORG_KEY`
+keeps its one remaining job (the same-tab Discord OAuth redirect, unrelated to sign-in). `e2e/join-link.spec.ts`'s
+own cross-tab test (`context.newPage()` — a real second browsing context in the same `BrowserContext`, sharing
+cookies but not `sessionStorage`) is the precedent `e2e/membership-invitation-panel.spec.ts` now has its own
+copy of, seeding the invitation directly against the e2e database rather than through the panel (the panel path
+is already proven by the pre-existing test in that file).
+
+**A process failure, named rather than smoothed over: a mutation-test leftover shipped as if it were the fix,
+caught by an independent review rather than by this agent.** While verifying the tests above fail without the
+fix (this document's own standing discipline), `Invitation.tsx`'s `destination` prop was intentionally removed
+to confirm `invitation.test.tsx`'s new test went red — and then, mid-investigation of an unrelated, apparently
+flaky e2e timeout, was never restored before moving on. The result: `Invitation.tsx`'s own module comment
+described passing a `destination` prop the code directly beneath it did not pass, `SignIn.tsx`'s own prop doc
+still claimed only two callers had anywhere to return to, and roughly forty minutes were spent diagnosing the
+resulting e2e timeout as a suspected environment/resource issue — checking system load, testing the API
+directly with `curl` (which worked, instantly, correctly, because the *backend* was never broken), and
+concluding, wrongly, that this was shared-machine contention rather than the tree's own uncommitted state. The
+review that caught it read the comment against the code directly, which is the check this discipline should
+have applied before ever declaring the mutation test "confirmed" and moving on. Fixed, and the lesson is
+procedural, not technical: **finish reverting a mutation before starting the next investigation, and re-read
+the file's own comment against its own code as the last step before calling a fix done** — the second half is
+what four separate review rounds on this branch have now caught missing at least once.
+
+**A second, unrelated drift found in the same working set: `docs/DEPLOY_DROPLET.md` carried roughly 300 lines
+this slice never wrote** — a specific domain's own DNS delegation walkthrough (`wonkledge.com`, GitHub Pages
+coexistence, a reserved IP, nginx gzip/caching, swap sizing), unrelated to CORE-7/CORE-8 or AUTH-6/ENRL-10 and
+absent from both briefs. Reverted to `HEAD` rather than kept or explained as this slice's own output, since
+none of it does in fact fall out of this work — it reads like a real operator's own working notes from an
+actual deployment, mixed into this working tree by some means this agent cannot account for (not a hook, not
+a mutation test, not anything intentional in this session's own record) and is flagged here exactly because
+"I am not assuming either way" was the right instruction: this agent is not the source of it and cannot claim
+otherwise, but also has no evidence pointing elsewhere. Worth a supervisor's own look at whether the working
+tree saw a second writer despite the "one writer at a time" rule this build otherwise holds to.
+
+**Evidence.** `invitation.test.tsx`'s new test and the rewritten `app.test.tsx` case were both confirmed
+failing (the former: `requestSignInLink` called with `undefined` where `/invitations/secret-abc` was expected;
+the latter: unaffected by this particular mutation, by design — it mocks `redeemSignInLink`'s own response
+directly, proving `App.tsx`'s dispatch is generic rather than re-testing `Invitation.tsx`'s own wiring) and
+passing once reverted. `e2e/membership-invitation-panel.spec.ts`'s new AUTH-6 case was confirmed failing
+(30-second timeout waiting for the granted membership to appear on the switcher — it never does, because the
+colleague never returns to `/invitations/:secret` to redeem it) and passing once reverted, and the pre-existing
+ENRL-10 test in the same file — untouched by this slice, confirmed via `git diff` showing zero change to its
+own body — failed and passed on the identical schedule, which is what actually revealed the mutation had been
+left in place rather than an environment issue.
+
+Final counts after the rework: 90 node:test (unchanged), 2128 vitest across 183 files (unchanged from D-70's
+own rework, above — this rework touched no vitest file), 25 e2e (this entry's own original baseline was 24;
++1, `e2e/membership-invitation-panel.spec.ts`'s new AUTH-6 case). `npx drizzle-kit check` (from `packages/db`):
+clean, no drift.
+
+**Limits, updated.** The `hasActiveSignInToken` anti-flood limit named above is unchanged and now applies
+identically to `Invitation.tsx`'s own `requestSignInLink` call. Nothing about the redemption logic itself
+(`redeemMembershipInvitation`, `packages/db`) needed to change — confirmed directly, by driving the whole
+sign-in-and-redeem round trip against the running e2e API with `curl` alone, bypassing the browser, while
+diagnosing the mutation above: every call resolved correctly and in milliseconds, which is what first pointed
+away from a backend defect and eventually toward the tree's own uncommitted state instead.
+
+---
+
+**Rework — a second independent review found two must-fix defects, a cheap-fix, and two notes; this closes all
+five, and corrects a claim this entry's own earlier "Limits" made.**
+
+**Must-fix 1 — `pages/Chat.tsx`'s join confirmation named whichever course was *currently selected*, not the
+one that was joined.** `joinedCourseTitle` derived from `selectedCourseId`, the same state the course
+`<select onChange>` rewrites on every switch — and the banner has no dismissal, so it kept asserting a fact
+about whatever the student most recently looked at, for as long as the mount lived. Reproduced exactly as the
+review described it: a student already enrolled in one course redeems a link for a second, sees the correct
+banner, then switches the picker to check the first — and the banner now reads a fresh-join (or, on the
+`alreadyEnrolled` path, an "already enrolled") claim about a course they have been in for weeks, or about the
+one the link never named at all. Fixed by deriving the title from `initialCourseId` instead — the one prop this
+component never reassigns after mount, unlike `selectedCourseId`, which is exactly why it is the correct key
+for a banner about a one-time event rather than the current selection. `apps/web/tests/chat.test.tsx` gained a
+case that switches the picker after the banner renders and asserts the joined course's own name survives the
+switch — neither existing case caught this, since both asserted before any switch ever happened.
+
+**Must-fix 2 — the anti-flood guard silently discarded a repeat request's own `destination`, and this entry's
+own "Limits" (above) understated what that meant.** `requestSignInLink` returns early on
+`hasActiveSignInToken` before `issueSignInToken` ever runs, and that check is keyed on `(email, usedAt IS NULL,
+expiresAt > now)` alone — it never consulted, and nothing ever updated, the outstanding row's own
+`destination`. Reproduced over real HTTP: `POST /auth/request-link` with `{ email }`, then again inside the
+token's own fifteen-minute TTL with `{ email, destination: '/join/SECRET' }` — `204`, one email sent, and
+redeeming the only link that exists carried no destination at all: exactly the "lands on the empty shell,
+enrolled in nothing" outcome AUTH-6 exists to prevent, and `docs/SPEC.md`'s own AUTH-6 states unconditionally
+("regardless of which tab completes it"). The record needs correcting, not merely the code: this entry's own
+"Limits" called it "a narrow, pre-existing edge case this slice did not widen." That is wrong on the history.
+Under `ef1f8f0`, `JoinLink.tsx` wrote `PENDING_JOIN_LINK_KEY` to `sessionStorage` **on mount**, before any
+network call at all — the same-tab return trip was immune to this guard entirely, since nothing about setting a
+`sessionStorage` key goes anywhere near `hasActiveSignInToken`. Retiring that marker in favour of the
+token-carried destination (this entry's own first "Choice," above) moved the return address behind a code path
+the anti-flood guard can skip — a straight regression for the same-tab case, and silent in both directions:
+neither an error nor a different response distinguishes "the destination was recorded" from "an earlier,
+outstanding token answered instead." Fixed by updating the outstanding token's own `destination`
+(`packages/db/src/repos/sign-in-tokens.ts#updateSignInTokenDestination`, called through a same-named,
+re-validating wrapper in `packages/auth/src/tokens.ts`, from `requestSignInLink`'s own anti-flood branch) rather
+than issuing a second token — re-issuing on every repeat request would defeat the anti-flood control this guard
+exists to be; updating the row instead costs neither a new token nor a new email, since the already-emailed
+link's own token value never changes, only what its eventual redemption reads back. A request that omits
+`destination` never clears one an earlier, still-outstanding request already set — only a *supplied* value ever
+overwrites the column, so a later, less specific request cannot silently downgrade a more specific one still in
+flight. Covered at every layer the first pass covered `alreadyEnrolled` at: `packages/db/tests/sign-in-tokens.test.ts`
+(the repo primitive, including that a consumed or expired row is never revived by this), `packages/auth/tests/tokens.test.ts`
+and `sign-in.test.ts` (the validating wrapper and `requestSignInLink`'s own branch, including the
+exact anti-flood-preserving shape — still one email, one row), and `apps/api/tests/auth-flow.test.ts` (the
+review's own HTTP-level reproduction, verbatim).
+
+**Cheap-fix — three of `isSameOriginPath`'s four enforcement points were unpinned.** The full suite stayed
+green under each of: deleting `consumeSignInToken`'s own redemption-time re-validation, deleting
+`issueSignInToken`'s own write-time throw, and reducing `App.tsx#returnToShell`'s own
+`if (destination && isSameOriginPath(destination))` to `if (destination)`. All three are defence-in-depth
+against the identical mistake, and the two implementations (`packages/auth`'s own, and `apps/web`'s deliberately
+duplicated copy) already agreed — so nothing was exploitable — but nothing pinned that agreement, and
+`App.tsx`'s copy is the one its own comment calls "the one gate between a caller-supplied string and the
+browser's own address bar." Closed with two shared adversarial values (`//evil.example`, `/\evil.example` —
+both resolve *off* origin despite looking like a path) asserted in both `packages/auth/tests/tokens.test.ts`
+(pinning the write-time throw and the redemption-time re-check, the latter by writing a bad value directly
+through `@bloombot/db`'s own repo — the only way to reach a row `issueSignInToken` itself would never have
+produced) and `apps/web/tests/app.test.tsx` (pinning `App.tsx`'s own copy, by mocking `redeemSignInLink` to
+resolve with each value and asserting the app lands on the ordinary shell rather than attempting to navigate to
+either).
+
+**Note, addressed — `routes/auth.ts`'s `destination` schema had no length bound.**
+`z.string().refine(isSameOriginPath)` accepted (and would have stored) an arbitrarily long path on an
+unauthenticated endpoint; the anti-flood guard limits *rate*, not *size*, so a single request was still a
+single, unbounded write. `.max(256)` now sits beside the `.refine()` — generous against every real path this
+app issues a link for (`/join/:secret`, `/connect/:organizationId`, `/invitations/:secret`, each at most a few
+dozen characters), and small enough to refuse a `10_000`-character same-origin-shaped destination with the
+ordinary `400` this route already answers for every other malformed input (`apps/api/tests/auth-flow.test.ts`'s
+own new case — sized well under `express.json()`'s own default 100kb body limit, so it is `requestLinkInputSchema`'s
+`.max()` being proven, not the body parser refusing an oversized request outright with an unrelated `413`).
+
+**Note, recorded — `sign_in_tokens.destination` trades away a property `course_join_links` deliberately
+keeps.** `course_join_links` stores only `secretHash` (`repos/course-join-links.ts`'s own module comment) so
+that reading the database alone never lets anyone redeem a link — a live secret is never at rest in plaintext.
+`sign_in_tokens.destination` now stores a live join-link secret (the `/join/:secret` path itself) in plaintext,
+for that token's own fifteen-minute life, partially undoing that property for whatever fraction of a
+token's lifetime it is unredeemed. The exposure this accepts is small — the secret is already class-shared (an
+entire roster holds the same one) and already travels in the clear by URL and by email, the two places this
+column's own value came from in the first place — but it is a real trade this entry did not previously write
+down, and the same trade now applies identically to `updateSignInTokenDestination`'s own write path (must-fix
+2, above), which touches the same column with the same kind of value. Flagged explicitly for ENRL-12, which
+plans to store join-link secrets encrypted at rest in `course_join_links`: whoever builds it should decide
+whether `sign_in_tokens.destination` needs the same treatment, or whether the short lifetime and existing
+exposure (URL, email) make it a deliberately accepted gap instead — this entry takes no position on which, only
+that the interaction exists and someone building that slice should see it before deciding.
+
+**Evidence.** Mutated and confirmed red, then reverted, five further properties, the same discipline this
+entry's own first "Evidence" (above) already held itself to: (1) the Chat banner — reverting to
+`selectedCourseId` turned the new switch-then-assert case red while leaving every pre-existing case green
+(neither asserted after a switch); (2) the anti-flood/destination fix — reverting `requestSignInLink`'s own
+branch to a bare early return turned red the new cases in `sign-in-tokens.test.ts`, `tokens.test.ts`,
+`sign-in.test.ts` and `auth-flow.test.ts` alike; (3)–(5) each of the three newly-pinned `isSameOriginPath`
+enforcement points — deleting each guard in turn (`consumeSignInToken`'s re-check, `issueSignInToken`'s throw,
+`App.tsx`'s own `&&` clause) turned exactly the test written for that point red, and no other test in the
+affected file, confirming each test pins the specific layer it claims to and not some other one already
+covering for it.
+
+Final counts after this rework: 90 node:test (unchanged), 2146 vitest across 183 files (this entry's own prior
+rework left 2128/183; +18 tests, no new file), 25 e2e (unchanged — this rework touched no e2e file; the
+`isSameOriginPath` cheap-fix and the anti-flood must-fix are both pinned at the unit/integration level, not
+through a third browser round trip). `npx drizzle-kit check` (from `packages/db`): clean, no drift — this
+rework added no migration.
+
+## D-72 — `apps/web`/`e2e`: WEB-24 — the chat composer stays put, and the thread follows the conversation, without stealing a reader's place
+
+**Problem.** `pages/Chat.tsx` laid the thread and the composer out in ordinary flow: the thread `<div>` had
+`min-h-64` and `overflow-y-auto` but no maximum height, so it grew with the conversation and the *page*
+scrolled — carrying the composer off the bottom of the window. A student partway through a long thread had to
+scroll the whole page down to type. `useEffect(() => threadEndRef.current?.scrollIntoView(...), [messages])`
+compounded it: with nothing bounding the thread, it was no longer the nearest *scrollable* ancestor, so
+`scrollIntoView` walked up to the document and moved the page, not the thread.
+
+**Choice — a flex column bounded to exactly the space `AppShell.tsx`'s fixed header and footer leave, not
+`position: fixed`, and not a change to `AppShell.tsx` itself.** `Chat.tsx`'s own top-level `<section>` now
+carries `h-[calc(100dvh-var(--spacing-header)-var(--spacing-footer)-3rem)] overflow-hidden` —
+`--spacing-header`/`--spacing-footer` are the same tokens `AppShell.tsx` sizes its own fixed header and footer
+with (`style.css`); the `3rem` is the 1.5rem gap `AppShell`'s own `main` padding reserves on each side. Every
+element above the thread (title, join banner, course picker, "New messages" affordance, decline notice, the
+composer form) is `shrink-0`; the thread itself is `flex-1 min-h-0 overflow-y-auto` — `min-h-0` overrides a
+flex item's default `min-height: auto` (sized to its content), which would otherwise refuse to shrink below the
+transcript's full height and reproduce the exact "grows past its box" defect one level up. `overflow-hidden` on
+the section is what actually enforces the bound: without it a flex column's children can still spill past a
+fixed height rather than being clipped to it. `100dvh`, not `100vh` — the dynamic viewport unit shrinks with a
+mobile browser's own chrome and, on the browsers that report it, a software keyboard, so this box (and the
+composer pinned inside it) resizes down with the keyboard rather than leaving the composer hidden underneath
+it; this was not proven against a real on-screen keyboard (Playwright does not drive one), so it is a design
+choice following the platform's own contract for `dvh`, not a measured result.
+
+`AppShell.tsx`'s own `main` (`min-h-[calc(100vh-var(--spacing-header)-var(--spacing-footer))]`, no maximum) was
+deliberately left alone: every other screen this shell renders (Projects, Transcripts, Usage, Team, Jobs,
+Discord) relies on it growing with its content and letting the ordinary document scroll past the fixed
+header/footer, and the brief scoped this slice to the one screen with the reported defect. `position: fixed`
+for the composer alone was rejected for the same reason the brief named directly: it fights `AppShell`'s own
+already-fixed header and footer rather than composing with them, and a flex column that simply bounds the
+thread needs no coordination with either.
+
+**Choice — the scroll-preservation judgement.** WEB-24's own text draws a distinction the previous
+`scrollIntoView` effect did not: "following the conversation" means the newest message, not a jump that steals
+a reader's place. `isNearBottomRef`, kept current by `onScroll` on the thread itself (appending a message never
+fires a `scroll` event on its own — the browser does not move `scrollTop` just because the scrollable content
+beneath it grew — so this only ever reflects the reader's own last movement), decides whether a message that
+*arrives* auto-scrolls or shows a "New messages ↓" affordance instead (`newMessageWaiting`, a plain `role="status"`
+sibling of the thread — an `aria-live` region, so it is announced the moment it appears — holding one ordinary
+`<button>`, reachable by Tab and Enter/Space like every other control on the screen, never an overlay that could
+cover the last message). The student's own send is the one case the requirement draws no such exception for:
+`forceScrollRef`, set immediately before the optimistic message is appended in `handleSend`, jumps the thread to
+it unconditionally, even if the reader had scrolled up to reread something first — consumed and reset the first
+time the scroll effect runs afterward, so the *reply* that follows is judged by `isNearBottomRef` alone, the same
+as any other arriving message.
+
+**Note, addressed — `min-h-64` was removed, not kept as a floor.** A fixed minimum height under a bounded,
+`flex-1` thread would fight the very containment this slice exists to add: on a short viewport it could force
+the thread taller than the space actually available, pushing the composer past the bottom of the column again.
+`flex-1` already fills whatever the column has left once every `shrink-0` sibling has taken its own height, which
+is generally more generous than 16rem on any realistic screen, and degrades gracefully (down to `min-h-0`, never
+negative) on one that is not.
+
+**Evidence.** `apps/web/tests/chat.test.tsx`'s own "Chat — thread scroll behaviour (WEB-24)" block proves, in
+jsdom, the one property jsdom's lack of real layout still lets it prove deterministically: `pages/Chat.tsx` sets
+the thread's own `scrollTop` to its `scrollHeight` — the imperative action "scroll to the newest message" means
+in code — on the student's own send, on a reply arriving while near the bottom (proven as a *second*, independent
+effect run, not merely the same assignment left over from the send), and *not* on a reply arriving while the
+reader had scrolled away, where the "New messages" button appears instead and a click on it both scrolls and
+dismisses it. `e2e/chat-scroll.spec.ts` proves what jsdom cannot lay out to see at all, against a real browser: a
+forty-message thread (seeded directly through `@bloombot/db#conversations.appendMessage` rather than forty real
+chat requests) overflows the bounded thread, the composer stays reachable with `window.scrollY` at `0` and no
+page scroll, the thread itself opens and then re-scrolls to within a few pixels of its own maximum, the composer
+never covers the last message (a real bounding-box comparison, not "both are visible"), and the page does not
+scroll horizontally at a 375px width.
+
+**Left unproven, honestly.** "A reply arriving while the reader has scrolled up does not move them" is proven
+deterministically in the unit test (a controlled, deferred `postChatMessage` promise lets the test scroll the
+mocked thread up *between* the student's own send and the reply's arrival) but not exercised in
+`e2e/chat-scroll.spec.ts`: the real fixture model answers fast enough that reproducing "scrolled up while a
+reply is still in flight" against a real network round trip would mean racing the test's own scroll action
+against the response, which is exactly the kind of timing-dependent assertion this codebase's own e2e discipline
+(`playwright.config.ts`'s `workers: 1` comment; QA-9) already rejects elsewhere. A soft-keyboard interaction on a
+real mobile browser is untested for the same reason Playwright cannot drive one — the `100dvh` choice above is a
+design decision following the platform contract, not a measured result.
+
+**Evidence, mutations.** Removing the thread's height bound (`h-[calc(...)]`/`overflow-hidden` on the section,
+`flex-1 min-h-0` on the thread, all reverted to the pre-fix `flex flex-col gap-4`/`min-h-64`) turned
+`e2e/chat-scroll.spec.ts` red on `toBeInViewport()` for the composer — confirming the composer genuinely fell out
+of the viewport without the bound, the reported defect exactly. Scrolling the page instead of the thread
+(`scrollThreadToBottom` mutated to `window.scrollTo(0, document.body.scrollHeight)`) turned the same spec red on
+the thread's own `scrollTop` staying `0` — confirming the thread never moves under this mutation, since the
+bounded section has nothing of its own to scroll the page *to*. Auto-scrolling unconditionally, ignoring
+`isNearBottomRef`, turned the unit test's "reply arriving while scrolled up" case red — the thread jumped to
+`260` where the test asserts it stays at `0` — and left the other twelve `chat.test.tsx` cases green, confirming
+that test pins exactly this property and nothing broader.
+
+Final counts after this slice: 90 node:test (unchanged), 2149 vitest across 183 files (+3 tests, no new file —
+`apps/web/tests/chat.test.tsx`'s own new "thread scroll behaviour" block), 26 e2e (+1 — `e2e/chat-scroll.spec.ts`,
+new). `npx drizzle-kit check` (from `packages/db`): not run — this slice touched no schema.
+
+---
+
+## D-73 — `packages/db`/`packages/actions`/`apps/web`/`e2e`: ENRL-11 — a membership can be revoked, and an organization always has an owner
+
+**Problem.** D-67 granted a role and D-68 invited a colleague who had none; neither took anything away, and each
+said so explicitly (D-67's own "Out of scope, deliberately" — "Demoting or removing a membership... is not built
+here... deciding what, if anything, stops the last owner removing themselves... is left for whoever picks it up
+next"; D-68's own "Removal/demotion... exactly the same open questions D-67 left, unchanged"). Together they
+create the gap this requirement names: D-68 is what first makes an outside account reachable as an owner in
+production, and once redeemed, that new owner could call `memberships.grant` to demote the original owner with
+no recourse, because nothing revoked a membership and nothing distinguished the account that created an
+organization from one invited into it. `deleteMembership` (`packages/db/src/repos/memberships.ts`) had existed,
+uncalled, since before D-67; nothing in `components/Team.tsx` offered a way to remove a row at all.
+
+**Choice, mark rather than delete.** The brief named this as mine to judge. ENRL-5 already requires a grant be
+*recorded* — `grantedByAccountId`/`grantedAt`, stamped on the row itself, not a separate audit log
+(`schema.ts`'s own comment on those two columns). A hard delete through `deleteMembership` would answer neither
+"who revoked this" nor "when" the moment it ran — exactly the kind of thing an institution has to account for on
+the way out, the identical reasoning TEN-6 already gives `discord_server_bindings.removed_at` for the same class
+of removal. `revokedByAccountId`/`revokedAt` (new columns, `0019_normal_patriot.sql`) mark instead, mirroring
+`discord_server_bindings.removed_at` and `course_join_links.revoked_at` exactly. `deleteMembership` itself is
+untouched and still uncalled — kept for whatever a future caller (a full account deletion, say) genuinely needs
+to be a hard delete, but `memberships.revoke` (the new action) never reaches it.
+
+**Consequence of marking: `getMembership` had to become the "active" query, and every one of its ~15 existing
+callers had to keep working unchanged.** `getMembership` is the one function nearly every authorization check in
+this platform calls — `apps/api`'s `routes/actions.ts`/`chat.ts`/`discord-servers.ts`/`transcript-exports.ts`,
+`apps/mcp`'s `authenticate.ts`/`call-tool.ts`, this package's own `discord-servers.ts`, and every owner-only
+action in `@bloombot/actions` — to answer "does this account currently have any standing here". A revoked row
+that `getMembership` kept returning would make revoking a no-op everywhere it actually matters, which is exactly
+the failure a first draft of this slice hit: marking the row without changing the read left every downstream
+check still authorizing the revoked account. `getMembership`'s own `WHERE` now excludes `revokedAt IS NOT NULL`
+— every one of those callers gets "a revoked membership is absent" for free, with no edit to any of them, and
+the `packages/actions` census tests (`access-audit.test.ts`, `catalog.test.ts`) and `apps/api`'s own
+`tenant-isolation.test.ts` all stayed green with zero changes beyond registering the new action, confirming
+nothing there had to learn a new column exists. `listMembershipsForOrganization` (the Team roster) and
+`listMembershipsForAccount` (`GET /auth/me`'s own organization discovery) both got the identical filter, for the
+same reason: a revoked membership must not still list as a current holder, or still name an organization the
+caller may act in.
+
+**Consequence of marking, the other direction: `grantMembershipRole` needed its own, unfiltered lookup.** The
+composite primary key on `memberships` (`organizationId`, `accountId`) means a revoked row still occupies that
+key exactly as an active one does. `grantMembershipRole`'s own "does a row already exist, so this is an update,
+not an insert" check used to be `getMembership` — now filtered to active-only, it would say "no" for a
+previously revoked account and attempt a second `INSERT` against a primary key the revoked row already holds,
+which SQLite refuses. Reached in practice through `redeemMembershipInvitation` (ENRL-10): that function's own
+"already a member" refusal also now reads a revoked account as having none, so a previously revoked colleague
+can be invited back in exactly like a stranger — and the redemption's own `grantMembershipRole` call would have
+crashed on the primary key without a fix. `findMembershipRow` (module-private, unfiltered) is that fix — used
+only by `grantMembershipRole`'s own `existing` check — and the update branch now also clears
+`revokedAt`/`revokedByAccountId`, so a fresh grant genuinely reactivates the row rather than leaving a stale
+revocation on one this call just made active again. Measured by mutation: dropping that reset (`packages/db/tests/memberships.test.ts`'s
+own "grantMembershipRole reactivates a previously revoked membership" test) fails without it; so does reverting
+`findMembershipRow` back to `getMembership` inside `grantMembershipRole`, though that failure mode is a thrown
+`SQLITE_CONSTRAINT` rather than a clean assertion — caught in this same test, from the other direction, before
+committing.
+
+**Choice, the decision ENRL-11's own text names as unsettled: an owner's own role changes only when that owner
+acts — never by a peer, through *either* action that can touch a role.** The brief required this be decided,
+implemented, and recorded rather than left to whichever screen was written first (D-67's and D-68's own
+deferral). ENRL-11's own text is explicit that this decision is the requirement's central question, not one
+scoped to a single new action. Enforced in `revokeMembershipAction#execute` (`entity.role === 'owner' &&
+entity.accountId !== accountId` refuses), because — the same reason `grantMembershipAction`'s own owner/self
+checks live in `execute`, not the policy — `PolicyContext` carries no caller account id at all. Measured by
+mutation: dropping this check made `packages/actions/tests/memberships.test.ts`'s own "an invited peer owner
+cannot revoke the founding owner" test fail (the call that should be refused instead succeeded); the self-target
+case remains allowed by the same check (`entity.accountId === accountId` is exempted), proven by "an owner may
+step down themselves, when they are not the organization's last owner" passing unmodified.
+
+**Correction — a first pass at this slice answered the decision above only for `revoke`, leaving `grant` open,
+and that is the exposure ENRL-11 was written to close.** The brief that scoped this slice's first pass named
+`memberships.grant`'s own behaviour as out of scope; ENRL-11's own SPEC text says the opposite — the peer-demotion
+question is the requirement's central one, not incidental — and the brief's own scoping was the mistake, caught
+on review, not a defensible reading of the requirement. Left as the first pass shipped it, the scenario ENRL-11
+exists for still worked end to end: an owner invites a colleague at `owner` (ENRL-10 permits it), the colleague
+redeems, and the colleague calls `memberships.grant` with `{ email: <inviter>, role: 'assistant' }` — which
+succeeded, because `grantMembershipAction#execute` refused a missing caller, a non-owner caller, an unknown
+email, a non-member target and a self-target, but never a peer owner as the *target*. `grantMembershipAction`
+now carries the identical check `revokeMembershipAction` already had: after the existing self-target refusal
+(check 3, which already forces `target.id !== accountId` by the time check 4 runs), a target whose *current*
+membership is `'owner'` is refused, exactly the same demote-side twin of the revoke-side decision above.
+
+**Finding, while wiring the fix — a real bug, not only a scoping gap.** The first attempt at check 4 read
+`target.role === 'owner'`, where `target` is `accounts.getAccountByEmail(input.email, db)`'s own return —
+`accounts`' `Account` type, which carries no `role` column at all (that lives on `memberships`, a separate
+table); `target.role` is `undefined` at runtime, so `undefined === 'owner'` is always `false` and the check was a
+silent no-op. This did not surface as a type error because `Account`'s own shape has no index signature to
+flag an unknown property access as invalid in the context it was written — plain property access on a mistyped
+variable, not a type-system gap this repository's own settings would ordinarily catch, which is exactly why the
+test that actually dispatches the scenario (not merely reads a descriptor or a return type) is what caught it:
+"refuses an owner demoting another owner, not-found-shaped" failed with the grant *succeeding* on its first run,
+before the fix. The fix keeps `check 2`'s own `memberships.getMembership` result (`targetMembership`, not
+discarded) and reads `targetMembership.role` instead. Recorded here as the report's own instruction requires:
+an honest "this did not work yet" is worth more than a confident summary that turns out wrong.
+
+**Choice, the refusal stays byte-identical — proven directly, not merely asserted from the shared `ActionRefusedError`
+constructor.** `grantMembershipAction`'s own doc comment (rework finding 1) already treats "this action never
+becomes an account-existence oracle" as load-bearing; a peer-demotion refusal that read, timed, or looked
+different from the action's other refusals would open a *second* oracle — "that account is an owner" — of the
+identical shape the first rework closed. `packages/actions/tests/memberships.test.ts`'s own "the peer-owner
+refusal is byte-identical to an existing grant refusal" test catches both an unknown-email refusal and a
+peer-owner refusal, from the same caller, and asserts `{ name, message, code }` are equal — not merely that both
+are instances of `ActionRefusedError`, which `ActionRefusedError`'s own parameterless constructor already makes
+true by construction and would pass even if a caller mutated `.message` after construction, exactly the mutation
+tried and caught (see below).
+
+**Choice, no organization is stranded by closing the peer-demotion path too.** The brief asked this be checked
+explicitly rather than assumed. The two states named — a sole owner who wants to leave, and a two-owner
+organization where one leaves — both still have an exit: check 4 only refuses a target whose role is *already*
+`'owner'`; granting the `'owner'` role to a target who does not yet hold it (a promotion) is untouched, so a sole
+owner can still promote a successor via `grant`, then step down via `revoke` once a second owner exists to
+receive the last-owner guard's "more than one" count — proven directly by
+`packages/actions/tests/memberships.test.ts`'s own "a sole owner has a way out" test, not merely reasoned about.
+A two-owner organization where one leaves is the ordinary self-revoke path, already proven by "an owner can still
+step down via memberships.revoke, unaffected by this check". The one state with genuinely no exit — a peer owner
+who wants to *remove* another, unwilling owner without that owner's own action — is not a stranding: it is the
+decision itself, working as intended. No organization ever loses its floor of one owner, and no owner is ever
+trapped holding a role with no way to leave it; only forcing a colleague out against their will is closed, which
+is what this decision says should be true.
+
+**Choice, the last-owner invariant is enforced in the repo, not the action.** The brief was explicit that this
+belongs where the write happens, "not in the screen that offers it" — and named the action as an acceptable
+alternative to the repo. I chose the repo (`repos/memberships.ts#revokeMembership`) over the action, because
+this is a data invariant ("an organization has zero owners") rather than a fact about *who is calling* — the
+class of check `grantMembershipRole`'s own module comment already separates from "who may call this", which
+stays in `execute`. Enforcing it in the repo means any future caller of `revokeMembership` — not only today's one
+action — is forced through the same guard, the same reasoning `TargetMembership`'s own resolve being TEN-5-scoped
+protects every future caller of the policy, not only this one. The count of active owners and the revoking write
+run inside one `db.transaction(...)` — the same "narrow the race, don't just document it" discipline
+`course-join-links.ts#redeemJoinLink`'s own comment already explains — so two concurrent revokes of two
+different owners cannot both observe "more than one left" and both proceed, leaving none. Measured by mutation:
+replacing the `activeOwners.length <= 1` check with `false` (never refuse) made `packages/db/tests/memberships.test.ts`'s
+own "the last owner cannot be revoked, even by another owner" test fail — the sole owner's membership was
+actually removed. `revokeMembershipAction#execute` cannot tell "the last owner" apart from "nothing left to
+revoke at all" from `revokeMembership`'s own `undefined` return, by design — both become the identical
+`ActionRefusedError`, TEN-5's "not-found rather than a different refusal" shape, so a caller probing which
+reason it got learns nothing either way.
+
+**Choice, revoking removes staff authority and nothing else.** TEN-6 and ENRL-6 both hold this rule for the
+identical reason (removal must never delete what an institution may be required to retain), and `revokeMembership`
+touches only the `memberships` row — it calls into no other repo. Proven directly, not merely by omission:
+`packages/actions/tests/memberships.test.ts`'s own "revoking deletes no transcript and ends no enrolment" test
+seeds a course, an active enrolment and a conversation with messages, revokes an unrelated instructor
+membership, and counts every one of those rows before and after — the same TEN-6 discipline
+`packages/actions/tests/discord-servers.test.ts#countRows` already holds itself to, rather than trusting that an
+action touching one table could not possibly reach another.
+
+**Finding — the "holder can no longer do what that role permitted" test could not use an owner-role target the
+way a first draft tried.** The first version of that test promoted a colleague to owner, then had the *original*
+owner revoke them — which the peer-owner decision above refuses outright, so the test itself failed against the
+correct implementation, not merely against a bug. Fixed by having the colleague step down *themselves*
+(`accountId: colleague.id` as both caller and target) before proving `costLedger.setSpendingCap` (owner-only,
+checked inside its own `execute`) refuses the identical call afterward — a genuine "real access, lost" proof
+that also respects the requirement's own peer-owner rule rather than working around it.
+
+**The UI (`components/Team.tsx`, ENRL-11): the screen explains, the write decides.** A row's own control depends
+on whose row it is, computed entirely from `entries` (`listMembershipsAction`'s own return) and a new
+`viewerAccountId` prop (threaded from `pages/Shell.tsx`'s own `account.id`, the caller's `/auth/me` identity) —
+no separate request. A peer owner's row carries no control at all (the server would refuse every attempt
+identically, so offering one would only teach a caller to expect a refusal); the viewer's own `'owner'` row
+offers "Step down", disabled with the reason stated in the row itself when `entries` shows exactly one active
+owner — the same count the repo's own guard uses, read off the list this screen already fetched rather than a
+second request. A non-owner row always offers an ordinary "Revoke". The confirmation states both halves before
+sending, the same discipline `handleGrant`/`JoinLinks.tsx#handleRevoke` already hold themselves to. Measured by
+mutation, both in `apps/web/tests/team.test.tsx`: replacing the last-owner disabled condition with `false` left
+the sole owner's own "Step down" control enabled — caught by the "disables... with the reason given" test;
+replacing the peer-owner exclusion with "always show" surfaced a control on a peer owner's row — caught by the
+"withholds the revoke control on a peer owner's row" test.
+
+**Evidence, mutation testing beyond what is recorded above.** Every mutation the brief's own "On evidence" list
+names was tried directly, each confirmed to turn a specific test red, then reverted: dropping the last-owner
+guard (repo test above); letting the revoker be supplied by the request body (`revokeInputSchema` reverted from
+`z.strictObject` to a plain `z.object` — `packages/actions/tests/memberships.test.ts`'s own "refuses a revoke
+whose body supplies revokedByAccountId" fails without it, the identical `z.strictObject` discipline D-67's own
+`grantInputSchema` already established); allowing a non-owner to call the action at all (`callerMembership.role
+!== 'owner'` weakened to merely requiring *a* membership — "refuses a caller who is not an owner" fails); making
+the UI-side guard the only guard (covered above). No mutation tried survived any test in this slice's own suite.
+
+**Evidence, `grantMembershipAction`'s own new check (the correction above), mutated three ways the follow-up
+brief named.** Dropping the check entirely (`if (targetMembership.role === 'owner')` replaced with `if (false)`)
+turned three tests red at once: "refuses an owner demoting another owner" (the grant that should be refused
+instead succeeded), "the peer-owner refusal is byte-identical..." (no error thrown to compare at all) and "the
+ENRL-10 → ENRL-11 scenario..." itself. Making the refusal distinguishable — constructing an `ActionRefusedError`
+and then overwriting its own `.message` before throwing, simulating a caller who reads the *reason* rather than
+merely the fact of a refusal — turned only "the peer-owner refusal is byte-identical..." red, and none of the
+other twenty-six tests in this file: exactly the targeted proof that test exists to give, not a broader
+regression that would have caught the mutation by accident. Applying the check to every target regardless of
+role (`if (targetMembership.role === 'owner')` widened to `if (targetMembership)`) turned seven tests red across
+three describe blocks — including the explicit "an owner can still change a non-owner colleague's role"
+regression this follow-up added for exactly this purpose — confirming the check is scoped to what it claims and
+nothing wider. No mutation tried survived any test in this slice's own suite.
+
+**Out of scope, deliberately, stated rather than left ambiguous.** ENRL-12 and the `expiresAt` refinement (a
+later slice, per the brief). `memberships.grant`'s own anti-oracle refusal for an unknown or non-member email —
+untouched; its own *demotion* path is not out of scope, and is what the correction above closes. Invitation
+issuing/redeeming (ENRL-10, unchanged, beyond the "revoked reads as absent" consequence `getMembership`'s own
+filter gives it automatically). MCP's tool surface — `apps/mcp/src/tool-surface.ts`'s own module comment already
+reasons about the omission of membership actions, deliberately; this slice does not touch that file, so neither
+`memberships.grant` nor `memberships.revoke` is reachable from a model caller by construction, the same as every
+other membership action. `accounts.disableAccount` (account lifecycle) — untouched. No UI change accompanies the
+correction: `components/Team.tsx`'s own grant form has no per-row affordance to hide (it takes a free-typed email,
+not a selection from the roster), so a peer-demotion attempt still surfaces as an ordinary `ErrorMessage` after
+submission, the same way every other action-level refusal already reaches that screen — a dedicated warning
+before submission is a UI enhancement this correction's own brief did not ask for.
+
+Final counts after the initial pass: 90 node:test (unchanged), 2178 vitest across 183 files (+29 — no new file:
++8 in `packages/db/tests/memberships.test.ts`, +10 in `packages/actions/tests/memberships.test.ts`, +7 in
+`apps/web/tests/team.test.tsx`, +3 derived in `apps/api/tests/tenant-isolation.test.ts`'s own foreign-session/
+no-session/disabled-account matrix for the new route, +1 derived in `packages/actions/tests/access-audit.test.ts`'s
+own per-descriptor loop; `catalog.test.ts` gained a name in an existing array, no new case), 27 e2e (+1 —
+`e2e/team-panel-revoke.spec.ts`, new). `npx drizzle-kit check` (from `packages/db`): clean.
+
+Final counts after the correction above: 90 node:test (unchanged), 2184 vitest across 183 files (+6, all in
+`packages/actions/tests/memberships.test.ts` — no new file), 27 e2e (unchanged — the correction is action-level,
+driven through tests, not the screen, per the follow-up brief). `npx drizzle-kit check` (from `packages/db`):
+clean — this correction touched no schema.
+
+---
+
+## D-74 — `packages/db`/`packages/actions`/`apps/api`: ENRL-12 — a live join link's secret is recoverable by the instructors of its own organization, encrypted at rest under a key that lives only in the environment
+
+**Problem.** `sign_in_tokens` and `course_join_links` both stored a bearer secret as only a SHA-256 hash — right
+for a sign-in link, which proves one person's email and is spent once, but wrong for a join link: D-67's own
+"Out of scope, deliberately" carried this forward twice (D-73's own entry, above, and D-68's) without ever
+naming it as anything but future work. A join link is deliberately broadcast to a whole class, so the secrecy a
+hash protects is already handed to everyone the instructor shared it with, while the cost of losing it — a
+closed tab, a mid-term re-send — falls entirely on the instructor, whose only recourse today is
+`courseJoinLinks.revoke` followed by a fresh `.create`, which breaks the link for every student still holding
+the old one. `docs/SPEC.md`'s own ENRL-12 names the shape: encrypted at rest, the key in the environment beside
+every other credential (CFG-5), the hash still the lookup path, revealing a separate request rather than a list
+field, and a deployment with no key behaving exactly as it does today.
+
+**Choice — the hash stays the lookup path; a second, independent copy is added for reveal, never a
+replacement.** `course_join_links` gains three nullable columns, `secret_ciphertext`/`secret_nonce`/
+`secret_auth_tag` (`packages/db/migrations/0020_curvy_marauders.sql`, three plain `ALTER TABLE ... ADD`
+statements — no backfill, so no dedicated `migrate.test.ts` case beyond adding the new column names to that
+file's own `expect(schema.course_join_links)` assertion, which did not exist before this slice and now does,
+the same "pin the columns a slice adds" convention `memberships`'/`sign_in_tokens`' own entries in that test
+already follow). `redeemJoinLink`/`redeemJoinLinkForWebAccount` (`packages/db/src/repos/course-join-links.ts`)
+are untouched — still `WHERE secret_hash = ?` — because encryption is not searchable and was never proposed as
+the lookup path; proved by mutation, not merely stated: pointing `findLiveJoinLinkByHash`'s own `WHERE` at
+`secretCiphertext` instead of `secretHash` turned fifteen tests red across both `packages/db/tests/` and
+`packages/actions/tests/`, including every pre-existing redemption test this slice did not otherwise touch.
+
+**Choice — encryption and decryption both live in `packages/actions/src/actions/course-join-links.ts`, never in
+`packages/db`.** That file's own module comment already claimed "the plaintext secret never sees this file" for
+`secretHash`; this slice keeps that claim true for the ciphertext too by construction, not merely by discipline
+— `repos/course-join-links.ts` stores and returns `secretCiphertext`/`secretNonce`/`secretAuthTag` exactly as it
+already did `secretHash`, opaque bytes it never encrypts, decrypts, or reads the meaning of; that file's own
+module comment is updated to say so explicitly. `encryptSecret`/`decryptSecret` (module-private, `node:crypto`'s
+`createCipheriv`/`createDecipheriv`, AES-256-GCM) sit beside `hashSecret`/`generateSecret`, the same file D-34
+already put those in for the identical "this package has no dependency on `@bloombot/auth`, and duplicating a
+handful of lines costs less than a new cross-package dependency" reasoning.
+
+**Choice — a fresh, random 96-bit nonce every call, stored alongside the ciphertext it encrypted, never derived
+or reused.** GCM's confidentiality guarantee is broken outright by reusing a nonce under the same key, so
+`encryptSecret` takes no nonce parameter a caller could supply or reuse by mistake — it always calls
+`randomBytes(12)` itself. The auth tag is likewise stored, not recomputed: `decryptSecret` calls
+`decipher.setAuthTag(...)` before `decipher.final()`, so a tampered ciphertext, nonce, or tag throws before a
+single byte of plaintext is returned — GCM's own authentication check running inside `final()` is what
+authenticated encryption is for, over a bare block-cipher mode with no integrity check of its own. Proved by
+mutation: flipping one bit of a stored auth tag's own decoded bytes (not the base64 text — a text-level edit
+risks producing invalid base64 that decodes to a different length rather than the same bytes with one bit
+wrong, a weaker proof) and calling `courseJoinLinks.reveal` throws `ActionRefusedError`, never returns garbage;
+skipping `setAuthTag`/`final()` entirely (returning only `decipher.update`'s own output — GCM's stream-cipher
+half, which decrypts before the tag is ever checked) made the tampered-ciphertext test fail, confirming the tag
+check is what the test actually pins down, not an incidental side effect of some other check.
+
+**Choice — the key is threaded as an explicit argument, never read by `packages/actions` itself.** This package
+holds no dependency on `@bloombot/config` at all (`actions/index.ts`'s own module comment, `packages/core`'s
+identical discipline per `docs/DECISIONS.md`) — `createCourseJoinLinkAction`/`createRevealCourseJoinLinkAction`
+are both factories taking an optional `Buffer`, the same "a dependency this package cannot construct for
+itself" shape `course-attachments.ts`'s own `createAttachCourseAttachmentAction` already takes an
+`AttachmentStorage` for. `createCourseJoinLinkAction` itself changes shape — from a plain exported object to a
+zero-or-one-argument factory — which is why its own name did not have to change: the factory-naming convention
+this codebase already uses (`create<Verb><Noun>Action` for an action named `<noun>.<verb>`) happens to spell the
+same identifier for an action whose own verb is "create". Every existing call site (`packages/actions/tests/
+course-join-links.test.ts`) changed from `createCourseJoinLinkAction` to `createCourseJoinLinkAction()` — nine
+call sites, zero behaviour change, since none of them cared about ENRL-12. `apps/api/src/index.ts` reads
+`JOIN_LINK_ENCRYPTION_KEY` directly (a credential, CFG-5 — never through `packages/config`'s schema, the same
+`BOT_TOKEN`/`DISCORD_CLIENT_SECRET`/`OPENAI_API_KEY` treatment), decodes it as base64, and requires it decode to
+exactly 32 bytes or refuses to start — unlike `BOT_TOKEN`, an _unset_ key is not a startup failure (ENRL-12's
+own deployment-compatibility promise), but a key that is _set and malformed_ is: silently ignoring it would let
+an operator believe reveal works when it never will, the same "a bad environment fails immediately" discipline
+`packages/config/src/env.ts`'s own module comment holds the schema-validated half of the environment to.
+Threaded through `apps/api/src/server.ts`'s `ServerDependencies.joinLinkEncryptionKey` and
+`createPlatformRegistry`'s own new `joinLinkEncryptionKey` option, the same path `attachmentStorageDir` already
+takes — omitted anywhere along that chain, both factories build with no key, which reproduces the "no key
+configured" behaviour exactly: `courseJoinLinks.create` still returns the secret once, and
+`courseJoinLinks.reveal` refuses unconditionally, proved directly (not merely by omission) by a dedicated test
+and by mutation (skipping the `if (!encryptionKey) throw ...` line was not separately mutation-tested, since
+every "no key" test already exercises the un-mutated code path — the deployment-compatibility promise is what
+the test asserts, not a line coverage target).
+
+**Choice — who may reveal: `courseJoinLinks.reveal`'s policy is `courseJoinLinks.revoke`'s policy object,
+reused, not a second one that happens to look the same.** ENRL-12's own text says "the instructors of its own
+organization" — this codebase's existing gate for that phrase, for this exact resource, is `.revoke`'s
+`{ resource: 'courseJoinLink', access: 'write' }` descriptor with `resolve` scoped to the link's own
+organization: any member (owner, instructor or assistant — `.create`'s identical policy already permits all
+three, un-role-differentiated) of the organization the link's course belongs to, the same set `.create`/`.list`/
+`.revoke` already permit, and no wider. Reusing the literal policy object (`policy: revokeCourseJoinLinkAction.policy`),
+not a duplicate with the same two field values, is what keeps the two gates from drifting apart under a future
+edit to either action alone. A non-member (an account whose own session belongs to a different organization
+entirely, or no session at all) is refused before `dispatch` ever runs `courseJoinLinks.reveal`'s own `execute`
+— `apps/api/src/routes/actions.ts`'s own membership check, the same gate every other action-route call already
+passes through, and — since `courseJoinLinks.reveal` is registered into `createPlatformRegistry` and reachable
+only through that one generic route — exercised automatically by `apps/api/tests/tenant-isolation.test.ts`'s own
+derived matrix (foreign-organization session, no session, disabled-account session) with no new test written by
+hand. A caller _within_ the right organization but for a link belonging to a different one is refused by
+`resolve` itself, the identical TEN-5 shape `.revoke`'s own "refuses another organization's link, identically to
+a missing one" test already pins — mirrored for `.reveal` in this slice.
+
+**What an instructor sees for a link issued before this shipped.** Its row carries `null` for all three of
+`secret_ciphertext`/`secret_nonce`/`secret_auth_tag` — the migration adds the columns with no backfill, so every
+existing row reads exactly like a row created today with no key configured. Redemption is unaffected (it never
+reads these columns at all); `courseJoinLinks.reveal` refuses, identically to a revoked or expired link — proved
+directly by a dedicated test that creates such a row through the repo's own `createJoinLink` with the ciphertext
+fields omitted, confirms the reveal refuses, and confirms the same secret still redeems through
+`redeemCourseJoinLink` unchanged.
+
+**How this sits beside D-71's own `sign_in_tokens.destination`.** That entry records a join-link redemption's
+own return address — which, for the join-link flow specifically, is the join link's URL, secret and all —
+living in `sign_in_tokens.destination` as plaintext for the token's own fifteen-minute life. That is a real,
+already-accepted plaintext exposure of the identical class of secret this entry now encrypts at rest — not a
+contradiction, because the two rows answer different questions under different trust boundaries. A sign-in
+token is single-use, expires in fifteen minutes, and is deleted from relevance the moment it is consumed
+(`consumeSignInToken` marks `usedAt`); its `destination` is read back exactly once, by the same request that
+proved the recipient controls the mailed address, and nothing about ENRL-12 changes that row, that flow, or its
+own already-recorded tradeoff. A join link's own `course_join_links` row is the opposite shape on every axis
+that matters here: long-lived (valid until revoked, sometimes for a whole term), read by nobody but the
+instructor who asks to see it again, and reachable by an entirely different, ordinary membership-scoped
+`dispatch` call rather than a token consumed once at redemption. Encrypting the row a join link's secret lives
+in for the long run, while leaving a fifteen-minute, single-use, already-scoped-down token row alone, is the
+same "match the durability of the protection to the durability of the exposure" reasoning this build applies
+elsewhere (D-2's integer money, D-32's `tmp/`-not-`data/` test isolation) — not a gap the two entries leave
+between them.
+
+**Judgment call — "who may reveal" resolved to "any member," not narrowed to `owner`/`instructor`.** The brief's
+own text ("the instructors of its own organization... `courseJoinLinks.create` is already gated; match it")
+reads two ways: "instructor" as the `MEMBERSHIP_ROLES` value, or "instructor" as this SPEC's own loose shorthand
+for organization staff generally, the reading `courseJoinLinks.create`'s own un-role-differentiated policy
+already commits to. Chosen: match `.create`'s actual gating exactly, not a stricter one it does not itself
+enforce — a `.create`/`.list`/`.revoke`/`.reveal` quartet that suddenly disagreed about which roles may act on
+the same link would be a harder-to-explain platform than one where all four agree. An inference, not a measured
+fact: this repository has no existing place ENRL-3's "instructor" is cashed out as a `MEMBERSHIP_ROLES` role
+check, so there is nothing to measure it against beyond the sibling actions' own, already-shipped behaviour.
+Revisit if a future requirement narrows `.create`/`.list`/`.revoke` themselves to `owner`/`instructor` — `.reveal`
+should follow, via the shared policy object, with no separate edit.
+
+**Out of scope, deliberately.** Redemption's authorization and binding (unchanged — this slice added no new
+caller of `redeemJoinLink`/`redeemJoinLinkForWebAccount`, and neither function's own signature or behaviour
+changed). `memberships.grant`/`.revoke` — untouched. The chat surface, and MCP's tool surface —
+`apps/mcp/src/tool-surface.ts`'s own allowlist does not name `courseJoinLinks.reveal`, so it is unreachable from
+a model caller by construction, the same as every action that file's own module comment already reasons about
+omitting; this slice adds no entry there. Rotating or re-encrypting a link's own ciphertext under a new key —
+raised in the brief as a question, not a requirement: nothing here reads `JOIN_LINK_ENCRYPTION_KEY` more than
+once per process lifetime, and changing its value between deployments leaves every previously-encrypted row
+undecryptable under the new key (its own reveal now behaves like a tampered-ciphertext refusal, byte-identical
+to every other refusal this action gives) while redemption — the property that actually matters to a student —
+stays unaffected throughout, since it never touches this key at all. If key rotation becomes a real operational
+need, it reads like its own requirement (a re-encryption job, keyed identically to `apps/worker`'s other
+background jobs, JOB-1), not a change to this entry's own design. No `apps/web` change accompanies this slice:
+the brief's own "files and interfaces involved" names only `packages/db`, `packages/actions` and `apps/api`, and
+`components/JoinLinks.tsx` has no affordance today to reveal a secret from, the same "a UI enhancement the
+brief did not ask for" reasoning D-73's own entry gives for `components/Team.tsx`. `courseJoinLinks.reveal` is
+reachable today only by direct dispatch or through `POST /organizations/:id/actions/courseJoinLinks.reveal` —
+a real, tested, authorized capability with no panel affordance yet, the same shape several actions in this
+codebase already sat in before their own panel screen landed.
+
+**A carried-over cheap-fix, closed in the same slice.** `membershipInvitations.create`'s own `expiresAt`
+`.refine` (`packages/actions/src/actions/membership-invitations.ts`) already existed — its own doc comment even
+claimed it "mirrors `courseJoinLinks.create`'s own `expiresAt` exactly, including its own... refinement" — but
+carried no test of its own, unlike `courseJoinLinks.create`'s identical refinement, which
+`packages/actions/tests/course-join-links.test.ts`'s own "refuses creating a join link whose expiresAt is
+already in the past" already pinned. Confirmed live over the shape the brief described:
+`POST /organizations/<id>/actions/membershipInvitations.create` with `{"email":"x@y.edu","role":"instructor",
+"expiresAt":1}` would have answered `200` with a plaintext secret no invitee could ever redeem, indistinguishable
+from success to the owner who sent it, until this slice added the missing test. Mutated and confirmed red (the
+`.refine(...)` call removed entirely, leaving only `.number().int().positive()`) before restoring it, byte for
+byte (`diff` against a saved copy, confirmed identical). `courseJoinLinks.create`'s own equivalent was already
+pinned; no change needed there.
+
+**Evidence.** Every mutation this entry names above was tried directly against the real source, confirmed to
+turn a specific, named test red, then reverted and confirmed byte-identical to before (`diff` against a saved
+copy in every case): the hash-vs-ciphertext lookup swap (fifteen tests, both packages), the revoked/expired
+liveness check short-circuited to `true` (two tests, one each), the auth-tag check skipped (one test), and
+`toSummary` widened to include `secretCiphertext` (one test). The `membershipInvitations.create` refinement
+removal is recorded separately, just above.
+
+Final counts: 90 node:test (unchanged), 2197 vitest across 183 files (baseline at `ed3cfea` was 2184/183 — +13,
+no new file: +8 in `packages/actions/tests/course-join-links.test.ts`'s own new `courseJoinLinks.reveal (ENRL-12)`
+describe block, +1 in `packages/actions/tests/membership-invitations.test.ts`, +3 derived in `apps/api/tests/
+tenant-isolation.test.ts`'s own foreign-session/no-session/disabled-account matrix for the new route, +1 derived
+in `packages/actions/tests/access-audit.test.ts`'s own per-descriptor loop; `catalog.test.ts` gained a name in
+an existing array, no new case), 27 e2e (unchanged — this slice is backend-only, per the "out of scope" note
+above). `npx drizzle-kit check` (from `packages/db`): clean, no drift.
+
+**Limits.** The judgment call above (who may reveal) is exactly as firm as `.create`'s own existing gating —
+if a future slice tightens that, this one should tighten in step, via the shared policy object. Key rotation is
+named but not built (above). No panel affordance exists yet for an instructor to actually click "show again" —
+the backend capability is complete and tested; the screen is not this slice's own scope.
+
+---
+
+**Rework — a coordinator's own audit reopened five requirements this build had already marked Done for exactly
+this reason (TEN-8, WEB-4, COST-3, COST-4, ENRL-5: "a working action nobody could reach"), and this entry's own
+"Out of scope" above was the sixth: `courseJoinLinks.reveal` was real, tested, and authorized, and reachable by
+nothing an instructor could click. The audit's own criterion — the generic
+`/organizations/:id/actions/:name` route does not count as a surface — closes this gap the same way.**
+
+**Choice — `CourseJoinLinkSummary` gains one field, `revealable: boolean`, rather than threading the encryption
+key into `courseJoinLinks.list` to compute it freshly on every call.** `revealable` is
+`Boolean(link.secretCiphertext)` alone — a link this listing already has in hand, not a decrypt attempt — so
+`.list` stays the plain object it already was; only `.create`/`.reveal` needed to become factories. This is
+capability metadata, not secret material: it says nothing a caller could not already learn by attempting
+`.reveal` and reading whether it refused, so it carries none of the risk `secretHash`'s own omission from this
+same summary (WEB-20's original doc comment) guards against. It does not account for "is a key configured right
+now" — only "did this row get one at creation" — so it would read `true` for a link encrypted under a key an
+operator later removed, a real gap but the same one `.reveal` itself already has (this entry's own "Out of
+scope" on rotation, above), not a new one. `apps/web/src/components/JoinLinks.tsx` reads it, alongside its own
+`isLiveForReveal` (mirroring `.reveal`'s own revoked/expired refusal), to decide whether to offer the control at
+all — never a control certain to fail, the follow-up brief's own explicit requirement.
+
+**Choice — the panel keeps at most one revealed secret in memory at a time, the same discipline `created`
+already held itself to, plus an explicit "Hide."** `revealed: { linkId, secret } | undefined` — revealing a
+different link replaces it outright (never a list, never keyed by anything that survives past this one value),
+and a "Hide" button lets an instructor clear it before doing anything else, closing the follow-up brief's own
+"do not leave it there indefinitely" more directly than `created`'s own precedent does (which has no hide
+control at all, since it is shown exactly once and reads as done the moment the instructor moves on). Copying a
+revealed secret uses its own `handleCopyRevealed`/`revealCopied`/`revealCopyError`, deliberately not shared with
+`created`'s own `handleCopy`/`copied`/`copyError` — sharing would flip both the creation banner's and a revealed
+row's own "Copied!" label on a single click in whichever one was actually used, wrong whenever both are on
+screen at once (both are reachable independently: creating a link, then revealing a _different_ existing one).
+Nothing here touches the URL — no query parameter, no route, no `window.location` write — so the secret never
+enters browser history either.
+
+**Choice — a live but non-revealable link explains itself in a sentence, never a control.** "Bloombot didn't
+keep a recoverable copy of this link's secret, so it can't be shown again. Revoke it and create a new one if
+students still need a link." — instructor-facing wording, not "no ciphertext," and rendered as an ordinary `<p>`
+(no `role="alert"`), since this is a fact the listing already carried, not a failure that just happened. A
+revoked or expired link gets neither the control nor this sentence — `formatExpiry` already says why, and a
+second sentence explaining a state the screen already displays would be noise, not help.
+
+**Choice — the role question is settled, not left an inference.** The follow-up brief's own challenge: ENRL-12's
+text says "instructors," `.reveal` shares `.revoke`'s policy (any member, un-role-differentiated), and ENRL-11
+has since made a role load-bearing elsewhere in this codebase (only an owner may revoke a membership or demote a
+peer owner). Decided: keep matching `.create`/`.list`/`.revoke` exactly, un-role-differentiated, for a reason
+ENRL-11's own precedent does not undercut — narrowing `.reveal` alone to `owner`/`instructor` would build a
+boundary any caller already inside `.revoke`'s own trust perimeter can walk straight around: an `assistant` who
+may revoke a link may also `.create` a fresh one and read its secret from the response the instant it is issued,
+so refusing that same caller `.reveal` on the _original_ link protects nothing a revoke-and-reissue does not
+already defeat — unlike ENRL-11's own concern (an organization always keeping an owner), which a role check
+genuinely does protect and revoke-and-reissue cannot substitute for. Pinned, not merely argued: `packages/actions/tests/course-join-links.test.ts`'s new "an assistant — not only an owner — can reveal a live link" dispatches as
+an `assistant` account directly and asserts the real secret comes back. Mutated to prove the test is not
+vacuous: adding an owner-only membership check to `.reveal`'s own `execute` turned exactly that one test red and
+left the other eighteen in the same file green — the precise, narrow proof this decision is pinned by something
+that would actually fail if it regressed, not merely present.
+
+**Evidence, the frontend half.** Every mutation the follow-up brief's own "assert on what remains" line implies
+was tried directly against `components/JoinLinks.tsx`, confirmed to turn a specific, named test in
+`apps/web/tests/join-links.test.tsx` red, then reverted (`diff` against a saved copy, confirmed byte-identical
+in every case): `isLiveForReveal` short-circuited to always `true` (the revoked-link and expired-link "offers no
+reveal control" tests, both); the `link.revealable` check dropped from the control's own render guard (the
+"nothing encrypted to show" test); `setRevealed` changed to keep the first revealed secret rather than replace
+it (the "does not survive the re-render" test); `handleHideRevealed`'s own `setRevealed(undefined)` removed (the
+"hiding... removes it from the DOM" test). The backend's own new `revealable` field was mutated too — forced to
+`true` unconditionally in `toSummary` — and caught by two tests at once: the listing test's own `revealable:
+false` assertion (no key configured) and the new "revealable is true only for a link created with an encryption
+key configured" test.
+
+**Evidence, end to end.** `e2e/join-links-panel.spec.ts` gained
+`an owner issues a join link, closes the tab that showed it, then reveals it again later and a real visitor
+redeems that revealed URL (ENRL-12)` — the journey the requirement itself names, issue → close → reveal →
+redeem, proved by a real second browser context following the _revealed_ URL and landing connected, the same
+outcome `join-link.spec.ts` already proves for an ordinary just-created link — not by comparing the revealed
+string against the created one. `e2e/support/start-api.ts` now configures a real `joinLinkEncryptionKey`
+(`randomBytes(32)`, generated once per harness run, never read from `process.env`) — without it every link this
+harness creates has `revealable: false` and this journey has no control to click at all, which was confirmed
+directly: with the key omitted, the new spec's own `page.getByRole('button', { name: /^Show join link/ })` step
+times out rather than failing on a later assertion.
+
+Final counts after this rework: 90 node:test (unchanged), 2208 vitest across 183 files (+11 from this rework's
+own baseline of 2197 — +2 in `packages/actions/tests/course-join-links.test.ts` (`revealable`'s own listing
+test, and the assistant-reveals test), +9 in `apps/web/tests/join-links.test.tsx`'s own new
+`JoinLinks reveal (ENRL-12)` describe block; no new file in either package), 28 e2e (+1 —
+`e2e/join-links-panel.spec.ts`'s new case). `npx drizzle-kit check` (from `packages/db`): clean, no drift — this
+rework touched no schema.
+
+**Limits, updated.** The "no `apps/web` change accompanies this slice" line in this entry's own original text
+(above) no longer holds — corrected here rather than silently edited away, the same "state what changed and
+why" discipline this file holds every other rework to. The role decision is now pinned by a test and a mutation,
+not merely argued; it remains exactly as firm as `.create`/`.list`/`.revoke`'s own existing, un-role-
+differentiated gating, and should move in step with them if a future requirement narrows any of the four.
+`revealable`'s own key-rotation gap (above) is the same one `.reveal` itself already had — still out of scope,
+still named, not newly introduced by this field.

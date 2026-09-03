@@ -12,6 +12,12 @@
  * Every function here operates on the link's *hash*. The plaintext secret is
  * generated and returned to the caller exactly once, by `@bloombot/actions`'
  * `course-join-links.ts` — this file never sees it and never writes it.
+ * ENRL-12 adds a second copy of the secret, `secretCiphertext`/`secretNonce`/
+ * `secretAuthTag` — that stays true of *those* too: this file stores and
+ * returns them exactly as it stores and returns `secretHash`, opaque bytes
+ * it never decrypts, encrypts, or otherwise interprets. `@bloombot/actions`
+ * is where the AES-256-GCM key lives, and the only place plaintext is ever
+ * produced or read back.
  */
 
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
@@ -37,6 +43,16 @@ export interface NewCourseJoinLink {
   courseId: string
   /** SHA-256 hash of the secret; see `@bloombot/actions`' `course-join-links.ts`. */
   secretHash: string
+  /**
+   * ENRL-12 — the same secret `secretHash` hashes, encrypted (AES-256-GCM)
+   * so an instructor can see it again. Omitted (stored `null`) whenever no
+   * encryption key was configured at creation time — `secretNonce`/
+   * `secretAuthTag` follow the same all-or-nothing rule; a caller that
+   * supplies one is expected to supply all three.
+   */
+  secretCiphertext?: string | null
+  secretNonce?: string | null
+  secretAuthTag?: string | null
   /** `null`/omitted: no expiry, valid until revoked. */
   expiresAt?: number | null
   createdByAccountId: string
@@ -55,6 +71,9 @@ export function createJoinLink(
       organizationId,
       courseId: input.courseId,
       secretHash: input.secretHash,
+      secretCiphertext: input.secretCiphertext ?? null,
+      secretNonce: input.secretNonce ?? null,
+      secretAuthTag: input.secretAuthTag ?? null,
       expiresAt: input.expiresAt ?? null,
       createdByAccountId: input.createdByAccountId,
       createdAt: Date.now(),
@@ -326,13 +345,25 @@ export function redeemJoinLink(
  * or expired secret (this function's own "no oracle" shape, above). No
  * branch here reveals that a match was found; the caller only ever learns
  * "redeeming this link did not work."
+ *
+ * WEB-25 — the return value also reports `alreadyEnrolled`, alongside the
+ * enrolment itself, so a caller (`apps/web`'s own join-link screen) can say
+ * "you're already enrolled" for a link redeemed a second time, rather than
+ * a plain success indistinguishable from the first. Read *before*
+ * `enrolments.enrolViaJoinLink` runs, not inferred from its result:
+ * `enrolViaJoinLink` (`admit`'s own doc comment) is itself idempotent and
+ * returns the *existing* row unchanged either way, so nothing about its
+ * return value alone tells a fresh admission apart from a repeat one. This
+ * changes nothing about which refusal a caller sees or when — it is read
+ * only on the path that already leads to a successful admission, never
+ * consulted for `!link` or a refused resolve-or-create above.
  */
 export function redeemJoinLinkForWebAccount(
   secretHash: string,
   accountId: string,
   now: number,
   db: Database
-): enrolments.Enrolment | undefined {
+): { enrolment: enrolments.Enrolment; alreadyEnrolled: boolean } | undefined {
   return db.transaction((tx) => {
     const link = findLiveJoinLinkByHash(secretHash, now, tx)
     if (!link) return undefined
@@ -389,10 +420,27 @@ export function redeemJoinLinkForWebAccount(
       person = created
     }
 
-    return enrolments.enrolViaJoinLink(
+    // WEB-25 — read before `enrolViaJoinLink`, not after; see this
+    // function's own doc comment on why the enrolment it returns cannot
+    // itself distinguish a fresh admission from a repeat one. A person just
+    // created (the branch above) can never already hold one — `getActiveEnrolment`
+    // is scoped to `person.id`, a brand-new id nothing could have enrolled
+    // yet — so this is only ever `true` for an existing, previously-resolved
+    // person redeeming the same link again.
+    const alreadyEnrolled =
+      enrolments.getActiveEnrolment(
+        link.organizationId,
+        link.courseId,
+        person.id,
+        tx
+      ) !== undefined
+
+    const enrolment = enrolments.enrolViaJoinLink(
       link.organizationId,
       { courseId: link.courseId, personId: person.id },
       tx
     )
+    if (!enrolment) return undefined
+    return { enrolment, alreadyEnrolled }
   })
 }

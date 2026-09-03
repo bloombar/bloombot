@@ -2,6 +2,8 @@
  * WEB-20, end to end: an organization owner issues a join link from the
  * panel, copies it, a real visitor redeems it, and revoking it stops
  * admitting new visitors without un-enrolling the one who already joined.
+ * WEB-23's own expiry test, and ENRL-12's own "issue, close, reveal,
+ * redeem" journey, are further down this same file.
  *
  * **What is real, and what is a harness stand-in — read this before
  * trusting what this test proves** (the same discipline
@@ -28,7 +30,7 @@
  * directly.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
@@ -334,6 +336,157 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
     expect(joinLink.expiresAt as number).toBeGreaterThan(before)
     expect(joinLink.expiresAt as number).toBeLessThanOrEqual(
       before + weekMs + 60_000
+    )
+  } finally {
+    closeDatabase(db)
+  }
+})
+
+/**
+ * ENRL-12, end to end: the journey the requirement itself names — an
+ * instructor issues a link, the tab that showed the secret once closes (a
+ * reload, standing in for that the same way the WEB-20 test above already
+ * does for its own step 4), and the secret is still recoverable later, from
+ * the list alone, through a real reveal that a real second visitor then
+ * redeems. `e2e/support/start-api.ts` configures a real
+ * `joinLinkEncryptionKey` for this harness — without it, `revealable` is
+ * `false` for every link this process ever creates and this journey has no
+ * control to click at all (`components/JoinLinks.tsx`'s own module
+ * comment).
+ *
+ * Real, the same three things the WEB-20 test above is real for: the
+ * browser, `apps/api` unmodified, and a real database — plus the redemption
+ * round trip through the *revealed* URL specifically, not the one shown at
+ * creation, which is the one thing only this test proves.
+ */
+test('an owner issues a join link, closes the tab that showed it, then reveals it again later and a real visitor redeems that revealed URL (ENRL-12)', async ({
+  page,
+  browser,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const ownerEmail = `owner-enrl12-${suffix}@example.edu`
+  const studentEmail = `student-enrl12-${suffix}@example.edu`
+  const projectName = `ENRL-12 — ${suffix}`
+  const courseTitle = `ENRL-12 Course — ${suffix}`
+
+  await page.goto('/')
+  await page.getByLabel('Email').fill(ownerEmail)
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
+  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
+  const ownerToken = await readSignInToken(ownerEmail)
+  await page.goto(`/sign-in/${ownerToken}`)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Projects' }).click()
+  await page.getByLabel('New project name').fill(projectName)
+  await page.getByRole('button', { name: 'Create project' }).click()
+  await page.getByRole('button', { name: projectName }).click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(courseTitle)
+  await page.getByLabel('File prefix').fill(`e12-${suffix}`)
+  await page.getByLabel('Admins role').fill(`admins-e12-${suffix}`)
+  await page.getByLabel('Students role').fill(`students-e12-${suffix}`)
+  await page.getByLabel('Enabled').check()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+
+  // 1. Issue — the secret is shown once, right here, exactly as WEB-20's own
+  //    test above proves. Deliberately never copied or read in this test:
+  //    the point is that this instructor loses it the ordinary way (closing
+  //    the tab), not that they saved it somewhere else first.
+  await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
+  await page.getByRole('button', { name: 'Create join link' }).click()
+  await expect(page.getByTestId('created-join-link-url')).toBeVisible()
+
+  // 2. Close — a real reload, the same stand-in the WEB-20 test above uses
+  //    for "closed the tab, came back later": this app routes most screens
+  //    through client-side state, not a URL, so a reload always lands back
+  //    on Projects (`App.tsx`'s own module comment). The once-shown secret
+  //    is genuinely gone from this page now, not merely hidden.
+  await page.reload()
+  await page.getByRole('button', { name: projectName }).click()
+  await page.getByRole('button', { name: courseTitle }).click()
+  await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
+  await expect(page.getByTestId('created-join-link-url')).not.toBeVisible()
+
+  // 3. Reveal — the control this slice adds. Fails without it: before
+  //    ENRL-12, nothing in this panel could ever put the secret back on
+  //    screen, and the journey this test proves would have nowhere to go
+  //    from here but a dead end.
+  await page.getByRole('button', { name: /^Show join link/ }).click()
+  const revealedUrlNode = page.getByTestId('revealed-join-link-url')
+  await expect(revealedUrlNode).toBeVisible()
+  const revealedUrl = (await revealedUrlNode.textContent())?.trim()
+  if (!revealedUrl) throw new Error('the panel never rendered the revealed URL')
+  expect(revealedUrl).toContain('/join/')
+
+  // 4. Prove it by redeeming, not by comparing strings — a real, independent
+  //    visitor (a fresh browser context; sign-in is cookie-based) follows
+  //    the *revealed* URL specifically and lands connected, the same
+  //    outcome `join-link.spec.ts` already proves for an ordinary,
+  //    just-created link.
+  const studentContext = await browser.newContext()
+  try {
+    const studentPage = await studentContext.newPage()
+    await studentPage.goto(revealedUrl)
+    await expect(
+      studentPage.getByRole('heading', { name: 'Sign in to Bloombot' })
+    ).toBeVisible()
+    await studentPage.getByLabel('Email').fill(studentEmail)
+    await studentPage
+      .getByRole('button', { name: 'Email me a sign-in link' })
+      .click()
+    await expect(studentPage.getByTestId('link-requested')).toContainText(
+      studentEmail
+    )
+    const studentToken = await readSignInToken(studentEmail)
+    await studentPage.goto(`/sign-in/${studentToken}`)
+    await expect(
+      studentPage.getByTestId('organization-switcher')
+    ).toContainText('(connected)')
+  } finally {
+    await studentContext.close()
+  }
+
+  // 5. Read back directly: the revealed secret really is the same one
+  //    `.create` issued — `secretHash` never changed, only a second,
+  //    encrypted copy was added alongside it (`docs/DECISIONS.md` D-74).
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const ownerAccount = accounts.getAccountByEmail(ownerEmail, db)
+    if (!ownerAccount) throw new Error('verify failed: owner account not found')
+    const [ownerMembership] = memberships.listMembershipsForAccount(
+      ownerAccount.id,
+      db
+    )
+    if (!ownerMembership) throw new Error('verify failed: membership not found')
+    const organizationId = ownerMembership.organizationId
+
+    const project = projects
+      .listProjects(organizationId, db)
+      .find((candidate) => candidate.name === projectName)
+    if (!project) throw new Error('verify failed: project not found')
+    const course = courses
+      .listCourses(organizationId, db, { projectId: project.id })
+      .find((candidate) => candidate.title === courseTitle)
+    if (!course) throw new Error('verify failed: course not found')
+
+    const [joinLink] = courseJoinLinks.listJoinLinks(
+      organizationId,
+      course.id,
+      db
+    )
+    if (!joinLink) throw new Error('verify failed: join link not found')
+    // The revealed secret's own hash is the row's own secretHash — the
+    // property ENRL-12's own "the hash stays the lookup path" decision
+    // rests on, checked here directly rather than only through the browser.
+    const revealedSecret = revealedUrl.split('/join/')[1]
+    if (!revealedSecret) {
+      throw new Error('verify failed: could not parse the revealed secret')
+    }
+    expect(createHash('sha256').update(revealedSecret).digest('hex')).toBe(
+      joinLink.secretHash
     )
   } finally {
     closeDatabase(db)

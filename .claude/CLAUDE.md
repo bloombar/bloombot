@@ -62,3 +62,38 @@ slice against a brief, `.claude/agents/spec-reviewer.md` reviews the diff in fre
 doing the work is never the one grading it. The brief template and definition of done are in the
 `phase-handoff` skill. The plan being built is summarised in `docs/SPEC.md` and `docs/ROADMAP.md`; decisions
 made along the way are in `docs/DECISIONS.md`.
+
+## One writer in the working tree at a time
+
+Agents share the repository's working directory. They cannot see each other's uncommitted edits,
+and `git` has no idea two of them exist — so two agents writing at once produce a broken tree, a
+`tsc` that fails for reasons neither caused, and commits that sweep up work nobody meant to include.
+This has happened repeatedly and cost real time; it is not a hypothetical.
+
+**The supervisor:**
+
+- Runs **one writing agent at a time** against the working tree. Reviewers are read-only and may run
+  in parallel with anything, but they must work in a temporary `git worktree`, never the main tree.
+- Runs two writing agents concurrently only with `isolation: "worktree"`, which gives each its own
+  checkout. Without it, serialise — waiting is cheaper than untangling.
+- Does **not** edit or commit the tree while a writing agent is running, including documentation and
+  board files. A `git status` an agent cannot explain is a `git status` it has to stop and ask about.
+
+**Every agent, before committing:**
+
+- Run `git status` first. **Stage only the files you touched, by path.** Never `git add -A`, `git add .`
+  or `git commit -a` — those are how another agent's half-finished work ends up in your commit.
+- If `git status` shows files you did not touch, **stop and report before doing anything about them**.
+  Do not commit them, do not revert them, do not "clean up". Reporting an irreversible action after
+  taking it is not reporting. Uncommitted content is not recoverable from git, and it may be the
+  user's own work-in-progress rather than another agent's — an agent reverted ~300 lines of the
+  user's real deployment notes this way, and only a truncated copy survived in a transcript.
+  Discarding content nobody assigned you is never your call to make.
+- **`docs/DEPLOY_DROPLET.md` is the user's own working document.** Do not edit or revert it.
+- If a check fails in a file outside your slice, say so and stop rather than fixing it. A failure you
+  did not cause is information the supervisor needs, not a chore to absorb.
+- Re-measure your own baselines after your final pull. Numbers in a brief go stale the moment another
+  slice lands, and a report built on them is wrong in a way nobody can see.
+
+`git checkout -- <file>`, `git stash` and `git restore` discard uncommitted work irreversibly —
+including work you cannot see because another agent has not committed it yet. Commit early instead.

@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   closeDatabase,
@@ -691,6 +691,189 @@ describe('getJob and countQueuedJobs', () => {
 
     // One completed (excluded) and one still pending (included).
     expect(jobs.countQueuedJobs(testDb.db)).toBe(1)
+  })
+})
+
+// JOB-2: a job that keeps failing is visible, and stays visible past the
+// browser session that dispatched it — proved directly against the
+// database, the same "assert against the database, not a return value"
+// discipline this file's own module comment already holds every other
+// claim here to.
+describe('listJobsForOrganization (JOB-2)', () => {
+  it("lists the caller's own organization's jobs, not another organization's", () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(orgA, { kind: 'a', payload: {}, maxAttempts: 1 }, testDb.db)
+    jobs.enqueueJob(orgB, { kind: 'b', payload: {}, maxAttempts: 1 }, testDb.db)
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?.kind).toBe('a')
+  })
+
+  // This is JOB-2's own defect, proved at the repo layer: a job that
+  // exhausted its attempts is never deleted (`markJobFailed` never removes
+  // the row), and this listing is what actually surfaces it — with the
+  // reason it stopped and how many attempts it took, not merely "it is
+  // still in the table somewhere."
+  it('a permanently failed job appears with its own error and attempt count', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'e2e-worker', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'e2e-worker', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+
+  // Newest *activity* first, not newest *created* first — a job that was
+  // enqueued first but updated most recently (a retry, a completion) sorts
+  // above one enqueued after it but never touched since.
+  //
+  // Fake timers so the three writes below land in different milliseconds —
+  // without this, `updatedAt` (and `createdAt`, its own tiebreaker) can tie
+  // on a fast machine, and which row `listJobsForOrganization` returns first
+  // among ties is not guaranteed (the same caveat
+  // `membership-invitations.test.ts`'s own "lists invitations newest first"
+  // case already documents, and the same fix). A flaky run of this exact
+  // test (`AssertionError: expected 'dd06e749-…' to be 'f307bce5-…'`) is
+  // what found the gap — this file's own module comment already holds every
+  // claim here to "assert against the database", and an assertion that only
+  // sometimes holds against the real database is not that.
+  it('orders by most recently updated, not by creation order', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    vi.useFakeTimers()
+    let older: jobs.Job
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+      older = jobs.enqueueJob(
+        orgA,
+        { kind: 'older', payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.001Z'))
+      jobs.enqueueJob(
+        orgA,
+        { kind: 'newer', payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+
+      // Touch the older job after the newer one was created — its own
+      // `updatedAt` now leads.
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.002Z'))
+      const claimed = jobs.claimNextJob(
+        ['older'],
+        { owner: 'worker-1', leaseMs: 60_000 },
+        testDb.db
+      )
+      if (!claimed) throw new Error('expected a claim')
+      jobs.completeJob(
+        orgA,
+        claimed.id,
+        { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+        testDb.db
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result[0]?.id).toBe(older.id)
+  })
+
+  // A genuine tie, not merely an unlucky one — a batch enqueue issues
+  // several `enqueueJob` calls back to back, and with the clock frozen here
+  // every one of them shares the same `updatedAt` *and* `createdAt`. `id`
+  // ascending is the third tiebreaker this repository adds for exactly this
+  // (this file's own doc comment on `listJobsForOrganization`) — proved by
+  // calling the listing twice against the same, untouched rows and checking
+  // the order does not move between calls, which is the actual symptom an
+  // unstable tie produces on a screen a caller polls (`pages/Jobs.tsx`'s own
+  // "Refresh").
+  it('a genuine tie on updatedAt and createdAt still orders deterministically, by id', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    vi.useFakeTimers()
+    let seeded: jobs.Job[]
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+      seeded = [
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'a', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'b', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'c', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+      ]
+    } finally {
+      vi.useRealTimers()
+    }
+    // Every row above shares the same `updatedAt`/`createdAt` — the tie
+    // this test exists to prove is real, not merely asserted.
+    expect(new Set(seeded.map((job) => job.updatedAt)).size).toBe(1)
+    expect(new Set(seeded.map((job) => job.createdAt)).size).toBe(1)
+
+    const expectedOrder = [...seeded].sort((a, b) => (a.id < b.id ? -1 : 1))
+    const first = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+    const second = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(first.map((job) => job.id)).toEqual(expectedOrder.map((j) => j.id))
+    expect(second.map((job) => job.id)).toEqual(first.map((job) => job.id))
+  })
+
+  it('is bounded by limit', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    for (let i = 0; i < 5; i++) {
+      jobs.enqueueJob(
+        orgA,
+        { kind: `k${i}`, payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+    }
+
+    expect(jobs.listJobsForOrganization(orgA, 3, testDb.db)).toHaveLength(3)
   })
 })
 

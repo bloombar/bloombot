@@ -10,16 +10,29 @@ import {
   closeDatabase,
   openDatabase,
   schema,
+  signInTokens,
   type Database,
 } from '@bloombot/db'
 
+import { hashSecret, generateSecret } from '../src/secrets.js'
 import {
   consumeSignInToken,
   issueSignInToken,
+  updateSignInTokenDestination,
   DEFAULT_TOKEN_TTL_MS,
   MAX_TOKEN_TTL_MS,
 } from '../src/tokens.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
+
+// AUTH-6 rework, cheap-fix — two adversarial values `apps/web/tests/app.test.tsx`
+// asserts against too, both resolving *off* origin despite looking like a
+// path: `//evil.example` is protocol-relative (a browser treats it exactly
+// like `https://evil.example`), and `/\evil.example` is the identical trick
+// through a backslash some URL parsers still normalize to a second slash.
+// Shared between the two files deliberately, not two independently invented
+// examples — the point is that both of `isSameOriginPath`'s copies
+// (`tokens.ts`'s own, and `App.tsx`'s duplicate) refuse the *same* inputs.
+const OFF_ORIGIN_DESTINATIONS = ['//evil.example', '/\\evil.example']
 
 let testDb: TestDatabase
 
@@ -49,6 +62,28 @@ describe('issueSignInToken', () => {
     expect(() => issueSignInToken('not-an-email', testDb.db)).toThrow()
     expect(testDb.db.select().from(schema.signInTokens).all()).toHaveLength(0)
   })
+
+  // AUTH-6 rework, cheap-fix — pins this function's own throw directly,
+  // rather than only through `apps/api`'s route-level `zod` schema (which
+  // refuses the request before this function ever runs, so it cannot prove
+  // this defence-in-depth layer does anything on its own). Fails without the
+  // fix if this throw is ever removed and nothing upstream catches the gap.
+  it.each(OFF_ORIGIN_DESTINATIONS)(
+    'rejects a destination that is not a same-origin path (%s), writing nothing',
+    (destination) => {
+      testDb = createTestDatabase()
+
+      expect(() =>
+        issueSignInToken(
+          'student@example.edu',
+          testDb.db,
+          DEFAULT_TOKEN_TTL_MS,
+          destination
+        )
+      ).toThrow()
+      expect(testDb.db.select().from(schema.signInTokens).all()).toHaveLength(0)
+    }
+  )
 
   it('defaults to a fifteen-minute expiry', () => {
     testDb = createTestDatabase()
@@ -174,4 +209,85 @@ describe('consumeSignInToken (AUTH-1 replay)', () => {
 
     closeDatabase(connectionB)
   })
+
+  // AUTH-6 rework, cheap-fix — pins the redemption-time re-check directly.
+  // `issueSignInToken` already refuses to store a bad `destination`, so the
+  // only way to exercise this defence-in-depth layer at all is to write one
+  // straight through `@bloombot/db`'s own repo (bypassing `issueSignInToken`
+  // entirely) — simulating a row this package's own write path did not
+  // produce, the one case `consumeSignInToken`'s own "defended, not assumed"
+  // comment is actually defending against. Fails without the fix if this
+  // re-check is ever removed and `redeemSignInLink` starts handing an
+  // off-origin value straight to a browser.
+  it.each(OFF_ORIGIN_DESTINATIONS)(
+    'strips an off-origin destination (%s) back to undefined on redemption, even if the row somehow carried one',
+    (destination) => {
+      testDb = createTestDatabase()
+      const secret = generateSecret()
+      signInTokens.createSignInToken(
+        {
+          email: 'student@example.edu',
+          tokenHash: hashSecret(secret),
+          expiresAt: Date.now() + 60_000,
+          destination,
+        },
+        testDb.db
+      )
+
+      const consumed = consumeSignInToken(secret, testDb.db)
+
+      expect(consumed?.email).toBe('student@example.edu')
+      expect(consumed?.destination).toBeUndefined()
+    }
+  )
+})
+
+describe('updateSignInTokenDestination (AUTH-6 rework, must-fix 2)', () => {
+  it('updates the destination of the active token for this address, without issuing a new one', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken(
+      'student@example.edu',
+      testDb.db,
+      DEFAULT_TOKEN_TTL_MS,
+      '/connect/org-1'
+    )
+
+    const updated = updateSignInTokenDestination(
+      'student@example.edu',
+      '/join/secret-abc',
+      testDb.db
+    )
+
+    expect(updated).toBe(true)
+    // Still exactly one row — a second, competing token was not issued.
+    expect(testDb.db.select().from(schema.signInTokens).all()).toHaveLength(1)
+    // The *same*, already-issued token now redeems to the new destination.
+    expect(consumeSignInToken(token, testDb.db)?.destination).toBe(
+      '/join/secret-abc'
+    )
+  })
+
+  it.each(OFF_ORIGIN_DESTINATIONS)(
+    'rejects a destination that is not a same-origin path (%s), leaving the outstanding token unchanged',
+    (destination) => {
+      testDb = createTestDatabase()
+      const { token } = issueSignInToken(
+        'student@example.edu',
+        testDb.db,
+        DEFAULT_TOKEN_TTL_MS,
+        '/connect/org-1'
+      )
+
+      expect(() =>
+        updateSignInTokenDestination(
+          'student@example.edu',
+          destination,
+          testDb.db
+        )
+      ).toThrow()
+      expect(consumeSignInToken(token, testDb.db)?.destination).toBe(
+        '/connect/org-1'
+      )
+    }
+  )
 })

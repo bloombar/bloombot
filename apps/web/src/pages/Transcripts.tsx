@@ -9,6 +9,19 @@
  * `dispatchAction` (`api/client.ts`'s own module comment on
  * `readTranscript`/`exportTranscript`), the one write path every other
  * screen in this panel already uses.
+ *
+ * **ADMIN-2's own read path, owner-only.** An audit
+ * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found the
+ * transcript-access audit trail this screen's own reads and exports write
+ * to (`transcripts.read`/`.export`'s own module comment) had no read path
+ * anywhere — `isOwner` (a prop, computed once in `pages/Shell.tsx` from the
+ * caller's own membership, the same shape `pages/Usage.tsx`/`components/Team.tsx`
+ * already take) decides whether the "Access log" section below even fetches
+ * or renders, the same "withhold the control rather than offer one every
+ * click through which would refuse" discipline those two already hold
+ * themselves to — `transcripts.listAccessLog`'s own `execute` is what
+ * actually enforces the restriction (`actions/transcripts.ts`'s own module
+ * comment on why an owner, not any membership).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -18,6 +31,7 @@ import {
   exportTranscript,
   listCourses,
   listProjects,
+  listTranscriptAccessLog,
   listTranscriptExports,
   listTranscriptStudents,
   readTranscript,
@@ -27,6 +41,7 @@ import {
 import type {
   CourseSummary,
   Project,
+  TranscriptAccessLogEntry,
   TranscriptEntry,
   TranscriptExport,
   TranscriptStudent,
@@ -44,6 +59,8 @@ import {
 
 export interface TranscriptsScreenProps {
   organizationId: string
+  /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the Access log section is withheld rather than merely disabled for anyone else. */
+  isOwner: boolean
 }
 
 /** A `<input type="date">` value's own start-of-day/end-of-day boundary, in epoch milliseconds — `undefined` for an empty picker, so an unset filter is genuinely omitted rather than sent as `NaN`. */
@@ -93,7 +110,15 @@ function exportStatusLabel(status: TranscriptExport['status']): string {
   }
 }
 
-export function Transcripts({ organizationId }: TranscriptsScreenProps) {
+/** ADMIN-2 — a plain past-tense verb for the audit row's own `kind`, matching `entries`' own `entry.direction === 'from_person' ? 'asked' : 'answered'` convention just below. */
+function accessLogVerb(kind: TranscriptAccessLogEntry['kind']): string {
+  return kind === 'export' ? 'exported' : 'read'
+}
+
+export function Transcripts({
+  organizationId,
+  isOwner,
+}: TranscriptsScreenProps) {
   const [projects, setProjects] = useState<Project[] | undefined>(undefined)
   const [projectId, setProjectId] = useState('')
   const [courses, setCourses] = useState<CourseSummary[] | undefined>(undefined)
@@ -108,6 +133,11 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
     undefined
   )
   const [exports, setExports] = useState<TranscriptExport[]>([])
+  // ADMIN-2 — this file's own module comment. Only ever fetched for an
+  // owner (the effect below skips the request entirely otherwise); stays
+  // `[]` for anyone else, so the section renders nothing rather than an
+  // empty-looking one nobody asked to see.
+  const [accessLog, setAccessLog] = useState<TranscriptAccessLogEntry[]>([])
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -150,6 +180,32 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
     )
   }, [organizationId, courseId])
 
+  // ADMIN-2 — this file's own module comment: fetched only for an owner
+  // (`transcripts.listAccessLog` would otherwise refuse it, the same
+  // "withhold rather than offer a click that would refuse" discipline
+  // `pages/Usage.tsx`'s own `isOwner` gate already takes). Re-run after
+  // `runSearch`/`handleExport` below, not only on a course switch — the
+  // read (or export) this very screen just made is itself an ADMIN-2 event,
+  // and an owner reading their own access log should see it without a
+  // manual refresh.
+  const refreshAccessLog = useCallback(() => {
+    if (!isOwner || !courseId) {
+      setAccessLog([])
+      return
+    }
+    listTranscriptAccessLog(organizationId, courseId).then(
+      (result) => setAccessLog(result),
+      (caught: unknown) => {
+        if (caught instanceof ApiError) setError(caught)
+        else throw caught
+      }
+    )
+  }, [organizationId, courseId, isOwner])
+
+  useEffect(() => {
+    refreshAccessLog()
+  }, [refreshAccessLog])
+
   const currentFilters = useCallback((): TranscriptFilters => {
     const startAt = dayStart(startDate)
     const endAt = dayEnd(endDate)
@@ -171,13 +227,17 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
         currentFilters()
       )
       setEntries(result.entries)
+      // This read is itself an ADMIN-2 event — an owner watching the
+      // Access log section sees it without a manual refresh (this file's
+      // own module comment on `refreshAccessLog`).
+      refreshAccessLog()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
     } finally {
       setLoading(false)
     }
-  }, [organizationId, courseId, currentFilters])
+  }, [organizationId, courseId, currentFilters, refreshAccessLog])
 
   // Deliberately keyed on `organizationId`/`courseId` alone, not on
   // `runSearch` (which itself closes over the current filters): a filter
@@ -447,6 +507,41 @@ export function Transcripts({ organizationId }: TranscriptsScreenProps) {
                   )
                 })}
               </ul>
+            </div>
+          )}
+
+          {/* ADMIN-2 — this file's own module comment: withheld entirely
+              for anyone but an owner, not merely rendered empty. */}
+          {isOwner && (
+            <div className="flex flex-col gap-2">
+              <h2 className="text-sm font-semibold text-neutral-900">
+                Access log
+              </h2>
+              {accessLog.length === 0 ? (
+                <p className="text-sm text-neutral-500">
+                  No reads recorded yet.
+                </p>
+              ) : (
+                <ul
+                  className="flex flex-col gap-2"
+                  data-testid="transcript-access-log"
+                >
+                  {accessLog.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3 text-xs text-neutral-500"
+                    >
+                      <span>
+                        {entry.actorDisplayName} {accessLogVerb(entry.kind)}{' '}
+                        {entry.personDisplayName ?? 'the whole course'}
+                      </span>
+                      <time dateTime={new Date(entry.createdAt).toISOString()}>
+                        {new Date(entry.createdAt).toLocaleString()}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </>

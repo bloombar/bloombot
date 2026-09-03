@@ -43,7 +43,7 @@
  * attempt.
  */
 
-import { and, asc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { jobs } from '../schema.js'
@@ -371,6 +371,65 @@ export function getJob(
     .from(jobs)
     .where(and(eq(jobs.id, jobId), eq(jobs.organizationId, organizationId)))
     .get()
+}
+
+/**
+ * JOB-2's own "a job that keeps failing is visible", read back — the most
+ * recently updated jobs in this organization's queue, newest activity
+ * first, bounded by `limit`. An audit found this repository had no listing
+ * at all (`docs/ROADMAP.md`'s "Audit — surfaces that were never built"):
+ * `getJob` needs an id the caller already holds, and the panel only ever
+ * held one for a job it dispatched *in the current browser session*
+ * (`RosterImport.tsx`, `ScaffoldButton.tsx`) — so a job that exhausted its
+ * attempts in an earlier session was invisible to everyone, forever, even
+ * though the row itself was never deleted (JOB-2's own "stays visible ...
+ * rather than disappearing" was true at this layer and false everywhere a
+ * person could actually look).
+ *
+ * Ordered by `updatedAt` descending, not `createdAt`: a retry, a terminal
+ * failure or a completion is what an instructor checking in on the queue
+ * cares about seeing first, not merely when a job was first enqueued — a
+ * job stuck retrying for an hour should surface above one that finished
+ * cleanly a minute after being created. `createdAt` descending is the
+ * tiebreaker for two jobs updated within the same millisecond —
+ * deterministic, not itself meaningful, the same role a tiebreaker plays
+ * everywhere else this codebase adds one for an `ORDER BY` that can
+ * otherwise tie (`schema.ts`'s own comments on
+ * `transcript_access_log.sequence`/`transcript_exports.sequence`); unlike
+ * those two this adds no new column for it — `createdAt` already exists on
+ * every row, and a stable order does not need to be a *meaningful* one,
+ * only a deterministic one, for a bounded, unpaginated listing like this.
+ *
+ * `id` ascending is a third, final tiebreaker — for two jobs that tie on
+ * *both* `updatedAt` and `createdAt`, which a batch enqueue genuinely
+ * produces (this file's own `enqueueJob` reads the clock once per call, so
+ * several calls issued back to back inside the same millisecond share both
+ * columns exactly). SQLite gives no guaranteed order among rows tied on
+ * every `ORDER BY` column, so without this a caller polling this same query
+ * twice — the Jobs tab's own "Refresh" button, worked example — could see a
+ * tied pair swap places between two reads with no activity in between,
+ * which reads as the queue lying about what changed. `id` itself carries no
+ * meaning (a fresh UUID per `enqueueJob` call), the same "deterministic, not
+ * meaningful" role `createdAt` above already plays.
+ *
+ * `limit` is the caller's own bound, not read from a platform default here
+ * — the same "no default value is invented" reasoning `maxAttempts`'s own
+ * comment (`NewJob`, above) already applies to a value like this;
+ * `@bloombot/actions`'s `jobs.list` is what actually clamps it (that
+ * action's own module comment has the bound, and why one exists at all).
+ */
+export function listJobsForOrganization(
+  organizationId: string,
+  limit: number,
+  db: Database
+): Job[] {
+  return db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.organizationId, organizationId))
+    .orderBy(desc(jobs.updatedAt), desc(jobs.createdAt), asc(jobs.id))
+    .limit(limit)
+    .all()
 }
 
 /**

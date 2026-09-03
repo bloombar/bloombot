@@ -28,6 +28,8 @@ export interface NewSignInToken {
   /** SHA-256 hash of the token; see `@bloombot/auth`'s `tokens.ts`. */
   tokenHash: string
   expiresAt: number
+  /** AUTH-6 — the same-origin path to return to once this token is redeemed; see `schema.ts`'s own comment on the column. `null`/omitted for an ordinary sign-in with nowhere in particular to return to. */
+  destination?: string | null
 }
 
 /** Issue (insert) a new sign-in token row. */
@@ -42,6 +44,7 @@ export function createSignInToken(
       email: input.email.toLowerCase(),
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,
+      destination: input.destination ?? null,
       createdAt: Date.now(),
     })
     .returning()
@@ -114,6 +117,47 @@ export function hasActiveSignInToken(
     )
     .get()
   return row !== undefined
+}
+
+/**
+ * AUTH-6 rework, must-fix 2 — update the `destination` of whichever active
+ * (unexpired, unused) token row exists for `email`, without issuing a new
+ * one. `requestSignInLink`'s own anti-flood guard (`hasActiveSignInToken`,
+ * above) declines a *second* token/email while an earlier one is still
+ * live — correct for the flood case, but it used to also silently drop a
+ * `destination` a repeat request carried, since nothing updated the
+ * already-issued row to match. The already-emailed link's own token value
+ * never changes here — only what `sign_in_tokens.destination` the eventual
+ * redemption of that same, unchanged token reads back — so this costs
+ * neither a new row nor a new email, the property the anti-flood guard
+ * exists to hold onto.
+ *
+ * Returns whether a row was actually updated — `false` when nothing is
+ * currently outstanding for this address, the caller's own signal that
+ * there was nothing here to update (`requestSignInLink` only ever calls this
+ * from inside its own "an active token already exists" branch, so `false`
+ * should not occur in practice, but is not assumed away — the same
+ * "defended, not assumed" discipline `consumeSignInToken`'s own re-validated
+ * `destination` already holds itself to, `@bloombot/auth`'s `tokens.ts`).
+ */
+export function updateSignInTokenDestination(
+  email: string,
+  destination: string,
+  now: number,
+  db: Executor
+): boolean {
+  const result = db
+    .update(signInTokens)
+    .set({ destination })
+    .where(
+      and(
+        eq(signInTokens.email, email.toLowerCase()),
+        isNull(signInTokens.usedAt),
+        gt(signInTokens.expiresAt, now)
+      )
+    )
+    .run()
+  return result.changes > 0
 }
 
 /**

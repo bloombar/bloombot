@@ -233,11 +233,14 @@ export function listPeopleWithTranscript(
 
 /**
  * ADMIN-2's audit trail, read back — every access recorded for one course,
- * newest first. Not itself required by any screen this slice builds (the
- * brief asks that a read be *recorded*, not that the log be displayed
- * anywhere yet), but a write-only table nobody can ever read is not
- * meaningfully an audit trail — this is what a future admin screen, or a
- * test proving ADMIN-2 actually happened, reads through.
+ * newest first. An audit (`docs/ROADMAP.md`'s "Audit — surfaces that were
+ * never built") found this function had zero callers outside a test — the
+ * only other reference in the repo was a comment in `schema.ts` — so
+ * ADMIN-2's "written to an audit trail" held while its "an institution has
+ * to be able to account for" did not: nothing in the panel, `/admin` or MCP
+ * ever read a row back. `@bloombot/actions`'s `transcripts.listAccessLog`
+ * is the caller that closes that gap — see that action's own module
+ * comment for who may call it, and why.
  */
 export function listAccessLogForCourse(
   organizationId: string,

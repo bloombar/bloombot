@@ -67,6 +67,17 @@ describe('describeApiError (WEB-5)', () => {
     expect(headline).toMatch(/did not match/i)
   })
 
+  // ENRL-10 — named plainly, the same "no oracle" shape `join_link_not_found`
+  // already gives ENRL-4: never issued, revoked, expired, already-redeemed,
+  // wrong-account and already-a-member are all one code, one message.
+  it('membership_invitation_not_found names the invitation, not the reason', () => {
+    const error = new ApiError(404, {
+      error: 'membership_invitation_not_found',
+    })
+    const { headline } = describeApiError(error)
+    expect(headline).toMatch(/invitation/i)
+  })
+
   it('an unexpected failure (internal_error) discloses nothing beyond a generic message', () => {
     const error = new ApiError(500, { error: 'internal_error' })
     const { headline, details } = describeApiError(error)

@@ -24,32 +24,113 @@
  * every branch below actually renders — never `activeTab` directly — so a
  * tab selection left over from a previously active membership organization
  * can never leak a screen the server would refuse in this one.
+ *
+ * TEN-8/WEB-4: the Discord tab's own install state has two sources, not
+ * one. `justInstalled` is the *immediate* signal — `App.tsx` sets it only
+ * once `pages/DiscordCallback.tsx` reports a bound server in this same
+ * browser session, so it is known synchronously, before any request, and
+ * showing it right away is what keeps a fresh install from flashing
+ * "Install" while `discordBindingState` below is still in flight. But it is
+ * silent about everything else — a reload, a second device, an install from
+ * a previous session — which is the defect an audit found (see
+ * `docs/ROADMAP.md`'s "Audit — surfaces that were never built"):
+ * `justInstalled` alone made "already installed" indistinguishable from
+ * "not installed" for anyone who did not just install in this tab.
+ * `discordBindingState` fetches `discordServers.list` (`api/client.ts#listDiscordServers`)
+ * on mount and on every organization switch, and — once it resolves — is
+ * the only thing either `installedServerId` or `handleRemove` below trust;
+ * `justInstalled` is consulted only while that fetch is still `'loading'`.
+ * That `'loading'` state recurs on every organization switch, not only the
+ * first render, so `justInstalled`'s stand-in has two independent ways to go
+ * stale, not one — a same-session `discordServers.remove` (guarded by
+ * `removedServerId`, its own comment below) and a switch away from and back
+ * to a different organization mid-fetch (guarded by `discordFetchId`, its
+ * own comment below, for the response race; `removedServerId` again for
+ * what the `'loading'` window itself renders).
+ *
+ * COST-3/COST-4: a fifth tab, Usage (`pages/Usage.tsx`) — an audit found
+ * neither an instructor's own read of their courses' spend nor a way to
+ * set the organization's spending cap ever reached this panel
+ * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built"), the same
+ * class of gap TEN-8/WEB-4 above were found to have. `isOwner`, computed
+ * once below from `account.memberships`, is what `Usage.tsx` uses to
+ * decide whether it renders the cap-setting form at all — the server's own
+ * check (`costLedger.setSpendingCap`, restricted to an owner) is what
+ * actually enforces this; this only decides what the panel offers, the
+ * same division `isMember` already draws for the other four tabs.
+ *
+ * ENRL-5: a sixth tab, Team (`components/Team.tsx`) — the same class of gap
+ * again: `memberships.grant` had existed since TEN-1's own slice with no
+ * caller outside a test, so an owner had no actual way to add a second
+ * instructor or a teaching assistant (`docs/ROADMAP.md`'s own audit note).
+ * `isOwner` is reused here exactly as `Usage.tsx` already takes it — the
+ * grant form is owner-only, the same reasoning, the same server-side
+ * enforcement doing the real work.
+ *
+ * JOB-2: a seventh tab, Jobs (`pages/Jobs.tsx`) — the same class of gap a
+ * third time: `jobs.get` needs an id the caller already holds, and every
+ * screen that reaches it only ever holds one for a job dispatched in the
+ * current browser session, so a job that failed permanently in an earlier
+ * one was invisible to everyone, forever (`docs/ROADMAP.md`'s own audit
+ * note; `pages/Jobs.tsx`'s own module comment has the full account). Open
+ * to any member, not only an owner — `isOwner` is not threaded through
+ * here, unlike Usage/Team, because `jobs.list` itself carries no owner-only
+ * restriction (that action's own descriptor).
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import { ApiError, dispatchAction, signOut } from '../api/client.js'
-import type { AccountSummary } from '../api/types.js'
+import {
+  ApiError,
+  dispatchAction,
+  listDiscordServers,
+  signOut,
+} from '../api/client.js'
+import type {
+  AccountSummary,
+  DiscordServerBindingSummary,
+} from '../api/types.js'
 import { AppShell } from '../components/AppShell.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
+import { Team } from '../components/Team.js'
 import {
   NavigationGuardProvider,
   useNavigationGuard,
 } from '../hooks/navigation-guard.js'
 import { SignOutIcon } from '../icons.js'
 import { Chat } from './Chat.js'
+import { Jobs } from './Jobs.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
+import { Usage } from './Usage.js'
 
 export interface ShellProps {
   account: AccountSummary
-  /** Set by `App.tsx` once `pages/DiscordCallback.tsx` reports a bound server — carries across the round trip through Discord's own consent screen (see that page's module comment). `undefined` until an install completes in this browser session; there is no route today to look up an organization's existing bindings (see `docs/DECISIONS.md`). */
+  /** Set by `App.tsx` once `pages/DiscordCallback.tsx` reports a bound server — carries across the round trip through Discord's own consent screen (see that page's module comment). `undefined` until an install completes in this browser session — this is only the *immediate* signal; `discordBindingState` (this file's own module comment, TEN-8) is what the panel actually trusts once it has fetched, via `api/client.ts#listDiscordServers`, so a reload or a second device shows the truth too. */
   justInstalled?: { organizationId: string; serverId: string }
+  /** WEB-25 — set by `App.tsx` once `pages/JoinLink.tsx` reports a redeemed course join link (fresh or already-enrolled), the same "carried across this one remount" shape `justInstalled` (above) already uses for the Discord install round trip. Prefers this organization for the initial active one and opens straight to the Chat tab with this course already selected (`activeOrganizationId`/`activeTab`'s own initializers, and the `Chat` render, below) — a redeemer's whole point in following the link was to ask this exact course something, not to land on Projects and have to find it themselves. */
+  joinedCourse?: {
+    organizationId: string
+    courseId: string
+    alreadyEnrolled: boolean
+  }
   onSignedOut: () => void
 }
+
+/**
+ * TEN-8: the three shapes fetching an organization's Discord binding can be
+ * in, mirroring the loading/error handling this panel already gives
+ * `Projects.tsx` (`refresh`'s own `refreshId` there) — `'loading'` must
+ * never render as "not installed" (that is the exact bug being fixed, one
+ * request away), and a failed lookup must say so rather than guess.
+ */
+type DiscordBindingState =
+  | { status: 'loading' }
+  | { status: 'ready'; binding: DiscordServerBindingSummary | undefined }
+  | { status: 'error'; error: ApiError }
 
 /**
  * WEB-16: every navigation this shell itself initiates — the nav row, the
@@ -69,7 +150,12 @@ export function Shell(props: ShellProps) {
   )
 }
 
-function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
+function ShellInner({
+  account,
+  justInstalled,
+  joinedCourse,
+  onSignedOut,
+}: ShellProps) {
   const { guardedNavigate } = useNavigationGuard()
   // WEB-3/WEB-4 — an install navigates the whole browser away to Discord and
   // back (`components/InstallButton.tsx`'s own module comment), so the
@@ -84,7 +170,26 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // organization the install belonged to, so `installedServerId` below
   // actually matches on the first render rather than only after a manual
   // switch.
+  //
+  // WEB-25 — `joinedCourse` is checked first: a course join link admits a
+  // redeemer as a *connected person*, not necessarily a member (LINK-10), so
+  // this also checks `connectedOrganizations`, unlike `justInstalled`'s own
+  // membership-only check (an install can only ever target an organization
+  // this account already administers).
   const [activeOrganizationId, setActiveOrganizationId] = useState(() => {
+    if (
+      joinedCourse &&
+      (account.memberships.some(
+        (membership) =>
+          membership.organizationId === joinedCourse.organizationId
+      ) ||
+        account.connectedOrganizations.some(
+          (connection) =>
+            connection.organizationId === joinedCourse.organizationId
+        ))
+    ) {
+      return joinedCourse.organizationId
+    }
     if (
       justInstalled &&
       account.memberships.some(
@@ -96,9 +201,36 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
     }
     return account.memberships[0]?.organizationId ?? ''
   })
+  // TEN-8: the server-truth read this file's own module comment describes —
+  // starts `'loading'` on every mount, never defaults to "no binding," so a
+  // render before the first `listDiscordServers` response cannot be
+  // mistaken for "not installed."
+  const [discordBindingState, setDiscordBindingState] =
+    useState<DiscordBindingState>({ status: 'loading' })
+  // TEN-8 rework (must-fix 1) — the `justInstalled` fallback below is
+  // consulted on *every* `'loading'` state, not only the first: an
+  // organization switch away and back re-runs the effect below, which sets
+  // `discordBindingState` back to `'loading'` while the refetch is in
+  // flight, and without this record `justInstalled` would answer for that
+  // window too — resurrecting a binding this same session already removed,
+  // with a live Remove button that then 404s (`discordServers.remove`'s own
+  // policy correctly refuses a binding that is no longer active). Recorded
+  // once, in `handleRemove`, and never cleared — `justInstalled` itself
+  // never changes after mount (it is a prop, not state this component
+  // updates), so once its own server id has been removed this session it
+  // must never be offered again, from *any* organization switch, not only
+  // the one immediately after removing it.
   const [removedServerId, setRemovedServerId] = useState<string | undefined>(
     undefined
   )
+  // Tags each `listDiscordServers` call, the same `refreshId` shape
+  // `pages/Projects.tsx#refresh` already uses — an organization switch
+  // (re-running the effect below) or a successful `handleRemove` can each
+  // make an earlier, still-in-flight lookup stale; only the most recent
+  // request is allowed to update state, so a slow response for the
+  // *previous* organization (or for a binding this same click just removed)
+  // cannot resurrect it.
+  const discordFetchId = useRef(0)
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [signingOut, setSigningOut] = useState(false)
@@ -108,9 +240,12 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // mocks, added there rather than left implicit by defaulting elsewhere).
   // WEB-14: also this shell's own "home" — the header's home control
   // (`AppShell.tsx`) returns here.
+  //
+  // WEB-25 — `joinedCourse` overrides that default to `'chat'`: a redeemer
+  // followed this link to ask a course something, not to see Projects.
   const [activeTab, setActiveTab] = useState<
-    'discord' | 'projects' | 'chat' | 'transcripts'
-  >('projects')
+    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team' | 'jobs'
+  >(() => (joinedCourse ? 'chat' : 'projects'))
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
   // same thing as a connected person (LINK-3's proof) — a student who has
@@ -128,6 +263,15 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   const isMember = account.memberships.some(
     (membership) => membership.organizationId === activeOrganizationId
   )
+  // COST-3: whether the caller's own membership *here* is `'owner'` — this
+  // file's own module comment has why `Usage.tsx` uses this to decide
+  // whether it offers the cap-setting form at all, rather than only the
+  // read.
+  const isOwner = account.memberships.some(
+    (membership) =>
+      membership.organizationId === activeOrganizationId &&
+      membership.role === 'owner'
+  )
   // Chat is the only screen a connected-but-not-a-member account can reach
   // in this organization — forced here, rather than merely left out of
   // `navItems` below, so a stale `activeTab` (this shell's own state,
@@ -138,11 +282,56 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
   // where the server would refuse every one of them.
   const effectiveTab = isMember ? activeTab : 'chat'
 
+  // TEN-8: read the organization's actual Discord binding on mount and on
+  // every organization switch — `isMember` guards it the same way it guards
+  // `navItems` below, since a caller with no membership would only have
+  // `discordServers.list` refused (`routes/actions.ts`) and never sees the
+  // Discord tab to render a result for anyway. Not scoped to `effectiveTab
+  // === 'discord'`: fetching once per organization, before the tab is even
+  // opened, is what keeps switching *into* Discord from itself needing a
+  // round trip on top of the mount's.
+  useEffect(() => {
+    if (!isMember) {
+      setDiscordBindingState({ status: 'ready', binding: undefined })
+      return
+    }
+    const fetchId = ++discordFetchId.current
+    setDiscordBindingState({ status: 'loading' })
+    listDiscordServers(activeOrganizationId).then(
+      (bindings) => {
+        if (fetchId !== discordFetchId.current) return
+        setDiscordBindingState({
+          status: 'ready',
+          binding: bindings.find((binding) => binding.removedAt === null),
+        })
+      },
+      (caught: unknown) => {
+        if (fetchId !== discordFetchId.current) return
+        if (caught instanceof ApiError) {
+          setDiscordBindingState({ status: 'error', error: caught })
+        } else throw caught
+      }
+    )
+  }, [activeOrganizationId, isMember])
+
+  // `discordBindingState` is the source of truth once it has resolved; while
+  // it is still `'loading'`, `justInstalled` — known synchronously, no
+  // request required — stands in for it, but only for the organization it
+  // actually names (this file's own module comment on why) and only when
+  // `handleRemove` has not already removed that exact server this session
+  // (`removedServerId`'s own comment — a `'loading'` state can be *any*
+  // organization switch, not only the first render, so this must hold every
+  // time, not once). Once the fetch resolves (`'ready'` or `'error'`),
+  // `justInstalled` is not consulted again: a stale same-session signal must
+  // never outlive the server-truth read that supersedes it.
   const installedServerId =
-    justInstalled?.organizationId === activeOrganizationId &&
-    justInstalled.serverId !== removedServerId
-      ? justInstalled.serverId
-      : undefined
+    discordBindingState.status === 'ready'
+      ? discordBindingState.binding?.serverId
+      : discordBindingState.status === 'loading' &&
+          justInstalled?.organizationId === activeOrganizationId &&
+          justInstalled.serverId !== removedServerId
+        ? justInstalled.serverId
+        : undefined
 
   const handleRemove = async () => {
     if (!installedServerId) return
@@ -155,6 +344,15 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
       await dispatchAction(activeOrganizationId, 'discordServers.remove', {
         serverId: installedServerId,
       })
+      // Invalidates any lookup still in flight for this organization — see
+      // `discordFetchId`'s own comment — so a slow `listDiscordServers`
+      // response that started before this remove cannot land afterward and
+      // show the just-removed binding as installed again.
+      discordFetchId.current++
+      setDiscordBindingState({ status: 'ready', binding: undefined })
+      // Records exactly which server id this session just removed —
+      // `removedServerId`'s own comment on why a later organization switch,
+      // not only this immediate render, needs to keep seeing it.
       setRemovedServerId(installedServerId)
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
@@ -232,6 +430,24 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
                   guardedNavigate(() => setActiveTab('transcripts')),
                 active: effectiveTab === 'transcripts',
               },
+              {
+                key: 'usage',
+                label: 'Usage',
+                onClick: () => guardedNavigate(() => setActiveTab('usage')),
+                active: effectiveTab === 'usage',
+              },
+              {
+                key: 'team',
+                label: 'Team',
+                onClick: () => guardedNavigate(() => setActiveTab('team')),
+                active: effectiveTab === 'team',
+              },
+              {
+                key: 'jobs',
+                label: 'Jobs',
+                onClick: () => guardedNavigate(() => setActiveTab('jobs')),
+                active: effectiveTab === 'jobs',
+              },
             ]
           : [chatNavItem]
       }
@@ -268,12 +484,30 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
           <h1 className="text-page-title font-semibold text-neutral-900">
             Discord
           </h1>
-          <InstallButton
-            organizationId={activeOrganizationId}
-            {...(installedServerId ? { installedServerId } : {})}
-            onRemove={() => void handleRemove()}
-            removing={removing}
-          />
+          {discordBindingState.status === 'loading' &&
+          installedServerId === undefined ? (
+            // TEN-8: the lookup is in flight and `justInstalled` did not
+            // already answer for this organization — rendering
+            // `InstallButton` here would default to "Install," the exact
+            // bug being fixed, only momentary. `role="status"` matches
+            // `Projects.tsx`'s own loading text (`pages/Projects.tsx`), the
+            // same pattern this panel already uses for an async read.
+            <p role="status" className="text-sm text-neutral-500">
+              Loading…
+            </p>
+          ) : discordBindingState.status === 'error' ? (
+            // TEN-8: say the lookup failed rather than silently falling
+            // back to "not installed," which would offer Install for a
+            // server that may well still be bound.
+            <ErrorMessage error={discordBindingState.error} />
+          ) : (
+            <InstallButton
+              organizationId={activeOrganizationId}
+              {...(installedServerId ? { installedServerId } : {})}
+              onRemove={() => void handleRemove()}
+              removing={removing}
+            />
+          )}
           {error && <ErrorMessage error={error} />}
         </div>
       ) : effectiveTab === 'chat' ? (
@@ -281,16 +515,69 @@ function ShellInner({ account, justInstalled, onSignedOut }: ShellProps) {
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
         // already holds itself to — a course selected in the previous
         // organization must not linger once a different one is active.
+        //
+        // WEB-25 — `joinedCourse` is only ever passed through when it names
+        // *this* active organization: a redeemer who has since switched to a
+        // different one, then back, sees the same confirmation again on
+        // return (this component holds no separate "already shown" flag),
+        // which is accurate, if not the tersest possible UI — see this
+        // slice's own report for why that tradeoff was left as is.
         <Chat
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          {...(joinedCourse &&
+          joinedCourse.organizationId === activeOrganizationId
+            ? {
+                initialCourseId: joinedCourse.courseId,
+                joinConfirmation: {
+                  alreadyEnrolled: joinedCourse.alreadyEnrolled,
+                },
+              }
+            : {})}
         />
       ) : effectiveTab === 'transcripts' ? (
         // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning
         // `Chat`/`ProjectsPanel` already hold themselves to: a project or
         // course selected in the previous organization must not linger
-        // once a different one is active.
+        // once a different one is active. `isOwner` (ADMIN-2, this file's
+        // own module comment) is the same shape Usage/Team already take,
+        // one level below — this screen decides whether to fetch or render
+        // the Access log section at all.
         <Transcripts
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          isOwner={isOwner}
+        />
+      ) : effectiveTab === 'usage' ? (
+        // COST-3/COST-4 — the same `key={activeOrganizationId}` reasoning
+        // every other tab above already holds itself to, plus `isOwner`
+        // (this file's own module comment) so `Usage.tsx` knows whether to
+        // offer the cap-setting form at all.
+        <Usage
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          isOwner={isOwner}
+        />
+      ) : effectiveTab === 'team' ? (
+        // ENRL-5 — the same `key={activeOrganizationId}` reasoning every
+        // other tab above already holds itself to, plus `isOwner` (this
+        // file's own module comment) so `Team.tsx` knows whether to offer
+        // the grant form at all. `viewerAccountId` (ENRL-11) is what lets
+        // that same screen tell the caller's own row apart from a peer's —
+        // its own module comment has why that distinction decides whether a
+        // revoke control is even offered.
+        <Team
+          key={activeOrganizationId}
+          organizationId={activeOrganizationId}
+          isOwner={isOwner}
+          viewerAccountId={account.id}
+        />
+      ) : effectiveTab === 'jobs' ? (
+        // JOB-2 — the same `key={activeOrganizationId}` reasoning every
+        // other tab above already holds itself to; no `isOwner`, unlike
+        // Usage/Team (this file's own module comment on why `jobs.list`
+        // needs none).
+        <Jobs
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
         />

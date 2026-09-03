@@ -663,4 +663,226 @@ describe('Shell (WEB-3, WEB-4)', () => {
       ).not.toBeInTheDocument()
     })
   })
+
+  // --- TEN-8 rework — coordinator review findings -------------------------
+  //
+  // Two must-fix regressions the first pass introduced, plus three surviving
+  // mutants the coordinator's own probe found: behaviour that happened to be
+  // correct with nothing in this file pinning it there.
+  describe('TEN-8 rework: coordinator review findings', () => {
+    it('must-fix 1: does not resurrect a binding this session already removed when switching organizations away and back', async () => {
+      // Realistic, not merely static: once `discordServers.remove` actually
+      // runs, org-1's own binding stops being active — the same thing a real
+      // `discordServers.list` would report afterward. Without this, the
+      // eventual refetch below would hide the bug this test exists to catch
+      // by coincidentally reporting "not installed" for its own reason.
+      let removed = false
+      listDiscordServers.mockImplementation((organizationId: string) =>
+        Promise.resolve(
+          organizationId === 'org-1' && !removed
+            ? [
+                {
+                  serverId: 'guild-42',
+                  organizationId: 'org-1',
+                  installedByAccountId: 'account-1',
+                  installedAt: Date.now(),
+                  removedAt: null,
+                },
+              ]
+            : []
+        )
+      )
+      dispatchAction.mockImplementation(() => {
+        removed = true
+        return Promise.resolve({ result: undefined })
+      })
+
+      renderWithModal(
+        <Shell
+          account={MULTI_MEMBERSHIP_ACCOUNT}
+          justInstalled={{ organizationId: 'org-1', serverId: 'guild-42' }}
+          onSignedOut={vi.fn()}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+      await screen.findByRole('button', { name: 'Install to Discord' })
+
+      // The reviewer's own repro: switch away, then back — no reload in
+      // between.
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'org-2' },
+      })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'org-1' },
+      })
+
+      // The bug's own window: synchronously after the switch back, before
+      // the refetch resolves, `justInstalled` must not answer for this
+      // server again — `removedServerId` (`pages/Shell.tsx`) is what this
+      // asserts holds, without it this renders "Installed — server
+      // guild-42" with a live Remove button that would then 404.
+      expect(screen.queryByText(/guild-42/)).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Remove' })
+      ).not.toBeInTheDocument()
+
+      // And it settles correctly once the refetch itself resolves too.
+      expect(
+        await screen.findByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
+    })
+
+    it('must-fix 2: refetches the Discord binding on every organization switch, not only on mount', async () => {
+      listDiscordServers.mockImplementation((organizationId: string) =>
+        Promise.resolve(
+          organizationId === 'org-1'
+            ? [
+                {
+                  serverId: 'guild-1',
+                  organizationId: 'org-1',
+                  installedByAccountId: 'account-1',
+                  installedAt: Date.now(),
+                  removedAt: null,
+                },
+              ]
+            : []
+        )
+      )
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      expect(await screen.findByText(/guild-1/)).toBeInTheDocument()
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'org-2' },
+      })
+
+      // A second, org-2-scoped request actually happened — fetching only on
+      // mount (`useEffect(..., [])`) would leave this never called with
+      // 'org-2' at all.
+      await waitFor(() =>
+        expect(listDiscordServers).toHaveBeenCalledWith('org-2')
+      )
+      // And the panel reflects it — org-2 has no binding, so org-1's own
+      // installed server must not still be showing.
+      expect(
+        await screen.findByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/guild-1/)).not.toBeInTheDocument()
+    })
+
+    it('cheap-fix: shows the active binding, not merely the first one in the list, when a removed binding is also present', async () => {
+      // Order deliberately puts the removed binding first — `bindings[0]`
+      // would pick it; only `.find((b) => b.removedAt === null)` picks the
+      // active one that actually belongs here.
+      listDiscordServers.mockResolvedValue([
+        {
+          serverId: 'guild-removed',
+          organizationId: 'org-1',
+          installedByAccountId: 'account-1',
+          installedAt: Date.now() - 200_000,
+          removedAt: Date.now() - 100_000,
+        },
+        {
+          serverId: 'guild-active',
+          organizationId: 'org-1',
+          installedByAccountId: 'account-1',
+          installedAt: Date.now() - 50_000,
+          removedAt: null,
+        },
+      ])
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      expect(await screen.findByText(/guild-active/)).toBeInTheDocument()
+      expect(screen.queryByText(/guild-removed/)).not.toBeInTheDocument()
+    })
+
+    it('cheap-fix: a slow lookup that resolves after Remove does not resurrect the binding', async () => {
+      dispatchAction.mockResolvedValue({ result: undefined })
+
+      // The mount fetch never settles on its own — this test settles it by
+      // hand, after Remove has already completed, standing in for a
+      // response that started before the removal and only arrived after.
+      let settleMountFetch:
+        ((bindings: DiscordServerBindingSummary[]) => void) | undefined
+      listDiscordServers.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            settleMountFetch = resolve
+          })
+      )
+
+      renderWithModal(
+        <Shell
+          account={MULTI_MEMBERSHIP_ACCOUNT}
+          justInstalled={{ organizationId: 'org-1', serverId: 'guild-42' }}
+          onSignedOut={vi.fn()}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      // `justInstalled` is the immediate signal while the mount fetch above
+      // is still in flight (this file's own regression test, above).
+      expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+      await screen.findByRole('button', { name: 'Install to Discord' })
+
+      // The original mount fetch — begun before Remove ran, still unsettled
+      // — finally resolves now, reporting the binding as still active,
+      // because that response was generated before the removal happened.
+      // `discordFetchId`'s own increment in `handleRemove` (`pages/Shell.tsx`)
+      // is what must make this land as a no-op.
+      settleMountFetch?.([
+        {
+          serverId: 'guild-42',
+          organizationId: 'org-1',
+          installedByAccountId: 'account-1',
+          installedAt: Date.now(),
+          removedAt: null,
+        },
+      ])
+      // Flush the microtask queue so the stale response's `.then` — the one
+      // that must be ignored — has a chance to run before this asserts, the
+      // same idiom `tests/projects.test.tsx`/`tests/courses.test.tsx` use
+      // for the identical class of race.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(
+        screen.getByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/guild-42/)).not.toBeInTheDocument()
+    })
+
+    it('cheap-fix: does not fetch a Discord binding for an organization the account is not a member of', async () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      await waitFor(() =>
+        expect(listDiscordServers).toHaveBeenCalledWith('personal-org')
+      )
+
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+      await screen.findByRole('heading', { name: 'Chat' })
+
+      // `routes/actions.ts` refuses `discordServers.list` outright for a
+      // caller with no membership — this must never even be attempted for
+      // an organization the account is only connected to, not a member of.
+      expect(listDiscordServers).not.toHaveBeenCalledWith('institution-org')
+    })
+  })
 })

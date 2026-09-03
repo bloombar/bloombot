@@ -6554,11 +6554,15 @@ is `'loading'`, `justInstalled` — known synchronously, no round trip needed �
 install's own banner shows immediately rather than flickering through a loading state it does not need. Once the
 fetch resolves, one way or the other, `discordBindingState` is the only thing either `installedServerId` or
 `handleRemove` trust — a stale same-session signal must not outlive the server-truth read that supersedes it.
-The alternative — keeping `justInstalled` as a permanent fallback whenever the fetch fails — was rejected: it
-would mean a failed lookup after a successful install still reads as installed, which is accidentally correct
-for that one case and silently wrong for every other reason a lookup can fail, and WEB-5's "the panel adds no
-interpretation the API did not give it" argues for saying the failure plainly (`ErrorMessage`, the same path
-every other refusal in this app renders) over guessing which failures are safe to paper over.
+The alternative — keeping `justInstalled` as a fallback on a failed lookup too, not only while one is in flight —
+was rejected, corrected per review: the fallback's own `justInstalled?.organizationId === activeOrganizationId`
+guard means it can only ever apply immediately after a successful install in *this* tab, never more broadly — an
+earlier draft of this entry overstated the alternative's blast radius as "every other reason a lookup can fail,"
+which is not what the guard actually admits. The real argument is narrower and still holds: even in that one
+case, a failed refetch is itself a fact worth telling the caller (a Discord-reachability problem, a session
+about to expire, whatever it is), and WEB-5's "the panel adds no interpretation the API did not give it" argues
+for saying so plainly (`ErrorMessage`, the same path every other refusal in this app renders) over silently
+sitting on the last known-good value and letting the caller find out the lookup is broken some other way.
 
 **Choice, fetched on `Shell.tsx` mount and on every organization switch, not gated behind opening the Discord
 tab.** `ProjectsPanel` already fetches unconditionally on mount for the same reason (`Shell.tsx`'s own module
@@ -6570,6 +6574,36 @@ rather than once per mount, for no offsetting benefit.
 **What this does not touch.** The OAuth+PKCE install flow itself, `apps/api/src/routes/discord-servers.ts`, and
 `discordServers.remove`'s own behaviour are all unchanged — this slice makes Remove *reachable* whenever a
 binding exists, it does not change what removing one does.
+
+**Correction, TEN-8/WEB-4 rework: a removed binding could come back on an organization switch, and nothing
+pinned the switch behaviour that fixes it.** Review found the `'loading'` fallback above was written to consult
+`justInstalled` on the *first* `'loading'` state only, in the author's own head, but the code actually consults
+it on *every* `'loading'` state — and `discordBindingState` returns to `'loading'` on every organization switch,
+not only on mount (the previous paragraph's own point). Sequence: install into org-1, remove it (correctly
+returns to "Install to Discord"), switch to org-2, switch back to org-1 with no reload in between — the effect
+re-runs, `discordBindingState` is `'loading'` again, `justInstalled.organizationId === activeOrganizationId`
+still holds (`justInstalled` never changes after mount), and nothing recorded that this exact server had already
+been removed, so "Installed — server guild-42" rendered again, live Remove button included, until the refetch
+resolved a moment later and corrected it — clicking that Remove button in the interim got a real `404
+action_refused` from `discordServers.remove`'s own policy, correctly refusing a binding that is no longer
+active. Momentary and self-healing, but the brief's own reasoning against a momentary "Install" flash applies
+unchanged to a momentary "Installed" one: a bug that clears itself in one round trip is still the bug. Fixed by
+restoring the record the pre-slice code already kept and this rework had dropped: `removedServerId`
+(`pages/Shell.tsx`), set once in `handleRemove` and never cleared, checked alongside
+`justInstalled.organizationId === activeOrganizationId` in the fallback — a `'loading'` render only trusts
+`justInstalled` when its own server id has not already been removed this session, on any organization switch,
+not only the one immediately following the removal.
+
+Separately: stubbing the effect's own dependency array down to `[]` (fetch on mount only, never on an
+organization switch) left the full suite green — no test asserted `listDiscordServers` was ever called again
+with a newly selected organization, or that the panel's own Discord-tab content changed across a switch at all.
+That gap is exactly where the regression above lived, which is presumably why it shipped unnoticed. Both are now
+pinned directly: `tests/shell.test.tsx`'s "TEN-8 rework: coordinator review findings" describe block reproduces
+the reviewer's own repro for the resurrection bug, asserts `listDiscordServers` is called with the newly active
+organization on every switch, and separately pins three mutants that survived the original suite without any
+test noticing — `bindings.find((b) => b.removedAt === null)` swapped for `bindings[0]`, `discordFetchId.current++`
+deleted from `handleRemove`, and the effect's own `if (!isMember) return` guard deleted — each confirmed to fail
+against its own specific mutation before being left in place, not merely asserted correct by inspection.
 
 ## D-66 — `packages/actions`/`packages/db`/`apps/web`/`e2e`: COST-3/COST-4 — a spending cap that can actually be set, and an instructor's own usage screen
 

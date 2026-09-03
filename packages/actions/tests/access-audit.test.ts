@@ -110,6 +110,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // the same "the course it names is what a write grant already protects"
   // shape `roster.import`/`discordServers.scaffold` both use above.
   'courseJoinLinks.create': { resource: 'course', access: 'write' },
+  // WEB-20: resolves the course a join-link list is scoped to, read — the
+  // same "the course it names is what a read grant already protects" shape
+  // `courseAttachments.list`/`transcripts.listStudents` both use above; this
+  // is a read of the course's own links, never a write to any of them.
+  'courseJoinLinks.list': { resource: 'course', access: 'read' },
   // ENRL-4: resolves the link itself, write — a link belonging to another
   // organization resolves to nothing (TEN-5), the same as every other
   // scoped write in this table. Redeeming a link is not an action at all

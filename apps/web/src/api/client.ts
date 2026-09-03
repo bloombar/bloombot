@@ -31,7 +31,9 @@ import type {
   Course,
   CourseAttachmentSummary,
   CourseInstructionRevisionSummary,
+  CourseJoinLinkSummary,
   CourseSummary,
+  CreatedCourseJoinLink,
   DiscordPersonLinkPreviewResponse,
   DuplicateProjectResult,
   InstallBeginResponse,
@@ -514,6 +516,67 @@ export function scaffoldCourseDiscord(
 ): Promise<{ jobId: string }> {
   return dispatchAction(organizationId, 'discordServers.scaffold', {
     courseId,
+  })
+}
+
+/**
+ * WEB-20 — a course's join links: issuing one (the secret is the response's
+ * own, one-time payload — nothing about it is ever fetched again), the
+ * current list (never a secret among them), and revoking one. Each a thin
+ * wrapper over `dispatchAction`, the same generic action route every other
+ * screen in this app already reaches through.
+ */
+
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `courseJoinLinks.create`'s own optional `expiresAt` (omitted or `null` both mean "no expiry"). */
+export function createCourseJoinLink(
+  organizationId: string,
+  courseId: string,
+  expiresAt?: number | null
+): Promise<CreatedCourseJoinLink> {
+  return dispatchAction<CreatedCourseJoinLink>(
+    organizationId,
+    'courseJoinLinks.create',
+    {
+      courseId,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    }
+  )
+}
+
+/** WEB-20: a course's own join links, newest first — never carries a secret (`courseJoinLinks.list`'s own projection, `@bloombot/actions`). */
+export function listCourseJoinLinks(
+  organizationId: string,
+  courseId: string
+): Promise<CourseJoinLinkSummary[]> {
+  return dispatchAction<CourseJoinLinkSummary[]>(
+    organizationId,
+    'courseJoinLinks.list',
+    { courseId }
+  )
+}
+
+/** ENRL-4: revoke a join link — stops it admitting anyone new; never un-enrols anyone it already admitted. */
+export function revokeCourseJoinLink(
+  organizationId: string,
+  linkId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'courseJoinLinks.revoke', { linkId })
+}
+
+/**
+ * WEB-21/ROST-9..12: import a roster CSV into a course — enqueues a
+ * background job and returns immediately; the report itself is read back
+ * through `getJobStatus`'s own `result`, the same "poll a job id" shape
+ * `scaffoldCourseDiscord`/`attachCourseFile` already use.
+ */
+export function importRoster(
+  organizationId: string,
+  courseId: string,
+  csvText: string
+): Promise<{ jobId: string }> {
+  return dispatchAction(organizationId, 'roster.import', {
+    courseId,
+    csvText,
   })
 }
 

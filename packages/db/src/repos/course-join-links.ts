@@ -14,7 +14,7 @@
  * `course-join-links.ts` — this file never sees it and never writes it.
  */
 
-import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
 import * as enrolments from './enrolments.js'
@@ -77,6 +77,41 @@ export function getJoinLink(
       )
     )
     .get()
+}
+
+/**
+ * WEB-20: every join link a course has, newest first — the same
+ * newest-first convention `course-instruction-revisions.ts#listRevisionsForCourse`
+ * already uses for its own "history" list. Unlike that table, this one
+ * carries no `sequence` column to break a same-millisecond tie by insertion
+ * order — adding one is a schema migration this slice's own brief puts out
+ * of scope — so two links minted in the same millisecond sort in whatever
+ * order SQLite happens to return them, not a guaranteed one; ordinary,
+ * human-paced link creation never produces that tie in practice. Returns
+ * the row as stored, `secretHash` included: this file's own module comment
+ * says the plaintext secret never reaches this file at all, but the *hash*
+ * is an ordinary column like any other, and this function is a plain read,
+ * not the boundary that decides what a browser may see. `@bloombot/actions`'
+ * `courseJoinLinks.list` (the one caller `apps/web`'s panel reaches) is
+ * where that projection happens — see that action's own doc comment for
+ * why the exclusion belongs there and not here.
+ */
+export function listJoinLinks(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): CourseJoinLink[] {
+  return db
+    .select()
+    .from(courseJoinLinks)
+    .where(
+      and(
+        eq(courseJoinLinks.courseId, courseId),
+        eq(courseJoinLinks.organizationId, organizationId)
+      )
+    )
+    .orderBy(desc(courseJoinLinks.createdAt))
+    .all()
 }
 
 /**

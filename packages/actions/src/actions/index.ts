@@ -48,6 +48,7 @@ import { importRosterAction } from './roster.js'
 import { organizationUsageAction } from './cost-ledger.js'
 import {
   createCourseJoinLinkAction,
+  listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
 } from './course-join-links.js'
 import {
@@ -100,10 +101,12 @@ export {
 } from './cost-ledger.js'
 export {
   createCourseJoinLinkAction,
+  listCourseJoinLinksAction,
   revokeCourseJoinLinkAction,
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
   type CreatedCourseJoinLink,
+  type CourseJoinLinkSummary,
 } from './course-join-links.js'
 export {
   checkEnrolmentAccessAction,
@@ -178,6 +181,7 @@ export function createPlatformRegistry(options?: {
   registry.register(restoreCourseInstructionRevisionAction)
   registry.register(organizationUsageAction)
   registry.register(createCourseJoinLinkAction)
+  registry.register(listCourseJoinLinksAction)
   registry.register(revokeCourseJoinLinkAction)
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)

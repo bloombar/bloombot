@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   createCourseJoinLinkAction,
+  listCourseJoinLinksAction,
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
   revokeCourseJoinLinkAction,
@@ -206,6 +207,59 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
       testDb.db
     )
     expect(person?.connectedAt).not.toBeNull()
+  })
+
+  // WEB-20: the list a panel's own join-links screen reads. Fails without
+  // the fix: `courseJoinLinks.list` did not exist at all before this slice.
+  describe('courseJoinLinks.list (WEB-20)', () => {
+    it('lists a course own join links, and never carries a secretHash field', async () => {
+      testDb = createTestDatabase()
+      const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+        testDb.db
+      )
+      await dispatch(
+        createCourseJoinLinkAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+
+      const listed = await dispatch(
+        listCourseJoinLinksAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+
+      expect(listed).toHaveLength(1)
+      // Cheap-fix-8-style precision: assert against the actual serialized
+      // shape, not merely `.secretHash` being `undefined` on the object —
+      // a caller that spread extra fields through would still fail this.
+      expect(JSON.stringify(listed)).not.toContain('secretHash')
+      expect(JSON.stringify(listed)).not.toMatch(/secret_hash/)
+      expect(listed[0]).toMatchObject({ courseId: course.id, revokedAt: null })
+    })
+
+    it("does not list another organization's course join links, refusing not-found-shaped", async () => {
+      testDb = createTestDatabase()
+      const { organizationId: orgA } = seedOrganizationWithCourse(testDb.db)
+      const {
+        organizationId: orgB,
+        ownerId: ownerB,
+        course: courseB,
+      } = seedOrganizationWithCourse(testDb.db)
+      await dispatch(
+        createCourseJoinLinkAction,
+        { courseId: courseB.id },
+        { organizationId: orgB, db: testDb.db, accountId: ownerB }
+      )
+
+      await expect(
+        dispatch(
+          listCourseJoinLinksAction,
+          { courseId: courseB.id },
+          { organizationId: orgA, db: testDb.db }
+        )
+      ).rejects.toThrow(ActionRefusedError)
+    })
   })
 
   it("revoking refuses another organization's link, identically to a missing one", async () => {

@@ -37,6 +37,7 @@ import {
   Hammer,
   Home,
   Info,
+  Link2,
   Loader2,
   LogOut,
   Menu,
@@ -82,6 +83,12 @@ export const RestoreIcon = ArchiveRestore
 export const ScaffoldIcon = Hammer
 /** Attach a file to a course's knowledge base (FILE-1). */
 export const AttachIcon = Upload
+/** Import a roster CSV into a course (WEB-21). Same Lucide glyph as `AttachIcon` — a distinct intent name, since the two are unrelated uploads a reader should be able to tell apart in this file even though they render identically today. */
+export const ImportIcon = Upload
+/** Copy a value (a join link's own secret URL) to the clipboard (WEB-20). */
+export const CopyIcon = Copy
+/** A course join link itself (WEB-20). */
+export const JoinLinkIcon = Link2
 /** Leave this panel for another site (Discord's own consent screen, a footer link). */
 export const ExternalLinkIcon = ExternalLink
 /** A collapsible section, or a select control, is closed and can be opened. */

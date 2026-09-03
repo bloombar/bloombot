@@ -380,3 +380,253 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
     ).toBeUndefined()
   })
 })
+
+describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () => {
+  // ENRL-8: a signed-in web account with no person in the link's own
+  // organization yet gets one, created and connected through the real
+  // `people.ts#connectIdentity` path — never a raw `connectedAt` write.
+  // Fails without the fix: `redeemJoinLink` refuses outright (`getPerson`
+  // finds no row for a bare account id).
+  it('creates and connects a web person for an account with none in this organization, then enrols it', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('join_link')
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    expect(person).toBeDefined()
+    // Connected through the real path, not a raw column write — the same
+    // property `createConnectedWebPerson`'s own test coverage
+    // (`@bloombot/auth`) checks for its identical shape.
+    expect(person?.connectedAt).not.toBeNull()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person?.id ?? '',
+        testDb.db
+      )
+    ).toMatchObject({ id: enrolment?.id })
+  })
+
+  // A second redemption by the same account must not mint a second person —
+  // idempotent the same way `enrolViaJoinLink`'s own idempotence already is.
+  it('reuses the same web person on a second redemption rather than creating another', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const first = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+    const second = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(second?.id).toBe(first?.id)
+    expect(
+      enrolments.listPeopleForCourse(organizationId, course.id, testDb.db)
+    ).toHaveLength(1)
+  })
+
+  // A signed-in account that already has a connected person in this
+  // organization (a Discord identity a roster or role admitted, since
+  // merged onto this same account) is enrolled through that existing
+  // person, not a second, freshly-minted one.
+  it("enrols the account's existing connected person, rather than creating a second one", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+    const existingPerson = people.createPerson(organizationId, {}, testDb.db)
+    const connected = people.connectIdentity(
+      organizationId,
+      existingPerson.id,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    if (!connected) throw new Error('setup failed')
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountId,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        existingPerson.id,
+        testDb.db
+      )
+    ).toMatchObject({ id: enrolment?.id })
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
+  })
+
+  // A body-supplied identity cannot redirect the enrolment to anyone else —
+  // this function's own second parameter is the account id a session
+  // already proved, never a person id a caller names; there is no argument
+  // here through which "enrol somebody else" could even be expressed. Two
+  // different accounts redeeming the same (multi-use) link get two
+  // different people, each enrolled only themselves.
+  it('two different accounts redeeming the same link each enrol only themselves', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountA = randomUUID()
+    const accountB = randomUUID()
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountA,
+      Date.now(),
+      testDb.db
+    )
+    courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-1',
+      accountB,
+      Date.now(),
+      testDb.db
+    )
+
+    expect(
+      enrolments.listPeopleForCourse(organizationId, course.id, testDb.db)
+    ).toHaveLength(2)
+  })
+
+  // --- ENRL-4: refusals are byte-identical, and add no side effect --------
+
+  it('refuses a hash that was never issued, creating no person', () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    expect(
+      courseJoinLinks.redeemJoinLinkForWebAccount(
+        'never-issued',
+        accountId,
+        Date.now(),
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(0)
+  })
+
+  it('a revoked link admits nobody, creating no person', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+
+    const link = courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+    courseJoinLinks.revokeJoinLink(organizationId, link.id, testDb.db)
+
+    expect(
+      courseJoinLinks.redeemJoinLinkForWebAccount(
+        'hash-1',
+        accountId,
+        Date.now(),
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(0)
+  })
+
+  it('an expired link admits nobody, creating no person', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const accountId = randomUUID()
+    const now = Date.now()
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-1',
+        expiresAt: now - 1,
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    expect(
+      courseJoinLinks.redeemJoinLinkForWebAccount(
+        'hash-1',
+        accountId,
+        now,
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(people.listPeople(organizationId, testDb.db)).toHaveLength(0)
+  })
+})

@@ -17,12 +17,18 @@
  *
  * ENRL-3's Discord-role path (`enrolViaDiscordRole`) is evaluated here, in
  * the repo layer, rather than in `@bloombot/core`'s `routing.ts` — see
- * `docs/DECISIONS.md`. It is a pure string-membership check against a
- * course's own `studentsRole` (never `adminsRole` — ENRL-5's "a Discord role
- * confers none of them" means even the *admin* role a person holds in
- * Discord has no bearing on enrolment, only the student one does) against
- * whatever role names its caller already resolved; this file makes no
- * Discord call of its own.
+ * `docs/DECISIONS.md`. It is a pure string-membership check against
+ * *either* of a course's two roles — its `studentsRole` or its `adminsRole`
+ * (ENRL-7: "anyone a course is taught through is enrolled by asking it" —
+ * `routing.ts#routeMessage` already answers an admins-role holder's message
+ * the same as a students-role holder's, so this file's own admission has to
+ * match, or the web surface, which authorizes on this table rather than a
+ * membership, refuses the very person Discord just answered). ENRL-5's "a
+ * Discord role confers none of [staff authority]" is untouched by this —
+ * that requirement is about `memberships` and who may administer a course,
+ * a different table and a different question than "who may ask it," which
+ * is all `enrolments` ever records — against whatever role names its caller
+ * already resolved; this file makes no Discord call of its own.
  */
 
 import { and, eq, isNull } from 'drizzle-orm'
@@ -340,12 +346,23 @@ export function enrolViaRoster(
 }
 
 /**
- * ENRL-3: enrol via holding the course's student role in the organization's
- * bound Discord server. `roleNames` is whatever the caller already resolved
- * (a guild member's own role names) — this function makes no Discord call
- * of its own (this file's own module comment). `undefined` both when
- * `courseId` does not resolve in `organizationId` and when `roleNames` does
- * not include the course's `studentsRole` — nobody is admitted either way.
+ * ENRL-3/ENRL-7: enrol via holding either of the course's two roles — its
+ * `studentsRole` or its `adminsRole` — in the organization's bound Discord
+ * server. `roleNames` is whatever the caller already resolved (a guild
+ * member's own role names) — this function makes no Discord call of its own
+ * (this file's own module comment). `undefined` both when `courseId` does
+ * not resolve in `organizationId` and when `roleNames` includes neither
+ * role — nobody is admitted either way.
+ *
+ * ENRL-7 widened this from `studentsRole` alone: `routeMessage` already
+ * answers an admins-role holder's message the same as a students-role
+ * holder's (`@bloombot/core`'s `routing.ts`, unchanged by this — its own
+ * `roleMatches` check has always been "either role"), so an instructor or
+ * teaching assistant held a Discord conversation this table had no record
+ * of, and the web surface (which authorizes on this table, not a
+ * membership — `routes/chat.ts`'s own module comment) refused the very
+ * person Discord just answered. Both roles now admit identically; nothing
+ * below distinguishes which one a caller held.
  *
  * `reviveEnded: false` (D-35 rework, finding 5 — reversed from `true`) — a
  * prior ended enrolment blocks a fresh one here, the same choice
@@ -369,7 +386,13 @@ export function enrolViaRoster(
  * re-admits them through one of the other two `enrolVia*` functions
  * (`reviveEnded: true` there is unchanged, and correct: redeeming a link or
  * a roster row *is* a deliberate re-admission decision the way an ambient
- * Discord role never was — see each function's own comment).
+ * Discord role never was — see each function's own comment). This reasoning
+ * never turned on *which* role the caller held — an admins-role holder's
+ * enrolment is just as ambient a fact, re-checked on every message the same
+ * way, as a students-role holder's — so ENRL-7's widening to either role
+ * leaves `reviveEnded: false` exactly as it was: an instructor an owner has
+ * explicitly ended (ENRL-6) stays ended, full stop, not merely "stays ended
+ * unless they happen to hold the other of the course's two roles."
  */
 export function enrolViaDiscordRole(
   organizationId: string,
@@ -378,7 +401,14 @@ export function enrolViaDiscordRole(
 ): Enrolment | undefined {
   const course = courses.getCourse(organizationId, input.courseId, db)
   if (!course) return undefined
-  if (!input.roleNames.includes(course.studentsRole)) return undefined
+  // ENRL-7: either of the course's two roles admits — see this function's
+  // own doc comment for why `adminsRole` is no longer excluded.
+  if (
+    !input.roleNames.includes(course.studentsRole) &&
+    !input.roleNames.includes(course.adminsRole)
+  ) {
+    return undefined
+  }
   return admit(
     organizationId,
     input.courseId,

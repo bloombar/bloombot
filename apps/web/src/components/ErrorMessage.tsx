@@ -85,6 +85,15 @@ export function describeApiError(error: ApiError): {
         headline: 'That link is no longer valid. Request a new one.',
         details: [],
       }
+    // ENRL-8: `routes/join-links.ts` answers this identically for a secret
+    // that was never issued, one that is revoked, and one that has expired
+    // (ENRL-4's own "no oracle" shape) — this app says the same one thing
+    // for all three, rather than guessing which.
+    case 'join_link_not_found':
+      return {
+        headline: 'That join link is no longer valid. Ask for a new one.',
+        details: [],
+      }
     case 'origin_refused':
       return { headline: 'That request was refused.', details: [] }
     case 'network_error':

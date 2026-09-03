@@ -17,6 +17,7 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
+import { PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
 
 // `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
 // — finding 10 of the WEB-7 rework changed `pages/Shell.tsx`'s default tab to
@@ -31,6 +32,7 @@ const {
   redeemSignInLink,
   previewDiscordPersonLink,
   confirmDiscordPersonLink,
+  redeemCourseJoinLink,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
@@ -39,6 +41,7 @@ const {
   redeemSignInLink: vi.fn(),
   previewDiscordPersonLink: vi.fn(),
   confirmDiscordPersonLink: vi.fn(),
+  redeemCourseJoinLink: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -54,6 +57,7 @@ vi.mock('../src/api/client.js', async () => {
     redeemSignInLink,
     previewDiscordPersonLink,
     confirmDiscordPersonLink,
+    redeemCourseJoinLink,
   }
 })
 
@@ -279,5 +283,89 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
 
     await screen.findByRole('heading', { name: 'Connect your account' })
     expect(window.location.pathname).toBe('/connect/org-1')
+  })
+})
+
+describe('App — /join/:secret (ENRL-8)', () => {
+  it('signed out, renders the join-link screen own sign-in prompt rather than the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({ account: null })
+    window.history.pushState(null, '', '/join/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
+    ).toBeInTheDocument()
+    expect(sessionStorage.getItem(PENDING_JOIN_LINK_KEY)).toBe('secret-abc')
+  })
+
+  it('signed in, redeems the link rather than rendering the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    // Never resolves in this test — asserting the pending "Joining…" state
+    // (below) needs the redemption to still be in flight; a resolved mock
+    // would race the assertion against `JoinLink`'s own `onRedeemed` (which
+    // navigates away to the shell, `pages/JoinLink.tsx`'s own module
+    // comment).
+    redeemCourseJoinLink.mockReturnValue(new Promise(() => undefined))
+    window.history.pushState(null, '', '/join/secret-abc')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemCourseJoinLink).toHaveBeenCalledWith('secret-abc')
+    )
+    // Not the ordinary shell — no organization switcher, since redemption
+    // has not resolved.
+    expect(
+      screen.queryByRole('combobox', { name: 'Organization' })
+    ).not.toBeInTheDocument()
+  })
+
+  // ENRL-8, the same LINK-6 rework reasoning as `/connect/:organizationId`
+  // above: a visitor who arrived at `/join/:secret` signed out
+  // (`JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY`) must return to that same
+  // link, not the shell, once a sign-in redemption completes — proved here
+  // by the join link actually being redeemed (with the pending secret),
+  // which could only happen if the browser landed back on `JoinLink`
+  // rather than going straight to the ordinary shell.
+  it('a sign-in redemption returns to the pending join link, not straight to the shell', async () => {
+    sessionStorage.setItem(PENDING_JOIN_LINK_KEY, 'secret-abc')
+    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+    redeemCourseJoinLink.mockReturnValue(new Promise(() => undefined))
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemCourseJoinLink).toHaveBeenCalledWith('secret-abc')
+    )
+    expect(window.location.pathname).toBe('/join/secret-abc')
   })
 })

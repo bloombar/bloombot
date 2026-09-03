@@ -16,12 +16,14 @@
  * then route through the stored enrolment" (D-34's own words). `routeMessage`'s
  * own category-or-role match is still the only thing that decides which
  * course a message belongs to — unchanged. What *is* now gated (D-35
- * rework, finding 5): a person who holds a course's own `studentsRole` but
- * whose enrolment an instructor explicitly ended (ENRL-6) is refused, not
- * silently re-admitted and answered — `enrolViaDiscordRole` no longer
- * revives an ended row (`enrolments.ts`'s own doc comment), and this file
- * is what turns "not (re-)admitted" into an actual refusal reaching the
- * student rather than an enrolment row quietly staying out of step with
+ * rework, finding 5): a person who holds a course's own `studentsRole` (or,
+ * since ENRL-7 widened `enrolViaDiscordRole` to either of the course's two
+ * roles, its `adminsRole`) but whose enrolment an instructor explicitly
+ * ended (ENRL-6) is refused, not silently re-admitted and answered —
+ * `enrolViaDiscordRole` no longer revives an ended row (`enrolments.ts`'s
+ * own doc comment), and this file is what turns "not (re-)admitted" into an
+ * actual refusal reaching the student — or, now, the instructor or
+ * assistant — rather than an enrolment row quietly staying out of step with
  * whether the message was answered anyway. See `docs/DECISIONS.md` D-35.
  */
 
@@ -387,28 +389,32 @@ export async function handleMention(
   // D-34/LINK-5 — a role holder is admitted (once) through the stored
   // enrolment relation rather than only ever routed by re-checking their
   // Discord role on every message. `enrolViaDiscordRole` is itself the
-  // no-op when the author does not hold `courseId`'s own `studentsRole`
+  // no-op when the author does not hold either of `courseId`'s two roles
   // (`repos/enrolments.ts`'s own doc comment), or when they already hold an
   // active enrolment for it, so this is safe to call on every matched
   // message rather than only the first.
   //
   // D-35 rework, finding 5 — ENRL-6's "ended ... stops the person asking
   // that course" now actually gates the answer, not merely the audit row:
-  // `holdsStudentsRole` is checked independently of *why* this message
+  // `holdsTeachingRole` is checked independently of *why* this message
   // routed (category or role — CORE-2/`routeMessage`'s own decision is
-  // unchanged either way, this never overrides it) — a person who holds the
-  // course's own `studentsRole` is exactly who `enrolViaDiscordRole` would
-  // freely (re-)admit, so `enrolViaDiscordRole` returning nothing for them
-  // can only mean `reviveEnded: false` blocked a prior *ended* row
-  // (`enrolments.ts`'s own doc comment): the only other refusal that
-  // function has — not holding the role at all — is already ruled out by
-  // `holdsStudentsRole` being true, and a foreign/missing course cannot
-  // happen here (`routing.course` already resolved it). An instructor who
-  // holds no student role of their own (only `adminsRole`, ENRL-5's "a
-  // Discord role confers none of them") is untouched by this either way.
-  const holdsStudentsRole = input.authorRoleNames.includes(
-    routing.course.studentsRole
-  )
+  // unchanged either way, this never overrides it) — a person who holds
+  // either of the course's own roles is exactly who `enrolViaDiscordRole`
+  // would freely (re-)admit (ENRL-7 widened that function from
+  // `studentsRole` alone to either role), so `enrolViaDiscordRole` returning
+  // nothing for them can only mean `reviveEnded: false` blocked a prior
+  // *ended* row (`enrolments.ts`'s own doc comment): the only other refusal
+  // that function has — holding neither role — is already ruled out by
+  // `holdsTeachingRole` being true, and a foreign/missing course cannot
+  // happen here (`routing.course` already resolved it). Renamed from
+  // `holdsStudentsRole` (ENRL-7): before this, an admins-role-only holder's
+  // ended enrolment silently went ungated here, the same gap ENRL-7 closes
+  // in `enrolViaDiscordRole` itself — this local has to track that widening,
+  // or ENRL-6 would stop being enforceable for staff the moment they held no
+  // student role of their own.
+  const holdsTeachingRole =
+    input.authorRoleNames.includes(routing.course.studentsRole) ||
+    input.authorRoleNames.includes(routing.course.adminsRole)
   let enrolmentEnded = false
   try {
     const enrolment = enrolments.enrolViaDiscordRole(
@@ -416,7 +422,7 @@ export async function handleMention(
       { courseId, personId: person.id, roleNames: input.authorRoleNames },
       db
     )
-    if (holdsStudentsRole && !enrolment) {
+    if (holdsTeachingRole && !enrolment) {
       enrolmentEnded = true
     }
   } catch (error) {

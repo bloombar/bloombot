@@ -187,3 +187,30 @@ export function redeemCourseJoinLink(
     db
   )
 }
+
+/**
+ * ENRL-8: redeem a join link for a signed-in *web* account — the composed
+ * entry point `apps/api`'s own join-link route calls, the same way this
+ * file's `redeemCourseJoinLink` (above) composes `hashSecret` with
+ * `repos/course-join-links.ts#redeemJoinLink` for a caller that already has
+ * a person id in hand. `accountId` comes from the caller's own
+ * already-authenticated session — never a request body — the same
+ * obligation `redeemCourseJoinLink`'s own doc comment states for
+ * `callerAssertedPersonId`, except this one is impossible to get wrong from
+ * the arguments alone: there is no person id parameter here for a caller to
+ * mis-supply. See `repos/course-join-links.ts#redeemJoinLinkForWebAccount`
+ * for what this does about an account with no person in the link's own
+ * organization yet.
+ */
+export function redeemCourseJoinLinkForWebAccount(
+  secret: string,
+  accountId: string,
+  db: Database
+) {
+  return courseJoinLinks.redeemJoinLinkForWebAccount(
+    hashSecret(secret),
+    accountId,
+    Date.now(),
+    db
+  )
+}

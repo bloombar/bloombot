@@ -209,10 +209,39 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toBeUndefined()
   })
 
-  // Holding the course's own *admins* role must never admit anyone — ENRL-5's
-  // "a Discord role confers none of them" also means the admin role has no
-  // bearing on enrolment eligibility, only the student one does.
-  it("enrolViaDiscordRole does not admit someone holding only the course's admin role", () => {
+  // ENRL-7: "anyone a course is taught through is enrolled by asking it" —
+  // an admins-role holder (an instructor or TA) is admitted exactly like a
+  // students-role holder, so the web surface (which authorizes on this
+  // table, not a membership) does not refuse the same person Discord just
+  // answered. Fails without the fix: before ENRL-7, `enrolViaDiscordRole`
+  // checked `studentsRole` only, and this call returned `undefined`.
+  it("enrolViaDiscordRole admits someone holding only the course's admin role", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const enrolment = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('discord_role')
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeDefined()
+  })
+
+  it("enrolViaDiscordRole refuses a person holding neither of the course's two roles", () => {
     testDb = createTestDatabase()
     const { organizationId, course } = seedOrganizationWithCourse(testDb)
     const person = people.createPerson(organizationId, {}, testDb.db)
@@ -223,8 +252,49 @@ describe('enrolments repo (ENRL-1..6)', () => {
         {
           courseId: course.id,
           personId: person.id,
-          roleNames: [course.adminsRole],
+          roleNames: ['some-other-role'],
         },
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  // ENRL-7's widening never reversed ENRL-6: an admins-role holder an
+  // instructor has explicitly ended stays ended, exactly like a
+  // students-role holder (`enrolViaDiscordRole`'s own `reviveEnded: false`).
+  it("enrolViaDiscordRole does not revive an admin-role holder's ended enrolment", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = enrolments.enrolViaDiscordRole(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: person.id,
+        roleNames: [course.adminsRole],
+      },
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
         testDb.db
       )
     ).toBeUndefined()

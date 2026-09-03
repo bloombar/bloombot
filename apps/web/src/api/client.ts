@@ -149,6 +149,23 @@ export function signOut(): Promise<void> {
   return request<void>('/auth/sign-out', { method: 'POST' })
 }
 
+/**
+ * ENRL-8: redeem a course join link, bound to the caller's own signed-in
+ * session — `apps/api`'s own `routes/join-links.ts` never accepts anything
+ * beyond the secret itself in the request body. Throws `ApiError` (404,
+ * `join_link_not_found`) identically for a secret that was never issued,
+ * one that is revoked, and one that has expired (ENRL-4) — never a
+ * different status or message across the three.
+ */
+export function redeemCourseJoinLink(
+  secret: string
+): Promise<{ courseId: string }> {
+  return request<{ courseId: string }>('/join-links/redeem', {
+    method: 'POST',
+    body: { secret },
+  })
+}
+
 /** "Who am I" — the account and its memberships (WEB-3), or `{ account: null }` when signed out. */
 export function fetchMe(): Promise<MeResponse> {
   return request<MeResponse>('/auth/me')

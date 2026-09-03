@@ -18,8 +18,9 @@
  *      request never reaches `sessionMiddleware`, let alone a route.
  *   3. `sessionMiddleware` (API-2) — attaches `req.session`, or not.
  *   4. The routes themselves (API-1) — `routes/auth.ts`, `routes/actions.ts`,
- *      `routes/discord-servers.ts` (TEN-4), `routes/chat.ts` (WEB-10), and
- *      this process's own `GET /health` (API-6).
+ *      `routes/discord-servers.ts` (TEN-4), `routes/chat.ts` (WEB-10),
+ *      `routes/join-links.ts` (ENRL-8), and this process's own `GET /health`
+ *      (API-6).
  *   5. `errorMiddleware` (API-4 / ACT-4) — last, so every thrown error from
  *      every route above lands here and nowhere else.
  */
@@ -50,6 +51,7 @@ import { buildAdminRouter } from './routes/admin.js'
 import { buildAuthRouter } from './routes/auth.js'
 import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
+import { buildJoinLinksRouter } from './routes/join-links.js'
 import {
   buildPersonLinkRouter,
   type PendingDiscordConnect,
@@ -157,6 +159,10 @@ export function buildApp(deps: ServerDependencies): Express {
       googleVerifier: deps.googleVerifier,
     })
   )
+  // ENRL-8 — unscoped, like `/auth` (`routes/join-links.ts`'s own module
+  // comment has why): a redeemer presents only the secret, not an
+  // organization id.
+  app.use('/join-links', buildJoinLinksRouter({ db: deps.db }))
   app.use(
     '/organizations/:organizationId/actions',
     buildActionsRouter(registry, deps.db)

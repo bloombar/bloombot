@@ -136,6 +136,17 @@ describe('packages/core imports no vendor SDK (CORE-4)', () => {
  * about one surface" violation CORE-4 already forbids for an SDK import;
  * this scans for the literal two-character token no legitimate line of
  * `packages/core/src` should ever contain, surface syntax or otherwise.
+ *
+ * A known, accepted limitation, worth stating rather than leaving implied
+ * (found in review): this only catches the *literal* token — writing the
+ * same mention by concatenation (`'<' + '@' + id + '>'`) or any other
+ * obfuscation passes cleanly. This is the weaker of two layers, not the
+ * only one: `packages/core/tests/answer.test.ts`'s own CORE-7/CORE-8 block
+ * asserts on actual behaviour (an `EchoingModelClient` proving the reply
+ * text itself, not merely a request field), which no string-shaped dodge of
+ * this guard can pass. This guard exists for the cheap, fast case — a
+ * future contributor pasting the obvious literal back in — not as the
+ * platform's only defence against the defect class.
  */
 describe('packages/core contains no surface-specific address syntax (CORE-7)', () => {
   const files = listSourceFilesRecursively(SRC_DIR)

@@ -35,20 +35,29 @@ export interface CreateUpstreamConversationOptions {
   courseTitle: string | null
   /** CORE-7/CORE-8 — how the surface wants the model able to address the person, embedded in the opening item's own content. `null` addresses nobody. */
   addressAs: string | null
-  /** MDL-4 — the raw, opaque identity reference, carried in `metadata.user_id` (matching `response_bot.py`'s own `metadata={"user_id": ...}`), never in the opening item's content. `null` omits `metadata` entirely. */
+  /**
+   * MDL-4 — the raw, opaque identity reference, carried in `metadata.
+   * user_id` (the *field* matches `response_bot.py`'s own
+   * `metadata={"user_id": ...}`; the *value* deliberately no longer does —
+   * `ports.ts`'s own `ModelRequest.personIdentifier` comment has the fuller
+   * "field matches, value doesn't, and that is a real discontinuity with a
+   * legacy `user_id` lookup" reasoning, D-70), never in the opening item's
+   * content. `null` omits `metadata` entirely.
+   */
   personIdentifier: string | null
 }
 
 /**
  * The opening item's text (MDL-4's "seeded with who they are and which
- * course they are in"), matching `response_bot.py:262-269`'s own
- * `f"My name is {name} (user id <@{id}>) and I am a student in the
- * {course_name} course."` when every field is known and the surface is
- * Discord (`addressAs` is that surface's own choice — CORE-7/CORE-8).
- * Degrades gracefully when any is missing rather than fabricating one:
- * `addressAs` only ever appears alongside a `displayName` (there is
- * nothing to attach a bare address to in prose), and a course title on its
- * own drops the name clause entirely.
+ * course they are in"), matching `response_bot.py:262-269`'s own —
+ * `"My name is {name} (user id {mention}) and I am a student in the
+ * {course_name} course."`, where `{mention}` was Discord's own angle-bracket
+ * mention token — when every field is known and the surface is Discord
+ * (`addressAs` is that surface's own choice — CORE-7/CORE-8). Degrades
+ * gracefully when any is missing rather than fabricating one: `addressAs`
+ * only ever appears alongside a `displayName` (there is nothing to attach a
+ * bare address to in prose), and a course title on its own drops the name
+ * clause entirely.
  */
 export function buildSeedText(
   displayName: string | null,

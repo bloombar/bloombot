@@ -26,13 +26,14 @@
  * ENRL-10 exists for.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
 import {
   accounts,
   closeDatabase,
+  membershipInvitations,
   memberships,
   openDatabase,
   organizations,
@@ -207,4 +208,107 @@ test('an owner invites a colleague with no prior membership; a real second accou
   } finally {
     closeDatabase(verifyDb)
   }
+})
+
+/** The same hash `@bloombot/actions`' own (module-private) `hashSecret` computes — `e2e/join-link.spec.ts`'s own identical device, and the same reason `apps/api/tests/routes/join-links.test.ts`'s own module comment gives for why this file cannot import that function directly. */
+function hashSecret(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex')
+}
+
+/**
+ * Seeds an organization, an owner, and a live invitation for
+ * `colleagueEmail` — directly against the e2e database, the same
+ * `seedJoinLink` device `join-link.spec.ts` uses for its own cross-tab case,
+ * standing in for the panel round trip the test above already exercises in
+ * full (WEB-20's own "issued through the panel" is proven there; this test
+ * is about what happens after a link exists, not how one is issued).
+ */
+function seedInvitation(
+  suffix: string,
+  colleagueEmail: string
+): { organizationId: string; institutionName: string; secret: string } {
+  const organizationId = randomUUID()
+  const institutionName = `Institution ${suffix}`
+  const secret = `secret-${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      organizationId,
+      { name: institutionName, isPersonal: false },
+      seedDb
+    )
+    const owner = accounts.createAccount(
+      organizationId,
+      {
+        email: `owner-${suffix}@example.edu`,
+        displayName: 'Owner',
+        role: 'owner',
+      },
+      seedDb
+    )
+    membershipInvitations.createInvitation(
+      organizationId,
+      {
+        email: colleagueEmail,
+        role: 'instructor',
+        secretHash: hashSecret(secret),
+        createdByAccountId: owner.id,
+      },
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  return { organizationId, institutionName, secret }
+}
+
+// AUTH-6 — the same rework `join-link.spec.ts`'s own identical test proves
+// for a course join link, here for a membership invitation: a sign-in
+// completing in a *different* browsing context than the one that requested
+// it must still land the colleague with their granted membership, which the
+// old `PENDING_INVITATION_KEY` `sessionStorage` marker could not survive
+// (`join-link.spec.ts`'s own module comment has why a second `Page` in the
+// same `BrowserContext` is the right stand-in for that — shared cookies,
+// isolated `sessionStorage`, exactly a mail client's own "open in a new
+// tab"). Fails without the fix: the redeemed session would land on the
+// ordinary, empty shell in the second tab, with no second organization on
+// the switcher at all.
+test('a sign-in that completes in a different browsing context than the one that requested it still lands the colleague with their membership (AUTH-6)', async ({
+  page,
+  context,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const colleagueEmail = `crosstab-colleague-${suffix}@example.edu`
+  const { institutionName, secret } = seedInvitation(suffix, colleagueEmail)
+
+  // Tab A: follow the invitation link, signed out, and request a sign-in
+  // link — exactly as far as a visitor gets before switching to their mail
+  // client.
+  await page.goto(`/invitations/${secret}`)
+  await page.getByLabel('Email').fill(colleagueEmail)
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
+  await expect(page.getByTestId('link-requested')).toContainText(colleagueEmail)
+  const token = await readSignInToken(colleagueEmail)
+
+  // Tab B: a genuinely different browsing context — a fresh `Page` in the
+  // same `BrowserContext`, sharing cookies (irrelevant here: neither tab has
+  // a session yet) but not `sessionStorage`, the same isolation a mail
+  // client's own "open in a new tab" gives a real visitor. This is the tab
+  // that actually opens the emailed link.
+  const otherTab = await context.newPage()
+  await otherTab.goto(`/sign-in/${token}`)
+
+  // Redeemed in tab B, and tab B lands with the granted membership visible
+  // on the switcher — carried entirely on the token the server issued,
+  // never on anything tab A's own `sessionStorage` wrote (tab B never
+  // touched it).
+  await expect(otherTab.getByTestId('organization-switcher')).toBeVisible()
+  await otherTab
+    .getByRole('combobox', { name: 'Organization' })
+    .selectOption({ label: `${institutionName} (instructor)` })
+  await expect(otherTab.getByRole('button', { name: 'Team' })).toBeVisible()
+
+  await otherTab.close()
 })

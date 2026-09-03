@@ -193,11 +193,11 @@ export function listPeople(organizationId: string, db: Database): Person[] {
  * `organizationId`.
  *
  * Added for finding 1 of the MDL-1 rework (docs/DECISIONS.md, D-16): MDL-4's
- * seeded opening item needs the person's own external id to embed as
- * `metadata.user_id` (`response_bot.py:262-269`'s `<@id>`), and the surface
- * that reported the message knowing the raw snowflake is not a reason to
- * make `answer.ts` ask its caller for something `person_identities` already
- * holds.
+ * seeded opening item needs the person's own external id, once to embed in
+ * the opening item itself and once (raw, unwrapped, since CORE-7/CORE-8's
+ * split — D-70) as `metadata.user_id`; the surface that reported the
+ * message knowing the raw snowflake is not a reason to make `answer.ts` ask
+ * its caller for something `person_identities` already holds.
  *
  * D-35 rework, finding 8 — `mergePeople` makes more than one identity on the
  * same surface for one person routine (a survivor absorbing a loser who had

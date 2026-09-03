@@ -7202,6 +7202,49 @@ require it). The `person_identities` multi-identity-per-surface imprecision `peo
 doc comment already names (see the second choice above) — a pre-existing, documented limitation this slice
 inherits rather than fixes.
 
+**Rework round — three findings from an independent review, none a design change.**
+
+1. **The e2e assertion did not pin the fix.** `e2e/chat.spec.ts`'s own two `not.toContain` lines against the
+   rendered thread pass with the reported defect fully present — verified directly: `answer.ts`'s `addressAs`
+   computation was reverted to Discord's own mention token for every surface, `apps/web` was rebuilt, and the
+   spec still passed, because `e2e/support/fake-model-client.ts` answers with a fixed string that never reads
+   `request.addressAs` at all. The spec's own comment already said the mechanism was not real, but read as
+   though the assertion still proved the fix; a reader would reasonably believe otherwise. Fixed two ways: the
+   comment was rewritten to say plainly, up front, that this assertion passes with the defect present and is not
+   a regression test for it; and `apps/api/tests/routes/chat.test.ts` gained the cheap, genuine proof this
+   package's own test suite can give — an `EchoingModelClient` (the same device `packages/core/tests/answer.test.ts`'s
+   own CORE-7/CORE-8 block already uses) asserted against the actual HTTP response body a browser reads, which
+   does fail with the defect restored. `e2e/support/fake-model-client.ts` was deliberately left static rather
+   than made to echo `addressAs`: that file is shared by several other specs which assert its exact fixed text,
+   and making it dynamic risked a defect in an unrelated spec for a proof already available more cheaply one
+   layer down.
+2. **The guard caught only the literal token, and covered only one of two packages that could reintroduce it.**
+   Writing the same mention as `'<' + '@' + identity.externalId + '>'` in `packages/core/src/answer.ts` passes
+   `no-vendor-sdk.test.ts`'s own scan cleanly — verified; only the behavioural CORE-7/CORE-8 tests in
+   `answer.test.ts` caught it. That guard's own comment now says so directly: it is the cheap, fast layer for
+   the obvious case, not the platform's only defence — the behavioural tests are. Separately, the guard scanned
+   `packages/core/src` only, and `packages/openai/src` is equally able to hard-code a surface's syntax (it is
+   the package `addressAs`/`personIdentifier` actually land in) — `packages/openai/tests/no-surface-syntax.test.ts`
+   is a new, analogous guard for that package, the same shape `no-vendor-hostname.test.ts` already takes for
+   MDL-7, copied rather than added as a second responsibility to an existing file (this package's own
+   established one-guard-per-file convention). Two doc comments in `packages/openai/src/conversations.ts` quoted
+   the literal token to describe `response_bot.py`'s own f-string; both were rephrased in prose so the new guard
+   needs no comment-vs-code exception to stay a plain substring scan.
+3. **Three comments described a value that no longer matched, after this slice's own change.** Discord's
+   upstream `metadata.user_id` changed from the wrapped mention token to the bare snowflake (deliberate,
+   documented above: metadata is never part of the content a model reads, so a raw identifier is safe there
+   regardless of surface, and more useful for a later lookup). `ports.ts`'s `ModelRequest.personIdentifier`,
+   `conversations.ts`'s `CreateUpstreamConversationOptions.personIdentifier`, and — untouched by this slice
+   originally, but wrong for the identical reason — `people.ts#getPersonIdentity`'s own doc comment all still
+   claimed this value matches `response_bot.py`'s (`response_bot.py:269` sends the mention token itself). All
+   three now say plainly that the *field* matches and the *value* does not, and name the operational
+   consequence in the one place an operator would actually read it (`ports.ts`): filtering the provider's own
+   dashboard by a legacy, mention-shaped `user_id` will not match a conversation created from this slice on.
+
+Final counts after the rework: 90 node:test (unchanged), 2128 vitest across 183 files (this rework's own
+baseline, `efbc729`, was 2119/182 — +9 tests, +1 file, `no-surface-syntax.test.ts`), 25 e2e (baseline 24 — no
+new spec from this round; the count changed by D-71's own rework, below, not this one).
+
 ---
 
 ## D-71 — `packages/db`/`packages/auth`/`apps/api`/`apps/web`/`e2e`: AUTH-6/WEB-25 — a sign-in's own destination survives whichever tab redeems it, and a join-link redemption confirms itself and lands the student in the joined course
@@ -7330,3 +7373,70 @@ earlier, undestined one for the same address is still outstanding (within its fi
 narrow, pre-existing edge case this slice did not widen and did not attempt to close, since doing so would mean
 mutating an already-issued, unconsumed token, a different (and larger) change than this slice's own brief
 asked for.
+
+**Rework — closing this entry's own named limit: `pages/Invitation.tsx` was the one entry point this slice
+left behind.** An owner's invited colleague (ENRL-10) is emailed a membership invitation exactly the way a
+join link is, so it carried the identical defect this entry's own "Problem" already fixed for join links and
+Discord connect: `Invitation.tsx` still stashed `PENDING_INVITATION_KEY` in `sessionStorage`, which a mail
+client opening the sign-in link in a fresh tab cannot read, stranding the colleague on the plain shell with no
+membership and no explanation. Fixed the identical way this entry's own two paths were: `Invitation.tsx` now
+passes its own address as `SignIn`'s `destination` prop, carried on the sign-in token itself
+(`isSameOriginPath`/`consumeSignInToken`, already generic — no change needed to `packages/auth` or
+`routes/auth.ts` to accept a third caller); `App.tsx#returnToShell`'s own `sessionStorage` fallback branch is
+now dead code with all three paths converted, and was removed rather than left unreachable.
+`PENDING_INVITATION_KEY` is retired the same way `PENDING_JOIN_LINK_KEY` already was; `PENDING_CONNECT_ORG_KEY`
+keeps its one remaining job (the same-tab Discord OAuth redirect, unrelated to sign-in). `e2e/join-link.spec.ts`'s
+own cross-tab test (`context.newPage()` — a real second browsing context in the same `BrowserContext`, sharing
+cookies but not `sessionStorage`) is the precedent `e2e/membership-invitation-panel.spec.ts` now has its own
+copy of, seeding the invitation directly against the e2e database rather than through the panel (the panel path
+is already proven by the pre-existing test in that file).
+
+**A process failure, named rather than smoothed over: a mutation-test leftover shipped as if it were the fix,
+caught by an independent review rather than by this agent.** While verifying the tests above fail without the
+fix (this document's own standing discipline), `Invitation.tsx`'s `destination` prop was intentionally removed
+to confirm `invitation.test.tsx`'s new test went red — and then, mid-investigation of an unrelated, apparently
+flaky e2e timeout, was never restored before moving on. The result: `Invitation.tsx`'s own module comment
+described passing a `destination` prop the code directly beneath it did not pass, `SignIn.tsx`'s own prop doc
+still claimed only two callers had anywhere to return to, and roughly forty minutes were spent diagnosing the
+resulting e2e timeout as a suspected environment/resource issue — checking system load, testing the API
+directly with `curl` (which worked, instantly, correctly, because the *backend* was never broken), and
+concluding, wrongly, that this was shared-machine contention rather than the tree's own uncommitted state. The
+review that caught it read the comment against the code directly, which is the check this discipline should
+have applied before ever declaring the mutation test "confirmed" and moving on. Fixed, and the lesson is
+procedural, not technical: **finish reverting a mutation before starting the next investigation, and re-read
+the file's own comment against its own code as the last step before calling a fix done** — the second half is
+what four separate review rounds on this branch have now caught missing at least once.
+
+**A second, unrelated drift found in the same working set: `docs/DEPLOY_DROPLET.md` carried roughly 300 lines
+this slice never wrote** — a specific domain's own DNS delegation walkthrough (`wonkledge.com`, GitHub Pages
+coexistence, a reserved IP, nginx gzip/caching, swap sizing), unrelated to CORE-7/CORE-8 or AUTH-6/ENRL-10 and
+absent from both briefs. Reverted to `HEAD` rather than kept or explained as this slice's own output, since
+none of it does in fact fall out of this work — it reads like a real operator's own working notes from an
+actual deployment, mixed into this working tree by some means this agent cannot account for (not a hook, not
+a mutation test, not anything intentional in this session's own record) and is flagged here exactly because
+"I am not assuming either way" was the right instruction: this agent is not the source of it and cannot claim
+otherwise, but also has no evidence pointing elsewhere. Worth a supervisor's own look at whether the working
+tree saw a second writer despite the "one writer at a time" rule this build otherwise holds to.
+
+**Evidence.** `invitation.test.tsx`'s new test and the rewritten `app.test.tsx` case were both confirmed
+failing (the former: `requestSignInLink` called with `undefined` where `/invitations/secret-abc` was expected;
+the latter: unaffected by this particular mutation, by design — it mocks `redeemSignInLink`'s own response
+directly, proving `App.tsx`'s dispatch is generic rather than re-testing `Invitation.tsx`'s own wiring) and
+passing once reverted. `e2e/membership-invitation-panel.spec.ts`'s new AUTH-6 case was confirmed failing
+(30-second timeout waiting for the granted membership to appear on the switcher — it never does, because the
+colleague never returns to `/invitations/:secret` to redeem it) and passing once reverted, and the pre-existing
+ENRL-10 test in the same file — untouched by this slice, confirmed via `git diff` showing zero change to its
+own body — failed and passed on the identical schedule, which is what actually revealed the mutation had been
+left in place rather than an environment issue.
+
+Final counts after the rework: 90 node:test (unchanged), 2128 vitest across 183 files (unchanged from D-70's
+own rework, above — this rework touched no vitest file), 25 e2e (this entry's own original baseline was 24;
++1, `e2e/membership-invitation-panel.spec.ts`'s new AUTH-6 case). `npx drizzle-kit check` (from `packages/db`):
+clean, no drift.
+
+**Limits, updated.** The `hasActiveSignInToken` anti-flood limit named above is unchanged and now applies
+identically to `Invitation.tsx`'s own `requestSignInLink` call. Nothing about the redemption logic itself
+(`redeemMembershipInvitation`, `packages/db`) needed to change — confirmed directly, by driving the whole
+sign-in-and-redeem round trip against the running e2e API with `curl` alone, bypassing the browser, while
+diagnosing the mutation above: every call resolved correctly and in milliseconds, which is what first pointed
+away from a backend defect and eventually toward the tree's own uncommitted state instead.

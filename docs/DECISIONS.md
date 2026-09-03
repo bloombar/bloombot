@@ -6161,3 +6161,61 @@ seeded student's email/handle), not against the repo function. `apps/web/tests/r
 existing "a finished report names every unparseable row" case, and the `roster-import-panel.spec.ts` e2e,
 needed no change and still pass — the panel's own `JobStatus` type never declared a `payload` field to begin
 with, so nothing in `apps/web` read the field this slice removes.
+
+## D-62 — `playwright.config.ts`/`e2e/support`: QA-9 — the e2e suite fails under its own parallelism, `workers: 1` over a database per spec file
+
+**Problem.** `npm run e2e` failed intermittently — `SQLITE_BUSY`/`database is locked`, raised from inside
+transactions in specs unrelated to one another. Reproduced on purpose before changing anything: five consecutive
+baseline runs at the commit this slice started from failed three of five, each time a different spec, each
+failure a UI timeout after a panel action silently never completed. `e2e/tmp/logs/e2e-api.log` named the actual
+cause underneath the UI timeout: `SqliteError: database is locked`, `code: SQLITE_BUSY` from
+`course-join-links.ts#redeemJoinLinkForWebAccount`'s transaction, and separately `code: SQLITE_BUSY_SNAPSHOT`
+from `courses.ts#createCourse`'s — both inside `apps/api`'s own single process, both from real, concurrently
+committing connections, not a single slow one.
+
+**Diagnosis, confirmed rather than assumed.** `playwright.config.ts`'s existing `fullyParallel: false` only
+serialises tests *within* one spec file; it set no `workers` limit, so Playwright's default pool (half the
+machine's CPUs — 4, on this machine's 8) ran separate spec files concurrently, in separate worker processes, all
+driving the one `apps/api` process (`e2e/support/start-api.ts`) against the one SQLite file at
+`E2E_DATABASE_PATH`. The second half of the mechanism, checked directly rather than inferred: ten of the twelve
+spec files (`course-configuration.spec.ts` among them) also open their *own* direct
+`openDatabase(E2E_DATABASE_PATH)` connection — a second, independent connection to the same file, live at the
+same moment as the API's, used to seed state past the browser or assert past the API's own read actions. With
+more than one worker, a spec's own direct write and a *different*, concurrently running spec's request landing
+on the API can commit at the same moment, and SQLite answers one of them `SQLITE_BUSY` (ordinary lock
+contention) or `SQLITE_BUSY_SNAPSHOT` (a deferred transaction's read snapshot invalidated by someone else's
+concurrent commit). The brief's warning proved out exactly: `busy_timeout` (already 5000ms, `packages/db/src/
+client.ts`) only helps the first of those two — a `SQLITE_BUSY_SNAPSHOT` transaction cannot be waited out, it has
+to restart, so raising the timeout further would not have touched the failures actually observed in the log.
+
+**Fix chosen: `workers: 1`, not a database per spec file.** Both were viable — the diagnosis is genuine
+multi-*process* concurrency, and either "stop sharing the database" or "stop running concurrently" removes it
+(SPEC's own QA-9 phrasing names both). Chose `workers: 1`: it removes the concurrent connection entirely (with
+one worker, Playwright runs one spec file — browser actions, API requests and that spec's own direct database
+access — to completion before starting the next, so at most one non-API connection is ever open), it needs no
+new machinery (no per-worker API process, no per-worker database path plumbed through `env.ts`, `start-api.ts`
+and every direct `openDatabase` call), and the cost is small: the suite's own wall clock went from ~11-12s to
+~20-26s across ten runs (`npm run e2e` includes `pree2e`'s build; `npx playwright test` alone measured ~21s). A
+database per spec file was rejected as materially more machinery — a distinct API process per worker, a distinct
+database path threaded through everywhere a spec currently imports `E2E_DATABASE_PATH` — to buy back roughly ten
+seconds on a fourteen-test suite. If this suite grows enough that ten seconds compounds into a real cost, that
+machinery is the next move; nothing here forecloses it.
+
+**Made hard to silently undo.** `workers: 1` alone is a config line indistinguishable, to a contributor chasing
+suite speed, from an arbitrary default — nothing stops it being raised back without anyone learning why, and the
+failure that follows (intermittent, in an unrelated-looking spec) would not obviously point back at the change
+that caused it. `e2e/support/require-single-worker.ts`, wired in as `globalSetup`, reads Playwright's own
+*resolved* worker count — after every CLI override, not just the config file — and throws immediately, naming
+QA-9 and this record, if it is ever anything but `1`. Verified directly: `npx playwright test --workers=4` now
+fails before any process starts, with that message.
+
+**Rejected: `retries`.** Not considered a fix at all — `playwright.config.ts`'s own existing comment on
+`retries: 0` already states the reasoning ("a flake here should be diagnosed, not hidden by Playwright's own
+retry loop") and this slice's brief repeated it; re-running a real API and database until one attempt gets lucky
+is exactly the "coin flip" QA-9 is about not being.
+
+**Verification.** Ten consecutive `npm run e2e` runs post-fix, each one `14 passed`, zero `SQLITE_BUSY`/
+`SQLITE_BUSY_SNAPSHOT` lines appended to `e2e/tmp/logs/e2e-api.log` across any of them (the three present in that
+file are timestamped during the pre-fix baseline reproduction, ~7 minutes earlier than the first post-fix run).
+`npm run lint && npx prettier --check . && npm run typecheck && npm test` all pass unchanged
+(90 node:test, 1926 vitest across 172 files, matching this slice's stated baseline).

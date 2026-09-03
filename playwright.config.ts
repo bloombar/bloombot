@@ -31,6 +31,30 @@ import {
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
+  // QA-9: `workers: 1`, not merely `fullyParallel: false` above. That
+  // setting only serialises tests *within* one spec file — with no
+  // `workers` limit, Playwright's default pool still runs separate spec
+  // files concurrently, in separate worker processes, all driving the one
+  // `apps/api` process from `e2e/support/start-api.ts` against the one
+  // SQLite file at `E2E_DATABASE_PATH`. Several specs (`course-configuration
+  // .spec.ts` among them) also open their *own* direct
+  // `openDatabase(E2E_DATABASE_PATH)` connection to seed or assert past the
+  // API — a second, independent connection to the same file, live at the
+  // same time as the API's. Confirmed by reproducing it (`docs/DECISIONS.md`):
+  // baseline runs failed 3 of 5 with `apps/api`'s own log recording both
+  // `SQLITE_BUSY` and `SQLITE_BUSY_SNAPSHOT` from inside `courses.ts` and
+  // `course-join-links.ts` transactions. Raising `busy_timeout` cannot fix
+  // the latter — a snapshot invalidated by a concurrent commit is not a lock
+  // to wait out, it is a transaction that must restart — so the fix is to
+  // remove the concurrent connection, not to make it wait longer. `workers:
+  // 1` costs real wall clock (~11-12s became ~20-26s across ten runs
+  // locally) in exchange for a suite that gives the same answer every time;
+  // a database per spec file (per worker) was rejected as materially more
+  // machinery for a suite this size — see docs/DECISIONS.md's D-62 for the
+  // full trade. `globalSetup` below fails loudly if this is ever raised back
+  // without knowing why.
+  workers: 1,
+  globalSetup: './e2e/support/require-single-worker.ts',
   // No retries in this slice: a flake here should be diagnosed, not hidden
   // by Playwright's own retry loop re-running a real API and database.
   retries: 0,

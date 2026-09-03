@@ -636,7 +636,8 @@ export const discordInstallStates = sqliteTable(
 // `repos/**`'s usual organization-scoped functions, so a payload naming
 // another tenant's record is refused the same way any other cross-tenant
 // read or write is (`repos/jobs.ts`'s own module comment has the worked
-// example).
+// example). JOB-6: `payload` is retention-bounded, not kept for the life of
+// the row the way `kind` is — see the column's own comment below.
 export const JOB_STATUSES = [
   'pending',
   'running',
@@ -653,7 +654,17 @@ export const jobs = sqliteTable(
       .notNull()
       .references(() => organizations.id),
     kind: text('kind').notNull(),
-    payload: text('payload').notNull(),
+    // JOB-6: not-null while a job can still be claimed or retried (pending,
+    // running, or awaiting a scheduled retry) — nulled by `repos/jobs.ts`'s
+    // own `completeJob`/`markJobFailed`, in the same write that records the
+    // terminal `succeeded`/`failed` status, so a job that has finished stops
+    // carrying whatever real names, emails or Discord handles it was given
+    // (`roster.import`'s own `csvText`, worked example). Left populated by
+    // `rescheduleJobForRetry` — JOB-2's retry and JOB-3's once-only
+    // execution across a worker restart both still need it for the next
+    // attempt, so the one state that is not terminal is deliberately left
+    // untouched here.
+    payload: text('payload'),
     status: text('status', { enum: JOB_STATUSES }).notNull(),
     // How many attempts this job has been claimed for, incremented by
     // `repos/jobs.ts#claimNextJob` at the moment of claim — attempt 1 is the

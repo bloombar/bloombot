@@ -6093,3 +6093,71 @@ cases; (2) the new `packages/db/tests/enrolments.test.ts` merge-collision case; 
 for the `role="status"` live region's own announced text (a hole a prior review pass left: deleting the region
 entirely left every existing test green) — verified failing the same way, by temporarily removing the region and
 rerunning.
+
+## D-61 — `packages/db`/`packages/actions`/`packages/jobs`: JOB-6 — a finished job stops carrying the personal data it was given, `payload` clears only from a state no retry follows, and `jobs.get` drops the field outright
+
+**Problem.** A security review of the roster-import panel found that `roster.import`'s own job payload — an
+entire roster CSV, real names, emails and Discord handles — was never cleared once the import finished, and
+`jobs.get` handed the parsed payload back to any member of the organization for the life of the row. Correctly
+tenant-scoped, crossing no privilege boundary (anyone who could read it could have dispatched the import
+themselves), but a retention gap on exactly the class of data `data/*.db`/`logs/*.log`/`results/*.csv`/
+`rosters/*.csv` are hook-protected for, sitting in the one place nothing protects.
+
+**Which states clear `payload`, and why exactly those two.** `repos/jobs.ts#completeJob` (`succeeded`) and
+`#markJobFailed` (`failed`, attempts exhausted or a permanent error) both null the column in the same write that
+records the terminal status — clearing it as a separate pass would leave a window where a crash between the two
+writes lands a terminal job that still carries its payload, defeating the guarantee as surely as never clearing
+it. `#rescheduleJobForRetry` (the job returns to `pending`, a retry still ahead of it) deliberately leaves
+`payload` untouched: JOB-2's retry and JOB-3's once-only execution across a worker restart both re-read it for
+the next attempt. `claimNextJob`'s own `eligible()` is what makes this safe — it only ever claims a `pending` row
+or a `running` one whose lease lapsed, never a `succeeded` or `failed` one, so a terminal row is never reclaimed
+and its payload is never needed again.
+
+**Schema.** `jobs.payload` moved from `text('payload').notNull()` to nullable (`schema.ts`). Two migrations:
+`0015` (drizzle-kit generated, the SQLite 12-step table rebuild the column-nullability change requires) and a
+hand-written `0016` — `UPDATE jobs SET payload = NULL WHERE status IN ('succeeded', 'failed')` — backfilling
+every row that reached a terminal state before this shipped. Written narrowly on purpose: only `payload`, only
+`succeeded`/`failed` rows, the same WHERE clause the repo layer itself now enforces going forward, stated in the
+migration's own comment so a future reader does not have to re-derive what it touches from the SQL alone.
+
+**`jobs.get` stops returning `payload` outright, not merely once it is cleared.** Two options: hide the field
+once the row's own `payload` happens to be `null`, or drop it from the action's response unconditionally. Chose
+the latter. Nothing that calls this action today reads `payload` off the response — `ScaffoldButton.tsx` and
+`RosterImport.tsx` (checked directly, not assumed) only ever read `status`/`lastError`/`result`, and
+`apps/web/src/api/types.ts`'s own hand-mirrored `JobStatus` interface already omitted `payload` before this
+slice touched it, for the same reason `apps/mcp/src/tool-surface.ts`'s own allowlist already excludes it: a
+completed `roster.import` job's *report* carries a subset of the same PII in several of its own fields, which is
+exactly why `roster.import` itself is deliberately kept off the MCP tool surface. Returning `payload` only while
+a job is still `pending`/`running` would have closed less than the platform-level read action stopping
+entirely — a caller belonging to the organization can read a roster CSV back through `jobs.get` for as long as
+the row is queued, before this slice's own retention write ever runs, which is the same PII exposure through a
+narrower window rather than a closed one. `result` (the outcome — SRV-6..8) is untouched; this action still
+returns the handler's own report, which is the whole point of the "way to see the outcome" `jobs.get` exists for.
+
+**The runner's own defensive branch, and why it earned a test.** `runNextJob` (`packages/jobs`) parses
+`job.payload` for whatever handler claimed the row; once the column's type is `string | null`, `JSON.parse`
+alone would silently treat a `null` payload as the JSON value `null` (JavaScript coerces `JSON.parse`'s argument
+to the string `"null"` first, so this does not even throw) rather than failing loudly. Added an explicit guard —
+a claimed job with a `null` payload fails immediately with a named reason, the same "defensive, not a case this
+function's contract expects a caller to hit" shape the existing missing-handler branch already uses. Per the
+reasoning above this should be structurally unreachable (`eligible()` never reclaims a terminal row), but it is
+cheap to prove and it is exactly the kind of invariant a future edit could quietly break, so
+`packages/jobs/tests/runner.test.ts` reaches past the repo layer (the same device the existing "a payload that
+will not parse" test already uses) to null a claimed row's payload directly and asserts the guard fires.
+
+**Tests, failing-then-passing.** Verified by stashing only the three source edits (`repos/jobs.ts`,
+`actions/jobs.ts`, `runner.ts`) with the schema/migration/test changes still in place, rerunning, and restoring:
+all seven new assertions failed cleanly (a still-populated `payload` where `null` was expected, `payload`
+present in `jobs.get`'s own response, and the retry-then-succeed regression still succeeding when the defensive
+guard test expected it to fail) with no other test affected, then passed once the stash was restored.
+`packages/db/tests/jobs.test.ts` proves `completeJob`/`markJobFailed` clear `payload` and
+`rescheduleJobForRetry` does not, at the repo layer; `packages/jobs/tests/runner.test.ts` proves the regression
+that matters most — a job that fails but has attempts left is retried through two real `runNextJob` calls, and
+the second attempt's handler still receives the same payload the first one did — plus the succeeded-clears-
+payload case and the null-payload defensive branch, both through the real runner rather than an assertion about
+a column; `packages/actions/tests/reads.test.ts` proves `jobs.get`'s own response — pending or finished — never
+carries `payload`, asserted against the actual response shape (`Object.keys`, a `JSON.stringify` scan for the
+seeded student's email/handle), not against the repo function. `apps/web/tests/roster-import.test.tsx`'s
+existing "a finished report names every unparseable row" case, and the `roster-import-panel.spec.ts` e2e,
+needed no change and still pass — the panel's own `JobStatus` type never declared a `payload` field to begin
+with, so nothing in `apps/web` read the field this slice removes.

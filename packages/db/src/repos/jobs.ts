@@ -26,6 +26,21 @@
  * enforcement for that; the scoping every other repo function already holds
  * itself to is the whole answer (`tests/jobs.test.ts` proves it against a
  * real handler-shaped call).
+ *
+ * JOB-6 — `payload` is opaque, but it is not kept forever: it is real
+ * personal data (`roster.import`'s own payload is an entire roster CSV —
+ * names, emails, Discord handles), and a job outlives the work it described
+ * once it reaches a state nothing will ever read the payload from again.
+ * `completeJob` and `markJobFailed` below null it out in the same write that
+ * records the terminal `succeeded`/`failed` status — clearing it as a
+ * separate pass, after the fact, would leave a window where a crash between
+ * the two writes lands a terminal job that still carries its payload, and
+ * defeats the retention guarantee as surely as never clearing it at all.
+ * `rescheduleJobForRetry` is the one write that must *not* clear it: JOB-2's
+ * retry and JOB-3's once-only execution across a worker restart both re-read
+ * the payload for the next attempt, so a job that failed but has attempts
+ * left still needs it, and stays exactly as populated as it was on the last
+ * attempt.
  */
 
 import { and, asc, eq, inArray, lt, lte, or, sql } from 'drizzle-orm'
@@ -211,6 +226,12 @@ export function claimNextJob(
  * handler that resolves with nothing (`Promise<void>`, still the common
  * case for a job with no report worth keeping) — the column stays `null`
  * rather than becoming the string `"undefined"` or `"null"`.
+ *
+ * JOB-6 — `payload` is nulled in this same write. `succeeded` is terminal:
+ * nothing ever reclaims this row (`claimNextJob`'s own `eligible()` only
+ * matches `pending` or a lapsed `running` lease), so nothing will read the
+ * payload again — the input this job was given is not the job's outcome,
+ * and does not outlive it.
  */
 export function completeJob(
   organizationId: string,
@@ -226,6 +247,7 @@ export function completeJob(
       status: 'succeeded',
       claimedBy: null,
       claimExpiresAt: null,
+      payload: null,
       updatedAt: now,
       ...(result !== undefined ? { result: JSON.stringify(result) } : {}),
     })
@@ -247,6 +269,11 @@ export interface RetryFailure {
  * file). `reason` is kept on `lastError` even though this is not the
  * terminal state, so the row shows why the *last* attempt failed while it
  * waits for the next one.
+ *
+ * JOB-6 — `payload` is deliberately left untouched here, unlike
+ * `completeJob`/`markJobFailed`: this is not a terminal state, a retry
+ * follows, and the next attempt (JOB-2) reads the same payload the previous
+ * one did.
  */
 export function rescheduleJobForRetry(
   organizationId: string,
@@ -275,6 +302,12 @@ export function rescheduleJobForRetry(
  * A claimed job's attempt failed, and it has exhausted its attempts —
  * JOB-2's terminal state: stays on the table with `reason` in `lastError`,
  * never deleted and never silently dropped.
+ *
+ * JOB-6 — `payload` is nulled in this same write, the same reasoning
+ * `completeJob`'s own doc comment gives: `failed` is as terminal as
+ * `succeeded` is (this file's own `eligible()`, in `claimNextJob`, never
+ * reclaims either), so the row keeps the reason it stopped but not the
+ * input it was given.
  */
 export function markJobFailed(
   organizationId: string,
@@ -290,6 +323,7 @@ export function markJobFailed(
       status: 'failed',
       claimedBy: null,
       claimExpiresAt: null,
+      payload: null,
       lastError: reason,
       updatedAt: now,
     })

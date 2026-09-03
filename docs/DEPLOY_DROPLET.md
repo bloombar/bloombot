@@ -179,7 +179,7 @@ what breaks when it is wrong or missing:
 | `DATABASE_PATH` | no (`./data/data.db` default) | the platform's own SQLite file | every process opens this; a path a process cannot create/write to fails that process's own startup |
 | `ATTACHMENT_STORAGE_DIR` | no (`./data/attachments` default) | course attachment bytes on disk (FILE-1..5) | same failure mode as `DATABASE_PATH` — not writable, that action fails |
 | `SQL_LITE_DB_PATH` | **yes, while the Python bot still runs** | the same SQLite file, the Python bot's own name for it (D-9) | must equal `DATABASE_PATH` **exactly** or the two systems silently fork onto different databases with no error until the data has already diverged |
-| `PUBLIC_APP_URL` | **yes** — e.g. `https://bloombot.example.edu` (no trailing slash — see why) | the panel's public origin, scheme+host | every non-GET API request's `Origin` (falling back to `Referer`) is checked against this (`apps/api/src/middleware/origin.ts`, AUTH-3) — a mismatch is a `403` on every save, sign-in included. A trailing slash here does *not* break that check on its own (`origin.ts` compares `new URL(...).origin`, which normalizes it away) — it breaks the Discord install/connect redirect instead: `discordRedirectUri` is built as a plain string concatenation (`` `${publicAppUrl}/discord/callback` ``, `apps/api/src/index.ts`), so a trailing slash produces `.../callback` with a doubled `//` in the middle and stops matching the URI registered in the Discord developer portal (§4.1) at all |
+| `PUBLIC_APP_URL` | **yes** — e.g. `https://bloombot.wonkledge.com` (no trailing slash — see why) | the panel's public origin, scheme+host | every non-GET API request's `Origin` (falling back to `Referer`) is checked against this (`apps/api/src/middleware/origin.ts`, AUTH-3) — a mismatch is a `403` on every save, sign-in included. A trailing slash here does *not* break that check on its own (`origin.ts` compares `new URL(...).origin`, which normalizes it away) — it breaks the Discord install/connect redirect instead: `discordRedirectUri` is built as a plain string concatenation (`` `${publicAppUrl}/discord/callback` ``, `apps/api/src/index.ts`), so a trailing slash produces `.../callback` with a doubled `//` in the middle and stops matching the URI registered in the Discord developer portal (§4.1) at all |
 | `API_PORT` | no (`3000`) | the Express API's own port | nginx's `proxy_pass` (§5) must match |
 | `BOT_HEALTH_PORT` | no (`3001`) | the bot's own `/health` port | `scripts/health-check.mjs`/`scripts/ops-monitor.mjs` poll this |
 | `WORKER_HEALTH_PORT` | no (`3002`) | the worker's own `/health` port | same |
@@ -292,11 +292,16 @@ adapter exists.
 `apps/web`'s own build (`npm run build --workspace apps/web`, run in §4.3 once
 `VITE_GOOGLE_CLIENT_ID` was known) produces `apps/web/dist` — a static bundle with no server of
 its own (`apps/web/vite.config.ts`'s own module comment: "in production nginx puts the built
-bundle and the API behind one origin"). The only paths `apps/api` actually serves are `/health`,
-`/auth`, `/organizations` and `/admin` (and everything nested under them) —
-`apps/web/vite.config.ts`'s own dev-time proxy names exactly this list; everything else is the
-static bundle, with client-side routing falling back to `index.html`. `/admin` is `apps/api`'s
-own mount for the platform-administrator console's reads and writes (`routes/admin.ts`) — a
+bundle and the API behind one origin"). The paths `apps/api` actually serves are `/health`,
+`/auth`, `/organizations`, `/admin`, `/join-links` and `/membership-invitations` (and everything
+nested under them) — `apps/web/vite.config.ts`'s own dev-time proxy names exactly this list, and
+it is the list to re-check against `apps/api/src/server.ts`'s own mounts whenever a slice adds a
+route; everything else is the static bundle, with client-side routing falling back to
+`index.html`. `/join-links` (ENRL-8) and `/membership-invitations` (ENRL-10) are unscoped mounts,
+not nested under `/organizations` — a redeemer presents only the secret, not an organization id
+(those routers' own module comments) — so each needs its own `location` below. `/admin` is
+`apps/api`'s own mount for the platform-administrator console's reads and writes
+(`routes/admin.ts`) — a
 different path from the panel's own `/platform-admin` page (`App.tsx`), deliberately: a page path
 and a proxied API path can never share one top-level segment, or nginx cannot tell which of the
 two a request means (`docs/DECISIONS.md` D-48 has the collision this once already was, found and
@@ -308,18 +313,219 @@ generic failure with no indication the actual cause is this file.
 ### 5.1 DNS, before anything else
 
 `certbot`'s own certificate request (§5.3) proves domain ownership by having your DNS resolver
-answer for the domain — it has no way to succeed before that answer exists. Point an `A` (and,
-for IPv6, `AAAA`) record at the droplet's own address first, and confirm it before touching
-nginx at all:
+answer for the domain — it has no way to succeed before that answer exists. The domain must
+resolve to the droplet, from the public internet, *before* nginx is configured and *before*
+certbot is run:
 
 ```bash
-dig +short bloombot.example.edu
+dig +short bloombot.wonkledge.com
 # must print the droplet's own IP — if it prints nothing, or a different address, stop here.
 # DNS propagation can take minutes to hours depending on the record's own TTL.
 ```
 
 Getting this wrong shows up as `certbot` failing an HTTP-01 challenge with a message about the
 *challenge*, not about DNS — nothing points you back to this step unless you already suspect it.
+
+The rest of this section is how to make that `dig` answer correctly for the deployment this
+document is written against: **`wonkledge.com` registered at DreamHost, its zone delegated to
+DigitalOcean's nameservers, and `bloombot.wonkledge.com` pointed at the droplet.** Substitute
+your own domain throughout if it differs — every command below names the host explicitly.
+
+#### 5.1.0 Give the droplet a reserved IP first
+
+An ordinary droplet IP is not stable across a destroy/rebuild, and every DNS record, TLS
+certificate and registered redirect URI below is pinned to whatever address you write down here.
+Assign a **reserved IP** (DigitalOcean → Networking → Reserved IPs → assign to the droplet) and
+use *that* address in §5.1.3 — rebuilding the droplet then means re-pointing the reserved IP, not
+re-doing DNS and waiting out propagation while the site is down.
+
+```bash
+doctl compute reserved-ip list      # or read it off the droplet's own page in the console
+```
+
+#### 5.1.1 Read this before delegating: the apex is a live GitHub Pages site
+
+`wonkledge.com` currently serves a GitHub Pages site, and DNS for it is currently answered by
+DreamHost's nameservers. Delegating the zone to DigitalOcean moves **every record in it at
+once** — apex, `www`, mail, and every verification record — not just the new subdomain. The
+nameservers you delegate to become the only ones the internet asks; anything you did not
+recreate there simply stops existing the moment delegation propagates, with no error anywhere.
+The failure mode is the apex site and (if the domain receives mail) the mail for it going dark
+hours after a change that looked like it only concerned a subdomain.
+
+So there are two shapes, and the choice is about blast radius:
+
+| | **Delegate the whole zone** (§5.1.2–5.1.6, what this document walks through) | **Delegate only the subdomain** (§5.1.7) |
+|---|---|---|
+| What moves | all of `wonkledge.com`'s DNS | `bloombot.wonkledge.com` only |
+| Apex/GitHub Pages risk | real — you must recreate its records first | none; the apex zone is never touched |
+| Where records live afterwards | one place (DigitalOcean), next to the droplet | two places, and you must remember which |
+| Worth it when | you want the droplet and its DNS managed together, and `doctl`/DNS-01 certificate issuance available for the whole domain | the apex site matters more than the convenience |
+
+Neither is wrong. §5.1.7 is the lower-risk one and is a complete alternative — if you take it,
+skip §5.1.2–5.1.6 entirely.
+
+#### 5.1.2 Inventory the existing zone, before changing anything
+
+Whatever answers for `wonkledge.com` today is the *only* record of what has to be recreated in
+DigitalOcean — once the nameservers are switched, DreamHost's copy is no longer consulted and,
+if the DNS-hosting is later removed, no longer readable either. Capture it now:
+
+```bash
+for t in A AAAA CNAME MX TXT NS CAA SRV; do
+  echo "== $t"; dig +noall +answer "wonkledge.com" "$t"
+done
+# and every subdomain that already exists — at minimum:
+for h in www _dmarc; do dig +noall +answer "$h.wonkledge.com" ANY A CNAME TXT; done
+```
+
+Also read them straight out of the DreamHost panel (**Websites → Manage Domains → DNS** for
+`wonkledge.com`) — `dig` cannot show you a record nothing has ever queried, and the panel lists
+DreamHost's own auto-created records alongside your custom ones. Save both outputs somewhere
+outside the droplet. The records that matter most and are easiest to forget:
+
+- **The GitHub Pages apex `A` records** — GitHub's four addresses (`185.199.108.153`,
+  `185.199.109.153`, `185.199.110.153`, `185.199.111.153`) and, if configured, the four `AAAA`
+  (`2606:50c0:8000::153` through `2606:50c0:8003::153`). Copy what your zone *actually* has
+  rather than trusting this list — GitHub has changed these before.
+- **The `www` `CNAME`** to `<account-or-org>.github.io`, if you use `www`.
+- **`MX` plus SPF/DKIM/DMARC `TXT`** if any mail is delivered to this domain. Mail failing is
+  the quietest of these failures: nothing bounces to *you*.
+- **Any verification `TXT`** — GitHub's domain-verification record, Google Search Console, and
+  similar. These look inert and are the ones most often dropped.
+
+The GitHub Pages `CNAME` file in the Pages repository is not DNS and is not affected by any of
+this — leave it exactly as it is.
+
+#### 5.1.3 Add the domain to the bloombot project in DigitalOcean, and recreate the records
+
+Create the zone in DigitalOcean **while DreamHost is still authoritative**. Nothing about this
+step is visible to the internet until §5.1.5 switches the nameservers, so the zone can be built
+and checked at leisure.
+
+DigitalOcean console → **Networking → Domains → Add a domain**: enter `wonkledge.com` and, in
+the same dialog, select the **bloombot project** so the domain is listed alongside the droplet it
+serves rather than in the default project. Equivalently:
+
+```bash
+doctl compute domain create wonkledge.com
+doctl projects resources assign <bloombot-project-id> \
+  --resource=do:domain:wonkledge.com
+doctl projects list          # to find the project id
+```
+
+Adding the domain creates its `SOA` and the three `NS` records (`ns1`/`ns2`/`ns3.digitalocean.com`)
+automatically — do not delete or edit those. Now recreate everything from the §5.1.2 inventory,
+plus the one new record this deployment is for:
+
+```bash
+# The subdomain this platform is deployed at — the reserved IP from §5.1.0.
+doctl compute domain records create wonkledge.com \
+  --record-type A --record-name bloombot --record-data <RESERVED_IP> --record-ttl 3600
+
+# The GitHub Pages apex, recreated exactly as §5.1.2 found it. "@" is the apex.
+for ip in 185.199.108.153 185.199.109.153 185.199.110.153 185.199.111.153; do
+  doctl compute domain records create wonkledge.com \
+    --record-type A --record-name @ --record-data "$ip" --record-ttl 3600
+done
+
+# www, if the zone had it. The trailing dot is required on CNAME data.
+doctl compute domain records create wonkledge.com \
+  --record-type CNAME --record-name www --record-data <account>.github.io. --record-ttl 3600
+
+# ...and every MX / TXT / CAA record the inventory turned up. Nothing is optional here.
+```
+
+Add an `AAAA` for `bloombot` pointing at the droplet's IPv6 address only if you actually want it
+reachable over IPv6 — a published `AAAA` that does not answer makes the site look intermittently
+down to IPv6-preferring clients, which is worse than having no `AAAA` at all.
+
+Then compare, record for record, against the inventory:
+
+```bash
+doctl compute domain records list wonkledge.com
+```
+
+#### 5.1.4 Verify DigitalOcean answers correctly *before* delegating
+
+DigitalOcean's nameservers will answer for this zone as soon as it exists, whether or not the
+world is asking them yet — so the whole delegation can be rehearsed with no risk by querying
+them directly:
+
+```bash
+dig @ns1.digitalocean.com wonkledge.com A +short          # the four GitHub Pages addresses
+dig @ns1.digitalocean.com www.wonkledge.com CNAME +short  # if you use www
+dig @ns1.digitalocean.com wonkledge.com MX +short         # if the domain receives mail
+dig @ns1.digitalocean.com wonkledge.com TXT +short        # SPF/DMARC/verification records
+dig @ns1.digitalocean.com bloombot.wonkledge.com A +short # the reserved IP
+```
+
+Every one of these must match the inventory (plus the new `bloombot` record) **before** the next
+step. This is the only point in the process where a mistake costs nothing.
+
+#### 5.1.5 Switch the nameservers at DreamHost
+
+DreamHost panel → **Domains → Registrations** → the `wonkledge.com` row → **DNS** /
+**Nameservers** → choose to use **custom nameservers**, and enter exactly:
+
+```
+ns1.digitalocean.com
+ns2.digitalocean.com
+ns3.digitalocean.com
+```
+
+This is a *registrar* change: it edits the delegation held by the `.com` registry, not
+DreamHost's own DNS records. DreamHost's zone for the domain still exists in their panel
+afterwards and is simply no longer consulted by anyone — which is why §5.1.2's inventory had to
+be taken first, and why editing DNS in the DreamHost panel after this point silently does
+nothing. Do the editing in DigitalOcean from here on.
+
+Propagation is governed by the registry's own `NS` TTL, typically a few hours and occasionally up
+to 48; during it, some resolvers ask DreamHost and some ask DigitalOcean. Because §5.1.3
+recreated the zone faithfully, both answers are the same for every pre-existing record — that is
+the entire reason for doing it in that order. The one record that differs is `bloombot`, which
+resolves for progressively more of the internet and never resolves *wrongly*.
+
+#### 5.1.6 Confirm the delegation, then the subdomain
+
+```bash
+dig NS wonkledge.com +short         # expect ns1/ns2/ns3.digitalocean.com
+whois wonkledge.com | grep -i "name server"   # the registry's own view, the authoritative one
+dig +short wonkledge.com            # apex still the GitHub Pages addresses
+curl -sI https://wonkledge.com      # apex site still serving, still on a valid certificate
+dig +short bloombot.wonkledge.com   # the droplet's reserved IP
+```
+
+Do not proceed to §5.2 until the last of those prints the droplet's address from a resolver you
+did not specify by hand.
+
+**Then re-check GitHub Pages.** In the Pages repository's **Settings → Pages**, the custom domain
+should still show as configured and its certificate as issued; a nameserver change can put it
+back into "certificate provisioning" for a while, and if the DNS check now fails there, the apex
+records in §5.1.3 do not match what GitHub expects. Re-saving the custom domain field forces
+GitHub to re-run its check and re-request the certificate. `Enforce HTTPS` may need to be
+re-enabled once that completes.
+
+#### 5.1.7 Alternative: delegate only the subdomain
+
+If moving the whole zone is more risk than the convenience is worth, delegate just the
+subdomain. `wonkledge.com` keeps answering from DreamHost exactly as it does today — the apex,
+GitHub Pages and mail are never touched — and only `bloombot.wonkledge.com` is served by
+DigitalOcean:
+
+1. In DigitalOcean → **Networking → Domains → Add a domain**, add **`bloombot.wonkledge.com`** as
+   its own domain (not `wonkledge.com`), assigned to the bloombot project. Add the `A` record for
+   `@` — which in that zone means `bloombot.wonkledge.com` itself — pointing at the reserved IP.
+2. In the DreamHost DNS panel for `wonkledge.com`, add three **`NS`** records with name
+   `bloombot`, pointing at `ns1.digitalocean.com`, `ns2.digitalocean.com` and
+   `ns3.digitalocean.com`. Do **not** also add an `A` record for `bloombot` there — a name cannot
+   be both delegated and answered locally, and DreamHost may accept the pair while resolvers
+   disagree about which wins.
+3. Verify: `dig NS bloombot.wonkledge.com +short` (the three DigitalOcean nameservers) then
+   `dig +short bloombot.wonkledge.com` (the reserved IP).
+
+Everything from §5.2 onward is identical either way — nginx, TLS and the droplet do not know or
+care which nameserver answered.
 
 ### 5.2 nginx, HTTP only first
 
@@ -328,15 +534,25 @@ one — write the HTTP-only block below, reload, confirm it serves plain HTTP, a
 add TLS itself rather than hand-writing a `443` block referencing certificates that do not exist
 yet (`nginx -t` refuses to reload with `ssl_certificate` pointed at a missing file, which blocks
 this *and* every unrelated site nginx also serves — the DNS record from §5.1 must already be
-correct by this point, since this file names `bloombot.example.edu` explicitly).
+correct by this point, since this file names `bloombot.wonkledge.com` explicitly).
 
 ```nginx
 # /etc/nginx/sites-available/bloombot
 server {
     listen 80;
-    server_name bloombot.example.edu;   # PUBLIC_APP_URL's own host
+    server_name bloombot.wonkledge.com;   # PUBLIC_APP_URL's own host
 
     root /home/deploy/discord-channel-manager/apps/web/dist;
+
+    # FILE-1 — a courseAttachments.attach payload carries the file's bytes
+    # inside the JSON body, and apps/api allows 28 MB for it
+    # (ACTION_JSON_BODY_LIMIT_BYTES, routes/actions.ts). nginx's own default
+    # is 1 MB, and it rejects a larger body with its own 413 before the
+    # request ever reaches apps/api — so an upload the API would have
+    # accepted fails with an nginx error page and nothing in the API log.
+    # Set above the API's own limit so the API, not the proxy, is what
+    # enforces it and returns the 413 the panel knows how to report.
+    client_max_body_size 32m;
 
     location = /health {
         proxy_pass http://127.0.0.1:3000;
@@ -345,6 +561,18 @@ server {
         proxy_pass http://127.0.0.1:3000;
     }
     location /organizations/ {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    # ENRL-8 / ENRL-10 — unscoped API mounts (apps/api/src/server.ts), each
+    # deliberately a different top-level segment from the panel page that
+    # posts to it (/join/:secret, /invitations/:secret), which the SPA
+    # fallback below serves. Omitting either does not fail loudly: the page
+    # loads, its fetch gets index.html back as a 200, and response.json()
+    # reports a parse error that names nothing about this file.
+    location /join-links/ {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /membership-invitations/ {
         proxy_pass http://127.0.0.1:3000;
     }
     # ADMIN-4/ADMIN-5 — apps/api's own mount for the platform-administrator
@@ -363,20 +591,35 @@ server {
 ```bash
 sudo ln -s /etc/nginx/sites-available/bloombot /etc/nginx/sites-enabled/bloombot
 sudo nginx -t && sudo systemctl reload nginx
-curl -sI http://bloombot.example.edu/health   # confirm this actually reaches something before TLS
+curl -sI http://bloombot.wonkledge.com/health   # confirm this actually reaches something before TLS
 ```
 
 ### 5.3 TLS
 
 ```bash
-sudo certbot --nginx -d bloombot.example.edu
+sudo certbot --nginx -d bloombot.wonkledge.com
 ```
 
 `certbot` edits the server block above in place — adding its own `listen 443 ssl` server, the
 certificate paths, and an HTTP→HTTPS redirect on the `80` block — rather than needing a second,
-hand-written `443` block from this document. Confirm: `curl -sI https://bloombot.example.edu/health`.
+hand-written `443` block from this document. Confirm: `curl -sI https://bloombot.wonkledge.com/health`.
 
 Reload after any further change: `sudo nginx -t && sudo systemctl reload nginx`.
+
+Certbot installs a systemd timer that renews unattended; a certificate that silently stops
+renewing is discovered by the site going untrusted, so confirm the timer exists and that a
+renewal would actually succeed, now, while you are still looking at the box:
+
+```bash
+systemctl list-timers | grep -i certbot     # snap installs name it snap.certbot.renew.timer
+sudo certbot renew --dry-run                # exercises the real HTTP-01 challenge, issues nothing
+sudo certbot certificates                   # expiry date, and which server block it belongs to
+```
+
+Renewal re-uses the same HTTP-01 challenge as issuance, so **port `80` must stay open and
+reachable forever** — closing it in the firewall after TLS is working, or replacing the `80`
+server block with a bare redirect that swallows `/.well-known/acme-challenge/`, breaks renewal
+sixty days before anyone finds out. Leave certbot's own edits to the `80` block alone.
 
 ### 5.4 The MCP server and the bot's/worker's own health ports
 
@@ -387,6 +630,72 @@ authentication** (MCP-1..5's own session model, not this nginx config, is what a
 authenticates a caller — this is only about whether the port is reachable at all).
 `BOT_HEALTH_PORT`/`WORKER_HEALTH_PORT` need no public route at all — `scripts/health-check.mjs`
 and `scripts/ops-monitor.mjs` poll them from `127.0.0.1` on the same box.
+
+### 5.5 The rest of the droplet's own settings
+
+Everything above is what makes the site answer. These are the settings that decide whether it
+keeps answering, and each one has a failure this document has a reason to name.
+
+**Serving the panel at all.** nginx runs as `www-data` and must traverse `/home/deploy` to reach
+`root .../apps/web/dist` — §2's `chmod o+x /home/deploy` is what allows it, and without it every
+path returns `403` including `/`, which reads like a broken nginx config rather than a
+permissions one. The `dist` directory itself only exists after
+`npm run build --workspace apps/web` (§4.3); the root `npm run build` does not produce it
+(`package.json`'s own `pree2e` needs the separate call for the same reason), which is why
+`scripts/deploy.sh` runs both on every deploy.
+
+**Compression and caching for the bundle.** Ubuntu's stock `nginx.conf` has `gzip on` but
+compresses `text/html` only, so the Vite bundle — the large files — ships uncompressed by
+default. Vite emits content-hashed asset filenames, which makes them safe to cache forever,
+while `index.html` must *never* be cached: it is the file that names the current hashes, and a
+cached copy points a returning browser at asset files the last deploy deleted, for a white page
+whose console says only that a script 404'd. Add to the server block:
+
+```nginx
+    gzip_types text/plain text/css application/javascript application/json
+               image/svg+xml application/manifest+json;
+    gzip_min_length 1024;
+
+    # Content-hashed filenames (Vite) — a given URL's bytes never change.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # ...but never the file that names those hashes.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+```
+
+`location = /index.html` does not cover the SPA fallback, which serves the same file for every
+client-side route through `try_files`; if returning users see a stale panel after a deploy, move
+the `add_header` into the `location /` block itself (`add_header` in a `location` replaces any
+inherited ones, so it has to be set wherever the response is actually produced).
+
+**The firewall, in both places.** §1's rules are the whole public surface: `22`, `80`, `443`. If
+a DigitalOcean cloud firewall is attached to the droplet, it and `ufw` must *both* allow a port —
+a rule in one and not the other still blocks the traffic, and the symptom is a `curl` that hangs
+rather than one that is refused. Nothing else needs opening: `API_PORT`, `BOT_HEALTH_PORT`,
+`WORKER_HEALTH_PORT` and `MCP_PORT` all bind `127.0.0.1` by each process's own choice, so they
+are unreachable from outside regardless of firewall state.
+
+**Build memory.** `tsc --build` plus the Vite build is the peak memory this box ever uses, and it
+runs on every deploy (`scripts/deploy.sh`), not just the first. On a 2 GB droplet the build is
+what gets OOM-killed — a deploy that fails at "building the TypeScript workspace" with no useful
+error, then rolls back. §1's 4 GB sizing has headroom; add swap if you sized smaller:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # survive a reboot
+```
+
+**Surviving a reboot.** `pm2 startup` (§6) plus a `pm2 save` after the process list is right is
+what brings the stack back after the droplet restarts; `scripts/deploy.sh` runs `pm2 save` on
+every successful deploy and warns loudly rather than failing if it cannot. nginx and the certbot
+timer are systemd units and come back on their own. Confirm the whole thing honestly by
+rebooting once, before anyone depends on it, and re-running §8.3's checklist.
 
 ## 6. Start everything with pm2 — or run the cutover first
 

@@ -1013,6 +1013,33 @@ Removing an enrolment stops a person asking that course; it deletes neither thei
 nor the course's record of what was asked. A term ending is not a reason to lose what a student
 asked during it, and TEN-6's rule about removal applies here for the same reason.
 
+#### ENRL-7 Anyone a course is taught through is enrolled by asking it
+
+CORE-2 routes a message to a course when its author holds either of that course's two Discord
+roles — its admins role or its students role — but only a students-role holder is ever admitted to
+the enrolment relation. An instructor or teaching assistant therefore holds a conversation on
+Discord that the platform has no enrolment record of, and the web surface, which authorizes on an
+active enrolment rather than a membership (WEB-10), refuses the same person the Discord surface
+just answered. Asking a course through a channel it is taught in enrols the asker, whichever of
+the two roles carried them there, so that one person's access does not depend on which surface
+they happened to use first. ENRL-6 is untouched: an enrolment an instructor ended stays ended, and
+holding a role does not revive it.
+
+#### ENRL-8 A join link enrols whoever redeems it, and only them
+
+ENRL-3 gives an instructor a shareable course join link and `redeemJoinLink` to spend it, but
+nothing calls that function: there is no route, no screen, and no way for a student to redeem one.
+The function takes the person to enrol as an argument it cannot verify, and its own documentation
+names the trap — a link is deliberately shared with a whole class, so presenting the secret proves
+nothing about who is presenting it, and a route that took a person id from the request body would
+let anyone holding the link enrol anybody in the tenant. Redemption binds to the caller's own
+authenticated identity and never to a name they supply. A visitor who is not signed in is asked to
+sign in first and returns to the link they were given. A signed-in account with no person in the
+link's organization gets one, connected the same way LINK-3 connects every other identity, so the
+enrolment it gains is one the web chat can actually find. A link that never existed, one that was
+revoked and one that expired are refused identically, because a redemption endpoint that
+distinguishes them is an oracle for guessing links.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job
@@ -1719,6 +1746,30 @@ live course is the operation FILE-4 was written to make safe, and it is the one 
 unsafe. The instructions editor saves through the versioned action, shows who changed what and
 when, and restores a previous revision — which is itself a new revision, because history that can
 be rewritten is not history.
+
+#### WEB-20 A course's join links are issued and copied from the panel
+
+ENRL-3 and ENRL-4 give a course shareable join links that are revocable and optionally expiring,
+and the actions to create and revoke them exist, but no screen ever offered either — so the one
+way to admit a student who is not already carrying a Discord role does not exist in practice. The
+course screen issues a join link, shows its full URL once at creation with a control that copies
+it, and lists the links a course currently has with when each expires and whether it is revoked.
+The secret is shown once and never again, because it is stored only as a hash and the panel cannot
+recover what it did not keep. Revoking is behind a confirmation and says plainly what it does and
+does not do: it stops the link admitting anyone new, and it un-enrols nobody who already redeemed
+it.
+
+#### WEB-21 A roster is imported from the panel, with its format stated on the screen
+
+ROST-9 through ROST-12 parse an instructor's roster CSV, enrol each row and report what could not
+be done, and `roster.import` enqueues that job — but no screen ever offered it, so the capability
+was reachable only by dispatching an action by hand. The course screen takes a roster through a
+large drop zone that also accepts a click, and states the file's required format on the screen
+rather than in documentation the instructor does not have open: the five columns it reads, which
+are required and which may be blank, and a worked example row. The screen shows the import's
+progress while it runs and its report when it finishes, including every row that could not be
+parsed with the line number it was on, so a spreadsheet can be corrected and re-uploaded. Re-
+importing the same roster admits nobody twice.
 
 #### WEB-18 A course's knowledge files are managed in the panel
 

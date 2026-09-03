@@ -12,7 +12,11 @@ import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { AccountSummary, Project } from '../src/api/types.js'
+import type {
+  AccountSummary,
+  DiscordServerBindingSummary,
+  Project,
+} from '../src/api/types.js'
 import { Shell } from '../src/pages/Shell.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
@@ -21,7 +25,11 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 // default to 'projects' (this module's own comment, `docs/DECISIONS.md`
 // D-25), so `ProjectsPanel` (and, once a project is opened, `Courses`) now
 // mounts on every one of this file's tests, not only the ones that opt into
-// the Projects tab.
+// the Projects tab. `listDiscordServers` (TEN-8) is mocked the same way —
+// `Shell.tsx` now reads it on every mount, not only once the Discord tab is
+// opened, so every test in this file needs some resolved value or its own
+// `.then` throws on an unmocked `vi.fn()`'s bare `undefined` return, the
+// same reasoning `listProjects`'s own default already documents.
 const {
   beginDiscordInstall,
   dispatchAction,
@@ -29,6 +37,7 @@ const {
   listProjects,
   listCourses,
   listChatCourses,
+  listDiscordServers,
 } = vi.hoisted(() => ({
   beginDiscordInstall: vi.fn(),
   dispatchAction: vi.fn(),
@@ -36,6 +45,7 @@ const {
   listProjects: vi.fn(),
   listCourses: vi.fn(),
   listChatCourses: vi.fn(),
+  listDiscordServers: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -50,6 +60,7 @@ vi.mock('../src/api/client.js', async () => {
     listProjects,
     listCourses,
     listChatCourses,
+    listDiscordServers,
   }
 })
 
@@ -94,6 +105,9 @@ beforeEach(() => {
   // Individual tests override this where the response matters.
   listProjects.mockResolvedValue([])
   listCourses.mockResolvedValue([])
+  // No binding by default — individual tests below override this where the
+  // fetched install state is what they are actually testing (TEN-8).
+  listDiscordServers.mockResolvedValue([])
   // The connected-only organization's own Chat tab (LINK-10's own `describe`
   // block below) needs at least one course to render its full screen,
   // heading included — `pages/Chat.tsx`'s own "not enrolled in a course
@@ -122,7 +136,30 @@ describe('Shell (WEB-3, WEB-4)', () => {
     )
   })
 
-  it('an install that just completed for a *different* organization than the first membership opens the panel on that organization, not the first one (finding 2 of the WEB-1..6 rework)', () => {
+  // TEN-8 regression: `justInstalled` must keep working as the *immediate*
+  // signal it always was — the banner has to show right away, before
+  // `listDiscordServers` has even resolved, or a fresh install would flash
+  // "Install" for the round trip this slice added. `listDiscordServers`
+  // itself is mocked to resolve with the same binding `justInstalled`
+  // already named, matching what the server would actually report once
+  // asked — so this also proves the fetched value does not contradict, or
+  // flicker away, what `justInstalled` already showed.
+  it('an install that just completed for a *different* organization than the first membership opens the panel on that organization, not the first one (finding 2 of the WEB-1..6 rework)', async () => {
+    listDiscordServers.mockImplementation((organizationId: string) =>
+      Promise.resolve(
+        organizationId === 'org-2'
+          ? [
+              {
+                serverId: 'guild-42',
+                organizationId: 'org-2',
+                installedByAccountId: 'account-1',
+                installedAt: Date.now(),
+                removedAt: null,
+              },
+            ]
+          : []
+      )
+    )
     renderWithModal(
       <Shell
         account={MULTI_MEMBERSHIP_ACCOUNT}
@@ -141,8 +178,16 @@ describe('Shell (WEB-3, WEB-4)', () => {
     // matches when `activeOrganizationId` equals
     // `justInstalled.organizationId`. (The Discord tab itself is not the
     // default one anymore — finding 10 — so this test opens it explicitly.)
+    // This assertion runs before `listDiscordServers` has resolved (no
+    // `await` above it) — proving the banner does not wait on the fetch.
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
     expect(screen.getByText(/guild-42/)).toBeInTheDocument()
+
+    // Let the fetch settle before this test ends — otherwise its `.then`
+    // fires after `cleanup()` has already unmounted this render.
+    await waitFor(() =>
+      expect(listDiscordServers).toHaveBeenCalledWith('org-2')
+    )
   })
 
   it('a justInstalled organization the account is not actually a member of is ignored, defensively, in favour of the first membership', () => {
@@ -182,8 +227,13 @@ describe('Shell (WEB-3, WEB-4)', () => {
     // into this request instead of the actively selected one, this would
     // call beginDiscordInstall with 'org-1' — exactly the class of bug
     // WEB-3 exists to rule out ("cannot act in one while believing they are
-    // in the other").
-    fireEvent.click(screen.getByRole('button', { name: 'Install to Discord' }))
+    // in the other"). `findByRole`, not `getByRole` (TEN-8): neither org-1
+    // nor org-2 carries a `justInstalled` value here, so the button only
+    // appears once `listDiscordServers` resolves — this app no longer
+    // renders it optimistically.
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Install to Discord' })
+    )
 
     await vi.waitFor(() =>
       expect(beginDiscordInstall).toHaveBeenCalledWith('org-2')
@@ -438,6 +488,121 @@ describe('Shell (WEB-3, WEB-4)', () => {
       )
       const select = screen.getByRole('combobox', { name: 'Organization' })
       expect(select).toHaveTextContent('A University (connected)')
+    })
+  })
+
+  // --- TEN-8: the panel reads the organization's actual Discord binding ---
+  //
+  // Before this slice, `installedServerId` came from `justInstalled` alone
+  // — set only once, by `App.tsx`, when a Discord OAuth callback completes
+  // in *this* browser session. A reload, a second device, or an install
+  // from an earlier session all left `justInstalled` `undefined`, so the
+  // Discord tab offered "Install" for a server that was already bound, and
+  // `handleRemove`'s `if (!installedServerId) return` made Remove
+  // unreachable for exactly the accounts who most need it. Every test
+  // below renders with no `justInstalled` prop at all — the reload/second-
+  // device shape this gap actually broke.
+  describe("reading the organization's actual Discord binding (TEN-8)", () => {
+    const EXISTING_BINDING: DiscordServerBindingSummary = {
+      serverId: 'guild-99',
+      organizationId: 'org-1',
+      // A different account than the one signed in below — standing in for
+      // an install from an earlier session, or a colleague's device, which
+      // is exactly what `justInstalled` (this browser's own one-time
+      // signal) cannot know about.
+      installedByAccountId: 'account-other',
+      installedAt: Date.now() - 86_400_000,
+      removedAt: null,
+    }
+
+    it('a reload with an existing binding shows it as installed, with Remove offered — this is the defect', async () => {
+      dispatchAction.mockResolvedValue({ result: undefined })
+      listDiscordServers.mockResolvedValue([EXISTING_BINDING])
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      // Not "Install to Discord" — a fetched binding this session never
+      // created still renders as installed.
+      expect(await screen.findByText(/guild-99/)).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Install to Discord' })
+      ).not.toBeInTheDocument()
+
+      // Remove is reachable for a binding this session did not create —
+      // `handleRemove`'s own `if (!installedServerId) return` used to make
+      // this unreachable whenever `justInstalled` was `undefined`.
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+      await waitFor(() =>
+        expect(dispatchAction).toHaveBeenCalledWith(
+          'org-1',
+          'discordServers.remove',
+          { serverId: 'guild-99' }
+        )
+      )
+      expect(
+        await screen.findByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
+    })
+
+    it('a lookup in flight does not render "Install"', async () => {
+      // An unresolved promise — `listDiscordServers` never settles for the
+      // life of this test — standing in for the round trip genuinely being
+      // in flight.
+      let settle:
+        ((bindings: DiscordServerBindingSummary[]) => void) | undefined
+      listDiscordServers.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve
+          })
+      )
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      // An owner seeing "Install" for a server that is already bound is the
+      // exact bug this fetch exists to fix — a momentary version of it,
+      // while the lookup is still in flight, is still it.
+      expect(
+        screen.queryByRole('button', { name: 'Install to Discord' })
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+
+      // Let the promise settle before this test ends, so cleanup does not
+      // unmount a component with a still-pending state update.
+      settle?.([])
+      await screen.findByRole('button', { name: 'Install to Discord' })
+    })
+
+    it('a failed lookup reports the failure rather than rendering "not installed"', async () => {
+      listDiscordServers.mockRejectedValue(
+        new ApiError(500, { error: 'internal_error' })
+      )
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      // Rendering "Install" here would be the exact same bug this slice
+      // fixes, reached by a different path (a failed round trip standing
+      // in for a stale one) — so a failure must say so, through the same
+      // `ErrorMessage` path every other refusal in this app already uses,
+      // not fall back to "not installed."
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Something went wrong. Try again.'
+      )
+      expect(
+        screen.queryByRole('button', { name: 'Install to Discord' })
+      ).not.toBeInTheDocument()
     })
   })
 })

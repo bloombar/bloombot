@@ -3035,6 +3035,23 @@
   phase: 18
   status: Backlog
   review: false
+- id: ENRL-12
+  title: A live join link can be shown again to the instructor who owns it
+  full: "A course join link's secret is stored only as a SHA-256 hash, so the
+    panel can show it once at creation and never again. That rule is right for
+    sign_in_tokens, which prove one person's email address and are spent once.
+    It fits a join link poorly: a join link is deliberately broadcast to a whole
+    class, so the secrecy being protected has already been handed to everyone in
+    it, while the cost falls entirely on the instructor — close the tab, or come
+    back in week three to re-send the link, and the only way forward is to
+    revoke and reissue, which breaks the link for every student who still holds
+    the old one. A live link's secret is recoverable by the instructors of its
+    own organization. It is…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 18
+  status: In progress
+  review: false
 - id: WEB-24
   title: The chat composer stays put, and the thread follows the conversation
   full: "The chat screen lays the thread and the composer out in ordinary flow:

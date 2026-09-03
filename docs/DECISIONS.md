@@ -5920,3 +5920,72 @@ the mocked value (`ambiguousHandles` — a report naming a display-name collisio
 name; `limitations` — the welcome-message note); `join-links.test.tsx` gained one case, overriding its own
 `beforeEach` clipboard stub to `undefined` and asserting both the rendered failure text and that the secret's
 own URL stays visible afterward.
+
+---
+
+## D-59 — `packages/db`/`packages/actions`/`apps/web`: ENRL-9/WEB-22 — reinstating an ended enrolment, recorded as columns on the row rather than a second history table
+
+**Problem.** D-57's ENRL-6/ENRL-8 rework set every admission path (`enrolViaJoinLink`/`enrolViaRoster`/
+`enrolViaDiscordRole`) to `reviveEnded: false`, correctly closing a real self-revival bypass — but left
+`enrolments.ts`'s own `admit(..., reviveEnded: true)` reachable from nowhere. An instructor who ends the wrong
+enrolment, or ends one a student has since appealed, had no way back: a decision that can be made and never
+unmade is a trap, not an access control (ENRL-9's own text). Separately, `listPeopleForCourse` returns active
+enrolments only, so the panel that would let an instructor choose who to reinstate could not even list an ended
+person (WEB-22).
+
+**Choice — reinstating is its own function, `repos/enrolments.ts#reinstateEnrolment`, and does not call
+`admit`.** It clears `endedAt` on the one row named by `enrolmentId` (the same "acts on the row `endEnrolment`
+already resolved" shape, not a fresh `enrolVia*` admission), and stamps two new nullable columns on `enrolments`
+— `reinstatedByAccountId`/`reinstatedAt` — the same "record it on the row itself" shape `memberships.grantedByAccountId`/
+`grantedAt` already uses for ENRL-5, rather than a new `enrolment_reinstatements`-style history table (the
+`course_instruction_revisions` shape: a new row per event, its own migration, its own repo surface, its own
+tenant-scoping test rows). Rejected because ENRL-9 asks only "who reinstated this, and when" — a fact about the
+row's current state, not an audit of every end/reinstate cycle it might see — and a second table would exist to
+answer a question nobody asked for. The honest trade this makes, inherited from the same precedent: a *second*
+reinstatement overwrites the first's record on the same row, exactly as a second `grantMembershipRole` call
+overwrites the first grantor. A migration was written (`packages/db/migrations/0014_spooky_bucky.sql`,
+`ALTER TABLE enrolments ADD reinstated_by_account_id`/`ADD reinstated_at`, both nullable, `drizzle-kit check`
+clean) — this is the first ENRL-7/ENRL-8/ENRL-6/ENRL-8-rework slice on this branch where a schema change was
+actually in scope.
+
+**The reinstated person cannot trigger this themselves — enforced structurally, not by a check in the action.**
+`enrolments.reinstate`'s own policy resolves the enrolment (`{ resource: 'enrolment', access: 'write' }`, the
+same shape `enrolments.end` already uses) and `execute` refuses without an authenticated `accountId` — but
+neither of those is what actually keeps the removed person out, since a policy cannot see who is calling at all
+(`policy.ts`'s own module comment). What does: `apps/api`'s `routes/actions.ts` resolves the caller's
+organization from their own *membership* before `dispatch` ever runs, and an enrolled person (a course
+participant, admitted through `enrolments`) holds no membership — they have nothing to sign in to this route
+*as*. Proven directly, not merely assumed: `apps/api/tests/routes/enrolments-reinstate.test.ts` connects a
+signed-in account's own web identity onto the exact person whose enrolment was ended, then dispatches
+`enrolments.reinstate` as that same account, and asserts the ordinary TEN-5 not-found refusal — the distinction
+the whole ENRL-8 rework turns on, tested explicitly rather than assumed covered by the policy layer.
+
+**WEB-22 needed a new listing, not a widened `listPeopleForCourse`.** `listEnrolmentsForCourse`
+(`repos/enrolments.ts`) is additive — every existing caller of `listPeopleForCourse` (the roster-import
+idempotency check, the join-link duplicate-admission check) wants active-only, and widening its return shape to
+carry `source`/`endedAt`/reinstatement columns would touch call sites this slice has no reason to. The panel's
+own `components/CoursePeople.tsx` renders two visually distinct lists — "Enrolled" and "Enrolment ended" — never
+one list with a status column, on the same reasoning `JoinLinks.tsx` already separates a live link from a
+revoked one by section: a status column that only differs by a word is easy to misread right before removing
+somebody. It never renders a person's email — `displayName ?? personId`, the same fallback
+`pages/Transcripts.tsx` already uses for a person who never named itself, since a `null` display name is already
+told apart from another by a distinct id and these are real students' addresses.
+
+**Two new actions, not one.** `enrolments.reinstate` (write) is the act ENRL-9 names; `enrolments.listForCourse`
+(read, resolves the course) is what the panel actually dispatches to populate the screen — the brief that scoped
+this slice named only the first explicitly, but WEB-22's own listing needs a route to reach it the same way
+every other panel screen's own list does (`courseAttachments.list`, `courseJoinLinks.list`), so both were added
+together. `packages/actions/tests/access-audit.test.ts`, `catalog.test.ts` and
+`apps/api/tests/tenant-isolation.test.ts` (the last one deriving its own route table from the registry) were all
+updated for both.
+
+**Also fixed while in this file:** three stale doc-comment passages in `repos/enrolments.ts` — on
+`enrolViaJoinLink`, `enrolViaRoster` and `enrolViaDiscordRole` — that D-57's own rework left claiming "no
+function in this package re-admits anyone today" and pointing an instructor at "a future re-admission action"
+that would need writing. `reinstateEnrolment` is that action; all three now say so, and name it.
+
+**Limits.** No join-link expiry-setting control (a known, separately-scoped gap); the join-link redemption path,
+`packages/legacy-import`, MCP, and the cost ledger are all untouched. `reinstateEnrolment`'s "last reinstatement
+only" recording is the same limit `grantedByAccountId`/`grantedAt` already accepts for ENRL-5 — if a full
+end/reinstate history is ever needed (an audit trail of every cycle, not just the latest), that is the
+`course_instruction_revisions` shape, deliberately not built here.

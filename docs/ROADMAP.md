@@ -232,4 +232,4 @@ deliberate: refusing an address it cannot find is what stops the action becoming
 email addresses have accounts here. An invitation keeps that closed while making the requirement
 true.
 
-**In scope:** ENRL-10, ENRL-11, CORE-7, CORE-8
+**In scope:** ENRL-10, ENRL-11, CORE-7, CORE-8, WEB-24

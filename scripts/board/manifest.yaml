@@ -3018,3 +3018,20 @@
   phase: 18
   status: Backlog
   review: false
+- id: WEB-24
+  title: The chat composer stays put, and the thread follows the conversation
+  full: "The chat screen lays the thread and the composer out in ordinary flow:
+    the thread has a minimum height and no maximum, so it grows with the
+    conversation and the page scrolls, carrying the message box off the bottom
+    of the window. A student partway through a long thread has to scroll back
+    down to type, and the scrollIntoView that runs when messages change moves
+    the whole page rather than the thread. The composer holds a fixed position
+    above the footer, always reachable without scrolling. The thread occupies
+    the main content area, scrolls within itself, and follows the conversation —
+    moving to the newest message when the student sends one and when a reply
+    arrives. Following the conversation…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 18
+  status: Backlog
+  review: false

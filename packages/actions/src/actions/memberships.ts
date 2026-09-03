@@ -36,16 +36,22 @@
  * recorded the same way a grant already is (`repos/memberships.ts#revokeMembership`'s
  * own doc comment).
  *
- * **Decision this requirement exists to settle: an owner's own membership
- * may only ever be revoked by that owner, stepping down themselves — never
- * by a peer.** `grantMembershipAction` already lets one owner demote
- * *another* to a lesser role (unchanged by this slice, out of scope per
- * this requirement's own brief), so the identical peer-to-peer reach
- * already exists there; closing it here as well, for the strictly more
- * final act of removing a colleague's standing outright, is this
- * requirement's own answer to the question its SPEC text names as
- * unsettled. See `docs/DECISIONS.md` D-70 for the reasoning and what this
- * does not close (the pre-existing `grantMembershipAction` path).
+ * **Decision this requirement exists to settle: an owner's own role
+ * changes only when that owner acts — never by a peer, whether the write
+ * is a revoke or a grant.** ENRL-11's own SPEC text names this as the
+ * requirement's central question, not an incidental one, and a first pass
+ * at this slice answered it only for `revokeMembershipAction`, leaving
+ * `grantMembershipAction` free to demote a peer owner to a lesser role —
+ * the identical exposure ENRL-11 exists to close, reachable end to end the
+ * moment ENRL-10 makes an outside account reachable as an owner at all
+ * (invite at `owner`, redeem, then `grant` the inviter down to `assistant`).
+ * `grantMembershipAction`'s own `execute` now refuses that too — see its
+ * own doc comment, and the check itself, below — so the two actions agree:
+ * a peer cannot touch another owner's standing through either one; only
+ * that owner's own `memberships.revoke` call ever changes it. See
+ * `docs/DECISIONS.md` D-73 for the full reasoning, the reconciliation of
+ * this file's own earlier, narrower answer, and the mutation-testing
+ * evidence for both actions.
  *
  * **The last-owner invariant is enforced in the repo, not here.**
  * `revokeMembership`'s own doc comment has why: this action's `execute`
@@ -106,6 +112,10 @@ type GrantInput = z.infer<typeof grantInputSchema>
  * 3. The resolved account is not the caller themselves — a staff role is
  *    never self-selected (ENRL-5), even by an owner granting themselves a
  *    *different* role.
+ * 4. The resolved account does not currently hold `'owner'` — an owner's
+ *    role changes only through that owner's own `memberships.revoke` call
+ *    (ENRL-11), never through a peer's grant (see the ENRL-11 paragraph
+ *    below).
  *
  * Rework finding 1: check 2 used to be "does `email` resolve to *any*
  * account", through the organization-independent `accounts.getAccountByEmail`
@@ -130,6 +140,31 @@ type GrantInput = z.infer<typeof grantInputSchema>
  * inviting an address with no account is indistinguishable from inviting
  * one that has one. This action's own restriction to an *existing* member
  * stays exactly as this rework left it.
+ *
+ * **ENRL-11, check 4 above: an owner's own role is never changed by a
+ * peer, closing this action's own reachable half of the exposure ENRL-11
+ * exists for.** Reported after this file's first pass at ENRL-11 shipped
+ * with only `revokeMembershipAction` closed: an invited owner (ENRL-10
+ * permits inviting at `owner`) could call *this* action against the
+ * inviting owner — `{ email: <inviter>, role: 'assistant' }` — and
+ * succeed, demoting them with no recourse the redesigned `revoke` gave
+ * back. Check 3, above, already refuses a caller targeting themselves
+ * unconditionally, at every role — so by the time check 4 runs, `target.id
+ * !== accountId` is already established, and the target's *current* role
+ * being `'owner'` means precisely "a peer targeting another owner". This is
+ * not new machinery: it reads `targetMembership.role` — `targetMembership`
+ * is check 2's own `memberships.getMembership` result, kept rather than
+ * discarded (an `Account`, which `target` names, carries no `role` at all;
+ * that lives on `memberships`, this exact row) — and throws the identical,
+ * parameterless `ActionRefusedError()` every other check here throws — no
+ * distinct message, no extra lookup that would make "that account is an owner" a
+ * timing or shape difference a caller could learn to read. An owner who
+ * wants to leave the role calls `memberships.revoke` on their own account
+ * instead — the self-target refusal (check 3) already forced this action
+ * to never be that path, even before check 4 existed to close the
+ * peer-demotion path too. `docs/DECISIONS.md` D-73 has the full account,
+ * including why closing this leaves no organization stranded with no way
+ * to lose an owner it wants to lose.
  */
 export const grantMembershipAction: Action<
   'memberships.grant',
@@ -139,7 +174,7 @@ export const grantMembershipAction: Action<
 > = {
   name: 'memberships.grant',
   description:
-    'Change the membership role of an account that already belongs to this organization (ENRL-5): only an existing owner may call this, never on their own account, and the grant records who made it.',
+    "Change the membership role of an account that already belongs to this organization (ENRL-5): only an existing owner may call this, never on their own account, and the grant records who made it. Never on another owner's account either (ENRL-11) — an owner's own role changes only through that owner's own memberships.revoke call.",
   inputSchema: grantInputSchema,
   policy: {
     descriptor: { resource: 'organization', access: 'write' },
@@ -168,13 +203,39 @@ export const grantMembershipAction: Action<
     // account-existence oracle, and a successful grant would enrol a
     // stranger's account into an organization they never consented to join.
     // Refused identically to an email nobody holds (this function's own doc
-    // comment).
-    if (!memberships.getMembership(organizationId, target.id, db)) {
-      throw new ActionRefusedError()
-    }
+    // comment). The resolved row is kept, not discarded: it is `accounts`'
+    // own `Account`, which carries no `role` at all (that lives on
+    // `memberships`, this exact row) — check 4, below, reads its `.role`
+    // rather than re-querying, and rather than reading `target.role`, which
+    // does not exist on an `Account` and would silently type as `undefined`.
+    const targetMembership = memberships.getMembership(
+      organizationId,
+      target.id,
+      db
+    )
+    if (!targetMembership) throw new ActionRefusedError()
 
     // ENRL-5: never self-selected, even by an owner.
     if (target.id === accountId) throw new ActionRefusedError()
+
+    // ENRL-11: an owner's own role changes only when that owner acts —
+    // `memberships.revoke`'s own decision (D-73), applied here to this
+    // action's demote-by-role-change path, which the self-target check just
+    // above leaves untouched: this line is reached only when `target.id !==
+    // accountId`, so `targetMembership.role === 'owner'` here means exactly
+    // "a peer targeting another owner". Before this check, that call
+    // succeeded — the exposure ENRL-11 was written for (D-73's own
+    // reconciliation has the finding and how it was closed). Refused with
+    // the identical, parameterless `ActionRefusedError()` every check above
+    // already throws, not a distinct message or an early return that skips
+    // work the others do: `ActionRefusedError`'s own doc comment
+    // (`errors.ts`) says every instance is byte-identical by construction —
+    // "that account is an owner" must never become a fact this action's
+    // response, or the work it does to produce one, discloses. An owner who
+    // wants to leave the role steps down through `memberships.revoke`
+    // instead; this action was never that path even before this check
+    // existed, since the self-target refusal above already forced it.
+    if (targetMembership.role === 'owner') throw new ActionRefusedError()
 
     return memberships.grantMembershipRole(
       organizationId,

@@ -7695,24 +7695,68 @@ own "grantMembershipRole reactivates a previously revoked membership" test) fail
 `SQLITE_CONSTRAINT` rather than a clean assertion — caught in this same test, from the other direction, before
 committing.
 
-**Choice, the decision ENRL-11's own text names as unsettled: an owner's own membership is revoked only by that
-owner, stepping down themselves — never by a peer, even another owner.** The brief required this be decided,
+**Choice, the decision ENRL-11's own text names as unsettled: an owner's own role changes only when that owner
+acts — never by a peer, through *either* action that can touch a role.** The brief required this be decided,
 implemented, and recorded rather than left to whichever screen was written first (D-67's and D-68's own
-deferral). `memberships.grant` already lets one owner demote *another* to a lesser role — untouched by this
-slice, out of scope per the brief — so the identical peer-to-peer reach already exists there for a role
-*change*; I chose to close it for `memberships.revoke`, the strictly more final act of removing a colleague's
-standing outright with no update afterward to reconsider. This is the literal scenario the requirement's own
-"Why this exists" text describes — an invited owner using new authority to strip an existing one's — and closing
-it for the new capability this slice introduces is the concrete recourse ENRL-11 asks for, even though
-`grantMembershipAction`'s own pre-existing demotion path is a known, separately-scoped gap this slice does not
-touch (recorded here, not silently narrowed, the same discipline D-67/D-68 already hold themselves to for their
-own open questions). Enforced in `revokeMembershipAction#execute` (`entity.role === 'owner' && entity.accountId
-!== accountId` refuses), because — the same reason `grantMembershipAction`'s own owner/self checks live in
-`execute`, not the policy — `PolicyContext` carries no caller account id at all. Measured by mutation: dropping
-this check made `packages/actions/tests/memberships.test.ts`'s own "an invited peer owner cannot revoke the
-founding owner" test fail (the call that should be refused instead succeeded); the self-target case remains
-allowed by the same check (`entity.accountId === accountId` is exempted), proven by "an owner may step down
-themselves, when they are not the organization's last owner" passing unmodified.
+deferral). ENRL-11's own text is explicit that this decision is the requirement's central question, not one
+scoped to a single new action. Enforced in `revokeMembershipAction#execute` (`entity.role === 'owner' &&
+entity.accountId !== accountId` refuses), because — the same reason `grantMembershipAction`'s own owner/self
+checks live in `execute`, not the policy — `PolicyContext` carries no caller account id at all. Measured by
+mutation: dropping this check made `packages/actions/tests/memberships.test.ts`'s own "an invited peer owner
+cannot revoke the founding owner" test fail (the call that should be refused instead succeeded); the self-target
+case remains allowed by the same check (`entity.accountId === accountId` is exempted), proven by "an owner may
+step down themselves, when they are not the organization's last owner" passing unmodified.
+
+**Correction — a first pass at this slice answered the decision above only for `revoke`, leaving `grant` open,
+and that is the exposure ENRL-11 was written to close.** The brief that scoped this slice's first pass named
+`memberships.grant`'s own behaviour as out of scope; ENRL-11's own SPEC text says the opposite — the peer-demotion
+question is the requirement's central one, not incidental — and the brief's own scoping was the mistake, caught
+on review, not a defensible reading of the requirement. Left as the first pass shipped it, the scenario ENRL-11
+exists for still worked end to end: an owner invites a colleague at `owner` (ENRL-10 permits it), the colleague
+redeems, and the colleague calls `memberships.grant` with `{ email: <inviter>, role: 'assistant' }` — which
+succeeded, because `grantMembershipAction#execute` refused a missing caller, a non-owner caller, an unknown
+email, a non-member target and a self-target, but never a peer owner as the *target*. `grantMembershipAction`
+now carries the identical check `revokeMembershipAction` already had: after the existing self-target refusal
+(check 3, which already forces `target.id !== accountId` by the time check 4 runs), a target whose *current*
+membership is `'owner'` is refused, exactly the same demote-side twin of the revoke-side decision above.
+
+**Finding, while wiring the fix — a real bug, not only a scoping gap.** The first attempt at check 4 read
+`target.role === 'owner'`, where `target` is `accounts.getAccountByEmail(input.email, db)`'s own return —
+`accounts`' `Account` type, which carries no `role` column at all (that lives on `memberships`, a separate
+table); `target.role` is `undefined` at runtime, so `undefined === 'owner'` is always `false` and the check was a
+silent no-op. This did not surface as a type error because `Account`'s own shape has no index signature to
+flag an unknown property access as invalid in the context it was written — plain property access on a mistyped
+variable, not a type-system gap this repository's own settings would ordinarily catch, which is exactly why the
+test that actually dispatches the scenario (not merely reads a descriptor or a return type) is what caught it:
+"refuses an owner demoting another owner, not-found-shaped" failed with the grant *succeeding* on its first run,
+before the fix. The fix keeps `check 2`'s own `memberships.getMembership` result (`targetMembership`, not
+discarded) and reads `targetMembership.role` instead. Recorded here as the report's own instruction requires:
+an honest "this did not work yet" is worth more than a confident summary that turns out wrong.
+
+**Choice, the refusal stays byte-identical — proven directly, not merely asserted from the shared `ActionRefusedError`
+constructor.** `grantMembershipAction`'s own doc comment (rework finding 1) already treats "this action never
+becomes an account-existence oracle" as load-bearing; a peer-demotion refusal that read, timed, or looked
+different from the action's other refusals would open a *second* oracle — "that account is an owner" — of the
+identical shape the first rework closed. `packages/actions/tests/memberships.test.ts`'s own "the peer-owner
+refusal is byte-identical to an existing grant refusal" test catches both an unknown-email refusal and a
+peer-owner refusal, from the same caller, and asserts `{ name, message, code }` are equal — not merely that both
+are instances of `ActionRefusedError`, which `ActionRefusedError`'s own parameterless constructor already makes
+true by construction and would pass even if a caller mutated `.message` after construction, exactly the mutation
+tried and caught (see below).
+
+**Choice, no organization is stranded by closing the peer-demotion path too.** The brief asked this be checked
+explicitly rather than assumed. The two states named — a sole owner who wants to leave, and a two-owner
+organization where one leaves — both still have an exit: check 4 only refuses a target whose role is *already*
+`'owner'`; granting the `'owner'` role to a target who does not yet hold it (a promotion) is untouched, so a sole
+owner can still promote a successor via `grant`, then step down via `revoke` once a second owner exists to
+receive the last-owner guard's "more than one" count — proven directly by
+`packages/actions/tests/memberships.test.ts`'s own "a sole owner has a way out" test, not merely reasoned about.
+A two-owner organization where one leaves is the ordinary self-revoke path, already proven by "an owner can still
+step down via memberships.revoke, unaffected by this check". The one state with genuinely no exit — a peer owner
+who wants to *remove* another, unwilling owner without that owner's own action — is not a stranding: it is the
+decision itself, working as intended. No organization ever loses its floor of one owner, and no owner is ever
+trapped holding a role with no way to leave it; only forcing a colleague out against their will is closed, which
+is what this decision says should be true.
 
 **Choice, the last-owner invariant is enforced in the repo, not the action.** The brief was explicit that this
 belongs where the write happens, "not in the screen that offers it" — and named the action as an acceptable
@@ -7772,18 +7816,41 @@ whose body supplies revokedByAccountId" fails without it, the identical `z.stric
 !== 'owner'` weakened to merely requiring *a* membership — "refuses a caller who is not an owner" fails); making
 the UI-side guard the only guard (covered above). No mutation tried survived any test in this slice's own suite.
 
-**Out of scope, deliberately, stated rather than left ambiguous.** ENRL-12 and the `expiresAt` refinement (a
-later slice, per the brief). `memberships.grant`'s own behaviour and its anti-oracle refusal — untouched; its
-own pre-existing ability to demote a peer owner to a lesser role remains a known, separately-scoped gap (see the
-peer-owner choice above). Invitation issuing/redeeming (ENRL-10, unchanged, beyond the "revoked reads as absent"
-consequence `getMembership`'s own filter gives it automatically). MCP's tool surface — `apps/mcp/src/tool-surface.ts`'s
-own module comment already reasons about the omission of membership actions, deliberately; this slice does not
-touch that file, so `memberships.revoke` is unreachable from a model caller by construction, the same as every
-other membership action. `accounts.disableAccount` (account lifecycle) — untouched.
+**Evidence, `grantMembershipAction`'s own new check (the correction above), mutated three ways the follow-up
+brief named.** Dropping the check entirely (`if (targetMembership.role === 'owner')` replaced with `if (false)`)
+turned three tests red at once: "refuses an owner demoting another owner" (the grant that should be refused
+instead succeeded), "the peer-owner refusal is byte-identical..." (no error thrown to compare at all) and "the
+ENRL-10 → ENRL-11 scenario..." itself. Making the refusal distinguishable — constructing an `ActionRefusedError`
+and then overwriting its own `.message` before throwing, simulating a caller who reads the *reason* rather than
+merely the fact of a refusal — turned only "the peer-owner refusal is byte-identical..." red, and none of the
+other twenty-six tests in this file: exactly the targeted proof that test exists to give, not a broader
+regression that would have caught the mutation by accident. Applying the check to every target regardless of
+role (`if (targetMembership.role === 'owner')` widened to `if (targetMembership)`) turned seven tests red across
+three describe blocks — including the explicit "an owner can still change a non-owner colleague's role"
+regression this follow-up added for exactly this purpose — confirming the check is scoped to what it claims and
+nothing wider. No mutation tried survived any test in this slice's own suite.
 
-Final counts after this slice: 90 node:test (unchanged), 2178 vitest across 183 files (+29 — no new file: +8 in
-`packages/db/tests/memberships.test.ts`, +10 in `packages/actions/tests/memberships.test.ts`, +7 in
+**Out of scope, deliberately, stated rather than left ambiguous.** ENRL-12 and the `expiresAt` refinement (a
+later slice, per the brief). `memberships.grant`'s own anti-oracle refusal for an unknown or non-member email —
+untouched; its own *demotion* path is not out of scope, and is what the correction above closes. Invitation
+issuing/redeeming (ENRL-10, unchanged, beyond the "revoked reads as absent" consequence `getMembership`'s own
+filter gives it automatically). MCP's tool surface — `apps/mcp/src/tool-surface.ts`'s own module comment already
+reasons about the omission of membership actions, deliberately; this slice does not touch that file, so neither
+`memberships.grant` nor `memberships.revoke` is reachable from a model caller by construction, the same as every
+other membership action. `accounts.disableAccount` (account lifecycle) — untouched. No UI change accompanies the
+correction: `components/Team.tsx`'s own grant form has no per-row affordance to hide (it takes a free-typed email,
+not a selection from the roster), so a peer-demotion attempt still surfaces as an ordinary `ErrorMessage` after
+submission, the same way every other action-level refusal already reaches that screen — a dedicated warning
+before submission is a UI enhancement this correction's own brief did not ask for.
+
+Final counts after the initial pass: 90 node:test (unchanged), 2178 vitest across 183 files (+29 — no new file:
++8 in `packages/db/tests/memberships.test.ts`, +10 in `packages/actions/tests/memberships.test.ts`, +7 in
 `apps/web/tests/team.test.tsx`, +3 derived in `apps/api/tests/tenant-isolation.test.ts`'s own foreign-session/
 no-session/disabled-account matrix for the new route, +1 derived in `packages/actions/tests/access-audit.test.ts`'s
 own per-descriptor loop; `catalog.test.ts` gained a name in an existing array, no new case), 27 e2e (+1 —
 `e2e/team-panel-revoke.spec.ts`, new). `npx drizzle-kit check` (from `packages/db`): clean.
+
+Final counts after the correction above: 90 node:test (unchanged), 2184 vitest across 183 files (+6, all in
+`packages/actions/tests/memberships.test.ts` — no new file), 27 e2e (unchanged — the correction is action-level,
+driven through tests, not the screen, per the follow-up brief). `npx drizzle-kit check` (from `packages/db`):
+clean — this correction touched no schema.

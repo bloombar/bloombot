@@ -7044,10 +7044,47 @@ reads the existing `jobs` table with no new column. `drizzle-kit check` confirms
 `packages/actions/tests/transcripts.test.ts`'s own `transcripts.listAccessLog` block; `apps/web/tests/jobs.test.tsx`,
 new; `apps/web/tests/transcripts.test.tsx`'s own new "Access log" block; `apps/web/tests/shell.test.tsx`'s own new
 Jobs-tab case) was run against the implementation with the mutations above applied and confirmed failing before
-being reverted and confirmed passing — see each mutation paragraph for which test caught it. `npm run lint &&
-npx prettier --check . && npm run typecheck && npm test && npm run e2e && npx drizzle-kit check` all pass:
-90 node:test, 2095 vitest across 182 files (baseline 2065/181; +30 tests, +1 file —
-`apps/web/tests/jobs.test.tsx`), 22 e2e (baseline 20; +2 — `e2e/jobs-panel.spec.ts`, `e2e/transcript-access-log.spec.ts`).
+being reverted and confirmed passing — see each mutation paragraph for which test caught it.
+
+**Rework — a flaky ordering test, and a real tie the original design left unstated.** A verify run after this
+slice first landed caught `packages/db/tests/jobs.test.ts`'s own "orders by most recently updated" case failing
+intermittently (`expected 'dd06e749-…' to be 'f307bce5-…'`): `enqueueJob` reads `Date.now()` once per call, and
+on a fast machine the test's own three writes (enqueue `older`, enqueue `newer`, claim-and-complete `older`) can
+all land inside one millisecond, tying `updatedAt` — the diagnosis was that the *ordering* was correct and the
+*test* could not reliably observe it, not a bug in `listJobsForOrganization` itself. Fixed by controlling the
+clock rather than the assertion: `vi.useFakeTimers()`/`vi.setSystemTime()` around each of the three steps, one
+millisecond apart, the identical device `membership-invitations.test.ts`'s own "lists invitations newest first"
+case already uses for the same hazard (that test's own comment is what named the precedent). Checked every other
+new assertion in this slice for the same class of dependency: every other `jobs.list`/`listJobsForOrganization`
+test asserts length or single-row content, never relative position among two-or-more real, clock-derived
+timestamps, so none of them shared the hazard; `transcripts.listAccessLog`'s own "most recent first" assertion
+(`packages/actions/tests/transcripts.test.ts`) does not either — that ordering comes from
+`transcript_access_log.sequence`, a real per-transaction counter, not a timestamp, which is exactly why that
+column exists (`schema.ts`'s own comment). The e2e specs were checked the same way: `jobs-panel.spec.ts` seeds
+one job, `transcript-access-log.spec.ts` asserts two access-log rows are each visible somewhere, never their
+relative position — neither depends on two timestamps differing.
+
+**The tiebreak question this raised, answered rather than left implicit.** `updatedAt desc, createdAt desc`
+still leaves a *real* tie possible, not merely a testing artifact: a batch enqueue (several `enqueueJob` calls
+issued back to back) reads the clock once per call and can genuinely share both columns, at which point SQLite
+gives no guaranteed order among the tied rows. Left unstated, that means the Jobs tab's own "Refresh" button
+(`pages/Jobs.tsx`) could show a tied pair swap positions between two polls with no activity in between — the
+queue appearing to reorder itself for no reason, which undermines exactly the legibility JOB-2 is about.
+Chose to close it rather than leave it: `id` ascending is a third, final `ORDER BY` key
+(`listJobsForOrganization`, `packages/db/src/repos/jobs.ts`) — deterministic, not itself meaningful, the same
+role `createdAt` already plays as the second key, and it costs nothing (no schema change; `id` already exists on
+every row). Proved by a new test, not merely asserted: three jobs enqueued under one frozen timestamp (so both
+`updatedAt` and `createdAt` genuinely tie, checked directly before trusting the rest of the test), then the same
+listing query run twice — the order matches `id` ascending, and the second call returns the identical order the
+first did.
+
+`npm run lint && npx prettier --check . && npm run typecheck && npm test && npm run e2e && npx drizzle-kit check`
+all pass: 90 node:test, 2096 vitest across 182 files (this slice's original baseline was 2065/181; +31 tests
+overall, +1 file — `apps/web/tests/jobs.test.tsx`; the rework itself added one test, for the tie, and changed no
+other file's test count), 22 e2e (baseline 20; +2 — `e2e/jobs-panel.spec.ts`, `e2e/transcript-access-log.spec.ts`).
+`packages/db/tests/jobs.test.ts` alone run 15 times consecutively post-fix, `25 passed` every time — the file's
+own baseline before this slice was 20, +4 for the original `listJobsForOrganization` block, +1 for the tie test
+this rework added.
 
 **Out of scope, deliberately, unchanged from what the brief named.** Job retry/cancel controls — listing is
 what JOB-2 asks for; a "retry this job" button is a new capability this record does not build. Changing what

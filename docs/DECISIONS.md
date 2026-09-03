@@ -7545,3 +7545,95 @@ rework left 2128/183; +18 tests, no new file), 25 e2e (unchanged — this rework
 `isSameOriginPath` cheap-fix and the anti-flood must-fix are both pinned at the unit/integration level, not
 through a third browser round trip). `npx drizzle-kit check` (from `packages/db`): clean, no drift — this
 rework added no migration.
+
+## D-72 — `apps/web`/`e2e`: WEB-24 — the chat composer stays put, and the thread follows the conversation, without stealing a reader's place
+
+**Problem.** `pages/Chat.tsx` laid the thread and the composer out in ordinary flow: the thread `<div>` had
+`min-h-64` and `overflow-y-auto` but no maximum height, so it grew with the conversation and the *page*
+scrolled — carrying the composer off the bottom of the window. A student partway through a long thread had to
+scroll the whole page down to type. `useEffect(() => threadEndRef.current?.scrollIntoView(...), [messages])`
+compounded it: with nothing bounding the thread, it was no longer the nearest *scrollable* ancestor, so
+`scrollIntoView` walked up to the document and moved the page, not the thread.
+
+**Choice — a flex column bounded to exactly the space `AppShell.tsx`'s fixed header and footer leave, not
+`position: fixed`, and not a change to `AppShell.tsx` itself.** `Chat.tsx`'s own top-level `<section>` now
+carries `h-[calc(100dvh-var(--spacing-header)-var(--spacing-footer)-3rem)] overflow-hidden` —
+`--spacing-header`/`--spacing-footer` are the same tokens `AppShell.tsx` sizes its own fixed header and footer
+with (`style.css`); the `3rem` is the 1.5rem gap `AppShell`'s own `main` padding reserves on each side. Every
+element above the thread (title, join banner, course picker, "New messages" affordance, decline notice, the
+composer form) is `shrink-0`; the thread itself is `flex-1 min-h-0 overflow-y-auto` — `min-h-0` overrides a
+flex item's default `min-height: auto` (sized to its content), which would otherwise refuse to shrink below the
+transcript's full height and reproduce the exact "grows past its box" defect one level up. `overflow-hidden` on
+the section is what actually enforces the bound: without it a flex column's children can still spill past a
+fixed height rather than being clipped to it. `100dvh`, not `100vh` — the dynamic viewport unit shrinks with a
+mobile browser's own chrome and, on the browsers that report it, a software keyboard, so this box (and the
+composer pinned inside it) resizes down with the keyboard rather than leaving the composer hidden underneath
+it; this was not proven against a real on-screen keyboard (Playwright does not drive one), so it is a design
+choice following the platform's own contract for `dvh`, not a measured result.
+
+`AppShell.tsx`'s own `main` (`min-h-[calc(100vh-var(--spacing-header)-var(--spacing-footer))]`, no maximum) was
+deliberately left alone: every other screen this shell renders (Projects, Transcripts, Usage, Team, Jobs,
+Discord) relies on it growing with its content and letting the ordinary document scroll past the fixed
+header/footer, and the brief scoped this slice to the one screen with the reported defect. `position: fixed`
+for the composer alone was rejected for the same reason the brief named directly: it fights `AppShell`'s own
+already-fixed header and footer rather than composing with them, and a flex column that simply bounds the
+thread needs no coordination with either.
+
+**Choice — the scroll-preservation judgement.** WEB-24's own text draws a distinction the previous
+`scrollIntoView` effect did not: "following the conversation" means the newest message, not a jump that steals
+a reader's place. `isNearBottomRef`, kept current by `onScroll` on the thread itself (appending a message never
+fires a `scroll` event on its own — the browser does not move `scrollTop` just because the scrollable content
+beneath it grew — so this only ever reflects the reader's own last movement), decides whether a message that
+*arrives* auto-scrolls or shows a "New messages ↓" affordance instead (`newMessageWaiting`, a plain `role="status"`
+sibling of the thread — an `aria-live` region, so it is announced the moment it appears — holding one ordinary
+`<button>`, reachable by Tab and Enter/Space like every other control on the screen, never an overlay that could
+cover the last message). The student's own send is the one case the requirement draws no such exception for:
+`forceScrollRef`, set immediately before the optimistic message is appended in `handleSend`, jumps the thread to
+it unconditionally, even if the reader had scrolled up to reread something first — consumed and reset the first
+time the scroll effect runs afterward, so the *reply* that follows is judged by `isNearBottomRef` alone, the same
+as any other arriving message.
+
+**Note, addressed — `min-h-64` was removed, not kept as a floor.** A fixed minimum height under a bounded,
+`flex-1` thread would fight the very containment this slice exists to add: on a short viewport it could force
+the thread taller than the space actually available, pushing the composer past the bottom of the column again.
+`flex-1` already fills whatever the column has left once every `shrink-0` sibling has taken its own height, which
+is generally more generous than 16rem on any realistic screen, and degrades gracefully (down to `min-h-0`, never
+negative) on one that is not.
+
+**Evidence.** `apps/web/tests/chat.test.tsx`'s own "Chat — thread scroll behaviour (WEB-24)" block proves, in
+jsdom, the one property jsdom's lack of real layout still lets it prove deterministically: `pages/Chat.tsx` sets
+the thread's own `scrollTop` to its `scrollHeight` — the imperative action "scroll to the newest message" means
+in code — on the student's own send, on a reply arriving while near the bottom (proven as a *second*, independent
+effect run, not merely the same assignment left over from the send), and *not* on a reply arriving while the
+reader had scrolled away, where the "New messages" button appears instead and a click on it both scrolls and
+dismisses it. `e2e/chat-scroll.spec.ts` proves what jsdom cannot lay out to see at all, against a real browser: a
+forty-message thread (seeded directly through `@bloombot/db#conversations.appendMessage` rather than forty real
+chat requests) overflows the bounded thread, the composer stays reachable with `window.scrollY` at `0` and no
+page scroll, the thread itself opens and then re-scrolls to within a few pixels of its own maximum, the composer
+never covers the last message (a real bounding-box comparison, not "both are visible"), and the page does not
+scroll horizontally at a 375px width.
+
+**Left unproven, honestly.** "A reply arriving while the reader has scrolled up does not move them" is proven
+deterministically in the unit test (a controlled, deferred `postChatMessage` promise lets the test scroll the
+mocked thread up *between* the student's own send and the reply's arrival) but not exercised in
+`e2e/chat-scroll.spec.ts`: the real fixture model answers fast enough that reproducing "scrolled up while a
+reply is still in flight" against a real network round trip would mean racing the test's own scroll action
+against the response, which is exactly the kind of timing-dependent assertion this codebase's own e2e discipline
+(`playwright.config.ts`'s `workers: 1` comment; QA-9) already rejects elsewhere. A soft-keyboard interaction on a
+real mobile browser is untested for the same reason Playwright cannot drive one — the `100dvh` choice above is a
+design decision following the platform contract, not a measured result.
+
+**Evidence, mutations.** Removing the thread's height bound (`h-[calc(...)]`/`overflow-hidden` on the section,
+`flex-1 min-h-0` on the thread, all reverted to the pre-fix `flex flex-col gap-4`/`min-h-64`) turned
+`e2e/chat-scroll.spec.ts` red on `toBeInViewport()` for the composer — confirming the composer genuinely fell out
+of the viewport without the bound, the reported defect exactly. Scrolling the page instead of the thread
+(`scrollThreadToBottom` mutated to `window.scrollTo(0, document.body.scrollHeight)`) turned the same spec red on
+the thread's own `scrollTop` staying `0` — confirming the thread never moves under this mutation, since the
+bounded section has nothing of its own to scroll the page *to*. Auto-scrolling unconditionally, ignoring
+`isNearBottomRef`, turned the unit test's "reply arriving while scrolled up" case red — the thread jumped to
+`260` where the test asserts it stays at `0` — and left the other twelve `chat.test.tsx` cases green, confirming
+that test pins exactly this property and nothing broader.
+
+Final counts after this slice: 90 node:test (unchanged), 2149 vitest across 183 files (+3 tests, no new file —
+`apps/web/tests/chat.test.tsx`'s own new "thread scroll behaviour" block), 26 e2e (+1 — `e2e/chat-scroll.spec.ts`,
+new). `npx drizzle-kit check` (from `packages/db`): not run — this slice touched no schema.

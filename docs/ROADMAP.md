@@ -190,4 +190,4 @@ it has to be re-run until it passes, which is not a gate. And a join link's expi
 the action but by no screen, leaving WEB-20's "when each expires" column permanently reading "No
 expiry".
 
-**In scope:** JOB-6, QA-9, WEB-23
+**In scope:** JOB-6, QA-9, WEB-23, MCP-6

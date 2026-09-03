@@ -2898,6 +2898,23 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 17
+  status: Done
+  review: false
+- id: MCP-6
+  title: A session is found when it exists, under load as well as at rest
+  full: "apps/mcp's own test suite fails intermittently: a request against a
+    session that was just initialized comes back 404 session not found where a
+    specific status was expected. It is not one assertion — a different one
+    fails each time — and it appears only when the whole test suite runs, never
+    when the MCP project runs alone. Measured at roughly one failure in
+    twenty-four full runs, and it reproduces on commits that predate the branch
+    that noticed it, so it is neither new nor caused by any one feature. The
+    cause is not known. Two hypotheses have been offered and neither survives
+    inspection: the idle sweep cannot be reaping these sessions, because its
+    timeout is thirty minutes and a full run…"
+  section: §25 MCP Server & Agent Access
+  family: MCP
+  phase: 17
   status: In review
   review: false
 - id: QA-9
@@ -2915,7 +2932,7 @@
   section: §17 Quality, Types & Tooling
   family: QA
   phase: 17
-  status: In review
+  status: Done
   review: false
 - id: WEB-23
   title: A join link's expiry is chosen when it is issued
@@ -2931,5 +2948,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 17
-  status: In review
+  status: Done
   review: false

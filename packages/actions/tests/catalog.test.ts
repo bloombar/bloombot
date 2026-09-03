@@ -114,6 +114,7 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courseInstructions.restore',
         'costLedger.organizationUsage',
         'courseJoinLinks.create',
+        'courseJoinLinks.list',
         'courseJoinLinks.revoke',
         'enrolments.listForPerson',
         'enrolments.checkAccess',

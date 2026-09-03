@@ -247,6 +247,40 @@ export interface CourseAttachmentSummary {
   createdAt: number
 }
 
+/**
+ * WEB-20 — one of a course's join links, as `courseJoinLinks.list` returns
+ * it. Mirrors `packages/actions/src/actions/course-join-links.ts`'s own
+ * `CourseJoinLinkSummary` by hand, the same "not imported from the
+ * workspace" discipline this file's own module comment already explains —
+ * and, just as deliberately, narrower than the database row it is drawn
+ * from: there is no `secretHash` field here for the same reason
+ * `CourseAttachmentSummary` above carries no `providerFileId` — the secret
+ * is shown once, at creation (`CreatedCourseJoinLink` below), and never
+ * again.
+ */
+export interface CourseJoinLinkSummary {
+  id: string
+  courseId: string
+  expiresAt: number | null
+  revokedAt: number | null
+  createdByAccountId: string
+  createdAt: number
+}
+
+/**
+ * WEB-20 — what `courseJoinLinks.create` hands back once, and only once: the
+ * plaintext secret itself. Mirrors `packages/actions`' own
+ * `CreatedCourseJoinLink`. Never stored by this app past the component that
+ * renders it — a reload has nothing left to show, because the database
+ * itself does not either (`repos/course-join-links.ts`'s own module
+ * comment).
+ */
+export interface CreatedCourseJoinLink {
+  linkId: string
+  secret: string
+  expiresAt: number | null
+}
+
 /** WEB-10 — `GET /organizations/:organizationId/chat/courses`'s own entries: just enough to pick one, not `CourseSummary`'s full instructor-facing shape. */
 export interface ChatCourse {
   id: string
@@ -270,6 +304,63 @@ export interface JobStatus {
   result: unknown
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * WEB-21/ROST-9..12 — a `roster.import` job's own report, once
+ * `JobStatus.result` carries one (`status: 'succeeded'`). Mirrors
+ * `apps/worker/src/handlers/roster-import.ts`'s own `RosterImportReport` by
+ * hand — this app cannot import an app it does not build with (the same
+ * "not imported from the workspace" boundary this file's own module
+ * comment states for every other shape here, one level stricter: apps do
+ * not import each other's source at all, workspace package or not). Every
+ * field here narrows to what the panel's own import screen actually shows
+ * an instructor — `line`/`discord`/`email` on each row-shaped entry so a
+ * spreadsheet can be corrected and re-uploaded (ROST-9), never the raw
+ * Discord ids or category bookkeeping the worker's own report also carries
+ * for its own diagnostic purposes.
+ */
+export interface RosterImportReport {
+  parseErrors: { line: number; message: string }[]
+  peopleCreated: { line: number; discord: string; personId: string }[]
+  peopleMerged: { line: number; discord: string; personId: string }[]
+  unresolvedHandles: { line: number; discord: string; email: string }[]
+  ambiguousHandles: {
+    line: number
+    discord: string
+    email: string
+    matchedDisplayNames: string[]
+  }[]
+  channelsCreated: {
+    line: number
+    email: string
+    channelName: string
+    category: string
+  }[]
+  channelsAlreadyPresent: {
+    line: number
+    email: string
+    channelName: string
+    category: string
+  }[]
+  channelsNotCreated: { line: number; email: string; reason: string }[]
+  channelsFailed: {
+    line: number
+    email: string
+    channelName: string
+    category: string
+    reason: string
+  }[]
+  channelNameCollisions: {
+    line: number
+    email: string
+    channelName: string
+    collidesWithLine: number
+    collidesWithEmail: string
+  }[]
+  unresolvedRoles: string[]
+  /** ROST-6's own welcome message, and any other structural gap this run wants named plainly — see `RosterImportReport.limitations`'s own doc comment in `apps/worker`. */
+  limitations: string[]
 }
 
 /** WEB-10 — one message on a chat transcript (`GET .../chat/courses/:courseId/messages`), and the shape `POST .../messages` appends locally once its own `ChatAnswerResult` confirms the reply. */

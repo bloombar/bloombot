@@ -350,6 +350,87 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
     )
   })
 
+  // --- WEB-20: listing a course's join links -----------------------------
+
+  // The clock is frozen and stepped by hand (the same device
+  // `conversations.test.ts`'s own "orders a transcript by append order even
+  // when every message shares the same millisecond" uses) — `createdAt`
+  // alone ties for two rows minted in the same real millisecond, which a
+  // fast test run hits often enough to make this test flaky without control
+  // of the clock. `course_join_links` carries no `sequence` column the way
+  // `course_instruction_revisions`/`messages` do (a migration this brief's
+  // own scope excludes), so this list's ordering guarantee is only ever as
+  // fine-grained as `createdAt` itself — proven here with distinct
+  // millisecond values, not a same-millisecond tie this function does not
+  // claim to break any particular way.
+  it('lists a course own join links, newest first', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+
+    vi.useFakeTimers()
+    let first: courseJoinLinks.CourseJoinLink
+    let second: courseJoinLinks.CourseJoinLink
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+      first = courseJoinLinks.createJoinLink(
+        organizationId,
+        {
+          courseId: course.id,
+          secretHash: 'hash-1',
+          createdByAccountId: ownerId,
+        },
+        testDb.db
+      )
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.001Z'))
+      second = courseJoinLinks.createJoinLink(
+        organizationId,
+        {
+          courseId: course.id,
+          secretHash: 'hash-2',
+          createdByAccountId: ownerId,
+        },
+        testDb.db
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const listed = courseJoinLinks.listJoinLinks(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(listed.map((link) => link.id)).toEqual([second.id, first.id])
+  })
+
+  // Fails without the fix: before `listJoinLinks` existed, there was no way
+  // for a caller to read a course's join links back at all.
+  it("does not list another organization's course join links", () => {
+    testDb = createTestDatabase()
+    const {
+      organizationId: orgA,
+      course: courseA,
+      ownerId: ownerA,
+    } = seedOrganizationWithCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithCourse(testDb)
+
+    courseJoinLinks.createJoinLink(
+      orgA,
+      {
+        courseId: courseA.id,
+        secretHash: 'hash-1',
+        createdByAccountId: ownerA,
+      },
+      testDb.db
+    )
+
+    expect(courseJoinLinks.listJoinLinks(orgB, courseA.id, testDb.db)).toEqual(
+      []
+    )
+  })
+
   it("redeeming refuses a person from a different organization than the link's own", () => {
     testDb = createTestDatabase()
     const {

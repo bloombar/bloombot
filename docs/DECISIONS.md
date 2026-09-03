@@ -5665,3 +5665,85 @@ names it as a plausible future caller, resolving `callerAssertedPersonId` from a
 than a session) is still unwired from any live surface — nothing in this slice's brief asked for it, and
 `redeemJoinLinkForWebAccount`'s own account-based shape would not fit it directly regardless (a Discord
 identity is not a web account id).
+
+---
+
+## D-56 — `packages/db`/`packages/actions`/`apps/web`: WEB-20/WEB-21 — the panel issues and lists join links, and imports a roster, reusing the job-polling shape and the drop zone rather than inventing either a second time
+
+**Problem.** D-55 wired ENRL-8's redemption to a route and a screen but left issuing and listing join links
+(WEB-20) and running a roster import (WEB-21) unreachable from the panel — `courseJoinLinks.create`/`.revoke`
+and `roster.import` already existed as actions, but nothing before this slice ever called `courseJoinLinks.list`
+(it did not exist) or offered any of the three, or the roster import, through a screen.
+
+**Choice — `listJoinLinks` (`repos/course-join-links.ts`) returns the row as stored, `secretHash` included; the
+projection that drops it lives in `@bloombot/actions`' `courseJoinLinks.list` instead, as a `CourseJoinLinkSummary`
+built by a `toSummary` mapper the action's own `execute` always runs before returning.** The repo layer is a
+plain read, the same as every other `list*` function in this package — it is not the boundary that decides
+what a browser may see, and `packages/db`'s own tests (`course-join-links.test.ts`) already assert the row it
+returns unfiltered. `courseJoinLinks.list`'s own action-level test asserts the opposite property structurally
+(`JSON.stringify(listed)` never contains `secretHash`/`secret_hash`), which is the guarantee that actually
+matters: a caller of the action, not the repo, is what ends up serialized to a browser.
+
+**Choice — ordering is "newest first" by `createdAt`, with no `sequence` column to break a same-millisecond
+tie.** `course_instruction_revisions`/`messages`/`transcript_exports` all carry a monotonic `sequence` column
+for exactly this reason (`conversations.test.ts`'s own "orders a transcript by append order even when every
+message shares the same millisecond"), but adding one to `course_join_links` is a schema migration this
+slice's own brief puts explicitly out of scope ("If you think a schema migration is required, stop and report
+rather than writing one"). Two links minted in the same real millisecond — not a scenario ordinary,
+human-paced link creation produces — sort in whatever order SQLite happens to return them; `listJoinLinks`'s
+own doc comment states this rather than silently promising an ordering the column cannot back. The unit test
+that pins down the intended "newest first" behavior freezes the clock and steps it by hand (`vi.useFakeTimers`),
+the same device `conversations.test.ts` already uses, rather than asserting anything about a genuine tie.
+
+**Choice — the roster CSV's required format is written directly into `components/RosterImport.tsx`'s own JSX,
+kept in sync with `packages/schemas/src/roster.ts` by hand, rather than importing a shared constant for the
+header list.** `packages/schemas`' own `REQUIRED_HEADERS` is not exported from its public surface today, and
+exporting it would touch the roster _parser_ file this slice's own brief names out of scope ("You are building
+the screen that starts the job and reads its report, not changing what the job does"). The five-column
+description, the required-vs-blank rules and the worked example row are all read from that file directly (by a
+person, while writing this screen) rather than guessed at — the brief's own "if you find the screen and the
+schema disagreeing, the schema wins and you fix the screen" is honored by keeping this static text a faithful,
+literal transcription of `rosterRowSchema`'s own rules, not by a code-level import that would have required
+widening a file this slice was told not to touch.
+
+**Choice — the roster import's own job-status polling is a straight reuse of `ScaffoldButton.tsx`'s shape (poll
+`jobs.get`, show a "still queued" hint past a threshold), and its report is read off `JobStatus.result` with no
+change to that action at all.** The brief asked to "extend it minimally" only if the shape could not carry a
+per-row report; it already can (`result: unknown`, `JobStatus`'s own doc comment: "`null` until the job
+succeeds… `undefined` would be indistinguishable from `not yet read`"), since `apps/worker`'s own
+`RosterImportReport` is exactly what a succeeded `roster.import` job's `result` already contains. `apps/web`'s
+own `RosterImportReport` (`api/types.ts`) mirrors that shape by hand, narrowed to the fields this screen
+actually renders — the same "not imported from the workspace" boundary this file's own module comment already
+states for `JobStatus` and every other shape in that file, one level stricter here: `apps/web` cannot import
+`apps/worker`'s source at all (no app imports another app's source, workspace package or not), so this is a
+mirror of a mirror, not a shortcut around the boundary.
+
+**Choice — `RosterImport.tsx` reads the chosen file's text with `FileReader#readAsText`, not the newer
+`File#text()`.** `File#text()` does not exist on the `File` implementation this repository's own test
+environment (`vitest`'s `jsdom` project) constructs, which surfaced as every import test throwing
+`selectedFile.text is not a function` the moment a real click ran `handleImport`. `FileReader` is the same
+device `CourseAttachments.tsx`'s own `fileToBase64` already uses for the identical reason, just reading text
+instead of a base64 data URL.
+
+**Choice — the join-link secret is copied via `navigator.clipboard.writeText`, with no fallback for a browser
+that lacks it.** Every browser this panel is built for (WEB-1's own "a modern browser," the same assumption
+`FileDropZone.tsx` already makes for drag-and-drop) supports the Clipboard API; a `document.execCommand('copy')`
+fallback would be dead code covering an environment this panel does not otherwise support, and the unit test
+(`join-links.test.tsx`) stubs `navigator.clipboard` directly rather than exercising a fallback path that does
+not exist.
+
+**Rework finding — two file-upload e2e specs' own `input[type="file"]` locators collided once both drop zones
+render on the same course screen.** `e2e/course-knowledge-files.spec.ts` (WEB-18, pre-existing) and
+`e2e/roster-import-panel.spec.ts` (WEB-21, this slice) each render one hidden `input[type="file"]`
+(`FileDropZone.tsx`'s own shape) inside `pages/CourseEditor.tsx`, once a course exists — before this slice, only
+one drop zone was ever on screen at a time, so an unscoped `page.locator('input[type="file"]')` was unambiguous
+by accident. Both specs now scope that locator to their own component's `data-testid`
+(`course-attachments`/`roster-import`) before calling `setInputFiles` — the fix belongs to both files, not only
+the new one, since the pre-existing spec's own locator became ambiguous the moment this slice's own component
+mounted alongside it.
+
+**Limits.** The join-link creation screen offers no control for setting `expiresAt` — every link this panel
+issues has no expiry, valid until revoked, even though `courseJoinLinks.create` already accepts one. WEB-20's
+own text describes "an optionally expiring link" as ENRL-3/ENRL-4's own capability, not as something this
+screen's own creation control must expose; adding one is a small, real gap left for whoever picks it up next,
+not a decision that anything here forecloses.

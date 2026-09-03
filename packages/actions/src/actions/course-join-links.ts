@@ -120,6 +120,71 @@ export const createCourseJoinLinkAction: Action<
   },
 }
 
+const listInputSchema = z.object({
+  courseId: z.string().min(1),
+})
+type ListInput = z.infer<typeof listInputSchema>
+
+/**
+ * WEB-20: what a course's join links look like once they leave this
+ * package — deliberately narrower than `repos/course-join-links.ts`'s own
+ * `CourseJoinLink` row, the same "never mirror a sensitive or irrelevant
+ * column just because the row happens to carry it" discipline
+ * `CourseAttachmentSummary` (`apps/web/src/api/types.ts`) already applies to
+ * `providerFileId`/`vectorStoreId`. Here the omission is load-bearing, not
+ * merely tidy: `secretHash` is what redeems a link (`redeemJoinLink`'s own
+ * `findLiveJoinLinkByHash`), so a response that included it would hand a
+ * browser everything it needs to mint working join URLs for every link a
+ * course has ever issued, not only the one just created. `organizationId`
+ * is also left out — implied by which organization the caller dispatched
+ * this action in, and never needed by the panel's own list.
+ */
+export interface CourseJoinLinkSummary {
+  id: string
+  courseId: string
+  expiresAt: number | null
+  revokedAt: number | null
+  createdByAccountId: string
+  createdAt: number
+}
+
+function toSummary(link: JoinLink): CourseJoinLinkSummary {
+  return {
+    id: link.id,
+    courseId: link.courseId,
+    expiresAt: link.expiresAt,
+    revokedAt: link.revokedAt,
+    createdByAccountId: link.createdByAccountId,
+    createdAt: link.createdAt,
+  }
+}
+
+/**
+ * WEB-20: list a course's join links, newest first — what the panel's own
+ * "join links" screen reads. Projected through `toSummary` (above) before
+ * this action returns at all, so the exclusion of `secretHash` is this
+ * function's own guarantee, not something a caller has to remember to
+ * apply on the way out.
+ */
+export const listCourseJoinLinksAction: Action<
+  'courseJoinLinks.list',
+  ListInput,
+  Course,
+  CourseJoinLinkSummary[]
+> = {
+  name: 'courseJoinLinks.list',
+  description:
+    "List a course's join links (ENRL-3, WEB-20): id, expiry and revoked state for each — never the secret, which only ever existed at creation.",
+  inputSchema: listInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'read' },
+    resolve: (input, context) =>
+      courses.getCourse(context.organizationId, input.courseId, context.db),
+  },
+  execute: ({ organizationId, entity, db }) =>
+    courseJoinLinks.listJoinLinks(organizationId, entity.id, db).map(toSummary),
+}
+
 const revokeInputSchema = z.object({
   linkId: z.string().min(1),
 })

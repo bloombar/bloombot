@@ -315,6 +315,55 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
   })
 })
 
+// AUTH-6 rework, cheap-fix — `returnToShell`'s own `isSameOriginPath` check
+// (`App.tsx`, its own module comment calls this "the one gate between a
+// caller-supplied string and the browser's own address bar") is pinned
+// directly here, against the same two adversarial values
+// `packages/auth/tests/tokens.test.ts` asserts its own copy of the check
+// against — deliberately shared, not two independently invented examples:
+// the point is that both copies of `isSameOriginPath` refuse the same
+// inputs. Fails without the fix if this component ever navigates to a
+// server-supplied `destination` without checking it first.
+describe('App — a redeemed destination that is not a same-origin path is refused before navigating (AUTH-6)', () => {
+  it.each(['//evil.example', '/\\evil.example'])(
+    'does not navigate to an off-origin destination (%s) — falls back to the ordinary shell instead',
+    async (destination) => {
+      redeemSignInLink.mockResolvedValue({
+        accountId: 'account-1',
+        destination,
+      })
+      listProjects.mockResolvedValue([])
+      listDiscordServers.mockResolvedValue([])
+      fetchMe.mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'student@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Student',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      window.history.pushState(null, '', '/sign-in/a-token')
+
+      renderWithModal(<App />)
+
+      // The ordinary shell — not the off-origin address, and not left on
+      // `/sign-in/a-token` either (redemption itself still ran and
+      // succeeded; only the *navigation* it would otherwise have taken is
+      // refused).
+      expect(
+        await screen.findByTestId('organization-switcher')
+      ).toBeInTheDocument()
+      expect(window.location.pathname).toBe('/')
+    }
+  )
+})
+
 describe('App — /join/:secret (ENRL-8)', () => {
   it('signed out, renders the join-link screen own sign-in prompt rather than the ordinary shell', async () => {
     fetchMe.mockResolvedValue({ account: null })

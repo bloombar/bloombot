@@ -528,6 +528,76 @@ describe('requestSignInLink (AUTH-1)', () => {
     ).toHaveLength(1)
   })
 
+  // AUTH-6 rework, must-fix 2 — the exact reproduction the review named: an
+  // ordinary request with no destination, followed by a repeat request that
+  // does carry one, while the first token is still outstanding. Fails
+  // without the fix: the second call used to return having done nothing but
+  // decline (correctly) to send a second email — silently discarding the
+  // destination it was given, so the *only* email actually sent (the
+  // first one's) redeemed to nowhere in particular.
+  it('a repeat request with a destination updates the outstanding token instead of discarding it, still sending only one email', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const deps = {
+      db: testDb.db,
+      emailSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await requestSignInLink('flooded-with-destination@example.edu', deps)
+    await requestSignInLink(
+      'flooded-with-destination@example.edu',
+      deps,
+      '/join/secret-abc'
+    )
+
+    // The anti-flood property itself: still exactly one email, one row.
+    expect(emailSender.sent).toHaveLength(1)
+    expect(
+      testDb.db
+        .select()
+        .from(schema.signInTokens)
+        .all()
+        .filter((row) => row.email === 'flooded-with-destination@example.edu')
+    ).toHaveLength(1)
+
+    // The property this fix adds: the one email actually sent — the first
+    // request's own token, never re-issued — now redeems to the second
+    // request's own destination.
+    const sentLink = emailSender.sent[0]!.body
+    const token = sentLink.split('/sign-in/')[1]!.trim()
+    const redeemed = redeemSignInLink(token, testDb.db)
+    expect(redeemed?.destination).toBe('/join/secret-abc')
+  })
+
+  // A repeat request that omits `destination` must not blow away a more
+  // specific one an earlier, still-outstanding request already set —
+  // omitting a value is never treated as "clear the existing one."
+  it('a repeat request with no destination leaves an already-set one on the outstanding token untouched', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const deps = {
+      db: testDb.db,
+      emailSender,
+      buildLink: (token: string) =>
+        `https://app.bloombot.example/sign-in/${token}`,
+    }
+
+    await requestSignInLink(
+      'destined-then-plain@example.edu',
+      deps,
+      '/connect/org-1'
+    )
+    await requestSignInLink('destined-then-plain@example.edu', deps)
+
+    expect(emailSender.sent).toHaveLength(1)
+    const sentLink = emailSender.sent[0]!.body
+    const token = sentLink.split('/sign-in/')[1]!.trim()
+    const redeemed = redeemSignInLink(token, testDb.db)
+    expect(redeemed?.destination).toBe('/connect/org-1')
+  })
+
   it('issues a new token again once the earlier one has been redeemed', async () => {
     testDb = createTestDatabase()
     const emailSender = new RecordingEmailSender()

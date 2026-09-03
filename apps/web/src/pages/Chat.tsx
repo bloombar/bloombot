@@ -272,8 +272,18 @@ export function Chat({
   // confirmed defined, above) is this account's own enrolled list, read
   // moments after the redemption that set `joinConfirmation` in the first
   // place, so the just-joined course's own title is always in it.
+  //
+  // Rework finding (must-fix): this used to look the title up by
+  // `selectedCourseId`, which `courses.length > 1`'s own `<select onChange>`
+  // (below) rewrites on every switch — the banner has no dismissal and
+  // persists for the mount's whole life, so it kept asserting a fact about
+  // whichever course the student most recently *looked at*, not the one the
+  // link actually joined. `initialCourseId` is the one value this component
+  // never changes after mount (there is no setter for it, unlike
+  // `selectedCourseId`), so it is the only correct key for a banner that is
+  // itself about a one-time event, not the current selection.
   const joinedCourseTitle = joinConfirmation
-    ? courses.find((course) => course.id === selectedCourseId)?.title
+    ? courses.find((course) => course.id === initialCourseId)?.title
     : undefined
 
   return (

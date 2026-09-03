@@ -134,6 +134,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'consumeSignInToken',
     'hasActiveSignInToken',
     'deleteSignInToken',
+    'updateSignInTokenDestination',
   ],
   'sessions.ts': [
     'createSession',

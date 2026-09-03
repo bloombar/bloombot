@@ -606,3 +606,41 @@ export interface GrantMembershipResult {
   grantedAt: number | null
   createdAt: number
 }
+
+/**
+ * ENRL-10 — one invitation an organization has issued, as
+ * `membershipInvitations.list` returns it. Mirrors `@bloombot/actions`' own
+ * `MembershipInvitationSummary` by hand, the same boundary this file's own
+ * module comment already explains. Unlike `OrganizationMembership` above,
+ * `email` is present — an outstanding invitation has no account yet to
+ * attach a `displayName` to, and the address an owner typed is the only
+ * thing that identifies it (`membership-invitations.ts`'s own doc comment
+ * on why that omission is load-bearing for a granted role but not here).
+ * Never `secretHash` — that redeems the invitation, and only ever existed,
+ * in plaintext, at creation (`CreatedMembershipInvitation`, below).
+ */
+export interface MembershipInvitation {
+  id: string
+  email: string
+  role: 'owner' | 'instructor' | 'assistant'
+  expiresAt: number | null
+  revokedAt: number | null
+  redeemedAt: number | null
+  createdByAccountId: string
+  createdAt: number
+}
+
+/**
+ * ENRL-10 — what `membershipInvitations.create` hands back once, and only
+ * once: the plaintext secret itself. Mirrors `@bloombot/actions`' own
+ * `CreatedMembershipInvitation`. Never stored by this app past the
+ * component that renders it — a reload has nothing left to show, because
+ * the database itself does not either (`repos/membership-invitations.ts`'s
+ * own module comment), the same "shown once" shape
+ * `CreatedCourseJoinLink` already gives WEB-20's own join links.
+ */
+export interface CreatedMembershipInvitation {
+  invitationId: string
+  secret: string
+  expiresAt: number | null
+}

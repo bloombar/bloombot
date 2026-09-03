@@ -92,11 +92,17 @@ test('an owner grants the instructor role to a second account from the Team pane
   // 4. Grant the second account the instructor role — the consequence
   //    confirmed before anything is sent (ENRL-5's own "make the
   //    consequence legible at the moment of granting").
-  await page.getByLabel('Email').fill(secondEmail)
+  // `exact: true` — ENRL-10's own `MembershipInvitations.tsx`, mounted
+  // below this same form, has its own "Invite email" field, and
+  // `getByLabel`'s default matching is case-insensitive substring, not just
+  // form-control labels, so a plain `getByLabel('Email')` now resolves to
+  // both.
+  await page.getByLabel('Email', { exact: true }).fill(secondEmail)
   // `exact: true` — the surrounding sections' own `aria-label`s ("Who holds
   // a role", "Grant a role") both contain the substring "Role" too, and
-  // `getByLabel`'s default matching is case-insensitive substring, not just
-  // form-control labels.
+  // ENRL-10's own "Invite role" field (the identical reason as "Email",
+  // just above) — `getByLabel`'s default matching is case-insensitive
+  // substring, not just form-control labels.
   await page.getByLabel('Role', { exact: true }).selectOption('instructor')
   await page.getByRole('button', { name: 'Grant role' }).click()
   const dialog = page.getByRole('dialog', {

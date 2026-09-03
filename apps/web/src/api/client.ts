@@ -41,9 +41,11 @@ import type {
   InstallBeginResponse,
   InstallCallbackResponse,
   JobStatus,
+  CreatedMembershipInvitation,
   GrantMembershipResult,
   McpPersonLinkPreviewResponse,
   MeResponse,
+  MembershipInvitation,
   OrganizationDeletionPreview,
   OrganizationMembership,
   OrganizationUsageReport,
@@ -712,6 +714,76 @@ export function grantMembership(
     organizationId,
     'memberships.grant',
     { email, role }
+  )
+}
+
+/**
+ * ENRL-10 — inviting a colleague who is not yet in the organization: issuing
+ * an invitation (the secret is the response's own, one-time payload —
+ * nothing about it is ever fetched again), the outstanding list (never a
+ * secret among them), and revoking one. Each a thin wrapper over
+ * `dispatchAction`, the same route every other action in this app already
+ * reaches through — only an existing owner may call any of the three
+ * (`membership-invitations.ts`'s own module comment on why `.list` is
+ * owner-only here, unlike `memberships.list` above).
+ */
+
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `createCourseJoinLink`'s own optional `expiresAt`. */
+export function createMembershipInvitation(
+  organizationId: string,
+  email: string,
+  role: 'owner' | 'instructor' | 'assistant',
+  expiresAt?: number | null
+): Promise<CreatedMembershipInvitation> {
+  return dispatchAction<CreatedMembershipInvitation>(
+    organizationId,
+    'membershipInvitations.create',
+    {
+      email,
+      role,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    }
+  )
+}
+
+/** ENRL-10: every invitation the caller's organization has ever issued, newest first — never a secret among them. */
+export function listMembershipInvitations(
+  organizationId: string
+): Promise<MembershipInvitation[]> {
+  return dispatchAction<MembershipInvitation[]>(
+    organizationId,
+    'membershipInvitations.list',
+    {}
+  )
+}
+
+/** ENRL-10: revoke an invitation — stops it admitting anyone, ever again. */
+export function revokeMembershipInvitation(
+  organizationId: string,
+  invitationId: string
+): Promise<{ revoked: boolean }> {
+  return dispatchAction(organizationId, 'membershipInvitations.revoke', {
+    invitationId,
+  })
+}
+
+/**
+ * ENRL-10: redeem an invitation, bound to the caller's own signed-in
+ * session — `apps/api`'s own `routes/membership-invitations.ts` never
+ * accepts anything beyond the secret itself in the request body. Throws
+ * `ApiError` (404, `membership_invitation_not_found`) identically for a
+ * secret that was never issued, one that is revoked, one that has expired,
+ * one that was already redeemed, one whose account email does not match the
+ * invited address, and one for an account that already holds a membership
+ * in that organization — never a different status or message across any of
+ * the six.
+ */
+export function redeemMembershipInvitation(
+  secret: string
+): Promise<{ organizationId: string; role: string }> {
+  return request<{ organizationId: string; role: string }>(
+    '/membership-invitations/redeem',
+    { method: 'POST', body: { secret } }
   )
 }
 

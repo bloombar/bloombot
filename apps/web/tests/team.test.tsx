@@ -7,16 +7,32 @@
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { OrganizationMembership } from '../src/api/types.js'
 import { Team } from '../src/components/Team.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { listMemberships, grantMembership } = vi.hoisted(() => ({
+// ENRL-10: `Team` now mounts `MembershipInvitations` (owner-gated,
+// alongside the grant form) — that component's own `listMembershipInvitations`
+// is mocked here too, defaulted to an empty list in `beforeEach` below, so
+// every existing case in this file keeps exercising the grant form alone
+// without a stray, unmocked network call from the invitations section
+// landing its own "Could not reach Bloombot" alert alongside whatever this
+// file's own assertions are actually checking.
+const {
+  listMemberships,
+  grantMembership,
+  listMembershipInvitations,
+  createMembershipInvitation,
+  revokeMembershipInvitation,
+} = vi.hoisted(() => ({
   listMemberships: vi.fn(),
   grantMembership: vi.fn(),
+  listMembershipInvitations: vi.fn(),
+  createMembershipInvitation: vi.fn(),
+  revokeMembershipInvitation: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -27,6 +43,9 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     listMemberships,
     grantMembership,
+    listMembershipInvitations,
+    createMembershipInvitation,
+    revokeMembershipInvitation,
   }
 })
 
@@ -44,6 +63,10 @@ function entry(
     ...overrides,
   }
 }
+
+beforeEach(() => {
+  listMembershipInvitations.mockResolvedValue([])
+})
 
 afterEach(() => {
   vi.resetAllMocks()

@@ -163,6 +163,28 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // restricted in `execute` — this file's own module comment on
   // `listMembershipsAction` has why a read needs no owner check.
   'memberships.list': { resource: 'organization', access: 'read' },
+  // ENRL-10: no existing invitation to resolve on create either — the
+  // organization itself is the resource, the same "no existing record to
+  // resolve on create" shape `memberships.grant`/`projects.create` both use
+  // above. *Who* may call this (an existing owner) is `execute`'s own check,
+  // not the policy's, the same reason `memberships.grant`'s own row gives.
+  'membershipInvitations.create': { resource: 'organization', access: 'write' },
+  // ENRL-10: the organization itself again, read rather than written —
+  // unlike `memberships.list`, `execute` further restricts this to an
+  // existing owner (`membership-invitations.ts`'s own module comment on
+  // why an outstanding invitation's own email is not open to any member the
+  // way a granted role already is).
+  'membershipInvitations.list': { resource: 'organization', access: 'read' },
+  // ENRL-10: resolves the invitation itself, write — an invitation
+  // belonging to another organization resolves to nothing (TEN-5), the
+  // same as every other scoped write in this table. Redeeming an
+  // invitation is not an action at all (`actions/membership-invitations.ts`'s
+  // own module comment) — it needs no organization id in advance, which
+  // every dispatched action here is given.
+  'membershipInvitations.revoke': {
+    resource: 'membershipInvitation',
+    access: 'write',
+  },
   // ADMIN-1: resolves the course whose transcript is being read, read —
   // `execute` also writes an ADMIN-2 audit row, but that write happens
   // inside `@bloombot/db`'s own `readCourseTranscript` regardless of who

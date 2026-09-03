@@ -1268,3 +1268,67 @@ export const tenantDeletions = sqliteTable('tenant_deletions', {
   summary: text('summary').notNull(),
   deletedAt: integer('deleted_at').notNull(),
 })
+
+// ENRL-10 — an invitation: the missing layer beneath ENRL-5's
+// `memberships.grant`, which only ever changes the role of an account that
+// already holds a membership in this organization
+// (`packages/actions/src/actions/memberships.ts`'s own module comment) —
+// nothing in production creates that first membership. Same shape as
+// `course_join_links`/`sign_in_tokens`: a bearer secret, returned once and
+// stored only as `secretHash`, revocable and optionally expiring. Unlike a
+// join link — deliberately shared with a whole class, admitting whoever
+// redeems it, repeatedly, until revoked — an invitation is addressed to one
+// `email` and is single-use: `redeemedAt`/`redeemedByAccountId` are the
+// claim, set the moment `repos/membership-invitations.ts#redeemMembershipInvitation`
+// consumes it, and never un-set. That single-use property, together with
+// binding the redeemer's own account email to `email` (that function's own
+// doc comment), is what ENRL-10 means by an invitation admitting "exactly
+// the person who received it" rather than whoever first gets hold of the
+// secret. `createdByAccountId` is the inviting owner — redemption stamps it
+// onto the granted membership's own `grantedByAccountId`, never the
+// redeemer, so a role stays traceable to the owner who actually decided to
+// extend it (ENRL-5's own "recorded" requirement).
+export const membershipInvitations = sqliteTable(
+  'membership_invitations',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    // Stored lowercased by the repo layer (`repos/membership-invitations.ts`),
+    // the same convention `accounts.email` already uses — an invitation
+    // addressed to `Foo@Bar.com` must still bind to an account stored as
+    // `foo@bar.com`.
+    email: text('email').notNull(),
+    role: text('role', { enum: MEMBERSHIP_ROLES }).notNull(),
+    secretHash: text('secret_hash').notNull().unique(),
+    // Nullable — an invitation with no expiry is valid until revoked or
+    // redeemed, the same "nullable means not configured" reading
+    // `courseJoinLinks.expiresAt` already gives.
+    expiresAt: integer('expires_at'),
+    revokedAt: integer('revoked_at'),
+    redeemedAt: integer('redeemed_at'),
+    redeemedByAccountId: text('redeemed_by_account_id').references(
+      () => accounts.id
+    ),
+    createdByAccountId: text('created_by_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // What `repos/membership-invitations.ts#listInvitations` filters an
+    // organization's own outstanding invitations by — the same
+    // "organization first" index shape most scoped tables in this file
+    // carry.
+    index('membership_invitations_organization_id_idx').on(
+      table.organizationId
+    ),
+    // Belt-and-suspenders on top of the TypeScript `enum` above, the same
+    // reasoning `memberships`' own identical CHECK gives.
+    check(
+      'membership_invitations_role_check',
+      sql`${table.role} in ('owner', 'instructor', 'assistant')`
+    ),
+  ]
+)

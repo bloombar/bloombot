@@ -60,6 +60,11 @@ import {
 } from './enrolments.js'
 import { grantMembershipAction, listMembershipsAction } from './memberships.js'
 import {
+  createMembershipInvitationAction,
+  listMembershipInvitationsAction,
+  revokeMembershipInvitationAction,
+} from './membership-invitations.js'
+import {
   exportTranscriptAction,
   listTranscriptExportsAction,
   listTranscriptStudentsAction,
@@ -124,6 +129,14 @@ export {
   listMembershipsAction,
   type MembershipEntry,
 } from './memberships.js'
+export {
+  createMembershipInvitationAction,
+  listMembershipInvitationsAction,
+  revokeMembershipInvitationAction,
+  redeemMembershipInvitationForWebAccount,
+  type CreatedMembershipInvitation,
+  type MembershipInvitationSummary,
+} from './membership-invitations.js'
 export {
   exportTranscriptAction,
   listTranscriptExportsAction,
@@ -201,6 +214,9 @@ export function createPlatformRegistry(options?: {
   registry.register(listEnrolmentsForCourseAction)
   registry.register(grantMembershipAction)
   registry.register(listMembershipsAction)
+  registry.register(createMembershipInvitationAction)
+  registry.register(listMembershipInvitationsAction)
+  registry.register(revokeMembershipInvitationAction)
   registry.register(readTranscriptAction)
   registry.register(listTranscriptStudentsAction)
   registry.register(exportTranscriptAction)

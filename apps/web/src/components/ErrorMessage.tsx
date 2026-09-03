@@ -94,6 +94,17 @@ export function describeApiError(error: ApiError): {
         headline: 'That join link is no longer valid. Ask for a new one.',
         details: [],
       }
+    // ENRL-10: `routes/membership-invitations.ts` answers this identically
+    // for a secret that was never issued, one that is revoked, one that has
+    // expired, one that was already redeemed, one whose account email does
+    // not match the invited address, and one for an account that already
+    // holds a membership in that organization — the same "no oracle" shape
+    // `join_link_not_found` already gives ENRL-4, above.
+    case 'membership_invitation_not_found':
+      return {
+        headline: 'That invitation is no longer valid. Ask for a new one.',
+        details: [],
+      }
     // WEB-20 — `components/JoinLinks.tsx`'s own `handleCopy`: not a status
     // `apps/api` ever sent (no request was made at all), but constructed
     // the same `ApiError` shape so this one join-link secret — the value

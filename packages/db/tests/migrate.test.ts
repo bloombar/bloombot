@@ -74,6 +74,7 @@ describe('runMigrations', () => {
       'discord_server_bindings',
       'enrolments',
       'jobs',
+      'membership_invitations',
       'memberships',
       'messages',
       'organizations',
@@ -736,5 +737,79 @@ describe('runMigrations', () => {
         now
       )
     ).toThrow(/CHECK constraint failed/)
+  })
+})
+
+// ENRL-10 — 0017 adds `membership_invitations`, a brand-new table rather than
+// a rebuild, so its columns are already pinned by the plain schema-shape
+// assertion above (`schema.membership_invitations`, part of the first `it`
+// in this file). What that assertion cannot see is *behaviour* the table's
+// own `CHECK` and unique index are responsible for — the same class of gap
+// 0015/0016's own test (above) exists to close for `jobs`.
+describe('0017 — membership_invitations', () => {
+  it("rejects a role outside ('owner', 'instructor', 'assistant'), and a duplicate secret hash", () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+    runMigrations(db)
+
+    const organizationId = randomUUID()
+    const accountId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into accounts (id, email, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(accountId, 'owner@example.edu', 'Owner', now)
+
+    const insertInvitation = db.$client.prepare(
+      `insert into membership_invitations
+        (id, organization_id, email, role, secret_hash, created_by_account_id, created_at)
+       values (?, ?, ?, ?, ?, ?, ?)`
+    )
+
+    // The CHECK constraint, belt-and-suspenders on top of the TypeScript
+    // `enum` — a value no repo function in this package would ever write,
+    // but the constraint's own job is refusing it regardless of who wrote
+    // it (`schema.ts`'s own comment on `membership_invitations_role_check`).
+    expect(() =>
+      insertInvitation.run(
+        randomUUID(),
+        organizationId,
+        'invitee@example.edu',
+        'not-a-real-role',
+        'hash-1',
+        accountId,
+        now
+      )
+    ).toThrow(/CHECK constraint failed/)
+
+    // The unique index on `secret_hash` — two invitations must never be
+    // redeemable by the same secret, the same guarantee
+    // `course_join_links_secret_hash_unique` already gives ENRL-3/4.
+    insertInvitation.run(
+      randomUUID(),
+      organizationId,
+      'a@example.edu',
+      'instructor',
+      'hash-shared',
+      accountId,
+      now
+    )
+    expect(() =>
+      insertInvitation.run(
+        randomUUID(),
+        organizationId,
+        'b@example.edu',
+        'assistant',
+        'hash-shared',
+        accountId,
+        now
+      )
+    ).toThrow(/UNIQUE constraint failed/)
   })
 })

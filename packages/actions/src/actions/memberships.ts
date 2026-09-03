@@ -55,9 +55,13 @@ type GrantInput = z.infer<typeof grantInputSchema>
 
 /**
  * ENRL-5: grant a membership role to an account that already belongs to this
- * organization, identified by email — never created here (inviting a
- * brand-new account, or a first-time member, is a distinct feature this
- * action does not build; see the rework note below). Resolves the
+ * organization, identified by email — never created here. Inviting an
+ * address with no membership yet is `membership-invitations.ts`'s own job
+ * (ENRL-10) — a distinct act, deliberately: changing an existing member's
+ * role and admitting a first-time one carry different consequences (that
+ * file's own doc comment on `redeemMembershipInvitation`'s "already a
+ * member" refusal), so this action stays exactly what the rework note below
+ * closed it down to, rather than widened to cover both. Resolves the
  * organization itself (there is no existing membership to resolve against on
  * a first grant, the same "no existing record to resolve on create" shape
  * `projects.create` uses); `execute` then checks, in order:
@@ -88,10 +92,14 @@ type GrantInput = z.infer<typeof grantInputSchema>
  * `memberships.getMembership` to already find a row closes both: this
  * action can only ever change the role of somebody already known to belong
  * to this tenant, never invite a stranger's account into it or use this
- * action to learn whether a given email has one anywhere at all. ENRL-5
- * asks for no invitation flow, and this slice does not add one — a first
- * membership for a second instructor or TA (`memberships.createMembership`,
- * `repos/memberships.ts`) is a distinct feature, left to a later slice.
+ * action to learn whether a given email has one anywhere at all. A first
+ * membership for a second instructor or TA now has a path —
+ * `membershipInvitations.create`/`redeemMembershipInvitationForWebAccount`
+ * (ENRL-10, `membership-invitations.ts`) — that closes the same oracle a
+ * different way: by never looking `email` up against `accounts` at all, so
+ * inviting an address with no account is indistinguishable from inviting
+ * one that has one. This action's own restriction to an *existing* member
+ * stays exactly as this rework left it.
  */
 export const grantMembershipAction: Action<
   'memberships.grant',

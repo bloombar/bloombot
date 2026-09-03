@@ -1804,7 +1804,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 6
-  status: Done
+  status: In progress
   review: false
 - id: WEB-5
   title: A failure reads the way the API reported it
@@ -1885,7 +1885,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 7
-  status: Done
+  status: In progress
   review: false
 - id: WEB-7
   title: Projects are managed in the panel
@@ -1944,7 +1944,7 @@
   section: §20 Background Jobs & Admission
   family: JOB
   phase: 8
-  status: Done
+  status: In progress
   review: false
 - id: JOB-3
   title: A job runs once, even with a worker restart in the middle
@@ -2207,7 +2207,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: Done
+  status: In progress
   review: false
 - id: COST-4
   title: Usage is visible to the people it concerns
@@ -2217,7 +2217,7 @@
   section: §24 Cost Ledger, Caps & Monitoring
   family: COST
   phase: 11
-  status: Done
+  status: In progress
   review: false
 - id: COST-5
   title: The bot's own health is monitored, not inferred
@@ -2315,7 +2315,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: Done
+  status: In progress
   review: false
 - id: ENRL-6
   title: Ending an enrolment keeps what was said
@@ -2652,7 +2652,7 @@
   section: §26 Admin Console, Transcripts & Export
   family: ADMIN
   phase: 14
-  status: Done
+  status: In progress
   review: false
 - id: ADMIN-3
   title: Export produces a file, as a job

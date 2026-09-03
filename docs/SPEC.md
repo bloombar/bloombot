@@ -1050,6 +1050,19 @@ the redemption rather than admitting a second, freshly-created person for the sa
 actually means to re-admit a removed person does so through a caller that says so, the same way
 ROST-9's roster import already does; redeeming a link is never that caller.
 
+#### ENRL-9 An enrolment an instructor ended can be reinstated by an instructor
+
+ENRL-6 lets an instructor stop a person asking a course, and closing ENRL-8's self-service bypass
+made that decision genuinely stick: no admission path revives an ended enrolment any more — not a
+join link, not a roster row, not a Discord role. That is correct, and it leaves an instructor who
+ended the wrong enrolment, or ended one a student has since appealed, with no way to undo it. A
+decision that can be made and never unmade is not an access control, it is a trap. Reinstating is
+an instructor-initiated act, recorded the way granting a membership already is (ENRL-5): who did
+it and when. It is deliberately not something the reinstated person can trigger, which is the
+whole distinction ENRL-8's rework turns on — the person who was removed is exactly who must not be
+able to reverse it. Reinstating a person who is not currently ended changes nothing, the same
+idempotent no-op ending an already-ended enrolment gives.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job
@@ -1780,6 +1793,19 @@ are required and which may be blank, and a worked example row. The screen shows 
 progress while it runs and its report when it finishes, including every row that could not be
 parsed with the line number it was on, so a spreadsheet can be corrected and re-uploaded. Re-
 importing the same roster admits nobody twice.
+
+#### WEB-22 A course's people are visible in the panel, and admission is reversible there
+
+ENRL-2's enrolment relation decides who may ask a course, ENRL-6 ends an enrolment and ENRL-9
+reinstates one — and no screen shows any of it. `enrolments.end` has existed as an action with no
+surface, so removing a student has only ever been possible by dispatching an action by hand, and
+the repo cannot even list the people an instructor would be choosing between: `listPeopleForCourse`
+returns active enrolments only, so a person who was ended is invisible to every query the panel
+could make. The course screen lists the people enrolled in that course and the ones whose enrolment
+has ended, says how each was admitted — a join link, a roster row, or a Discord role — and lets an
+instructor end an active enrolment or reinstate an ended one. Ending is behind a confirmation that
+says what it does and does not do: it stops that person asking this course, and it deletes neither
+their transcript nor the course's record of what was asked (ENRL-6).
 
 #### WEB-18 A course's knowledge files are managed in the panel
 

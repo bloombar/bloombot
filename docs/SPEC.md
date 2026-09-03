@@ -1093,6 +1093,24 @@ person who received it. Inviting an address that has no account is indistinguish
 one that does, which is what keeps the oracle closed. An invitation grants a role and nothing else:
 it is not a sign-in, and redeeming one never creates an account or a session.
 
+#### ENRL-11 A membership can be revoked, and an organization always has an owner
+
+ENRL-5 grants a role and ENRL-10 invites a colleague who did not have one; neither takes anything
+away, and each deferred removal deliberately and said so. Together they create the gap: ENRL-10 is
+what first makes an outside account reachable as an owner, and once redeemed that owner can grant
+the original owner a lesser role with no recourse, because nothing revokes a membership and nothing
+distinguishes the account that created an organization from one invited into it. An owner who
+invites a colleague by mistake, or a colleague who leaves, cannot be removed at all — the only way
+out today is to have never let them in.
+
+A membership can be revoked by an owner, recorded the way granting already is. An organization
+never ends up with no owner: the last one cannot be revoked or demoted, and that is enforced where
+the write happens rather than trusted to the screen offering it. Revoking a membership removes
+staff authority and nothing else — it deletes no transcript and ends no enrolment, the same rule
+TEN-6 and ENRL-6 already hold to for the same reason. Whether an owner may be demoted by a peer at
+all, or only step down themselves, is the decision this requirement has to settle rather than leave
+to whichever screen is written first.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

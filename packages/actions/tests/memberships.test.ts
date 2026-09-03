@@ -298,6 +298,236 @@ describe('memberships.grant (ENRL-5)', () => {
   })
 })
 
+// ENRL-11: `memberships.grant`'s own reachable half of the exposure this
+// requirement exists for — a first pass at ENRL-11 closed only
+// `memberships.revoke`, leaving this action free to demote a peer owner to
+// a lesser role, which is the identical consequence D-73's own
+// reconciliation records. `target.role === 'owner'` after this describe
+// block's own `beforeEach`-free seeding always means "an existing owner,
+// resolved by check 2's own `memberships.getMembership` call" — no new
+// lookup, this file's own module comment (`actions/memberships.ts`) has
+// why that matters for the "byte-identical refusal" guarantee below.
+describe('memberships.grant (ENRL-11)', () => {
+  it('refuses an owner demoting another owner, not-found-shaped', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const ownerA = accounts.createAccount(
+      organizationId,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    const ownerB = accounts.createAccount(
+      organizationId,
+      { email: 'ownerB@example.edu', displayName: 'Owner B', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        grantMembershipAction,
+        { email: 'ownerB@example.edu', role: 'assistant' },
+        { organizationId, db: testDb.db, accountId: ownerA.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // Untouched — the refused call changed nothing.
+    expect(
+      memberships.getMembership(organizationId, ownerB.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // The brief's own instruction: assert against one of `grant`'s existing
+  // refusals directly, not merely a status code — `ActionRefusedError`'s
+  // own doc comment (`errors.ts`) says every instance is byte-identical by
+  // construction (same `name`, `message`, `code`), so this proves that
+  // guarantee actually holds for the new check too, rather than trusting
+  // the doc comment alone.
+  it('the peer-owner refusal is byte-identical to an existing grant refusal — an unknown email', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const ownerA = accounts.createAccount(
+      organizationId,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    accounts.createAccount(
+      organizationId,
+      { email: 'ownerB@example.edu', displayName: 'Owner B', role: 'owner' },
+      testDb.db
+    )
+
+    const peerOwnerError = await dispatch(
+      grantMembershipAction,
+      { email: 'ownerB@example.edu', role: 'assistant' },
+      { organizationId, db: testDb.db, accountId: ownerA.id }
+    ).catch((caught: unknown) => caught)
+
+    const unknownEmailError = await dispatch(
+      grantMembershipAction,
+      { email: `${randomUUID()}@example.edu`, role: 'assistant' },
+      { organizationId, db: testDb.db, accountId: ownerA.id }
+    ).catch((caught: unknown) => caught)
+
+    expect(peerOwnerError).toBeInstanceOf(ActionRefusedError)
+    expect(unknownEmailError).toBeInstanceOf(ActionRefusedError)
+    const peer = peerOwnerError as ActionRefusedError
+    const unknown = unknownEmailError as ActionRefusedError
+    expect({ name: peer.name, message: peer.message, code: peer.code }).toEqual(
+      { name: unknown.name, message: unknown.message, code: unknown.code }
+    )
+  })
+
+  // The exposure ENRL-11 was written for, named explicitly and driven end
+  // to end: ENRL-10 lets an owner invite a colleague at the `owner` role;
+  // once redeemed, that colleague previously could call `memberships.grant`
+  // to demote the inviter with no recourse. `grantMembershipAction` promotes
+  // `invited` to `owner`, standing in for ENRL-10's own redemption — the
+  // same substitution `"an invited peer owner cannot revoke the founding
+  // owner"` (below, `memberships.revoke (ENRL-11)`) and
+  // `e2e/team-panel.spec.ts`'s own module comment already use, for the
+  // identical reason.
+  it('the ENRL-10 → ENRL-11 scenario: an invited owner cannot demote the inviting owner via grant', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const founder = accounts.createAccount(
+      organizationId,
+      { email: 'founder@example.edu', displayName: 'Founder', role: 'owner' },
+      testDb.db
+    )
+    const invited = accounts.createAccount(
+      organizationId,
+      {
+        email: 'invited@example.edu',
+        displayName: 'Invited',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    // ENRL-10: the founder invites `invited` at the owner role.
+    await dispatch(
+      grantMembershipAction,
+      { email: 'invited@example.edu', role: 'owner' },
+      { organizationId, db: testDb.db, accountId: founder.id }
+    )
+
+    // ENRL-11's own exposure: the now-owner colleague attempts to demote
+    // the founder who invited them.
+    await expect(
+      dispatch(
+        grantMembershipAction,
+        { email: 'founder@example.edu', role: 'assistant' },
+        { organizationId, db: testDb.db, accountId: invited.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      memberships.getMembership(organizationId, founder.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // Regression: this new check is scoped to a target that is *currently*
+  // `'owner'` — an owner may still change a non-owner's role exactly as
+  // before.
+  it("an owner can still change a non-owner colleague's role", async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      { email: 'assistant@example.edu', displayName: 'A', role: 'assistant' },
+      testDb.db
+    )
+
+    const granted = await dispatch(
+      grantMembershipAction,
+      { email: 'assistant@example.edu', role: 'instructor' },
+      { organizationId, db: testDb.db, accountId: owner.id }
+    )
+
+    expect(granted).toMatchObject({
+      accountId: assistant.id,
+      role: 'instructor',
+    })
+  })
+
+  // Regression: an owner can still leave the role entirely — through
+  // `memberships.revoke`, the path this decision leaves open (see that
+  // action's own "steps down themselves" test, below).
+  it('an owner can still step down via memberships.revoke, unaffected by this check', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    // A second owner (unnamed further) is what keeps `peer` from being the
+    // organization's last owner — without one, this would be testing the
+    // *last*-owner refusal, not this test's own point.
+    accounts.createAccount(
+      organizationId,
+      { email: 'founder@example.edu', displayName: 'Founder', role: 'owner' },
+      testDb.db
+    )
+    const peer = accounts.createAccount(
+      organizationId,
+      { email: 'peer@example.edu', displayName: 'Peer', role: 'owner' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      revokeMembershipAction,
+      { accountId: peer.id },
+      { organizationId, db: testDb.db, accountId: peer.id }
+    )
+
+    expect(result).toEqual({ revoked: true })
+    expect(
+      memberships.getMembership(organizationId, peer.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  // No organization is stranded by closing the peer-demotion path: a sole
+  // owner who wants to leave entirely still has an exit — promote a
+  // successor (check 4 only refuses a target *already* `'owner'`; a
+  // non-owner target being granted the `'owner'` role is untouched), then
+  // step down themselves through `memberships.revoke`, which the last-owner
+  // guard now permits since a second owner exists.
+  it('a sole owner has a way out: promote a successor via grant, then step down via revoke', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const solePresent = accounts.createAccount(
+      organizationId,
+      { email: 'sole@example.edu', displayName: 'Sole', role: 'owner' },
+      testDb.db
+    )
+    const successor = accounts.createAccount(
+      organizationId,
+      { email: 'successor@example.edu', displayName: 'S', role: 'assistant' },
+      testDb.db
+    )
+
+    await dispatch(
+      grantMembershipAction,
+      { email: 'successor@example.edu', role: 'owner' },
+      { organizationId, db: testDb.db, accountId: solePresent.id }
+    )
+
+    const stepDown = await dispatch(
+      revokeMembershipAction,
+      { accountId: solePresent.id },
+      { organizationId, db: testDb.db, accountId: solePresent.id }
+    )
+
+    expect(stepDown).toEqual({ revoked: true })
+    expect(
+      memberships.getMembership(organizationId, solePresent.id, testDb.db)
+    ).toBeUndefined()
+    expect(
+      memberships.getMembership(organizationId, successor.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+})
+
 describe('memberships.list (ENRL-5)', () => {
   it("lists every membership in the caller's organization — the role, who granted it, and when", async () => {
     testDb = createTestDatabase()

@@ -6694,3 +6694,72 @@ makes the cap settable, it does not change what a cap does once reached. `spendi
 column default (every organization is created with `NULL`, not some documented ceiling) is reported, not
 fixed — changing it changes behaviour for every existing row, a decision this slice's brief explicitly reserved
 for whoever owns that call.
+
+## D-67 — `packages/actions`/`apps/web`/`e2e`: ENRL-5 — an owner can grant a membership role, and see who holds one
+
+**Problem.** The same class of audit that produced D-65/D-66 (`docs/ROADMAP.md`'s "Audit — surfaces that were
+never built") found `memberships.grant` (`packages/actions/src/actions/memberships.ts`) had no caller outside
+its own package's tests — no route, no panel screen — and `listMembershipsForOrganization`
+(`packages/db/src/repos/memberships.ts`) had no caller at all, anywhere. The consequence, stated plainly in
+the audit note: an owner had no actual way to add a second instructor or a teaching assistant to their
+organization, and the only membership row that has ever existed in production is the founding owner's own,
+written inline by `accounts.createAccount` at sign-up. The MCP omission is unrelated and stays: `apps/mcp/src/
+tool-surface.ts`'s own module comment already reasons about it, deliberately, and this slice does not touch
+that file — `MCP_TOOL_SURFACE` is an explicit allowlist, so a new action registered anywhere never reaches a
+model caller unless a reviewer adds its name there by hand (that file's own module comment).
+
+**Choice, `memberships.list` restricted to no role at all — any member may read it, unlike `memberships.grant`.**
+`costLedger.organizationUsage`/`.setSpendingCap` (D-66) already establish the shape this slice reuses: a read
+needs no extra check beyond an ordinary membership (which `routes/actions.ts` already requires of every action
+route), a write with organization-wide consequence does. Measured, not assumed: seeing who already holds a
+staff role carries none of a grant's own consequence — it changes nothing, and an assistant or instructor
+knowing their own colleagues' roles is not a fact this platform treats as sensitive anywhere else (`courses.list`,
+`discordServers.list` and `costLedger.organizationUsage` are all open to any membership the same way). Granting
+stays owner-only, unchanged — `grantMembershipAction`'s own check, already in place before this slice, is
+exercised by this slice's own new tests (`packages/actions/tests/memberships.test.ts`) but not altered.
+
+**Choice, `z.strictObject`, not `z.object`, on `memberships.grant`'s own input.** `grantInputSchema` used to be
+a plain `z.object({ email, role })`, which silently drops a key it does not declare rather than refusing it —
+`execute` never read `input.grantedByAccountId` regardless (both `grantedByAccountId` and `grantedAt` are
+always stamped from the session's own `accountId`, per ENRL-5's own "recorded" half), so this was never an
+actual hole, but a caller attempting to supply either deserved an explicit `action_input_invalid` refusal
+rather than silent disregard indistinguishable from never having tried. Measured by mutation: reverting to a
+plain `z.object` (with `grantedByAccountId` added back as an accepted, ignored field) was tried directly
+against this slice's own new "refuses a grant whose body supplies grantedByAccountId" test — it fails without
+`z.strictObject`, confirming the schema, not merely `execute`'s own indifference to the field, is what a test
+now pins.
+
+**Choice, the grant target still identified by email, and the list still never shows one.** ENRL-5's own text
+says roles are "granted only by an existing owner" — nothing about how the owner names who receives one.
+`grantMembershipAction`'s own input has always been `email` (unchanged by this slice), because an owner
+granting a role to somebody not yet visible in `memberships.list`'s own roster has nothing else to hand — no
+account id a screen could offer to pick from. `components/Team.tsx`'s own grant form is the one place in this
+app's whole membership surface that takes an email as text; the roster itself follows `components/CoursePeople.tsx#label`'s
+"never email" precedent exactly, showing `displayName` for every row (never `null` here — unlike a student's
+own, `accounts.displayName` is `NOT NULL`, `schema.ts`) and never persisting the typed email once a grant
+succeeds (`Team.tsx`'s `handleGrant` clears it and re-fetches the list rather than rendering anything back from
+`grantMembershipAction`'s own return, which is `@bloombot/db`'s raw `Membership` row and carries no display
+name at all — `api/types.ts#GrantMembershipResult`, distinct from `OrganizationMembership`, the enriched shape
+`memberships.list` returns).
+
+**Known limitation, inherited, not fixed by this slice.** `grantMembershipAction#execute` — before this slice,
+untouched by it — refuses a grant unless the target account *already holds a membership in this organization*
+(that function's own "rework finding 1" comment: without this check, the action was a cross-tenant
+account-existence oracle, and a successful call would have enrolled a stranger's account into an organization
+they never consented to join). No production path creates a *first* membership for an account in a second
+organization — `memberships.createMembership` (`packages/db/src/repos/memberships.ts`) has no caller outside a
+test, same as `deleteMembership` — so in practice, today, `memberships.grant` can only ever change the role of
+somebody who is, by some other means, already a member of the organization in question; it cannot yet be how
+an owner brings a genuinely new person onto their staff for the first time. That function's own doc comment
+already names this as "a distinct feature, left to a later slice," and this slice's own brief scoped the same
+way — building the missing surface over the grant this platform actually has, not extending what it grants.
+`e2e/team-panel.spec.ts` seeds its own second account directly through `accounts.createAccount` for exactly
+this reason, and says so in its own module comment, rather than implying a real invitation flow exists.
+
+**Out of scope, deliberately, stated rather than left ambiguous.** Demoting or removing a membership — including
+an organization ending up with no owner at all — is not built here. `deleteMembership` (`packages/db/src/repos/
+memberships.ts`) remains uncalled, exactly as this slice found it; nothing in `components/Team.tsx` offers a
+way to remove a row. A role can be *changed* (granting a different role to an existing member, including
+granting a second `'owner'`) but never revoked through this screen. The brief named this choice explicitly as
+open; closing it — and deciding what, if anything, stops the last owner removing themselves — is left for
+whoever picks it up next.

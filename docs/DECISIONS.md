@@ -6679,15 +6679,58 @@ is not.
 **Finding — `e2e/support/start-api.ts` never wired a pricing table through to `buildApp` at all.** Writing
 `usage-panel.spec.ts` (COST-4's own e2e proof that a real conversation's cost shows up on the instructor's own
 screen) surfaced a pre-existing gap in the shared e2e harness, not introduced by this slice: `deps.pricing`
-(`@bloombot/core#answer.ts`) was left `undefined`, so every chat conversation in the *entire* e2e suite — not
-only this slice's own new specs — has been priced at `0` since the harness was written, logging
+(`@bloombot/core#answer.ts`) was left `undefined`, so every chat conversation that talks to this API-hosted
+process — not only this slice's own new specs — has been priced at `0` since the harness was written, logging
 `answerQuestion`'s own "no pricing table configured" warning every time, unnoticed because nothing before this
 slice ever asserted a nonzero cost end to end. Fixed in place, one line
 (`pricing: getModelPricingTable()`, `@bloombot/config`'s own documented default table, the same one
 `apps/api/src/index.ts` builds in production from `CONFIG.MODEL_PRICING_JSON`) rather than worked around by
 seeding a ledger row directly — an e2e spec's own point is that a real pipeline actually did the thing, and a
 pipeline that has silently never priced anything in this harness is a defect the next COST-anything e2e spec
-would have hit regardless of who wrote it first.
+would have hit regardless of who wrote it first. **Not closed everywhere, and this entry originally overclaimed
+that it was** (a rework review caught the overclaim, below): `course-configuration.spec.ts` dispatches through
+`packages/discord#handleMention` in-process, with its own separate dependency object and no `pricing` field of
+its own either — a second, distinct instance of the identical gap, on a path this harness's own `apps/api`
+process never touches. Left open deliberately rather than chased in the same rework that found it: fixing it
+means threading a pricing table through a second, unrelated harness entry point for a gap this one fix does not
+reach, which is its own piece of work, not a one-line correction to this one.
+
+**Rework, same day — a review of the fix above found it unpinned, plus three related gaps in this slice's own
+COST-3 write path.** Four cheap fixes and one promoted to a fix:
+
+1. **The pricing fix had no assertion that would fail without it.** `usage-panel.spec.ts` asserted against the
+   panel's own dollar display (`toContainText(/\$\d+\.\d{2} · 1 call/)`), which a real run showed passing at
+   `cost_micros: 133` — `$0.000133`, which `pages/Usage.tsx#formatMicros` rounds to `"$0.00"` at two decimal
+   places. Deleting `pricing: getModelPricingTable()` from `start-api.ts` left the assertion passing regardless,
+   because the call-count half of the same regex matched on its own. The spec now reads
+   `cost_ledger_entries.cost_micros` back from the database directly (`costLedger.getOrganizationSpentMicros`),
+   the same directness `spending-cap.spec.ts` already uses for `spending_cap_micros` — proven to fail against
+   the same deletion.
+2. **`apps/api/tests/routes/chat.test.ts`'s own COST-3 integration test asserted a magnitude claim its own
+   harness cannot back.** `buildTestApp` (`apps/api/tests/helpers/build-test-app.ts`) wires no `pricing` either,
+   so the "costs something real … never `0` (COST-6)" comment was false there too — the recorded cost actually
+   is `0`, and the test (still valid) exercises COST-3's `0 >= 0` boundary, not a magnitude. Comment corrected
+   to say so.
+3. **`pages/Usage.tsx#parseCapAmount`'s blank-input branch (`'' → null`) had no test that could not also pass
+   with `'' → 0`.** The existing "Clear cap" test dispatches `handleClear`, which sends `null` directly and never
+   calls `parseCapAmount` at all. A new test blanks the field and clicks *Save* instead — the path that actually
+   exercises the branch — proven to fail against a `'' → { ok: true, value: 0 }` mutation. The consequence named
+   in review: an owner who blanks the field meaning to remove the cap would instead store `0` and block every
+   student in the organization on their very next question.
+4. **`toMicros`'s `Math.round` was unpinned.** Every value any existing test used (`12.5`, `5`, `5.25`, `0`) has
+   an exactly representable product with `1_000_000`, so `Math.floor` would have passed every one of them too.
+   `2.01` does not (`2.01 * 1_000_000` is `2009999.999999998` in IEEE 754 double precision) — a new test pins
+   `Math.round`'s own `2_010_000`, proven to fail against a `Math.floor` mutation.
+5. **Promoted from a note to a fix — the HTTP route accepted values the form cannot produce, with severe
+   consequences.** `setSpendingCapInputSchema` accepted any nonnegative finite number: `1e-7` rounded down to
+   `0` (a total block on every student, from a value an owner might reasonably read as "essentially no limit"),
+   and `1e300` was verified to reach `organizations.setSpendingCap` and land in `spending_cap_micros` (an
+   `INTEGER` column) as a SQLite `REAL` with no throw — a cap that then never fires. "The form validates it"
+   (`pages/Usage.tsx#parseCapAmount`'s own `^\d+(\.\d{1,2})?$`) is not a defence for an API the form is not the
+   only caller of. The schema now carries `.multipleOf(0.01)` (agreeing with the form's own two-decimal-place
+   limit) and `.max(MAX_SPENDING_CAP_AMOUNT)` (`$10,000,000` — arbitrary but generous, and `* 1_000_000` stays
+   comfortably inside `Number.MAX_SAFE_INTEGER`), each pinned by a test proving both the previous unrestricted
+   schema accepted the value and the new one refuses it.
 
 **Out of scope, deliberately.** `hasReachedSpendingCap` and the enforcement path in `answer.ts` — this slice
 makes the cap settable, it does not change what a cap does once reached. `spendingCapMicros`'s own missing

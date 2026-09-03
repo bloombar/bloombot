@@ -1930,6 +1930,22 @@ instructor end an active enrolment or reinstate an ended one. Ending is behind a
 says what it does and does not do: it stops that person asking this course, and it deletes neither
 their transcript nor the course's record of what was asked (ENRL-6).
 
+#### WEB-24 The chat composer stays put, and the thread follows the conversation
+
+The chat screen lays the thread and the composer out in ordinary flow: the thread has a minimum
+height and no maximum, so it grows with the conversation and the page scrolls, carrying the message
+box off the bottom of the window. A student partway through a long thread has to scroll back down
+to type, and the `scrollIntoView` that runs when messages change moves the whole page rather than
+the thread.
+
+The composer holds a fixed position above the footer, always reachable without scrolling. The
+thread occupies the main content area, scrolls within itself, and follows the conversation — moving
+to the newest message when the student sends one and when a reply arrives. Following the
+conversation means the newest message, not a jump that steals a reader's place: a student who has
+scrolled up to re-read something is not yanked back down, and is told there is something new
+instead. The page itself does not scroll horizontally at any width, and the composer never covers
+the last message.
+
 #### WEB-18 A course's knowledge files are managed in the panel
 
 FILE-1 says an instructor attaches a course's notes, syllabus and schedule in the panel, and the

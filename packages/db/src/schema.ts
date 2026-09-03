@@ -546,6 +546,16 @@ export const usageCounters = sqliteTable(
 // two concurrent redemptions of the same token cannot both succeed — the
 // same reasoning `discordServerBindings`' re-claim guard documents for
 // TEN-3.
+// AUTH-6 (this table's own rework): `destination` is the same-origin path
+// (`/join/:secret`, `/connect/:organizationId`, ...) this token's issuer
+// asked to return to once it is redeemed — `packages/auth`'s
+// `sign-in.ts#requestSignInLink` writes it, and `redeemSignInLink` reads it
+// back off the *token*, not off any tab, which is the whole point: the
+// intent belongs to the sign-in that was issued, not the browsing context
+// that requested it, so it survives an emailed link a mail client opens in a
+// fresh tab (see `docs/DECISIONS.md` D-55's own `sessionStorage` choice, and
+// this rework's own entry for why that stopped being enough). `null` for an
+// ordinary sign-in with nowhere in particular to return to.
 export const signInTokens = sqliteTable(
   'sign_in_tokens',
   {
@@ -554,6 +564,7 @@ export const signInTokens = sqliteTable(
     tokenHash: text('token_hash').notNull().unique(),
     expiresAt: integer('expires_at').notNull(),
     usedAt: integer('used_at'),
+    destination: text('destination'),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [index('sign_in_tokens_email_idx').on(table.email)]

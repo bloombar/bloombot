@@ -10,19 +10,21 @@
  *
  * A visit alone does nothing (LINK-6's own "does nothing until the person
  * says to"): signed out, this page asks the visitor to sign in — the same
- * `SignIn` screen every other entry point uses — and stashes
- * `organizationId` (`PENDING_CONNECT_ORG_KEY`) so a returning sign-in lands
- * back here rather than on the ordinary shell (`App.tsx`'s own
- * `returnToShell`) — but only when the emailed sign-in link is opened in
- * this *same* browsing context: `sessionStorage` is per-tab, so a link a
- * mail client opens in a fresh tab has no marker to read and lands on the
- * plain shell instead, exactly as if this page had never stashed anything.
- * Signed in, it offers two independent things to connect — Discord
- * (LINK-7) and an assistant (LINK-8) — neither of which spends anything
- * until its own preview screen is confirmed.
+ * `SignIn` screen every other entry point uses — passing this exact page's
+ * own `organizationId` as `SignIn`'s `destination` prop (AUTH-6), so a
+ * returning sign-in lands back here rather than on the ordinary shell
+ * (`App.tsx`'s own `returnToShell`), **regardless of which browsing context
+ * redeems it** — the destination is carried on the sign-in token itself
+ * (`@bloombot/auth`), not in `sessionStorage`, which is per-tab and so only
+ * ever worked while the whole round trip stayed in the one browsing context
+ * that set it (`docs/DECISIONS.md` D-55 records that original choice; this
+ * file's own entry there records what changed and why). Signed in, it
+ * offers two independent things to connect — Discord (LINK-7) and an
+ * assistant (LINK-8) — neither of which spends anything until its own
+ * preview screen is confirmed.
  */
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import {
   beginDiscordPersonLink,
@@ -38,7 +40,7 @@ import { textInputClasses } from '../components/fieldStyles.js'
 import { describePersonLinkOutcome } from '../person-link-outcome.js'
 import { SignIn } from './SignIn.js'
 
-/** Set the moment this page mounts (signed in or not) and read back by `App.tsx`'s own `returnToShell` — the same round-trip-surviving device `components/InstallButton.tsx`'s `PENDING_INSTALL_ORG_KEY` already uses for the Discord OAuth redirect, applied here so a sign-in redemption (a *different* round trip) also lands back on this exact organization's own connect screen rather than the ordinary shell. */
+/** Set immediately before `handleConnectDiscord` (below) redirects the browser to Discord's own consent screen, and read back by `pages/DiscordCallback.tsx` on the way back — the same round-trip-surviving device `components/InstallButton.tsx`'s `PENDING_INSTALL_ORG_KEY` already uses for the install flow's identical redirect. This is a same-tab round trip (`window.location.assign`, not an emailed link a mail client might open elsewhere), so `sessionStorage` is the right tool for it — unlike the *sign-in* round trip this page used to also use it for, which AUTH-6 retired in favor of a destination carried on the sign-in token itself (this file's own module comment). */
 export const PENDING_CONNECT_ORG_KEY = 'bloombot:pendingConnectOrganizationId'
 
 export interface ConnectProps {
@@ -151,24 +153,16 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
 
-  // A side effect (writing `sessionStorage`), not something to run during
-  // render itself — kept in an effect, gated on `account`/`organizationId`,
-  // rather than called directly in the render body below. Signed out: set
-  // the marker so a sign-in redemption's own round trip (`App.tsx`'s own
-  // `returnToShell`) can find its way back here. Signed in: clear it — its
-  // only job was surviving that one round trip, which has now already
-  // happened, and a stale value left behind would otherwise redirect a
-  // later, unrelated sign-in back to this organization's connect screen.
-  useEffect(() => {
-    if (account) {
-      sessionStorage.removeItem(PENDING_CONNECT_ORG_KEY)
-    } else {
-      sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, organizationId)
-    }
-  }, [account, organizationId])
-
   if (!account) {
-    return <SignIn onSignedIn={onSignedIn} />
+    // AUTH-6 — `destination` is what carries this page's own address
+    // through the sign-in round trip now; see this file's own module
+    // comment for why that replaced a `sessionStorage` marker set here.
+    return (
+      <SignIn
+        onSignedIn={onSignedIn}
+        destination={`/connect/${organizationId}`}
+      />
+    )
   }
 
   const handleConnectDiscord = async () => {

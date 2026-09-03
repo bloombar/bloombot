@@ -29,6 +29,7 @@ import {
   issueSignInToken,
   consumeSignInToken,
   discardSignInToken,
+  DEFAULT_TOKEN_TTL_MS,
 } from './tokens.js'
 import {
   createSession,
@@ -44,6 +45,8 @@ export interface SignInResult {
   session: CreatedSession
   /** `true` when this call created the account (TEN-1: with its personal organization and membership), `false` for a returning account. */
   createdAccount: boolean
+  /** AUTH-6 — where the sign-in that produced this session was issued to return to, if anywhere: the redeemed token's own `destination` (`tokens.ts#consumeSignInToken`), carried on the token rather than the tab that requested it, so it survives to whichever browsing context actually redeems the link. Always `undefined` for `signInWithGoogle` (below) — that flow never leaves the tab it started in, so it never had a destination to carry in the first place. */
+  destination: string | undefined
 }
 
 /**
@@ -320,12 +323,24 @@ export interface RequestSignInLinkDeps {
  * email, never a value this function hands back to its own caller to log,
  * cache, or otherwise let escape the mail port.
  *
+ * `destination` (AUTH-6): the same-origin path to carry on the issued token
+ * itself, so a redemption of the emailed link returns there whichever
+ * browsing context redeems it — `undefined` for the ordinary "email me a
+ * link" request, which has nowhere in particular to return to.
+ * `issueSignInToken` (`tokens.ts`) is what actually validates and stores it;
+ * this function does not re-check it.
+ *
  * @throws whatever `deps.emailSender.send` throws — see the `catch` below
  *   for why this is not swallowed.
+ * @throws {Error} if `destination` is supplied and is not a same-origin path
+ *   (`tokens.ts#isSameOriginPath`) — `apps/api`'s own route validates the
+ *   same way before this ever runs, so this should be unreachable in
+ *   practice.
  */
 export async function requestSignInLink(
   email: string,
-  deps: RequestSignInLinkDeps
+  deps: RequestSignInLinkDeps,
+  destination?: string
 ): Promise<void> {
   // "Also worth doing" of the API-1..6 rework: `/auth/request-link`
   // (`apps/api`) is unauthenticated, and its own origin check is trivially
@@ -340,7 +355,12 @@ export async function requestSignInLink(
   if (signInTokensRepo.hasActiveSignInToken(email, Date.now(), deps.db)) {
     return
   }
-  const { token } = issueSignInToken(email, deps.db)
+  const { token } = issueSignInToken(
+    email,
+    deps.db,
+    DEFAULT_TOKEN_TTL_MS,
+    destination
+  )
   try {
     await deps.emailSender.send(
       email,
@@ -421,7 +441,12 @@ export function redeemSignInLink(
     }
 
     const session = createSession(account.id, tx)
-    return { account, session, createdAccount }
+    return {
+      account,
+      session,
+      createdAccount,
+      destination: consumed.destination,
+    }
   })
 }
 
@@ -479,7 +504,12 @@ export function signInWithGoogle(
     }
 
     const session = createSession(account.id, tx)
-    return { account, session, createdAccount }
+    // AUTH-6: Google sign-in never leaves the tab it started in
+    // (`SignIn.tsx`'s own `handleGoogle` calls `onSignedIn` in place, no
+    // redirect and no emailed link), so there is nothing this flow could
+    // ever have carried a destination from — always `undefined`, unlike
+    // `redeemSignInLink`'s own token-carried one, above.
+    return { account, session, createdAccount, destination: undefined }
   })
 }
 

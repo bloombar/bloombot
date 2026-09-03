@@ -223,6 +223,7 @@ describe('runMigrations', () => {
     ])
     expect(schema.sign_in_tokens).toEqual([
       'created_at',
+      'destination',
       'email',
       'expires_at',
       'id',

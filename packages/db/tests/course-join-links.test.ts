@@ -484,14 +484,16 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
       testDb.db
     )
 
-    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+    const result = courseJoinLinks.redeemJoinLinkForWebAccount(
       'hash-1',
       accountId,
       Date.now(),
       testDb.db
     )
 
-    expect(enrolment?.source).toBe('join_link')
+    expect(result?.enrolment.source).toBe('join_link')
+    // WEB-25 — a first redemption, never already enrolled.
+    expect(result?.alreadyEnrolled).toBe(false)
     const person = people.resolveIdentity(
       organizationId,
       { surface: 'web', externalId: accountId },
@@ -509,12 +511,15 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
         person?.id ?? '',
         testDb.db
       )
-    ).toMatchObject({ id: enrolment?.id })
+    ).toMatchObject({ id: result?.enrolment.id })
   })
 
   // A second redemption by the same account must not mint a second person —
   // idempotent the same way `enrolViaJoinLink`'s own idempotence already is.
-  it('reuses the same web person on a second redemption rather than creating another', () => {
+  // WEB-25: also fails without the fix on `alreadyEnrolled` alone — before
+  // it existed, a caller had no way to tell this second, no-op redemption
+  // apart from the first, genuinely-new one.
+  it('reuses the same web person on a second redemption rather than creating another, and reports it as already enrolled', () => {
     testDb = createTestDatabase()
     const { organizationId, course, ownerId } =
       seedOrganizationWithCourse(testDb)
@@ -543,7 +548,9 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
       testDb.db
     )
 
-    expect(second?.id).toBe(first?.id)
+    expect(first?.alreadyEnrolled).toBe(false)
+    expect(second?.alreadyEnrolled).toBe(true)
+    expect(second?.enrolment.id).toBe(first?.enrolment.id)
     expect(
       enrolments.listPeopleForCourse(organizationId, course.id, testDb.db)
     ).toHaveLength(1)
@@ -577,7 +584,7 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
       testDb.db
     )
 
-    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+    const result = courseJoinLinks.redeemJoinLinkForWebAccount(
       'hash-1',
       accountId,
       Date.now(),
@@ -591,7 +598,7 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
         existingPerson.id,
         testDb.db
       )
-    ).toMatchObject({ id: enrolment?.id })
+    ).toMatchObject({ id: result?.enrolment.id })
     expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
   })
 
@@ -795,7 +802,7 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
       testDb.db
     )
     if (!first) throw new Error('setup failed: first redemption should succeed')
-    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+    enrolments.endEnrolment(organizationId, first.enrolment.id, testDb.db)
 
     const second = courseJoinLinks.redeemJoinLinkForWebAccount(
       'hash-1',
@@ -944,14 +951,14 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
       testDb.db
     )
 
-    const enrolment = courseJoinLinks.redeemJoinLinkForWebAccount(
+    const result = courseJoinLinks.redeemJoinLinkForWebAccount(
       'hash-1',
       account.id,
       Date.now(),
       testDb.db
     )
 
-    expect(enrolment?.source).toBe('join_link')
+    expect(result?.enrolment.source).toBe('join_link')
     expect(people.listPeople(organizationId, testDb.db)).toHaveLength(1)
   })
 

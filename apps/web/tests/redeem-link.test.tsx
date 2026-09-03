@@ -49,6 +49,26 @@ describe('RedeemLink (AUTH-1, WEB-2)', () => {
     // must not spend the single-use token twice.
     expect(redeemSignInLink).toHaveBeenCalledTimes(1)
     expect(redeemSignInLink).toHaveBeenCalledWith('tok-abc')
+    // No `destination` in the response — an ordinary sign-in with nowhere
+    // in particular to return to.
+    expect(onRedeemed).toHaveBeenCalledWith(undefined)
+  })
+
+  // AUTH-6: fails without the fix — before `onRedeemed` was threaded the
+  // token's own `destination` through, this page discarded it the same way
+  // `JoinLink.tsx` discarded `redeemCourseJoinLink`'s own result (WEB-25).
+  it('passes the redeemed destination through to onRedeemed', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/join/abc123',
+    })
+    const onRedeemed = vi.fn()
+
+    render(<RedeemLink token="tok-abc" onRedeemed={onRedeemed} />)
+
+    await vi.waitFor(() =>
+      expect(onRedeemed).toHaveBeenCalledWith('/join/abc123')
+    )
   })
 
   it('a genuinely invalid token still reports the refusal, once, under StrictMode', async () => {

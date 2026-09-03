@@ -29,10 +29,14 @@ import type {
 import { Button } from '../components/Button.js'
 import { ChatMessage } from '../components/ChatMessage.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
-import { SendIcon } from '../icons.js'
+import { SendIcon, SuccessIcon } from '../icons.js'
 
 export interface ChatProps {
   organizationId: string
+  /** WEB-25 — the course a join-link redemption most recently resolved for this account in this organization, preferred over `listChatCourses`' own first entry (`selectedCourseId`'s own initializer, below) so a redeemer already enrolled in more than one course here still lands on the one they just joined, not whichever the list happens to return first. */
+  initialCourseId?: string
+  /** WEB-25 — set only right alongside `initialCourseId`, by a just-completed join-link redemption: names the outcome plainly (`joinConfirmationText`, below) rather than leaving a redeemer to infer it from which course happens to be selected. `alreadyEnrolled` distinguishes "you're already enrolled" from a fresh join — ENRL-8's own "redeeming twice is a confirmation, not an error." */
+  joinConfirmation?: { alreadyEnrolled: boolean }
 }
 
 /**
@@ -85,13 +89,21 @@ function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
   }
 }
 
-export function Chat({ organizationId }: ChatProps) {
+export function Chat({
+  organizationId,
+  initialCourseId,
+  joinConfirmation,
+}: ChatProps) {
   const [courses, setCourses] = useState<ChatCourse[] | undefined>(undefined)
   const [coursesError, setCoursesError] = useState<ApiError | undefined>(
     undefined
   )
+  // WEB-25: seeded from `initialCourseId` when supplied — `listChatCourses`'
+  // own callback below (`current ?? result[0]?.id`) then leaves it alone,
+  // the same "do not override a value already chosen" guard it already
+  // holds for a course this component's own `<select>` picked.
   const [selectedCourseId, setSelectedCourseId] = useState<string | undefined>(
-    undefined
+    initialCourseId
   )
   const [messages, setMessages] = useState<ChatMessageEntry[] | undefined>(
     undefined
@@ -256,6 +268,14 @@ export function Chat({ organizationId }: ChatProps) {
     )
   }
 
+  // WEB-25 — named by title, not merely "this course": `courses` (just
+  // confirmed defined, above) is this account's own enrolled list, read
+  // moments after the redemption that set `joinConfirmation` in the first
+  // place, so the just-joined course's own title is always in it.
+  const joinedCourseTitle = joinConfirmation
+    ? courses.find((course) => course.id === selectedCourseId)?.title
+    : undefined
+
   return (
     <section
       aria-label="Chat"
@@ -263,6 +283,29 @@ export function Chat({ organizationId }: ChatProps) {
       className="flex flex-col gap-4"
     >
       <h1 className="text-page-title font-semibold text-neutral-900">Chat</h1>
+
+      {joinConfirmation && (
+        // WEB-25: `role="status"` — an `aria-live` region, so a screen
+        // reader announces this the moment it renders, the same "confirmed
+        // to a screen reader, not only shown" requirement `docs/SPEC.md`'s
+        // own WEB-25 states directly. Rendered inline with the rest of this
+        // screen, not a toast that times out on its own — nothing here ever
+        // removes it, so there is nothing a student has to notice before it
+        // disappears.
+        <p
+          role="status"
+          data-testid="join-confirmation"
+          className="flex items-center gap-2 rounded-md bg-success-50 px-3 py-2 text-sm text-neutral-700"
+        >
+          <SuccessIcon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-success-600"
+          />
+          {joinConfirmation.alreadyEnrolled
+            ? `You're already enrolled in ${joinedCourseTitle ?? 'this course'}.`
+            : `You're enrolled in ${joinedCourseTitle ?? 'this course'}.`}
+        </p>
+      )}
 
       {courses.length > 1 && (
         <label className="flex items-center gap-2 text-sm text-neutral-600">

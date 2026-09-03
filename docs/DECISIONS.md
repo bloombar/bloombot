@@ -7201,3 +7201,132 @@ nothing "fell out for free" because there is nothing there yet to fall out onto.
 require it). The `person_identities` multi-identity-per-surface imprecision `people.ts#getPersonIdentity`'s own
 doc comment already names (see the second choice above) — a pre-existing, documented limitation this slice
 inherits rather than fixes.
+
+---
+
+## D-71 — `packages/db`/`packages/auth`/`apps/api`/`apps/web`/`e2e`: AUTH-6/WEB-25 — a sign-in's own destination survives whichever tab redeems it, and a join-link redemption confirms itself and lands the student in the joined course
+
+**Problem.** `pages/JoinLink.tsx` and `pages/Connect.tsx` each stashed their own return address in
+`sessionStorage` (`PENDING_JOIN_LINK_KEY`, `PENDING_CONNECT_ORG_KEY`) for `App.tsx#returnToShell` to read back
+once a sign-in redemption completed — D-55's own choice, correct at the time, but `sessionStorage` is scoped
+per browsing context, and a sign-in link arrives by email: a mail client that opens it in a fresh tab (the
+ordinary case, not an edge one) leaves that tab with no marker to read, landing the visitor on the plain shell,
+enrolled in nothing, with no explanation. Separately, `JoinLink.tsx` called
+`redeemCourseJoinLink(secret).then(onRedeemed)` and discarded the result outright — `onRedeemed` took no
+arguments — so the course id, organization id and enrolment outcome the server had already resolved were
+thrown away, and a redeemer was dropped on whichever screen this account's own first membership happened to
+default to (nearly always its own personal organization, TEN-1), never told the link worked, never shown which
+course, and never taken to it.
+
+**Choice — the destination lives on the sign-in token row itself, not a `?next=` URL parameter, and not
+`sessionStorage`.** `sign_in_tokens` gains a nullable `destination` column
+(`packages/db/migrations/0018_ordinary_paibok.sql`), written by `issueSignInToken`
+(`packages/auth/src/tokens.ts`) when `requestSignInLink`'s own caller supplies one, and read back by
+`consumeSignInToken`/`redeemSignInLink` and returned to the browser on `POST /auth/redeem`. The token is
+already a row with a lifetime, tied to the sign-in itself rather than to any tab — exactly the reasoning the
+brief named directly, and it is what makes the AUTH-6 e2e's own cross-tab case work at all: `pages/RedeemLink.tsx`
+hands the destination straight to `onRedeemed`, and `App.tsx#returnToShell` navigates there before it ever
+looks at `sessionStorage`. A `?next=` URL parameter was the brief's other named option; not chosen, since it
+would put the same untrusted-input burden (validate before navigating) on every caller that builds the sign-in
+link's own URL, where the token-carried version puts it in exactly one place. `isSameOriginPath`
+(`packages/auth/src/tokens.ts`) is that validation, applied twice — once at issue time (`apps/api`'s own
+`routes/auth.ts`, the same `400` shape a malformed `email` already gets) and once again at redemption
+(`consumeSignInToken`, "defended, not assumed," the same discipline this codebase already holds every
+should-be-unreachable case to) — and duplicated a third time, deliberately, in `apps/web/src/App.tsx`, since
+PLAT-2 forbids that app importing `@bloombot/auth` at all; the same "small, deliberately duplicated pure
+function" trade D-34 already chose for `repos/course-join-links.ts`'s own `hashSecret`. The regex itself avoids
+a literal control character inside a character class (`eslint`'s own `no-control-regex`, which exists for
+exactly this kind of check) by pairing a short prefix regex with a plain char-code loop instead — a `boolean`
+inference note, not a measured one: this is a style choice a reviewer could reasonably make differently.
+
+**Choice — one mechanism replaces both, and `PENDING_JOIN_LINK_KEY` is deleted outright.**
+`pages/JoinLink.tsx`/`pages/Connect.tsx` now pass their own page's own address as `pages/SignIn.tsx`'s new
+`destination` prop; neither stashes anything in `sessionStorage` for the sign-in round trip any more.
+`PENDING_CONNECT_ORG_KEY` survives, narrowed: `pages/Connect.tsx`'s `handleConnectDiscord` still uses it to
+carry the organization across the Discord OAuth redirect, a *same-tab*, `window.location.assign` round trip
+`DiscordCallback.tsx` reads back — genuinely unaffected by AUTH-6, since that redirect never leaves the tab
+that started it. `pages/Invitation.tsx`'s `PENDING_INVITATION_KEY` is untouched — ENRL-10 was not named in this
+slice's brief, it carries the identical latent defect, and `App.tsx#returnToShell` still falls back to it
+(after the token-carried destination) for exactly that reason: a third device beside the retired two was
+explicitly forbidden, but a brief that names two of three defects does not authorize fixing the third
+un-asked-for. Flagged here for whoever picks up ENRL-10 next.
+
+**Choice — `redeemJoinLinkForWebAccount`'s return shape changes from a bare `Enrolment | undefined` to
+`{ enrolment, alreadyEnrolled } | undefined`.** `enrolments.ts#admit` is itself idempotent — a second redemption
+returns the *existing* active row unchanged, so nothing about the enrolment alone distinguishes "just admitted"
+from "already was." `alreadyEnrolled` is computed with `enrolments.getActiveEnrolment` *before*
+`enrolViaJoinLink` runs, inside the same transaction, and only on the path that already leads to a successful
+admission — every refusal branch (`!link`, the ENRL-6/ENRL-8 rework's own `wasRemoved` check, a foreign course
+or person) still returns a bare `undefined`, unchanged, so ENRL-4's "no oracle" property (never-issued, revoked
+and expired stay byte-identical, and none of them ever becomes distinguishable by an `alreadyEnrolled` leaking
+into a refusal) holds exactly as it did before this slice — proven by mutation, not merely argued: forcing
+`alreadyEnrolled` to a constant `false` turns red every one of the repo-, action- and route-level "already
+enrolled" tests and the e2e's own second-redemption case, while every existing "byte-identical refusal" test
+(unit and e2e) stays green throughout, since none of them touch the success path at all. `POST /join-links/redeem`
+now answers `{ courseId, organizationId, alreadyEnrolled }` on success — `organizationId` is what
+`pages/Shell.tsx` needs to open on the right organization (a join-link redeemer is a *connected person*,
+LINK-10, not necessarily a member, so the account's own first membership is usually the wrong default);
+`alreadyEnrolled` is what lets the browser say "you're already enrolled" rather than repeat the fresh-join
+wording. Existing tests that destructured the old shape directly (`packages/db/tests/course-join-links.test.ts`,
+`packages/actions/tests/course-join-links.test.ts`) were updated to the new one; none of their own assertions
+changed in substance.
+
+**Choice — WEB-25's confirmation lives on `pages/Chat.tsx` itself, not a separate interstitial screen.**
+`pages/JoinLink.tsx` no longer renders anything once redemption succeeds — it hands `{ organizationId, courseId,
+alreadyEnrolled }` to `onRedeemed` and lets `App.tsx` carry it into `pages/Shell.tsx`'s new `joinedCourse` prop
+(the same "carried across this one remount" shape `justInstalled` already uses for the Discord install round
+trip). `Shell` prefers `joinedCourse.organizationId` for the initial active organization (checking
+*both* `memberships` and `connectedOrganizations` — unlike `justInstalled`'s membership-only check, since a
+join-link redemption never grants a membership), defaults `activeTab` to `'chat'`, and passes
+`initialCourseId`/`joinConfirmation` through to `Chat`, which seeds `selectedCourseId` from it (so a redeemer
+already enrolled in more than one course in that organization still lands on the one just joined, not
+whichever `listChatCourses` happens to return first) and renders a `role="status"` banner naming the course by
+title — read back from its own already-fetched `courses` list, not a second round trip — and distinguishing
+"You're enrolled in…" from "You're already enrolled in…". The banner is inline, not a toast: nothing ever
+removes it, satisfying the brief's "must not depend on noticing something that disappears on its own" by
+construction rather than by timing a dismissal correctly. Chosen over carrying the confirmation on
+`JoinLink.tsx`'s own screen (which the redirect to the shell would have made exactly the kind of transient
+thing the brief warns against) and over the join-links route itself resolving a course title (which would have
+pulled a fresh dependency — `courses.getCourse` — into `repos/course-join-links.ts`, a file whose own redemption
+path several review rounds have already hardened; `Chat.tsx` already holds an authorized, per-account course
+read for exactly this organization, so reusing it costs nothing new to trust).
+
+**Rework finding — `App.tsx`'s own `refreshSession()` had to be sequenced *before* the navigation that mounts
+`Shell`, not fired alongside it, and this was caught by the e2e, not reasoned out in advance.** The first draft
+of the join-link `onRedeemed` handler set `joinedCourse` and called `goToRoot()`/`setPath('/')`/`refreshSession()`
+all in the same tick — `pages/Shell.tsx`'s own `activeOrganizationId` is a `useState` lazy initializer, which
+runs exactly once, on `ShellInner`'s first mount, off whatever `account.connectedOrganizations` that render
+already has. The join-link redemption that produces `joinedCourse` is the very thing that adds the institution
+to that list, reachable only once a *fresh* `/auth/me` read reflects it — and firing `refreshSession()`
+alongside the navigation let `path` reach `/`, and `Shell` mount, off the *stale* `session` still on hand from
+before redemption (or, on the sign-in-round-trip path, from immediately after sign-in but before the join link
+itself was redeemed). The panel opened on the account's own personal organization regardless of what
+`joinedCourse` said, and a later, resolved `session` update did not retroactively re-run an initializer that
+had already run. `e2e/join-link.spec.ts`'s own main scenario failed on exactly this — the organization switcher
+listed the joined institution as an option but never selected it — before the fix, which now chains the
+navigation off `refreshSession()`'s own returned promise (a small addition: `refreshSession` now returns the
+promise it always silently discarded, changing nothing about its existing fire-and-forget callers).
+
+**Evidence.** Mutated and confirmed red, then reverted, three properties: (1) the destination mechanism —
+disabling the token-carried branch in `App.tsx#returnToShell` turned every `e2e/join-link.spec.ts` test red,
+including the never-issued-secret one (which still depends on the sign-in round trip landing back on the join
+link at all); (2) `alreadyEnrolled` — forcing it to a constant `false` in
+`repos/course-join-links.ts#redeemJoinLinkForWebAccount` turned red the repo-, route- and e2e-level
+"already enrolled" tests, while every refusal test (byte-identical across never-issued/revoked/expired) stayed
+green, confirming the no-oracle property was never touched; (3) the same-origin check — dropping
+`isSameOriginPath` from `routes/auth.ts`'s own `zod` schema turned the "refuses a non-same-origin destination"
+test red (it surfaced as a `500`, not a silent `204`, since `issueSignInToken`'s own defended-not-assumed check
+still fired — belt-and-braces holding even with the belt cut).
+
+Final counts: 90 node:test (unchanged), 2119 vitest across 182 files (baseline at `ef1f8f0` was 2107/182 — +12
+tests, no new file), 24 e2e (baseline 22 — `e2e/join-link.spec.ts` gained two tests: the AUTH-6 cross-tab case
+and the WEB-25 already-enrolled case; `e2e/connect.spec.ts` unchanged in test count, its own module comment
+updated).
+
+**Limits.** `pages/Invitation.tsx`'s identical `sessionStorage` defect (ENRL-10) is untouched — see the second
+choice above. The `hasActiveSignInToken` anti-flood check (`requestSignInLink`, AUTH-1's "also worth doing")
+can silently decline to issue a *second* token — and so silently drop a *different* destination — while an
+earlier, undestined one for the same address is still outstanding (within its fifteen-minute lifetime); a
+narrow, pre-existing edge case this slice did not widen and did not attempt to close, since doing so would mean
+mutating an already-issued, unconsumed token, a different (and larger) change than this slice's own brief
+asked for.

@@ -28,6 +28,8 @@ export interface NewSignInToken {
   /** SHA-256 hash of the token; see `@bloombot/auth`'s `tokens.ts`. */
   tokenHash: string
   expiresAt: number
+  /** AUTH-6 — the same-origin path to return to once this token is redeemed; see `schema.ts`'s own comment on the column. `null`/omitted for an ordinary sign-in with nowhere in particular to return to. */
+  destination?: string | null
 }
 
 /** Issue (insert) a new sign-in token row. */
@@ -42,6 +44,7 @@ export function createSignInToken(
       email: input.email.toLowerCase(),
       tokenHash: input.tokenHash,
       expiresAt: input.expiresAt,
+      destination: input.destination ?? null,
       createdAt: Date.now(),
     })
     .returning()

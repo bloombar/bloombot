@@ -3,6 +3,7 @@
 export {
   issueSignInToken,
   consumeSignInToken,
+  isSameOriginPath,
   DEFAULT_TOKEN_TTL_MS,
   MAX_TOKEN_TTL_MS,
   type IssuedSignInToken,

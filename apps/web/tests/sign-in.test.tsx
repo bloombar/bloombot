@@ -38,7 +38,34 @@ describe('SignIn (WEB-2)', () => {
     expect(await screen.findByTestId('link-requested')).toHaveTextContent(
       'student@example.edu'
     )
-    expect(requestSignInLink).toHaveBeenCalledWith('student@example.edu')
+    // No `destination` prop supplied — the ordinary "email me a link"
+    // screen, with nowhere in particular to return to.
+    expect(requestSignInLink).toHaveBeenCalledWith(
+      'student@example.edu',
+      undefined
+    )
+  })
+
+  // AUTH-6: fails without the fix — before `destination` existed, this
+  // prop had nowhere to go, and a caller like `pages/JoinLink.tsx` had no
+  // way to ask a redeemed sign-in to return anywhere but the ordinary shell.
+  it('requests a link with the destination it was given', async () => {
+    requestSignInLink.mockResolvedValue(undefined)
+
+    render(<SignIn onSignedIn={vi.fn()} destination="/join/secret-abc" />)
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'student@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await vi.waitFor(() =>
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'student@example.edu',
+        '/join/secret-abc'
+      )
+    )
   })
 
   it('with no Google client id configured, shows no Google button', () => {

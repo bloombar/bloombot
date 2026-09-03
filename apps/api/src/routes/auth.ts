@@ -13,6 +13,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import {
+  isSameOriginPath,
   redeemSignInLink,
   requestSignInLink,
   revokeSession,
@@ -46,7 +47,20 @@ export interface AuthRouterDependencies {
 // as unexpected and answered `500`. `z.email()` here catches the same
 // address at the route boundary instead, where a validation failure is
 // already an ordinary `400`.
-const requestLinkInputSchema = z.object({ email: z.email() })
+// AUTH-6: `destination` is optional — a caller with nowhere in particular to
+// return to (the ordinary "email me a link" screen) omits it entirely — and,
+// when present, must pass `isSameOriginPath` (`@bloombot/auth`'s own
+// `tokens.ts`), the identical gate `consumeSignInToken` re-checks on the way
+// back out. Refusing a bad one here, the same `400` shape `email` already
+// gets, is cheap and immediate — the alternative is discovering it only once
+// something tries to navigate a browser there.
+const requestLinkInputSchema = z.object({
+  email: z.email(),
+  destination: z
+    .string()
+    .refine(isSameOriginPath, 'destination must be a same-origin path')
+    .optional(),
+})
 const redeemInputSchema = z.object({ token: z.string().min(1) })
 const googleInputSchema = z.object({ idToken: z.string().min(1) })
 
@@ -65,11 +79,15 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
         .json({ error: 'invalid_request', issues: parsed.error.issues })
       return
     }
-    requestSignInLink(parsed.data.email, {
-      db: deps.db,
-      emailSender: deps.emailSender,
-      buildLink: deps.buildSignInLink,
-    })
+    requestSignInLink(
+      parsed.data.email,
+      {
+        db: deps.db,
+        emailSender: deps.emailSender,
+        buildLink: deps.buildSignInLink,
+      },
+      parsed.data.destination
+    )
       .then(() => res.status(204).end())
       .catch(next)
   })
@@ -88,7 +106,14 @@ export function buildAuthRouter(deps: AuthRouterDependencies): Router {
         return
       }
       setSessionCookie(res, result.session)
-      res.status(200).json({ accountId: result.account.id })
+      // AUTH-6 — `result.destination` is already validated
+      // (`redeemSignInLink`'s own `consumeSignInToken`, `isSameOriginPath`),
+      // and `JSON.stringify` drops an `undefined` property outright, so an
+      // ordinary sign-in with nowhere to return to simply omits the field
+      // rather than sending it `null`.
+      res
+        .status(200)
+        .json({ accountId: result.account.id, destination: result.destination })
     } catch (error) {
       next(error)
     }

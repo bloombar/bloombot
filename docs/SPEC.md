@@ -1074,6 +1074,25 @@ whole distinction ENRL-8's rework turns on — the person who was removed is exa
 able to reverse it. Reinstating a person who is not currently ended changes nothing, the same
 idempotent no-op ending an already-ended enrolment gives.
 
+#### ENRL-10 An owner invites a colleague who is not yet in the organization
+
+ENRL-5 says a second instructor or a teaching assistant can be added to an organization, and
+`memberships.grant` plus the panel's team screen now change a role — but only for someone who
+already holds a membership in that organization, which nothing in production ever creates. The
+first membership any account gets is the `owner` row written at sign-up for its own personal
+organization. So the one thing ENRL-5 exists to make possible, adding a colleague, still cannot be
+done. That restriction is deliberate and should not simply be removed: `memberships.grant` refuses
+an address it cannot find so that it never becomes an oracle for which email addresses have
+accounts on this platform.
+
+An invitation resolves both. An owner invites an address to a role; the invitation is a bearer
+secret, returned once and stored only as a hash, revocable and optionally expiring — the shape
+`sign_in_tokens` and `course_join_links` already use, for the same reason. Redeeming it binds to
+the redeemer's own authenticated account, never to an address they supply, so it admits exactly the
+person who received it. Inviting an address that has no account is indistinguishable from inviting
+one that does, which is what keeps the oracle closed. An invitation grants a role and nothing else:
+it is not a sign-in, and redeeming one never creates an account or a session.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

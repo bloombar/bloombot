@@ -203,6 +203,25 @@ function normalizeRosterHandle(handle: string): string {
   return (handle.split('#')[0] ?? handle).trim().toLowerCase()
 }
 
+/**
+ * CORE-7/CORE-8 — Discord's own answer to "how does this surface want the
+ * person addressed": the same mention token this file always built, before
+ * this slice moved it out of `@bloombot/core#answer.ts` (the one package
+ * meant to know nothing about any surface's own syntax, CORE-4's rule
+ * applied here to addressing too). A room with many people in it needs a
+ * reply to say whose question it is answering — CORE-8's own reasoning —
+ * so, unlike a surface with no mention of its own, this never falls back to
+ * a name; a person with no identity on this surface (never reachable in
+ * practice — `handleMention` above already resolved one before
+ * `answerQuestion` is ever called) addresses nobody rather than guessing.
+ */
+function addressPersonForDiscord(
+  _person: people.Person,
+  identity: people.PersonIdentity | undefined
+): string | null {
+  return identity ? `<@${identity.externalId}>` : null
+}
+
 /** SURF-5 — send `text` through `reply`, split first if it is over Discord's limit, each part awaited in order so the parts cannot arrive out of sequence. Returns how many messages were sent. */
 async function sendReply(reply: ReplyPort, text: string): Promise<number> {
   const parts = splitForDiscord(text)
@@ -453,6 +472,7 @@ export async function handleMention(
     db,
     model,
     logger,
+    addressPerson: addressPersonForDiscord,
     ...(deps.admission ? { admission: deps.admission } : {}),
     ...(deps.pricing ? { pricing: deps.pricing } : {}),
   }

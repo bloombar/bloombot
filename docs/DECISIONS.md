@@ -7091,3 +7091,113 @@ what JOB-2 asks for; a "retry this job" button is a new capability this record d
 `readCourseTranscript` writes, or JOB-6's retention rules (both untouched — `listJobsForOrganization` reads the
 same `payload`-may-already-be-null column JOB-6 already clears, on the same schedule). MCP's tool surface
 (neither new action is added to `apps/mcp/src/tool-surface.ts`'s own allowlist).
+
+---
+
+## D-70 — `packages/core`/`packages/openai`/`packages/discord`/`apps/api`: CORE-7/CORE-8 — a person's own address is split from their opaque identity, and the surface decides one of them
+
+**Problem.** `answer.ts` built `personRef` as `` `<@${identity.externalId}>` `` — Discord's own mention token,
+constructed inside `packages/core`, the one package the rest of this build already holds to "no vendor SDK,
+nothing vendor-shaped" (CORE-4). `ports.ts` documented the field as "an opaque reference to the person", which
+was false: on Discord the token happened to render correctly; on the web the identity is the account's own id,
+so a student asking through the panel was answered with that id wrapped in Discord's own syntax — live,
+user-reported behaviour, not a theoretical one. Worse than the literal defect: the field carried Discord's
+syntax into the seeded opening item, content the model itself reads and, on a course whose prompt was written
+for Discord, echoes back at the front of its own reply — which is the actual mechanism the bug report showed
+(`<@68690a1b-…>- Hello`), not merely an unused value sitting in a request object.
+
+**Choice — one field becomes two, not one field renamed.** `ModelRequest.personRef` is replaced by
+`personIdentifier` (`person_identities.externalId`, unchanged in *value* for Discord, embedded only in the
+upstream conversation's own `metadata.user_id`, never in content the model reads) and `addressAs` (embedded in
+the opening item alongside `displayName`, and the only one of the two a model can ever echo into a reply).
+Splitting them is what lets `ports.ts`'s own "opaque reference" claim be true of `personIdentifier` rather than
+false of both: metadata is bookkeeping a later transcript read can use to trace a stored conversation to a
+person, never part of what the model is asked, so a raw identity is genuinely safe there regardless of surface
+— which is also why Discord's own metadata value changed from the wrapped token to the bare snowflake (an
+*internal*, non-observable change; nothing renders `metadata` to a Discord user, and
+`packages/openai/tests/conversations.test.ts`/`client.test.ts` were updated, not merely kept passing by
+accident, to assert the two fields are sourced independently).
+
+**Choice — who decides `addressAs`, and how "cannot inherit the bug by doing nothing" is made structural, not
+conventional.** `AnswerDependencies` gained an *optional* `addressPerson(person, identity)` function, not a
+required one. A required field was considered and rejected: every existing test across `packages/core`,
+`packages/discord` and `apps/api` that builds an `AnswerDependencies`-shaped object (well over a hundred call
+sites, measured by how many broke on a required-field trial edit) would have had to be touched for a decision
+almost none of them are about, which is exactly the kind of unrelated churn `docs/CONTRIBUTING.md` asks a
+slice to avoid — and it would have bought no more safety than the alternative actually taken: `deps.addressPerson`
+defaults to `NO_ADDRESS`, a function that always returns `null`, the same "expose the seam, default to the
+*safe* choice rather than a merely convenient one" discipline `NO_ADMISSION_LIMIT`/`NO_PRICING_CONFIGURED`
+(`answer.ts`, pre-existing) already hold themselves to for concurrency and cost. A surface that never wires
+`addressPerson` — including one not yet written — addresses nobody, never an id: the dangerous behaviour (build
+an id-shaped reference and hand it to the model) is unreachable by omission, proved by mutation, not merely
+documented (below).
+
+`identity` is still resolved inside `answer.ts` itself (`people.getPersonIdentity`, unchanged call site),
+not pushed out to each surface to re-derive: a review of `people.ts#getPersonIdentity`'s own doc comment
+found it already names a known, deliberate imprecision for a person with more than one identity on the same
+surface (a roster-handle-matched Discord student whose real snowflake has not yet been promoted onto their
+identity row) and says fixing it would require "the calling surface to pass its own already-known external id
+through" — precisely what moving identity resolution to each surface would have done. Doing that here would
+have silently changed which identity Discord's own mention resolves to in that one edge case, violating this
+slice's own "the Discord path must be unchanged in observable behaviour" constraint to fix a bug outside this
+slice's scope. Left alone, `addressPerson` receives whatever `getPersonIdentity` resolves, exactly as
+`personRef` did before this slice — the multi-identity imprecision is unchanged, not newly introduced.
+
+**Choice — the web surface implements CORE-8's fallback order for real, not merely `null`.** CORE-8's text
+reads two ways: "the web chat … addresses nobody" (literal, always) and "a surface that needs a name and has
+none of its own uses [a fallback order]" (general, and the web chat is exactly such a surface). Reconciled by
+implementing the general order (`person.firstName ?? person.displayName ?? null`) in `apps/api/src/routes/
+chat.ts#addressPersonForWeb`, on the reading that "addresses nobody" describes today's *empirical* outcome, not
+a rule against ever using a name: measured directly against `@bloombot/auth#sign-in.ts`, a web person is
+created via `createPerson(organizationId, {}, db)` — no roster fields at all — so `firstName`/`displayName` are
+both `null` for the account this build's e2e harness and every real account today ends up with, unless a
+later roster import merges one in by matching email (PPL-3's own path, unconnected to a name a future
+WEB-24/WEB-25 profile screen might one day let someone set — both out of this slice's scope). "Addresses
+nobody" is therefore what happens today, not a case this code special-cases; a name greeting a one-to-one
+thread is not the noise CORE-8's own reasoning is actually about (a Discord-style *mention*, naming who a reply
+is for in a room of many), so this reading does not undercut it. Recorded here as an inference, not a
+certainty, since the SPEC text does not itself disambiguate the two readings.
+
+**Not chosen — a surface-supplied plain string on `AnswerQuestionInput`.** The brief's own design notes offered
+this as an option: the caller computes `addressAs` itself, before calling `answerQuestion`, and passes it as
+data. Rejected because Discord's own snowflake is not something `handleMention` can safely recompute from
+`input.authorId` alone without risking exactly the multi-identity divergence the previous choice above declines
+to touch — `identity.externalId`, as `getPersonIdentity` resolves it today, is not always `input.authorId` (the
+roster-handle case). A function closes over `answer.ts`'s own resolution of `identity` instead of asking every
+surface to duplicate (and possibly diverge from) it.
+
+**Tests, failing-then-passing, and every mutation tried.** `packages/core/tests/no-vendor-sdk.test.ts` gained a
+guard scanning every `packages/core/src/**/*.ts` file for the literal two-character token `<@` — confirmed to
+fail (both this guard and the new CORE-7/CORE-8 web-defect test in `answer.test.ts`) when `answer.ts`'s
+`addressAs` computation was reverted to build the mention token directly, ignoring `deps.addressPerson`
+entirely; passes with the fix. `NO_ADDRESS` mutated to return `person.id` instead of `null` — three existing
+`answer.test.ts` assertions failed (the two `personIdentifier`/`addressAs`-null cases and the new web-defect
+test), proving the *default itself* leaking an id is caught, not only an explicit surface choice to do so.
+`apps/api/src/routes/chat.ts#addressPersonForWeb` mutated twice against its own new `chat.test.ts` case: dropped
+the first-name preference (`displayName ?? null`) — failed on the first assertion; fell back to `person.id`
+instead of `null` — failed on the third. `packages/discord/src/handle-mention.ts`'s own `addressPerson` wiring
+commented out — failed a new `handle-mention.test.ts` case asserting the real `handleMention` (not a duplicate
+of the function) still produces the mention token end to end. Every mutation was reverted and the suite
+reconfirmed green afterward.
+
+The reported defect itself is proven at the level CORE-7's own brief asked for — the reply text a person
+actually reads, not an intermediate request field — via a new `EchoingModelClient` in `answer.test.ts` that
+mimics the actual mechanism (a model echoing `addressAs` at the front of its own reply, the way a
+Discord-tuned prompt does): a Discord answer still reads `<@snowflake-1> - Hello`, unchanged; a web answer
+reads plain `Hello`, containing neither a mention token nor the account's own id. `e2e/chat.spec.ts` gained a
+matching assertion against the real browser-rendered reply — honestly scoped in its own comment as *not*
+exercising the echo mechanism itself (`e2e/support/fake-model-client.ts` is a static fixture, shared across
+several other specs that assert its exact text, so it was deliberately left unchanged rather than made dynamic
+and risking a collision with them), only that nothing in real rendering/serialization independently leaks the
+id.
+
+Final counts: 90 node:test (unchanged), 2107 vitest across 182 files (baseline 2096/182 — +11 tests, no new
+file), 22 e2e (unchanged — an existing spec was extended, not a new one added).
+
+**Out of scope, deliberately.** WEB-24, WEB-25, AUTH-6, ENRL-11, ENRL-12 (later slices, per the brief). The MCP
+surface — it has no `answerQuestion` caller anywhere in this codebase yet, so CORE-7/CORE-8 do not reach it;
+nothing "fell out for free" because there is nothing there yet to fall out onto. What a transcript stores,
+`conversations`' shape, and the web chat's layout (`Chat.tsx` itself was not touched — addressing did not
+require it). The `person_identities` multi-identity-per-surface imprecision `people.ts#getPersonIdentity`'s own
+doc comment already names (see the second choice above) — a pre-existing, documented limitation this slice
+inherits rather than fixes.

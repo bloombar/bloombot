@@ -110,9 +110,14 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   //    own enrolment in the course it just defined (this file's own module
   //    comment explains why).
   const db = openDatabase(E2E_DATABASE_PATH)
+  // CORE-7/CORE-8 — kept past the `db` connection closing below so step 3
+  // can assert the rendered reply never shows it (this file's own module
+  // comment on the account's own web identity being keyed on this id).
+  let accountId: string
   try {
     const account = accounts.getAccountByEmail(email, db)
     if (!account) throw new Error('setup failed: account not found')
+    accountId = account.id
     const [membership] = memberships.listMembershipsForAccount(account.id, db)
     if (!membership) throw new Error('setup failed: membership not found')
     const organizationId = membership.organizationId
@@ -176,4 +181,21 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   // WEB-10's own safety claim, proven against the real browser this time:
   // no script tag survived into the DOM.
   expect(await thread.locator('script').count()).toBe(0)
+
+  // CORE-7/CORE-8, end to end — the reported defect (`docs/SPEC.md`'s own
+  // CORE-7): a student asking through the panel used to be answered with
+  // Discord's own mention token wrapped around this exact account id. The
+  // model here is `e2e/support/fake-model-client.ts`'s own static fixture
+  // (this file's own module comment: "not real"), so this cannot exercise
+  // the mechanism that actually produced the bug — a real model echoing
+  // back what it was seeded with; that proof is
+  // `packages/core/tests/answer.test.ts`'s own CORE-7/CORE-8 block, against
+  // an `EchoingModelClient` that does. What this assertion adds on top: the
+  // real browser render of a real reply, through the real API, never shows
+  // this account's own id or a Discord-shaped token — a regression in
+  // rendering or serialization, not only in `answerQuestion` itself, would
+  // still be caught here.
+  const threadText = await thread.innerText()
+  expect(threadText).not.toContain('<@')
+  expect(threadText).not.toContain(accountId)
 })

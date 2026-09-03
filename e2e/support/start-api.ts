@@ -13,6 +13,7 @@
  * not change the API's routes").
  */
 
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 
@@ -80,6 +81,17 @@ const app = buildApp({
   // falls through to `./data/attachments`, the repository's own protected
   // directory (`env.js`'s own comment on `E2E_ATTACHMENT_STORAGE_DIR`).
   attachmentStorageDir: E2E_ATTACHMENT_STORAGE_DIR,
+  // ENRL-12 — without this, `courseJoinLinks.create` stores no ciphertext
+  // and `courseJoinLinks.reveal` refuses unconditionally, which is a real,
+  // supported deployment shape (`docs/DECISIONS.md` D-74's own "no key
+  // configured" promise) but not the one `join-links-panel.spec.ts`'s own
+  // reveal case needs to exercise the panel's live path — a fresh random
+  // key generated once per harness run, the same "real key, thrown away at
+  // the end of this process" shape a test key needs and nothing more; never
+  // read from `process.env`, since this harness's own module comment says
+  // it needs no change to `apps/api` itself and this key is not one of the
+  // credentials that file reads.
+  joinLinkEncryptionKey: randomBytes(32),
   // WEB-10 — `chat.spec.ts`'s own fixed, no-network answer, real Markdown
   // syntax on purpose (a heading and bold text) so that spec can assert the
   // browser actually rendered it rather than showing the literal

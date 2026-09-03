@@ -234,6 +234,20 @@ type ListInput = z.infer<typeof listInputSchema>
  * course has ever issued, not only the one just created. `organizationId`
  * is also left out — implied by which organization the caller dispatched
  * this action in, and never needed by the panel's own list.
+ *
+ * `revealable` (ENRL-12) is capability metadata, not secret material — it
+ * says nothing a caller could not already infer by attempting
+ * `courseJoinLinks.reveal` and reading whether it refused, so listing it
+ * here carries none of the risk `secretHash`'s own omission (above) guards
+ * against; it exists so `apps/web`'s own panel can decide whether to offer
+ * a reveal control *without* offering one that is certain to fail. Computed
+ * from `secretCiphertext` alone (`Boolean(link.secretCiphertext)`), not from
+ * whether a key is configured *right now* — the two agree in the ordinary,
+ * non-rotating-key deployment this platform assumes (rotation is explicitly
+ * out of scope, `docs/DECISIONS.md` D-74's own "Out of scope"), and would
+ * only disagree if an operator configured a key, encrypted some links under
+ * it, and later removed the key — a real gap, but the same one `reveal`
+ * itself has (D-74's own "Limits"), not a new one this field introduces.
  */
 export interface CourseJoinLinkSummary {
   id: string
@@ -242,6 +256,7 @@ export interface CourseJoinLinkSummary {
   revokedAt: number | null
   createdByAccountId: string
   createdAt: number
+  revealable: boolean
 }
 
 function toSummary(link: JoinLink): CourseJoinLinkSummary {
@@ -252,6 +267,7 @@ function toSummary(link: JoinLink): CourseJoinLinkSummary {
     revokedAt: link.revokedAt,
     createdByAccountId: link.createdByAccountId,
     createdAt: link.createdAt,
+    revealable: Boolean(link.secretCiphertext),
   }
 }
 
@@ -337,11 +353,24 @@ export interface RevealedCourseJoinLink {
  * rather than something new: the requirement names "the instructors of its
  * own organization" as who may reveal, and `.revoke` is already the gate
  * this codebase gives that phrase for a course join link (any member of the
- * organization the link's course belongs to; `dispatch.ts`'s own
- * `routes/actions.ts` caller already proved that much before `execute` here
- * ever runs). Reusing the identical policy object, not merely an
- * equivalent-looking one, is what keeps the two gates from drifting apart
- * under a future edit to either action alone.
+ * organization the link's course belongs to — owner, instructor or
+ * assistant, un-role-differentiated; `dispatch.ts`'s own `routes/actions.ts`
+ * caller already proved *that* much before `execute` here ever runs).
+ * Reusing the identical policy object, not merely an equivalent-looking
+ * one, is what keeps the two gates from drifting apart under a future edit
+ * to either action alone.
+ *
+ * Settled, not merely carried over: `.create`/`.list`/`.revoke` were
+ * already un-role-differentiated before this action existed, so narrowing
+ * `.reveal` alone to `owner`/`instructor` would build a boundary a caller
+ * already inside this action's own trust perimeter could walk straight
+ * around — anyone who may `.revoke` a link may also `.create` a fresh one
+ * and read its secret from the response the moment it is issued, so
+ * refusing that same caller `.reveal` on the *original* link protects
+ * nothing a revoke-and-reissue does not already defeat. If a future
+ * requirement narrows the other three to `owner`/`instructor`, `.reveal`
+ * should follow through this shared policy object, with no separate edit
+ * needed here. See `docs/DECISIONS.md` D-74 for the fuller record.
  *
  * A factory, the same reason `.create` (above) is one: decrypting needs the
  * key `.create` encrypted under, and this package has no way to reach for

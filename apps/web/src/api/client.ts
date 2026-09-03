@@ -51,6 +51,7 @@ import type {
   OrganizationUsageReport,
   PersonLinkBeginResponse,
   Project,
+  RevealedCourseJoinLink,
   SetSpendingCapResult,
   SignedInResponse,
   TenantDeletion,
@@ -614,6 +615,25 @@ export function revokeCourseJoinLink(
   linkId: string
 ): Promise<{ revoked: boolean }> {
   return dispatchAction(organizationId, 'courseJoinLinks.revoke', { linkId })
+}
+
+/**
+ * ENRL-12: show a live join link's secret again. Refuses — the same
+ * `action_refused` `ApiError` every other refusal in this app already
+ * throws — for a revoked or expired link, one with nothing encrypted to
+ * show, or when this deployment has no encryption key configured at all;
+ * `CourseJoinLinkSummary.revealable` is what `components/JoinLinks.tsx`
+ * reads to avoid calling this for a link certain to refuse.
+ */
+export function revealCourseJoinLink(
+  organizationId: string,
+  linkId: string
+): Promise<RevealedCourseJoinLink> {
+  return dispatchAction<RevealedCourseJoinLink>(
+    organizationId,
+    'courseJoinLinks.reveal',
+    { linkId }
+  )
 }
 
 /**

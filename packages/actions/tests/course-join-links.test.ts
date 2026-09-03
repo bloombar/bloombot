@@ -6,6 +6,7 @@
  */
 
 import {
+  accounts,
   courseJoinLinks as courseJoinLinksRepo,
   enrolments,
   people,
@@ -241,7 +242,45 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
       // a caller that spread extra fields through would still fail this.
       expect(JSON.stringify(listed)).not.toContain('secretHash')
       expect(JSON.stringify(listed)).not.toMatch(/secret_hash/)
-      expect(listed[0]).toMatchObject({ courseId: course.id, revokedAt: null })
+      // ENRL-12: created with no key, so nothing was ever encrypted to show
+      // again — `revealable` says so up front, without a caller having to
+      // attempt `.reveal` and read a refusal to find out.
+      expect(listed[0]).toMatchObject({
+        courseId: course.id,
+        revokedAt: null,
+        revealable: false,
+      })
+    })
+
+    // ENRL-12: the one field this listing adds — capability metadata, never
+    // secret material (this file's own `CourseJoinLinkSummary` doc comment).
+    it('revealable is true only for a link that was created with an encryption key configured', async () => {
+      testDb = createTestDatabase()
+      const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+        testDb.db
+      )
+      const key = randomBytes(32)
+
+      await dispatch(
+        createCourseJoinLinkAction(key),
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+      await dispatch(
+        createCourseJoinLinkAction(),
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+
+      const listed = await dispatch(
+        listCourseJoinLinksAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+
+      expect(listed).toHaveLength(2)
+      const revealableFlags = listed.map((entry) => entry.revealable).sort()
+      expect(revealableFlags).toEqual([false, true])
     })
 
     it("does not list another organization's course join links, refusing not-found-shaped", async () => {
@@ -552,5 +591,42 @@ describe('courseJoinLinks.reveal (ENRL-12)', () => {
         { organizationId: orgA, db: testDb.db }
       )
     ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // Pins the settled (not merely inferred) authorization decision this
+  // action's own doc comment records: `.reveal` shares `.revoke`'s policy
+  // verbatim, so an `assistant` — already able to `.create`/`.list`/`.revoke`
+  // a course's join links, un-role-differentiated — can reveal one too.
+  // Fails if `.reveal` is ever narrowed to `owner`/`instructor` without this
+  // test being updated deliberately.
+  it('an assistant — not only an owner — can reveal a live link, matching .create/.list/.revoke', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      {
+        email: 'assistant@example.edu',
+        displayName: 'Assistant',
+        role: 'assistant',
+      },
+      testDb.db
+    )
+    const key = randomBytes(32)
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(key),
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const revealed = await dispatch(
+      createRevealCourseJoinLinkAction(key),
+      { linkId: created.linkId },
+      { organizationId, db: testDb.db, accountId: assistant.id }
+    )
+
+    expect(revealed.secret).toBe(created.secret)
   })
 })

@@ -275,8 +275,15 @@ export interface CourseAttachmentSummary {
  * and, just as deliberately, narrower than the database row it is drawn
  * from: there is no `secretHash` field here for the same reason
  * `CourseAttachmentSummary` above carries no `providerFileId` — the secret
- * is shown once, at creation (`CreatedCourseJoinLink` below), and never
- * again.
+ * is shown once, at creation (`CreatedCourseJoinLink` below), or again later
+ * (ENRL-12, `RevealedCourseJoinLink` below), never on this listing itself.
+ *
+ * `revealable` (ENRL-12) says whether `courseJoinLinks.reveal` can plausibly
+ * succeed for this link — `false` for a link created before ENRL-12
+ * shipped, or created while no encryption key was configured — so
+ * `components/JoinLinks.tsx` can withhold the reveal control rather than
+ * offer one certain to fail; it carries no secret material itself
+ * (`CourseJoinLinkSummary`'s own doc comment, `packages/actions`).
  */
 export interface CourseJoinLinkSummary {
   id: string
@@ -285,6 +292,7 @@ export interface CourseJoinLinkSummary {
   revokedAt: number | null
   createdByAccountId: string
   createdAt: number
+  revealable: boolean
 }
 
 /**
@@ -299,6 +307,20 @@ export interface CreatedCourseJoinLink {
   linkId: string
   secret: string
   expiresAt: number | null
+}
+
+/**
+ * ENRL-12 — what `courseJoinLinks.reveal` hands back: the plaintext secret
+ * again, for a live link an instructor already asked to see once, at
+ * creation. Mirrors `packages/actions`' own `RevealedCourseJoinLink`. The
+ * same "never stored past the component that renders it" discipline
+ * `CreatedCourseJoinLink` above already holds itself to —
+ * `components/JoinLinks.tsx` keeps at most one of these in memory at a
+ * time, cleared explicitly or replaced by the next reveal, never folded
+ * into `CourseJoinLinkSummary`'s own list state.
+ */
+export interface RevealedCourseJoinLink {
+  secret: string
 }
 
 /**

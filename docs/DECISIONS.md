@@ -6806,3 +6806,160 @@ way to remove a row. A role can be *changed* (granting a different role to an ex
 granting a second `'owner'`) but never revoked through this screen. The brief named this choice explicitly as
 open; closing it — and deciding what, if anything, stops the last owner removing themselves — is left for
 whoever picks it up next.
+
+---
+
+## D-68 — `packages/db`/`packages/actions`/`apps/api`/`apps/web`/`e2e`: ENRL-10 — an owner invites a colleague who is not yet in the organization
+
+**Problem.** D-67's own "known limitation, inherited, not fixed by this slice" is the reason this slice
+exists: `grantMembershipAction` refuses a target with no existing membership in the caller's own organization,
+deliberately — closing that check any other way was already shown to make the action a cross-tenant
+account-existence oracle. Nothing in production created a *first* membership for a second instructor or
+teaching assistant, so an owner genuinely had no way to add a colleague. `membership-invitations.ts` (a new
+table, `packages/db`; new actions and a new bespoke redemption route, mirroring `course_join_links`/
+`sign_in_tokens` exactly) is that path.
+
+**Choice, single-use, not multi-use.** A join link is deliberately shared with a whole class (ENRL-3); an
+invitation is addressed to one person. Read literally, ENRL-10's "admits exactly the person who received it"
+could mean either "single-use" alone or "single-use *and* bound to the addressed identity" — I chose both,
+measured against the actual attack this closes: a bearer secret that leaked (forwarded, screenshotted) would,
+under single-use alone, still let whoever redeemed it *first* become staff of a stranger's organization — not
+"the person who received it," merely "whoever got there first." `redeemMembershipInvitation`
+(`packages/db/src/repos/membership-invitations.ts`) therefore also requires the redeeming account's own email
+to equal the invitation's own `email` column, both already-lowercased facts (`accounts.email`'s own repo
+comment; this table's own `createInvitation`) — refused identically to every other reason, so the check itself
+adds no new oracle. The consequence: an invitee with no account yet at the invited address cannot redeem
+until one exists at that address — consistent with SPEC's own "redeeming one never creates an account or a
+session" — they sign in first (which creates the account, ordinarily) and only then follow the link back.
+
+**Choice, an invitation refuses a redeemer who already holds any membership in that organization, rather than
+silently changing their role.** The brief named this as mine to decide. `memberships.grant` (ENRL-5) already
+exists, is owner-only, and is recorded — it is the one path this platform gives for changing an *existing*
+member's role. Letting an invitation redemption also change a role would be the identical write reachable two
+ways with two different confirmation UIs and two different "what does this mean" strings (`Team.tsx`'s own
+grant confirmation vs. `MembershipInvitations.tsx`'s own invite confirmation) — a second, quieter path to the
+same consequence. Refusing keeps the boundary exactly where D-67 already drew it: an invitation is the
+first-membership admission path, `memberships.grant` is the role-change path, and neither one's own doc
+comment has to hedge about the other doing its job too.
+
+**Choice, the recorded grantor is the inviting owner, never the redeemer.** ENRL-5 requires a role be
+"recorded" — who granted it. `redeemMembershipInvitation` stamps `grantMembershipRole`'s own
+`grantedByAccountId` from `invitation.createdByAccountId`, never from the redeeming `accountId` the function
+is otherwise acting as. Measured by mutation: swapping the two (`grantedByAccountId: accountId`) was tried
+directly against this slice's own "records the inviting owner ... not the redeemer" tests (both
+`packages/db/tests/membership-invitations.test.ts` and `packages/actions/tests/membership-invitations.test.ts`)
+— both fail without the fix.
+
+**Choice, an owner may invite at the `owner` role, and this slice cannot cause an organization to lose its
+last owner.** `Team.tsx`'s own `GRANTABLE_ROLES` already lets an owner grant a second `owner` through
+`memberships.grant` (D-67, unchanged) — `MembershipInvitations.tsx`'s own `INVITABLE_ROLES` mirrors it, for the
+same reason: nothing about *inviting* is different for the owner role than for any other. Because this slice
+only ever grants — it has no removal or demotion path, and does not touch `deleteMembership`, which D-67 left
+uncalled and this slice leaves uncalled still — no organization can lose an owner through anything built here,
+last one or otherwise. Removal/demotion, and what should stop an organization losing its last owner, are
+exactly the same open questions D-67 left, unchanged by this slice.
+
+**Choice, `membershipInvitations.list` is owner-only, unlike `memberships.list`.** D-67's own choice was that
+seeing who already holds a role carries none of a grant's own consequence, so that read stays open to any
+member. An *outstanding* invitation is a different fact: it carries an email nobody but the inviting owner has
+consented to have visible in this organization yet — closer to the sensitivity `Team.tsx`'s own grant form
+already treats an owner-typed email with (never rendered back, never shown to another member) than to a
+granted role's own, already-public membership row. Measured, not merely asserted: `.create`/`.list`/`.revoke`
+all share one `requireOwner` helper (`membership-invitations.ts`, `packages/actions`), and mutation-testing it
+down to "authenticated, any role" was tried directly against this slice's own three "refuses a caller who is
+not an owner" tests — all three fail without the role check.
+
+**Choice, the outstanding-invitations list is a history, not only a queue.** `listInvitations`
+(`packages/db`) returns every invitation an organization has ever issued, live, revoked and redeemed alike —
+the same "history, not only what is currently live" shape `course-join-links.ts#listJoinLinks` already gives
+WEB-20's own join-link screen, rather than a narrower reading of "outstanding" that would only show pending
+ones. `MembershipInvitations.tsx` withholds the Revoke control once an invitation is no longer live
+(`redeemedAt`/`revokedAt`/`expiresAt`, in that priority order — a redeemed invitation reads as redeemed
+regardless of what either other column holds, single-use having nothing further for `revokedAt` to protect
+against).
+
+**The migration (`0017_equal_stranger.sql`), and why `packages/db/tests/migrate.test.ts` gained a dedicated
+case rather than only the top-level table-list assertion.** `membership_invitations` is a brand-new table —
+generated by `drizzle-kit generate` off `schema.ts`, not written by hand — so its column shape is already
+pinned by that file's existing "applies every migration to an empty database" assertion (extended with this
+table's own row, the same light touch `course_join_links` originally got). What that assertion cannot see is
+*behaviour* a plain column list does not express: the `membership_invitations_role_check` `CHECK` and the
+unique index on `secret_hash`. `0017 — membership_invitations` (new `describe` block) inserts directly through
+`db.$client` — an out-of-range role, and two rows sharing a hash — and asserts both throw, the same class of
+gap `0015`/`0016`'s own dedicated test already closes for `jobs`.
+
+**Finding — three census tests exist precisely to catch a new action arriving unannounced, and did.**
+`packages/actions/tests/access-audit.test.ts`, `catalog.test.ts` and `apps/api/tests/tenant-isolation.test.ts`
+all derive their own expectations from `createPlatformRegistry()`, so registering
+`membershipInvitations.create`/`.list`/`.revoke` failed all three immediately, by design — each was updated
+with the new action's own descriptor/name/route, and `tenant-isolation.test.ts`'s own derived (a)/(b)/(c)
+matrix (foreign session / no session / disabled account) now exercises the three new routes for free, the
+same TEN-5 coverage every other action already gets, with no route-specific code added to that file at all.
+
+**Finding — the API proxy allowlist is a fourth place a new bespoke route has to be named, and this slice
+missed it on the first pass.** `apps/web/vite.config.ts`'s own `proxy` object lists every top-level path
+`apps/api` actually serves; `/join-links` was already there for ENRL-8, but `/membership-invitations` was not
+added in the same pass as `apps/api/src/server.ts`'s own mount, and the gap was invisible to every unit and
+action-level test (`apps/api/tests/routes/membership-invitations.test.ts` talks to `buildApp` directly, never
+through Vite's proxy) — only `e2e/membership-invitation-panel.spec.ts`, run through the real `vite preview`
+server, actually exercises the browser's own same-origin path and caught it: a real Chromium redemption
+attempt 404'd with an empty body (Vite's own "no route, no proxy match" response, not `apps/api`'s JSON
+`membership_invitation_not_found`), which `describeApiError`'s `default` case rendered as "Something went
+wrong. Try again." — plausible enough to read as a genuine server error rather than a missing proxy entry.
+Fixed by adding the entry (`vite.config.ts`), mirroring `/join-links`'s own comment on why a proxied API path
+and a page path (`/invitations/:secret`) must never share one top-level segment. Recorded here because the
+class of gap — a new bespoke, unscoped route needs *four* places updated (`server.ts`'s mount,
+`vite.config.ts`'s proxy, `App.tsx`'s own page route, and whichever tests derive from the registry) and only
+one of those four is checked by anything short of a real browser — is exactly the kind of thing worth a future
+slice's own audit, the same way `docs/ROADMAP.md`'s "Audit — surfaces that were never built" already caught
+`memberships.grant`/`memberships.list` having no caller at all.
+
+**Finding — `getByLabel`'s substring matching meant a second form on the same screen needed care twice, not
+once.** `Team.tsx`'s existing "Grant a role" form already labels its own fields "Email"/"Role" — mounting
+`MembershipInvitations.tsx` alongside it with the same labels would have made both React Testing Library's
+`getByLabelText` (jsdom) and Playwright's `getByLabel` (a real browser) resolve to two elements for a plain,
+un-anchored query. Distinct labels ("Invite email"/"Invite role") fixed the jsdom side outright — neither
+string is a substring of the other in either direction — but Playwright's own default matching is
+case-insensitive *substring*, not exact, so `e2e/team-panel.spec.ts`'s own pre-existing `getByLabel('Email')`
+(added for ENRL-5, before this slice) still matched "Invite email" too, since "email" is a substring of it.
+That existing spec needed `{ exact: true }` added to both its own `getByLabel('Email')` and (already present,
+for the identical "Role" collision `costLedger.setSpendingCap`'s own form never had) `getByLabel('Role', {
+exact: true })` — an edit to a file this slice's brief did not name, made necessary by mounting a second form
+in the same tree, not scope creep.
+
+**Mutation testing — what was tried, and what survived (report the brief itself asked for).** Beyond the
+findings recorded above (grantor swapped to the redeemer, the owner check dropped, `z.strictObject` reverted
+to `z.object` on both the redemption route's and the create action's own input, `revokedAt` dropped from
+`findLiveInvitationByHash`), two mutations are recorded here because the first attempt at a test did *not*
+catch them, and a better one had to be built rather than merely asserted passing:
+
+  1. *Dropping `revokedAt` from `findLiveInvitationByHash`'s own `WHERE`* still made every "no oracle"
+     assertion pass, because `claimInvitation`'s own re-check (the "a write whose own `WHERE` re-checks the
+     condition its read relied on" pattern `repos/memberships.ts#grantMembershipRole`'s own `updated` branch
+     already uses) still refused a revoked secret correctly — one step later, after doing strictly more work
+     first (an account lookup, an email comparison, a membership check) than a never-issued secret's own
+     immediate refusal does. Return-value equality could not see that extra work; it is itself a timing
+     oracle a sufficiently careful attacker could measure. Closed by a stronger assertion, not a weaker
+     mutation tolerance: `accounts.getAccountById` is spied on and asserted *never called* for any of the four
+     refusal reasons, proving they share the same immediate exit rather than merely agreeing on the eventual
+     answer.
+  2. *Splitting `redeemMembershipInvitation`'s single `db.transaction(...)` into two — one for the claim, one
+     for the grant* — passed the required "a concurrent revoke beats an in-flight redemption" test unchanged,
+     because that race is what `claimInvitation`'s own `WHERE` guards, not the surrounding transaction. The
+     transaction's own, different job — that a claim and its grant commit or roll back *together* — had no
+     test at all until one was added: `grantMembershipRole` mocked to throw once, after the claim already
+     ran, asserting the invitation reads as still live afterward (not claimed, not redeemed) and is still
+     genuinely redeemable — this is what actually fails against the split-transaction mutation, and would
+     have failed against this slice's very first draft had that draft ever shipped un-mutated.
+
+No other mutation tried (see the list above) survived any test in this slice's own suite.
+
+**Out of scope, deliberately, unchanged from what the brief named.** ADMIN-2/JOB-2 (a separate slice).
+`memberships.grant`'s own existing behaviour and its anti-oracle refusal (untouched — `packages/actions/src/
+actions/memberships.ts`'s own doc comment is corrected to point at the invitation path that now exists,
+nothing about `execute` itself changes). Removal/demotion of a membership (D-67's own open question, restated
+above rather than silently narrowed). MCP's tool surface (`apps/mcp/src/tool-surface.ts`'s own module comment
+already reasons about the omission; `MCP_TOOL_SURFACE` is a hand-maintained allowlist this slice does not
+touch, so the three new actions are unreachable from a model caller by construction). Emailing the invitation —
+an owner copies a link and sends it however they like, exactly as ENRL-3's own join link already works; if the
+mail transport should send it instead, that is a different slice's call.

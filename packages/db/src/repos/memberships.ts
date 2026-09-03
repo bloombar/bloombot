@@ -53,11 +53,21 @@ export function createMembership(
     .get()
 }
 
-/** The membership binding `accountId` to `organizationId`, if any. */
+/**
+ * The membership binding `accountId` to `organizationId`, if any.
+ *
+ * `db` accepts `Executor`, not just `Database` (rework, the same
+ * "called from inside another transaction" widening
+ * `listMembershipsForAccount`'s own comment already gives, LINK-9's own
+ * healing path): `repos/membership-invitations.ts#redeemMembershipInvitation`
+ * (ENRL-10) calls this from inside its own transaction, deciding whether a
+ * redeemer already holds a membership before granting a role from the
+ * invitation it is redeeming.
+ */
 export function getMembership(
   organizationId: string,
   accountId: string,
-  db: Database
+  db: Executor
 ): Membership | undefined {
   return db
     .select()
@@ -157,11 +167,17 @@ export interface GrantMembershipInput {
  * only of the organization the write is scoped to, the same division
  * `courseInstructionRevisions.createRevision` draws from
  * `courseInstructions.save`'s own `requireAccountId` check.
+ *
+ * `db` accepts `Executor`, not just `Database`, for the identical reason
+ * `getMembership`'s own comment gives, immediately above:
+ * `redeemMembershipInvitation` (ENRL-10) calls this from inside its own
+ * transaction, as the write that actually turns a redeemed invitation into
+ * a role.
  */
 export function grantMembershipRole(
   organizationId: string,
   input: GrantMembershipInput,
-  db: Database
+  db: Executor
 ): Membership {
   const existing = getMembership(organizationId, input.accountId, db)
   const grantedAt = Date.now()

@@ -45,6 +45,13 @@ const proxy = {
   // page path cannot share one top-level segment" rule `/admin` and
   // `/platform-admin` already hold themselves to, just above.
   '/join-links': apiOrigin,
+  // ENRL-10 — `apps/api`'s own `routes/membership-invitations.ts` mount,
+  // unscoped like `/join-links` immediately above, for the identical
+  // reason. Deliberately a different top-level segment from this app's own
+  // `/invitations/:secret` page (`App.tsx`, `pages/Invitation.tsx`) — the
+  // same "a proxied API path and a page path cannot share one top-level
+  // segment" rule `/join-links`/`/join/:secret` already hold themselves to.
+  '/membership-invitations': apiOrigin,
 }
 
 export default defineConfig({

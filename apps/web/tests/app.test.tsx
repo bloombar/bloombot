@@ -17,6 +17,7 @@ import { renderWithModal } from './helpers/render-with-modal.js'
 import { ApiError } from '../src/api/client.js'
 import { PENDING_INSTALL_ORG_KEY } from '../src/components/InstallButton.js'
 import { PENDING_CONNECT_ORG_KEY } from '../src/pages/Connect.js'
+import { PENDING_INVITATION_KEY } from '../src/pages/Invitation.js'
 import { PENDING_JOIN_LINK_KEY } from '../src/pages/JoinLink.js'
 
 // `listProjects` is mocked here too, not just `fetchMe`/`completeDiscordInstall`
@@ -38,6 +39,7 @@ const {
   previewDiscordPersonLink,
   confirmDiscordPersonLink,
   redeemCourseJoinLink,
+  redeemMembershipInvitation,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
@@ -48,6 +50,7 @@ const {
   previewDiscordPersonLink: vi.fn(),
   confirmDiscordPersonLink: vi.fn(),
   redeemCourseJoinLink: vi.fn(),
+  redeemMembershipInvitation: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -65,6 +68,7 @@ vi.mock('../src/api/client.js', async () => {
     previewDiscordPersonLink,
     confirmDiscordPersonLink,
     redeemCourseJoinLink,
+    redeemMembershipInvitation,
   }
 })
 
@@ -387,5 +391,83 @@ describe('App — /join/:secret (ENRL-8)', () => {
       expect(redeemCourseJoinLink).toHaveBeenCalledWith('secret-abc')
     )
     expect(window.location.pathname).toBe('/join/secret-abc')
+  })
+})
+
+describe('App — /invitations/:secret (ENRL-10)', () => {
+  it('signed out, renders the invitation screen own sign-in prompt rather than the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({ account: null })
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in to Bloombot' })
+    ).toBeInTheDocument()
+    expect(sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe('secret-abc')
+  })
+
+  it('signed in, redeems the invitation rather than rendering the ordinary shell', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'colleague@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Colleague',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    // Never resolves in this test — the same "assert the pending state
+    // without racing the navigate-away" reasoning `/join/:secret`'s own
+    // identical case gives, above.
+    redeemMembershipInvitation.mockReturnValue(new Promise(() => undefined))
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
+    )
+    expect(
+      screen.queryByRole('combobox', { name: 'Organization' })
+    ).not.toBeInTheDocument()
+  })
+
+  // ENRL-10, the same LINK-6 rework reasoning `/join/:secret`'s own
+  // identical case gives, above: a visitor who arrived at
+  // `/invitations/:secret` signed out (`Invitation.tsx`'s own
+  // `PENDING_INVITATION_KEY`) must return to that same invitation, not the
+  // shell, once a sign-in redemption completes.
+  it('a sign-in redemption returns to the pending invitation, not straight to the shell', async () => {
+    sessionStorage.setItem(PENDING_INVITATION_KEY, 'secret-abc')
+    redeemSignInLink.mockResolvedValue({ accountId: 'account-1' })
+    redeemMembershipInvitation.mockReturnValue(new Promise(() => undefined))
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'colleague@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Colleague',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    await vi.waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
+    )
+    expect(window.location.pathname).toBe('/invitations/secret-abc')
   })
 })

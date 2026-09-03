@@ -16,6 +16,10 @@
  *    reachable signed in or signed out, for the identical reason
  *    `/connect/:organizationId` is above — a course join link is shared
  *    with a whole class, most of whom have never signed in before.
+ *  - `/invitations/:secret` — ENRL-10's own membership invitation
+ *    (`pages/Invitation.tsx`); reachable signed in or signed out, the same
+ *    reason `/join/:secret` is above — the account an invitation is
+ *    addressed to may never have signed in before.
  *  - `/platform-admin` — ADMIN-4's console (`pages/Admin.tsx`); reachable
  *    by any signed-in account (deliberately *not* `/admin`, `apps/api`'s
  *    own mount for this screen's reads and writes — see this file's own
@@ -39,6 +43,7 @@ import { Button } from './components/Button.js'
 import { Admin } from './pages/Admin.js'
 import { Connect, PENDING_CONNECT_ORG_KEY } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
+import { Invitation, PENDING_INVITATION_KEY } from './pages/Invitation.js'
 import { JoinLink, PENDING_JOIN_LINK_KEY } from './pages/JoinLink.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
@@ -110,17 +115,28 @@ export function App() {
   // arbitrarily: this app never sets both in the same visit (each page
   // clears the other's marker only if it happens to render, and a browser
   // tab only ever has one such link open).
+  //
+  // ENRL-10: the same problem again, for `/invitations/:secret`
+  // (`Invitation.tsx`'s own `PENDING_INVITATION_KEY`) — checked last, for
+  // the identical reason.
   const returnToShell = useCallback(() => {
     const pendingConnectOrganizationId = sessionStorage.getItem(
       PENDING_CONNECT_ORG_KEY
     )
     const pendingJoinLinkSecret = sessionStorage.getItem(PENDING_JOIN_LINK_KEY)
+    const pendingInvitationSecret = sessionStorage.getItem(
+      PENDING_INVITATION_KEY
+    )
     if (pendingConnectOrganizationId) {
       const target = `/connect/${pendingConnectOrganizationId}`
       window.history.replaceState(null, '', target)
       setPath(target)
     } else if (pendingJoinLinkSecret) {
       const target = `/join/${pendingJoinLinkSecret}`
+      window.history.replaceState(null, '', target)
+      setPath(target)
+    } else if (pendingInvitationSecret) {
+      const target = `/invitations/${pendingInvitationSecret}`
       window.history.replaceState(null, '', target)
       setPath(target)
     } else {
@@ -217,6 +233,25 @@ export function App() {
     if (secret) {
       return (
         <JoinLink
+          secret={secret}
+          account={session.kind === 'signed-in' ? session.account : null}
+          onSignedIn={refreshSession}
+          onRedeemed={returnToShell}
+        />
+      )
+    }
+  }
+
+  // ENRL-10 — a membership invitation, reachable whether or not this
+  // browser already has a session, the identical reason `/join/:secret` is
+  // above: `Invitation.tsx` itself renders `SignIn` when `account` is
+  // `null`.
+  const invitationMatch = /^\/invitations\/([^/]+)$/.exec(path)
+  if (invitationMatch) {
+    const secret = invitationMatch[1]
+    if (secret) {
+      return (
+        <Invitation
           secret={secret}
           account={session.kind === 'signed-in' ? session.account : null}
           onSignedIn={refreshSession}

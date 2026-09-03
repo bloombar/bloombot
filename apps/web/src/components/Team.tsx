@@ -49,6 +49,15 @@
  * of those, this is not marked `destructive` in the modal — granting adds
  * authority rather than removing access — but the description still says
  * exactly what that authority is before an owner confirms.
+ *
+ * **ENRL-10 — the grant form's own limit, closed.** `grantMembershipAction`
+ * requires the target account to already hold a membership in this
+ * organization (its own doc comment's "rework finding 1"), so this screen
+ * could only ever reassign roles among people already present — the "Must
+ * already belong to this organization" help text on the email field, above,
+ * says so. `components/MembershipInvitations.tsx`, mounted below, owner-
+ * gated the identical way, is what actually lets an owner bring a
+ * genuinely new colleague onto their staff: an invitation, not a grant.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -60,6 +69,7 @@ import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FormField } from './FormField.js'
 import { textInputClasses } from './fieldStyles.js'
+import { MembershipInvitations } from './MembershipInvitations.js'
 import { useModal } from './modal/ModalProvider.js'
 
 export interface TeamProps {
@@ -208,7 +218,7 @@ export function Team({ organizationId, isOwner }: TeamProps) {
             <div className="w-64">
               <FormField
                 label="Email"
-                help="Must already belong to this organization."
+                help="Must already belong to this organization — to add someone who is not yet a member, use Invitations below."
               >
                 <input
                   type="email"
@@ -248,6 +258,16 @@ export function Team({ organizationId, isOwner }: TeamProps) {
           </div>
           {grantError && <ErrorMessage error={grantError} />}
         </section>
+      )}
+
+      {/* ENRL-10 — the gap the section above cannot close: `memberships.grant`
+          only ever changes the role of someone already present
+          (`MembershipInvitations.tsx`'s own module comment). Owner-gated
+          the same way, and for the identical reason. */}
+      {isOwner && (
+        <div className="border-t border-neutral-200 pt-4">
+          <MembershipInvitations organizationId={organizationId} />
+        </div>
       )}
     </div>
   )

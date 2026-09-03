@@ -90,6 +90,13 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    already-resolved person id; the two share the module-private
 //    `findLiveJoinLinkByHash`, which this test does not see at all (it
 //    scans exported functions only).
+//  - membership-invitations.ts#redeemMembershipInvitation: ENRL-10, the
+//    same class as `course-join-links.ts`'s own redemption functions,
+//    immediately above — a redeemer presents only the secret, not an
+//    organization id, so there is nothing to scope the lookup by until the
+//    hash itself resolves one (this file's own module comment). The
+//    organization the granted role belongs to comes out of the invitation
+//    the hash resolves, never in through a parameter a caller could pick.
 //  - person-link-challenges.ts: LINK-3, the same class as
 //    `discord-install-states.ts` one level up — a callback (Discord's own
 //    OAuth) or a token redemption (MCP) carries only the secret value, not
@@ -113,6 +120,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'deleteExpiredInstallStates',
   ],
   'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
+  'membership-invitations.ts': ['redeemMembershipInvitation'],
   'memberships.ts': ['listMembershipsForAccount'],
   'people.ts': ['listConnectedOrganizationsForAccount'],
   'person-link-challenges.ts': [
@@ -205,7 +213,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twenty-one repo files this test is written against', () => {
+  it('found the twenty-two repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -221,6 +229,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'discord-servers.ts',
         'enrolments.ts',
         'jobs.ts',
+        'membership-invitations.ts',
         'memberships.ts',
         'organizations.ts',
         'people.ts',

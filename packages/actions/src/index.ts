@@ -44,12 +44,14 @@ export {
 // action here is — this package's own root export is the only door in, and
 // `package.json`'s `exports` field exposes only this one entry point, so an
 // app importing `@bloombot/actions` deeply for it would fail to resolve at
-// all. `redeemCourseJoinLinkForWebAccount` (ENRL-8) is the same shape, for
-// the same reason, and re-exported here alongside it.
+// all. `redeemCourseJoinLinkForWebAccount` (ENRL-8) and
+// `redeemMembershipInvitationForWebAccount` (ENRL-10) are the same shape,
+// for the same reason, and re-exported here alongside it.
 export {
   redeemCourseJoinLink,
   redeemCourseJoinLinkForWebAccount,
 } from './actions/index.js'
+export { redeemMembershipInvitationForWebAccount } from './actions/index.js'
 
 export {
   checkPlatformHealth,

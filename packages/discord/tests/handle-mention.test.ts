@@ -667,15 +667,19 @@ describe('handleMention — D-34/LINK-5: a Discord role holder is admitted throu
     ).toHaveLength(0)
   })
 
-  // A person who holds only the *admin* role (never `studentsRole`, ENRL-5's
-  // own "a Discord role confers none of them") is untouched by this gate —
-  // `enrolViaDiscordRole` never admits them in the first place, so there is
-  // no enrolment for this check to find missing.
-  it('does not gate an admin-role message that never held a student enrolment at all', async () => {
+  // ENRL-7: "anyone a course is taught through is enrolled by asking it" —
+  // an instructor or TA who holds only the course's *admin* role is
+  // enrolled exactly like a student, so the web surface (which authorizes
+  // on this table, not a membership) does not refuse the same person
+  // Discord just answered. Fails without the fix: before ENRL-7,
+  // `enrolViaDiscordRole` checked `studentsRole` only, so this call left no
+  // enrolment behind at all.
+  it('records an enrolment for an admins-role-only holder too, the same as a student', async () => {
     testDb = createTestDatabase()
-    const { guildId } = seedBoundServerWithCourse(testDb.db, {
-      adminsRole: 'admins-tc',
-    })
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { adminsRole: 'admins-tc' }
+    )
     const { deps, model } = makeDeps(testDb)
 
     const result = await handleMention(
@@ -685,6 +689,64 @@ describe('handleMention — D-34/LINK-5: a Discord role holder is admitted throu
 
     expect(result.kind).toBe('answered')
     expect(model.calls).toHaveLength(1)
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      enrolments.listCoursesForPerson(organizationId, person.id, testDb.db)
+    ).toEqual([expect.objectContaining({ id: courseId })])
+  })
+
+  // ENRL-7's widening never reversed ENRL-6 for staff: an admins-role-only
+  // holder whose enrolment was ended by an instructor is refused exactly
+  // like a student would be — the same `enrolment-ended` reply, no model
+  // call. Fails without the fix: before ENRL-7, `holdsStudentsRole` was
+  // `false` for an admins-role-only holder, so this gate never fired and the
+  // second message was answered anyway.
+  it('an instructor-ended enrolment stays ended for an admins-role-only holder too, and the answer is refused', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { adminsRole: 'admins-tc' }
+    )
+    const { deps: deps1, model: model1 } = makeDeps(testDb)
+    await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['admins-tc'] }),
+      deps1
+    )
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: 'author-1' },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const activeEnrolment = enrolments.getActiveEnrolment(
+      organizationId,
+      courseId,
+      person.id,
+      testDb.db
+    )
+    if (!activeEnrolment) throw new Error('setup failed')
+    enrolments.endEnrolment(organizationId, activeEnrolment.id, testDb.db)
+
+    const { deps: deps2, model: model2, reply } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, authorRoleNames: ['admins-tc'] }),
+      deps2
+    )
+
+    expect(result).toEqual({ kind: 'enrolment-ended' })
+    expect(model1.calls).toHaveLength(1) // the first message was answered
+    expect(model2.calls).toHaveLength(0) // the second was not — no model call, no allowance spent
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toMatch(/no longer enrolled/i)
+    expect(
+      enrolments.getEnrolment(organizationId, activeEnrolment.id, testDb.db)
+        ?.endedAt
+    ).not.toBeNull()
   })
 })
 

@@ -5,12 +5,13 @@
  */
 
 import { enrolments, people } from '@bloombot/db'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   createCourseJoinLinkAction,
   redeemCourseJoinLink,
+  redeemCourseJoinLinkForWebAccount,
   revokeCourseJoinLinkAction,
 } from '../src/actions/course-join-links.js'
 import { dispatch } from '../src/dispatch.js'
@@ -172,6 +173,39 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
         testDb.db
       )
     ).toBeDefined()
+  })
+
+  // ENRL-8: `redeemCourseJoinLinkForWebAccount` composes `hashSecret` with
+  // `redeemJoinLinkForWebAccount` the same way `redeemCourseJoinLink` (above)
+  // already composes it with `redeemJoinLink` — this pins down that the
+  // secret this action returns actually redeems through the account-based
+  // entry point too, not only the person-id one.
+  it('redeeming the secret this action returned enrols a web account, creating its person', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const accountId = randomUUID()
+
+    const created = await dispatch(
+      createCourseJoinLinkAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const enrolment = redeemCourseJoinLinkForWebAccount(
+      created.secret,
+      accountId,
+      testDb.db
+    )
+
+    expect(enrolment?.source).toBe('join_link')
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      testDb.db
+    )
+    expect(person?.connectedAt).not.toBeNull()
   })
 
   it("revoking refuses another organization's link, identically to a missing one", async () => {

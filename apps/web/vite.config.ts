@@ -38,6 +38,13 @@ const proxy = {
   // already do not — a path this proxy forwards and a path this app's own
   // client-side router renders cannot be the same one.
   '/admin': apiOrigin,
+  // ENRL-8 — `apps/api`'s own `routes/join-links.ts` mount, unscoped like
+  // `/auth` (that file's own module comment has why). Deliberately a
+  // different top-level segment from this app's own `/join/:secret` page
+  // (`App.tsx`, `pages/JoinLink.tsx`) — the same "a proxied API path and a
+  // page path cannot share one top-level segment" rule `/admin` and
+  // `/platform-admin` already hold themselves to, just above.
+  '/join-links': apiOrigin,
 }
 
 export default defineConfig({

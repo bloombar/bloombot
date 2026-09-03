@@ -102,6 +102,7 @@ export {
   createCourseJoinLinkAction,
   revokeCourseJoinLinkAction,
   redeemCourseJoinLink,
+  redeemCourseJoinLinkForWebAccount,
   type CreatedCourseJoinLink,
 } from './course-join-links.js'
 export {

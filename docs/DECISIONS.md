@@ -5577,3 +5577,91 @@ more than one instructor, left open pending a directory read this slice did not 
 while the textarea has an unsaved edit of its own discards that edit (the confirmation names this), which is
 the same trade-off `components/CourseAttachments.tsx`'s own detach confirmation makes for a destructive action
 that replaces what is currently on screen.
+
+---
+
+## D-55 — `packages/db`/`packages/discord`/`apps/api`/`apps/web`: ENRL-7 widens Discord-role enrolment to either role, and ENRL-8 finally wires a join link's redemption to a route and a screen
+
+**Problem.** ENRL-7: `routing.ts#routeMessage` already routes a message to a course for either an admins-role or
+a students-role holder, but `enrolments.ts#enrolViaDiscordRole` only ever admitted the students role
+(D-34/D-35's own explicit, at-the-time-correct scope) — an instructor or TA held a real Discord conversation
+this table had no record of, and `routes/chat.ts`, which authorizes on this table rather than a membership,
+refused the same person Discord had just answered. ENRL-8: `redeemJoinLink` existed, correct and tested
+(D-34's rework finding 4/6), but nothing outside a test ever called it — no route, no screen — and its own doc
+comment names exactly the trap a careless wiring would fall into (a body-supplied `personId` lets anyone
+holding a shared secret enrol anybody in the tenant).
+
+**Choice — ENRL-7 widens the check, not the write.** `enrolViaDiscordRole` now admits a caller holding either
+`course.studentsRole` or `course.adminsRole`; `reviveEnded: false` is untouched, and its own doc comment now
+says explicitly why that reasoning never turned on *which* role was held — an admins-role holder's enrolment is
+just as ambient a re-checked fact as a students-role holder's, so ENRL-6 has to gate both identically.
+`packages/discord/src/handle-mention.ts`'s own `holdsStudentsRole` local (which decided whether a *missing*
+enrolment after the call means "never held the role" or "was ended") is renamed `holdsTeachingRole` and checks
+both roles — otherwise an admins-role-only holder's ended enrolment would silently stop being enforced the
+moment ENRL-7 landed, since `holdsStudentsRole` would stay `false` for them forever. `routeMessage` itself is
+untouched, as the brief for this slice required — it already treated the two roles identically; only admission
+had not caught up.
+
+**Choice — ENRL-8's redemption route lives at `/join-links`, unscoped by `:organizationId`, the same reason
+`/auth` is** (`repos/course-join-links.ts`'s own module comment: a redeemer presents only the secret, not an
+organization id). `POST /join-links/redeem` takes `z.strictObject({ secret })` — never a `personId` — and reads
+the enrolling identity from `req.session.accountId`, the caller's own already-proven session, the same "a
+signed-in web caller *is* the account" reasoning D-37 already established for `routes/chat.ts`.
+`redeemCourseJoinLinkForWebAccount` (`packages/actions`) composes `hashSecret` with a new
+`repos/course-join-links.ts#redeemJoinLinkForWebAccount`, which is not part of `@bloombot/actions`' public
+surface as a dispatched `Action` for the identical reason `redeemCourseJoinLink` is not (D-34): dispatch needs
+an organization id before it runs a single line, and a redeemer has not proven one yet.
+
+**Choice — a person the link's organization has never seen is created and connected inline, in
+`packages/db`, not by calling into `@bloombot/auth`.** `createConnectedWebPerson`/`ensureWebPersonForAccount`
+(`@bloombot/auth`'s `sign-in.ts`) already do exactly this create-then-connect sequence, but `@bloombot/auth`
+depends on `@bloombot/db`, not the other way around — `packages/db`'s own repo layer cannot import it without
+introducing a cycle. `redeemJoinLinkForWebAccount` instead composes the same underlying primitives
+(`people.ts#resolveIdentity`/`createPerson`/`connectIdentity`) directly, inside the identical
+`db.transaction(...)` `redeemJoinLink` already opens (a nested savepoint when called from inside one, per
+`client.ts`'s own `TransactingExecutor`) — the real `connectIdentity` path, never a raw `connectedAt` write,
+and atomic with the link's own liveness check and the enrolment write, so a concurrent revoke cannot land
+between "a person now exists for this account here" and "that person is enrolled." This is the identical
+"small, deliberate duplication over a new cross-package dependency" trade D-34 already chose for this same
+file's own `hashSecret` (a SHA-256 helper duplicated from `@bloombot/auth`'s `secrets.ts` rather than adding a
+dependency for ten lines) — see `repos/course-join-links.ts#redeemJoinLinkForWebAccount`'s own doc comment for
+the full reasoning, and `findLiveJoinLinkByHash` (factored out of `redeemJoinLink`, module-private) for why the
+refusal path costs no extra work, and so no extra timing signal, for a never-issued secret versus a revoked or
+expired one that happens to resolve an organization before failing.
+
+**Choice — the sign-in return path is a `sessionStorage` marker, not a `?next=` URL parameter.** The brief
+named a `redirectTo`/`next` query parameter through the sign-in flow as "the obvious route," which would have
+needed same-origin path validation against `PUBLIC_APP_URL` to avoid becoming an open redirect. This app
+already has a working, established device for the identical problem — `pages/Connect.tsx`'s
+`PENDING_CONNECT_ORG_KEY`, read back by `App.tsx#returnToShell` once a sign-in redemption completes.
+`pages/JoinLink.tsx`'s own `PENDING_JOIN_LINK_KEY` is the same device for a join link's own secret:
+`returnToShell` checks it right alongside `PENDING_CONNECT_ORG_KEY` and navigates back to `/join/:secret`
+before falling back to the shell. A second, differently-shaped redirect mechanism for the same problem would
+have been the inconsistency, not an improvement, and it sidesteps the open-redirect risk entirely — nothing
+here ever reads a redirect target out of a URL a caller controls; the target is always this same page's own
+already-trusted `secret` prop. Not overloading `pages/RedeemLink.tsx` (AUTH-1's own sign-in-link page) was a
+hard constraint the brief stated directly, for the same reason: a course join link and a sign-in link are
+different things, and a visitor who followed the wrong one must get a message that actually names what they
+are looking at.
+
+**Rework finding — the front end's own proxy allowlist silently 404'd the new route.**
+`apps/web/vite.config.ts`'s `proxy` object is an explicit allowlist of the top-level path segments `apps/api`
+actually serves (its own comment: "only the paths apps/api actually serves are proxied") — `/join-links` was
+missing from it, so `vite preview`/`vite dev` never forwarded the request to `apps/api` at all, and returned
+its own empty `404` instead of `apps/api`'s `join_link_not_found` JSON body. Every unit and route-level test
+(`supertest` against `apps/api` directly) passed regardless, because none of them go through Vite's proxy —
+only the Playwright e2e spec, which drives a real built `vite preview` in front of a real `apps/api`
+(`playwright.config.ts`'s own module comment), caught it, exactly the class of bug QA-7's "a real front end,
+not a mock" exists to catch. Fixed by adding `/join-links` to the proxy map, with the same "a proxied API path
+and a page path must never share one top-level segment" comment `/admin`/`/platform-admin` already state for
+themselves — `/join-links` (API) and `/join/:secret` (page) do not collide.
+
+**Limits.** The panel's own join-link issuing/copying UI (WEB-20) and the roster import UI (WEB-21) are a
+later slice on this same branch, per this slice's own brief — `e2e/join-link.spec.ts` therefore seeds its join
+link directly against the database rather than driving the panel to create one, the same "seed the one fact
+the screen does not expose yet" device `chat.spec.ts`/`link-10-connected-organization.spec.ts` already use for
+their own out-of-scope admission paths. A Discord-side join-link redemption (`redeemJoinLink`'s own doc comment
+names it as a plausible future caller, resolving `callerAssertedPersonId` from a message's own identity rather
+than a session) is still unwired from any live surface — nothing in this slice's brief asked for it, and
+`redeemJoinLinkForWebAccount`'s own account-based shape would not fit it directly regardless (a Discord
+identity is not a web account id).

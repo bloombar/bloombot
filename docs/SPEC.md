@@ -1579,6 +1579,34 @@ conversation. A failure to record is logged and does not prevent the person rece
 their answer: losing a transcript row is bad, and withholding a student's answer because
 of it is worse.
 
+#### CORE-7 How a person is addressed belongs to the surface, not to the core
+
+`answer.ts` builds `personRef` as `` `<@${identity.externalId}>` `` — Discord's own mention syntax,
+constructed in the one package that is meant to know nothing about any surface. The port's own
+documentation calls it "an opaque reference to the person", which it is not. On Discord this
+happens to be right. Everywhere else it is wrong, and visibly so: the web surface's identity is the
+account's own id, so a student asking a question through the panel is answered as
+`<@68690a1b-2ac2-4745-9f0a-ed680d9e7a58>- Hello` — a raw UUID wrapped in a syntax that renders as a
+mention on exactly one surface and as noise on every other.
+
+The core passes what it knows about the person — their display name, their first name, and the
+identity they hold on the surface the question arrived on — and each adapter decides how, or
+whether, to address them. That is the same split every other vendor concern in this repo already
+follows, and it is what stops the next surface inheriting the bug by default.
+
+#### CORE-8 A reply addresses the reader the way that surface expects
+
+Discord is a room with many people in it, so a reply names who it answers: the mention token, as
+the Python bot did and as the platform does today. That is unchanged, and it is not decoration —
+without it a student cannot tell which of several answers is theirs.
+
+The web chat is one person's own conversation, so a reply addresses nobody: naming the reader in a
+one-to-one thread is noise, and the panel already knows who is reading. A surface that needs a name
+and has no mention of its own uses the person's first name, falling back to what it actually has
+rather than inventing something — a display name, then nothing at all, never an internal id. No
+surface ever shows a person a raw account, person, or provider id: those are the platform's own
+bookkeeping, the same rule WEB-18 already applies to a course's vector store.
+
 ### 31. Model Adapter
 
 #### MDL-1 One package knows the vendor

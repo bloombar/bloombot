@@ -2950,6 +2950,40 @@
   phase: 17
   status: Done
   review: false
+- id: CORE-7
+  title: How a person is addressed belongs to the surface, not to the core
+  full: "answer.ts builds personRef as <@${identity.externalId} — Discord's own
+    mention syntax, constructed in the one package that is meant to know nothing
+    about any surface. The port's own documentation calls it \"an opaque
+    reference to the person\", which it is not. On Discord this happens to be
+    right. Everywhere else it is wrong, and visibly so: the web surface's
+    identity is the account's own id, so a student asking a question through the
+    panel is answered as <@68690a1b-2ac2-4745-9f0a-ed680d9e7a58- Hello — a raw
+    UUID wrapped in a syntax that renders as a mention on exactly one surface
+    and as noise on every other. The core passes what it knows about the person
+    — their display name, their first…"
+  section: §30 Conversation Core
+  family: CORE
+  phase: 18
+  status: In progress
+  review: false
+- id: CORE-8
+  title: A reply addresses the reader the way that surface expects
+  full: "Discord is a room with many people in it, so a reply names who it
+    answers: the mention token, as the Python bot did and as the platform does
+    today. That is unchanged, and it is not decoration — without it a student
+    cannot tell which of several answers is theirs. The web chat is one person's
+    own conversation, so a reply addresses nobody: naming the reader in a
+    one-to-one thread is noise, and the panel already knows who is reading. A
+    surface that needs a name and has no mention of its own uses the person's
+    first name, falling back to what it actually has rather than inventing
+    something — a display name, then nothing at all, never an internal id. No
+    surface ever shows a person a raw account…"
+  section: §30 Conversation Core
+  family: CORE
+  phase: 18
+  status: In progress
+  review: false
 - id: ENRL-10
   title: An owner invites a colleague who is not yet in the organization
   full: "ENRL-5 says a second instructor or a teaching assistant can be added to

@@ -194,10 +194,16 @@ export function Courses({
                 <div className="flex items-center gap-2">
                   {/* WEB-28: the one action on this row worth its own
                       control — opens a chat session for this course
-                      directly. */}
+                      directly. `aria-label` names the row, the same
+                      reason the kebab beside it does (`KebabMenu.tsx`'s
+                      own module comment) — a six-course list otherwise
+                      reads as six identically-named "Chat" buttons to a
+                      screen reader, and to `getByRole('button', { name:
+                      'Chat' })` in a test. */}
                   <Button
                     variant="secondary"
                     icon={<ChatIcon aria-hidden="true" className="size-4" />}
+                    aria-label={`Chat about "${course.title}"`}
                     onClick={() => onOpenChat(course.id)}
                   >
                     Chat

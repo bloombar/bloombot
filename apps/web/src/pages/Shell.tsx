@@ -272,17 +272,30 @@ function ShellInner({
   // asked to open — `Chat` (`pages/Chat.tsx`) only reads its own
   // `initialCourseId` prop once, at mount (the same "seed once, never
   // override a value already chosen" shape it already holds for the
-  // `<select>`), and `Chat` below is mounted with `key={activeOrganizationId}`,
-  // so a prop change alone would not reach an already-mounted `Chat` if a
-  // second course were requested without also switching organizations.
-  // Held here, in shell state, and folded into that same `key` (below)
-  // instead: the more surgical fix — reading `chatCourseId` continuously
-  // inside `Chat` rather than only at mount — would touch WEB-25's own
-  // `initialCourseId` contract there for a case this slice does not need
-  // to solve; forcing a fresh mount is exactly the remount `key` already
-  // gives every tab whenever what it should be showing changes out from
-  // under it (`ProjectsPanel`'s own module comment below has the same
-  // reasoning for an organization switch).
+  // `<select>`). Held here, in shell state, rather than read continuously
+  // inside `Chat` itself: the more surgical alternative would touch
+  // WEB-25's own `initialCourseId` contract there for a case this slice
+  // does not need to solve. No `key` extension is needed to make a second
+  // request reach a fresh `Chat` mount, either — `Chat` already sits in a
+  // ternary chain with every other tab (below), so reaching it a second
+  // time by way of `pages/Courses.tsx` (nested inside `ProjectsPanel`, a
+  // *different* branch of that same chain) always unmounts and remounts it
+  // regardless of `key`; a round 1 review measured this directly by
+  // reverting an earlier revision's `key={`${activeOrganizationId}:${chatCourseId ?? ''}`}`
+  // back to `key={activeOrganizationId}` alone and finding the second-click
+  // test below still green (`docs/DECISIONS.md` D-75 has the corrected
+  // record).
+  //
+  // Round 1 rework (must-fix 1): this value used to survive an
+  // organization switch untouched — nothing cleared it — so a course
+  // requested in one organization could be read as `initialCourseId` after
+  // switching to a different one whose own course list never contained it.
+  // `changeActiveOrganization`, below, is the one place `activeOrganizationId`
+  // is ever set (`OrganizationSwitcher`'s `onChange`, `Account`'s own
+  // `onSwitchOrganization`) — clearing `chatCourseId` there, every time,
+  // keeps the invariant this state depends on: whenever it is not
+  // `undefined`, it always names a course in the *currently* active
+  // organization.
   const [chatCourseId, setChatCourseId] = useState<string | undefined>(
     undefined
   )
@@ -458,6 +471,18 @@ function ShellInner({
       setActiveTab('chat')
     })
 
+  // Round 1 rework (must-fix 1): the one place `activeOrganizationId`
+  // itself is ever set — `OrganizationSwitcher`'s own `onChange` and
+  // `Account`'s own `onSwitchOrganization`, below, both call this rather
+  // than `setActiveOrganizationId` directly, so a course a previous Chat
+  // click asked for cannot outlive the organization it belongs to
+  // (`chatCourseId`'s own comment above has the invariant this keeps).
+  const changeActiveOrganization = (organizationId: string) =>
+    guardedNavigate(() => {
+      setActiveOrganizationId(organizationId)
+      setChatCourseId(undefined)
+    })
+
   // WEB-29: the "everyday" group — Projects, Chat, Transcripts — every
   // signed-in account gets, member or connected-only alike; Chat is the
   // only one of the three a connected-only account can actually reach
@@ -548,7 +573,7 @@ function ShellInner({
           connectedOrganizations={account.connectedOrganizations}
           activeOrganizationId={activeOrganizationId}
           onChange={(organizationId) =>
-            guardedNavigate(() => setActiveOrganizationId(organizationId))
+            changeActiveOrganization(organizationId)
           }
         />
       }
@@ -617,13 +642,12 @@ function ShellInner({
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
         // already holds itself to — a course selected in the previous
         // organization must not linger once a different one is active.
-        //
-        // WEB-28: the key also folds in `chatCourseId` — `Chat` only reads
-        // its own `initialCourseId` prop once, at mount (`chatCourseId`'s
-        // own comment, above), so a second "Chat" click from a course row,
-        // even for the same organization, needs a fresh mount to actually
-        // land on the newly requested course rather than leaving whichever
-        // course was already selected untouched.
+        // WEB-28's own second-Chat-click case needs no extra key: `Chat`
+        // sits in this same ternary chain, so navigating away from it —
+        // through `pages/Courses.tsx`, nested inside `ProjectsPanel`, a
+        // different branch entirely — already unmounts it; the next click
+        // reaches a fresh mount regardless (`chatCourseId`'s own comment,
+        // above, has the round 1 finding this corrected).
         //
         // WEB-25 — `joinedCourse` is only ever passed through when it names
         // *this* active organization *and* no course row's own Chat button
@@ -632,9 +656,12 @@ function ShellInner({
         // back, sees the same confirmation again on return (this component
         // holds no separate "already shown" flag), which is accurate, if
         // not the tersest possible UI — see this slice's own report for why
-        // that tradeoff was left as is.
+        // that tradeoff was left as is. `chatCourseId`, when set, always
+        // names a course in *this* organization (`changeActiveOrganization`
+        // clears it on every switch), so this guard needs no separate
+        // `activeOrganizationId` check of its own.
         <Chat
-          key={`${activeOrganizationId}:${chatCourseId ?? ''}`}
+          key={activeOrganizationId}
           organizationId={activeOrganizationId}
           {...(joinedCourse &&
           joinedCourse.organizationId === activeOrganizationId &&
@@ -706,7 +733,7 @@ function ShellInner({
           account={account}
           activeOrganizationId={activeOrganizationId}
           onSwitchOrganization={(organizationId) =>
-            guardedNavigate(() => setActiveOrganizationId(organizationId))
+            changeActiveOrganization(organizationId)
           }
         />
       ) : (

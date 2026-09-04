@@ -8368,3 +8368,78 @@ two new Chat-handoff cases both fail against the pre-change `Shell.tsx`/`Project
 against this slice's own uncommitted change, rerun, and popped back — never a hand-edited "what it used to look
 like" reconstruction. `npm test` (2239 vitest + 90 node:test) and `npm run e2e` (30/30, one spec added by this
 slice) both green afterward.
+
+**Round 1 rework.** A fresh-context review of `b725246` reproduced every number above and found the scope,
+`projects.rename`, and the `exact: true` e2e sweep all sound — but two must-fixes and a cheap-fix in
+`pages/Shell.tsx`/`components/KebabMenu.tsx`, corrected here rather than silently edited away (the same
+discipline this file already holds every rework to).
+
+*The "Choice — the Chat handoff... key" paragraph above is false and is corrected, not deleted, so the record
+stays honest about what was actually checked and when.* It claimed the second-click case was confirmed
+"against the key `${activeOrganizationId}` alone first," and that the key extension was what fixed it. Reverted
+directly in review — `key={`${activeOrganizationId}:${chatCourseId ?? ''}`}` changed back to
+`key={activeOrganizationId}` alone, `tests/shell.test.tsx` rerun — and the second-click test still passed,
+37/37. The reason is structural, not incidental: `Chat` sits in the same ternary chain as every other tab
+(`Shell.tsx`'s own ternary chain), so reaching it a second time by way of `pages/Courses.tsx` (nested inside
+`ProjectsPanel`, a *different* branch of that chain) always unmounts and remounts `Chat` regardless of its own
+`key` — `chatCourseId`, the shell *state*, was what the test actually pinned; the key half was inert for the
+case it was written to justify. The key extension is removed (`key={activeOrganizationId}` alone, matching
+every other tab); the comments that argued for it are rewritten to say why it is unnecessary, not merely
+removed silently.
+
+**Must-fix 1 — `chatCourseId` used to survive an organization switch untouched.** `setChatCourseId` was called
+only from `openChatForCourse`; `setActiveOrganizationId` (the switcher's own `onChange`, `Account`'s own
+`onSwitchOrganization`) never cleared it, and the render that turns `chatCourseId` into `Chat`'s own
+`initialCourseId` carried no `activeOrganizationId` guard of its own — unlike the `joinedCourse` branch right
+beside it, which has always checked `joinedCourse.organizationId === activeOrganizationId`. Reproduced exactly
+as measured, not merely reasoned about: Org One holding `course-1`/`course-2`, Org Two holding
+`course-9`/`course-10`, a Chat click on `course-1` in Org One, then a switch to Org Two —
+`getChatMessages`'s own second call landed `('org-2', 'course-1')`, a course Org Two's `listChatCourses` never
+even returned. Tenant scoping held throughout (the server refuses that lookup not-found; nothing leaks), but the
+picker itself lied: a controlled `<select>` whose value matches no `<option>` falls back to displaying the
+organization's own first course while the component's real `selectedCourseId` state stays wherever it was,
+invisibly wrong. Fixed by clearing `chatCourseId` at the one place `activeOrganizationId` itself is ever set —
+`changeActiveOrganization`, a new function both the switcher and `Account`'s own callback now call instead of
+`setActiveOrganizationId` directly — which keeps the invariant the render already assumed: whenever
+`chatCourseId` is not `undefined`, it always names a course in the organization currently active.
+`tests/shell.test.tsx`'s new "switching organizations clears a course a previous Chat click requested" case
+asserts on `getChatMessages`'s own call arguments, not the `<select>`'s displayed value — the latter looks
+identical whether the bug is present or fixed, which is exactly why the defect was invisible to the round 1
+slice's own tests in the first place.
+
+**Must-fix 2 — see the corrected paragraph above.**
+
+**Cheap-fix 3 — activating a kebab item stranded focus on `<body>`.** `onClick` ran `setOpen(false)` (unmounting
+the just-activated, focused `<button>`) before `item.onSelect()` — a keyboard user tabbing to a kebab, opening
+it, tabbing to "Rename," and activating it, then cancelling the prompt `Modal.tsx` opens, found focus restored
+to `<body>` rather than to the kebab's own trigger, since `<body>` was whatever held focus at the moment the
+dialog opened. Fixed the same way the `Escape` path already did: `buttonRef.current?.focus()` runs before
+`item.onSelect()`, not after.
+
+**Also addressed, from the same review.** `KebabMenu.tsx` claimed `role="menu"`/`role="menuitem"` while
+implementing none of that role's keyboard contract (no arrow-key navigation, no focus moved into the popup on
+open, no typeahead) — corrected by dropping both roles rather than building the contract: the popup is
+`role="group"`, its items are ordinary `<button>`s, each independently reachable by `Tab`, honest about what the
+component actually is. The same review found two kebabs could be open at once, because the outside-click
+listener that closes a sibling menu keys on `mousedown`, which a keyboard `Enter`/`Space` activation of a
+second kebab never fires — fixed with a `window`-broadcast custom event, announced the instant any menu opens,
+that every other mounted instance listens for and closes itself on hearing (`KebabMenu.tsx`'s own module
+comment has the specifics; no shared "which menu is open" owner exists, or was invented, for this one
+property). Separately, `pages/Courses.tsx`'s own Chat button carried no row-naming accessible name — a
+six-course list read as six identically-named "Chat" buttons, which is why `tests/shell.test.tsx` had to index
+into `chatButtons[0]`/`chatButtons[chatButtons.length - 1]` rather than naming the row it meant; it now carries
+`aria-label={`Chat about "${course.title}"`}`, the same naming convention the kebab beside it already uses, and
+every test that used to index positionally now names the row instead.
+
+**QA-1 evidence, round 1 rework.** The organization-switch guard's own test
+(`tests/shell.test.tsx`, "switching organizations clears a course a previous Chat click requested") was run
+against the pre-fix `Shell.tsx` first and failed for the right reason: `getChatMessages`'s second call was
+`('org-2', 'course-1')`, not the expected `('org-2', 'course-9')` — reported directly above. `kebab-menu.test.tsx`'s
+two new cases ("activating an item returns focus to the trigger, not to `<body>`" and "opening a second kebab
+menu closes the first, even without a pointer event") were each isolated by removing only the one line or
+block each pins — the `buttonRef.current?.focus()` call, and the `window.dispatchEvent` inside the trigger's
+own `onClick` — rerun, and each failed for the reason its own name states, then passed once restored. Final
+counts: `npm test` unchanged in shape (one new `describe`/`it` in `shell.test.tsx`, two new cases and a role
+rename across every existing case in `kebab-menu.test.tsx`), `npm run e2e` still 30/30 — the row-menu spec's own
+`getByRole('menu'/'menuitem', ...)` calls updated to `'group'`/`'button'` and its Chat click updated to the
+row-naming `aria-label`, not a behavior change.

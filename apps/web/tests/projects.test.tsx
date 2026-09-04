@@ -207,8 +207,8 @@ describe('Projects (WEB-7)', () => {
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Fall 2026"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Archive' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Archive' }))
     // Not yet — confirms first.
     expect(archiveProject).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog', {
@@ -241,8 +241,8 @@ describe('Projects (WEB-7)', () => {
     // project — both distinct from the active-project case above.
     expect(screen.getByText(/\(archived\)/)).toBeInTheDocument()
     openProjectMenu('Fall 2026')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Fall 2026"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Restore' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Restore' }))
 
     await waitFor(() =>
       expect(unarchiveProject).toHaveBeenCalledWith('org-1', 'project-1')
@@ -262,8 +262,8 @@ describe('Projects (WEB-7)', () => {
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Fall 2026"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Rename' }))
     const dialog = await screen.findByRole('dialog', {
       name: 'Rename "Fall 2026"',
     })
@@ -304,8 +304,8 @@ describe('Projects (WEB-7)', () => {
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Fall 2026"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Rename' }))
     const dialog = await screen.findByRole('dialog', {
       name: 'Rename "Fall 2026"',
     })
@@ -331,8 +331,8 @@ describe('Projects (WEB-7)', () => {
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Fall 2026"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Duplicate' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Duplicate' }))
     const dialog = await screen.findByRole('dialog', {
       name: 'Duplicate "Fall 2026"',
     })

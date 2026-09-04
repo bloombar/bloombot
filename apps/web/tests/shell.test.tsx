@@ -38,6 +38,7 @@ const {
   listProjects,
   listCourses,
   listChatCourses,
+  getChatMessages,
   listDiscordServers,
   fetchOrganizationUsage,
   listMemberships,
@@ -49,6 +50,7 @@ const {
   listProjects: vi.fn(),
   listCourses: vi.fn(),
   listChatCourses: vi.fn(),
+  getChatMessages: vi.fn(),
   listDiscordServers: vi.fn(),
   fetchOrganizationUsage: vi.fn(),
   listMemberships: vi.fn(),
@@ -67,6 +69,7 @@ vi.mock('../src/api/client.js', async () => {
     listProjects,
     listCourses,
     listChatCourses,
+    getChatMessages,
     listDiscordServers,
     fetchOrganizationUsage,
     listMemberships,
@@ -140,6 +143,11 @@ beforeEach(() => {
         : []
     )
   )
+  // `Chat.tsx` fetches this once a course is selected — an unmocked
+  // `vi.fn()` returning `undefined` would throw on `.then`, the same
+  // reason `listProjects`/`listCourses` default above. Individual tests
+  // override this where the transcript itself is what they are testing.
+  getChatMessages.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -1253,11 +1261,13 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // into the project, then its course list.
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
       await screen.findByText('Data Structures')
-      const chatButtons = screen.getAllByRole('button', { name: 'Chat' })
-      // The *first* row's own Chat button ("Web Design") — not the
-      // drawer's nav item, which reads "Chat" too but is closed at this
-      // point.
-      fireEvent.click(chatButtons[0]!)
+      // Named by its own row (`Courses.tsx`'s own `aria-label`, WEB-28
+      // rework) — not a positional index into every "Chat" button on the
+      // screen, which is exactly what a row-naming label exists to make
+      // unnecessary.
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Chat about "Web Design"' })
+      )
 
       // Landed on the Chat tab — not merely that some "Chat" text exists
       // (the drawer's own nav item also reads "Chat"), but the screen's own
@@ -1275,34 +1285,91 @@ describe('Shell (WEB-3, WEB-4)', () => {
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
-      // Both rows present before picking one — `findAllByRole` resolves the
-      // instant *any* match exists, which can be only the first row if the
-      // second has not committed yet; waiting for "Data Structures" by name
-      // first makes the subsequent `getAllByRole` a synchronous snapshot of
-      // the fully rendered list rather than a race against React's own
-      // commit.
       await screen.findByText('Data Structures')
-      fireEvent.click(screen.getAllByRole('button', { name: 'Chat' })[0]!)
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Chat about "Web Design"' })
+      )
       expect(
         await screen.findByRole('combobox', { name: 'Course' })
       ).toHaveValue('course-1')
 
-      // Back to Projects, then Chat again for the *other* course — without
-      // the fix (`Chat`'s own `key` folding in the requested course id),
-      // `Chat` stays mounted from the first click and never reads the
-      // second `initialCourseId` at all.
+      // Back to Projects, then Chat again for the *other* course — `Chat`
+      // unmounts entirely on the way there (it lives in a ternary chain
+      // with `ProjectsPanel`, `Shell.tsx`'s own render), so this proves
+      // `chatCourseId` (shell state, not `Chat`'s own `key`) is what a
+      // fresh mount actually reads.
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Projects' }))
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
       await screen.findByText('Data Structures')
-      const chatButtons = screen.getAllByRole('button', { name: 'Chat' })
-      // The row's own Chat button, not the drawer's nav item — the row for
-      // "Data Structures" carries the second one.
-      fireEvent.click(chatButtons[chatButtons.length - 1]!)
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Chat about "Data Structures"' })
+      )
 
       expect(
         await screen.findByRole('combobox', { name: 'Course' })
       ).toHaveValue('course-2')
+    })
+
+    // Must-fix 1 (round 1 rework): `chatCourseId` used to survive an
+    // organization switch untouched — nothing cleared it, and the render
+    // that turns it into `initialCourseId` carried no `activeOrganizationId`
+    // guard the way the `joinedCourse` branch right above it always has.
+    // Org Two's own courses do not include `course-1` at all, so `Chat`'s
+    // freshly mounted `selectedCourseId` (seeded from the stale
+    // `chatCourseId`) never matches anything `listChatCourses('org-2')`
+    // returns, and — because it is *not* `undefined` — the `current ?? ...`
+    // guard in `Chat.tsx`'s own fetch effect never overwrites it with Org
+    // Two's own first course either. The `<select>` itself still renders
+    // *something* (a browser falls back to its first `<option>` when a
+    // controlled value matches none — this is the "picker lies" defect the
+    // brief named, not a crash), so this asserts on what actually drives a
+    // sent question — `getChatMessages`'s own call — rather than the
+    // `<select>`'s displayed value, which looks identical whether the bug
+    // is present or fixed.
+    it('switching organizations clears a course a previous Chat click requested — it must not survive into a different organization', async () => {
+      listChatCourses.mockImplementation((organizationId: string) =>
+        Promise.resolve(
+          organizationId === 'org-1'
+            ? [
+                { id: 'course-1', title: 'Web Design' },
+                { id: 'course-2', title: 'Data Structures' },
+              ]
+            : organizationId === 'org-2'
+              ? [
+                  { id: 'course-9', title: 'Org Two Course A' },
+                  { id: 'course-10', title: 'Org Two Course B' },
+                ]
+              : []
+        )
+      )
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
+      await screen.findByText('Data Structures')
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Chat about "Web Design"' })
+      )
+      await waitFor(() =>
+        expect(getChatMessages).toHaveBeenCalledWith('org-1', 'course-1')
+      )
+
+      // Switch to Org Two — `course-1` belongs to Org One and must not
+      // survive the switch.
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'org-2' },
+      })
+
+      await waitFor(() =>
+        expect(getChatMessages).toHaveBeenCalledWith('org-2', 'course-9')
+      )
+      // The stale id is never dispatched under the new organization —
+      // fails without the fix, which calls `getChatMessages('org-2',
+      // 'course-1')` instead (a course Org Two's `listChatCourses` never
+      // even returned).
+      expect(getChatMessages).not.toHaveBeenCalledWith('org-2', 'course-1')
     })
   })
 })

@@ -98,8 +98,8 @@ describe('Courses (WEB-8)', () => {
     await screen.findByText('Web Design')
 
     openCourseMenu('Web Design')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Web Design"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Disable' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Disable' }))
     // WEB-15: destructive, so it confirms first (`components/modal/`).
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
@@ -125,8 +125,8 @@ describe('Courses (WEB-8)', () => {
     await screen.findByText('Web Design')
 
     openCourseMenu('Web Design')
-    const menu = screen.getByRole('menu', { name: 'Actions for "Web Design"' })
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Enable' }))
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Enable' }))
 
     await waitFor(() =>
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
@@ -151,7 +151,9 @@ describe('Courses (WEB-8)', () => {
     )
     await screen.findByText('Web Design')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Chat about "Web Design"' })
+    )
 
     expect(onOpenChat).toHaveBeenCalledWith('course-1')
   })

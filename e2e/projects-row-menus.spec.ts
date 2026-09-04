@@ -67,8 +67,8 @@ test('a project is created through the "New project" modal, renamed through its 
     .getByRole('button', { name: `Actions for "${projectName}"` })
     .click()
   await page
-    .getByRole('menu', { name: `Actions for "${projectName}"` })
-    .getByRole('menuitem', { name: 'Rename' })
+    .getByRole('group', { name: `Actions for "${projectName}"` })
+    .getByRole('button', { name: 'Rename' })
     .click()
   const renameDialog = page.getByRole('dialog', {
     name: `Rename "${projectName}"`,
@@ -148,8 +148,7 @@ test('a project is created through the "New project" modal, renamed through its 
   //    own Chat tab first.
   await page.getByRole('button', { name: `← ${renamedProjectName}` }).click()
   await page
-    .locator('li', { hasText: courseTitle })
-    .getByRole('button', { name: 'Chat' })
+    .getByRole('button', { name: `Chat about "${courseTitle}"` })
     .click()
 
   // Landed on the Chat tab, this exact course already selected — the same

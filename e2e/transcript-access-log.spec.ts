@@ -39,6 +39,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('an owner reads a course transcript, then reads its own access log — a display name on both sides, never an email (ADMIN-2)', async ({
@@ -61,7 +62,7 @@ test('an owner reads a course transcript, then reads its own access log — a di
   await page.goto(`/sign-in/${ownerToken}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -127,7 +128,7 @@ test('an owner reads a course transcript, then reads its own access log — a di
   //    filter is what makes the row name a student rather than "the whole
   //    course" (the unfiltered read this screen already ran on selecting
   //    the course, before this student filter was ever applied).
-  await page.getByRole('button', { name: 'Transcripts' }).click()
+  await navigateTo(page, 'Transcripts')
   await page.getByLabel('Project').selectOption({ label: projectName })
   await page.getByLabel('Course').selectOption({ label: courseTitle })
   await expect(page.getByText('When is the deadline?')).toBeVisible()

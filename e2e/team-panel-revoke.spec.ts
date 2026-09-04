@@ -29,6 +29,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test("an owner revokes a colleague's membership from the Team panel, and the row disappears (ENRL-11)", async ({
@@ -78,7 +79,7 @@ test("an owner revokes a colleague's membership from the Team panel, and the row
   }
 
   // 3. The Team panel lists the colleague.
-  await page.getByRole('button', { name: 'Team' }).click()
+  await navigateTo(page, 'Team')
   await expect(page.getByRole('heading', { name: 'Team' })).toBeVisible()
   await expect(
     page.getByText(`${colleagueDisplayName} — Instructor`)

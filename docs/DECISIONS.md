@@ -8196,19 +8196,28 @@ this as an open question, and there was no new information this slice surfaces t
 it was left exactly as `docs/DECISIONS.md`'s own prior entries already describe it (the WEB-1..6 rework, finding
 3).
 
-**Limit — this slice did not touch every e2e spec that clicks a nav item.** `e2e/keyboard.spec.ts` and the new
-`e2e/navigation-drawer.spec.ts` are the two the brief's own verification command names, and both pass clean.
-Several other specs (`course-configuration.spec.ts`, `discord-install-panel.spec.ts`, `course-people-panel.spec.ts`,
-and others — `grep -l "getByRole('button', { name: 'Discord'\|'Projects'\|'Transcripts'"` over `e2e/` finds more)
-click a nav button on the assumption it is a plain header-row control, visible without opening anything first —
-true before this slice, no longer true after it. They were deliberately left alone: the brief's own "Out of
-scope" section names `apps/web` and its tests as this slice's surface, plus `docs/DECISIONS.md`, and does not
-list every other e2e spec in the suite; touching them here would have been scope creep past what this brief
-scoped, and the fix in each case is the same one-line "open the drawer first" this file's own `keyboard.spec.ts`
-edit demonstrates. Flagged here, and in this slice's own report, rather than fixed quietly — a full `npx
-playwright test` run (not merely the two specs the brief names) was not attempted as part of this slice's own
-verification for that reason; the next slice that touches any of those specs should expect them red until they
-are updated the same way.
+**Correction — every e2e spec that reaches a tab now goes through a shared helper, not just the two the
+brief's own verification command named.** The first pass of this entry recorded leaving 16 other specs red as an
+explicit "out of scope" limit, reasoning that the brief's own scope line named only `apps/web` and its tests.
+That was wrong, and CI caught it immediately: `.github/workflows/ci.yml`'s `Run the end-to-end test (QA-7)` step
+runs the *whole* suite (`npm run e2e`), not the two specs the brief's verification command happened to name, so
+those 16 specs were never "adjacent work optionally left for later" — they were this change's own regression,
+and `.claude/CLAUDE.md`'s "all passing tests must stay reproducible as regression tests" applies to them exactly
+as it would to any other test this slice broke. Fixed here, in one shared place rather than eighteen scattered
+edits: `e2e/support/navigate.ts` (new, following `read-sign-in-token.ts`'s own "pulled out once, not
+duplicated" precedent) exports `openDrawer`, `navigateTo(page, label)` (open the drawer, click the named item,
+wait for the drawer to actually finish closing — the identical wait `e2e/keyboard.spec.ts` already needed, this
+file's own module comment has the "why" and points at the same inertness finding recorded above), and
+`signOut(page)` (the drawer-footer sign-out control WEB-30 also moved). Every spec that clicked a nav button
+directly (`admin-console`, `auth-flow`, `chat`, `chat-scroll`, `course-configuration`, `course-knowledge-files`,
+`course-people-panel`, `discord-install-panel`, `jobs-panel`, `join-links-panel`, `membership-invitation-panel`,
+`roster-import-panel`, `spending-cap`, `team-panel`, `team-panel-revoke`, `transcript-access-log`, `usage-panel`)
+now calls `navigateTo`/`signOut` instead — a mechanical, one-line-per-call-site swap; no spec's own assertions
+changed, only how each one reaches the screen it was already asserting against.
+`membership-invitation-panel.spec.ts` needed `openDrawer` alone, twice, for two presence checks
+(`colleaguePage`/`otherTab` seeing "Team" become reachable after a redemption) that were never clicks to begin
+with — the assertion itself is untouched, it is only opened where it used to be visible without opening
+anything. `npm run e2e` — the full 29-test suite, not the two specs the brief named — is now clean.
 
 **Evidence — QA-1.** Each of the following was confirmed to fail against the pre-change component (`git stash`
 of this slice's source changes, keeping the new/updated test), then pass after (`git stash pop`):

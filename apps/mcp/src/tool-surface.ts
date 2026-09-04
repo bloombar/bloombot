@@ -215,6 +215,7 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'projects.create' },
   { actionName: 'projects.archive' },
   { actionName: 'projects.unarchive' },
+  { actionName: 'projects.rename' },
   { actionName: 'projects.duplicate' },
   {
     actionName: 'courses.save',

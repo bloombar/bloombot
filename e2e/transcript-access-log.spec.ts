@@ -63,9 +63,12 @@ test('an owner reads a course transcript, then reads its own access log — a di
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
@@ -129,7 +132,14 @@ test('an owner reads a course transcript, then reads its own access log — a di
   //    course" (the unfiltered read this screen already ran on selecting
   //    the course, before this student filter was ever applied).
   await navigateTo(page, 'Transcripts')
-  await page.getByLabel('Project').selectOption({ label: projectName })
+  // `exact: true` — `ModalProvider` keeps the "New project" dialog this
+  // spec used above mounted (closed, not removed — `ModalProvider.tsx`'s
+  // own module comment on why), and its own "Project name" field label
+  // otherwise collides, as a case-insensitive substring, with this
+  // screen's own "Project" label.
+  await page
+    .getByLabel('Project', { exact: true })
+    .selectOption({ label: projectName })
   await page.getByLabel('Course').selectOption({ label: courseTitle })
   await expect(page.getByText('When is the deadline?')).toBeVisible()
   await page.getByLabel('Student').selectOption({ label: studentDisplayName })

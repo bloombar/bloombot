@@ -19,6 +19,7 @@ import {
   createProjectAction,
   duplicateProjectAction,
   listProjectsAction,
+  renameProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 import {
@@ -82,6 +83,7 @@ export {
   createProjectAction,
   duplicateProjectAction,
   listProjectsAction,
+  renameProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 export {
@@ -208,6 +210,7 @@ export function createPlatformRegistry(options?: {
   registry.register(createProjectAction)
   registry.register(archiveProjectAction)
   registry.register(unarchiveProjectAction)
+  registry.register(renameProjectAction)
   registry.register(listProjectsAction)
   registry.register(duplicateProjectAction)
   registry.register(saveCourseAction)

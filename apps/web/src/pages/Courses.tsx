@@ -4,6 +4,14 @@
  * from `courses.get`), with each course's enabled state toggled directly
  * from here (`courses.enable`/`courses.disable`) and a way into
  * `pages/CourseEditor.tsx` to define a new one or edit an existing one.
+ *
+ * WEB-26/WEB-28: each row also gets a **Chat** button — its own control,
+ * not folded into the kebab, because it is the one action on this row
+ * worth a keystroke of its own (`onOpenChat`, below, switches the shell to
+ * its Chat tab with this course already selected — see `pages/Shell.tsx`'s
+ * own module comment for how that handoff actually works) — and a kebab
+ * holding Disable/Enable, matching the row-menu shape `pages/Projects.tsx`
+ * already uses.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -13,14 +21,17 @@ import { ApiError } from '../api/client.js'
 import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
-import { AddIcon, DisableIcon, EnableIcon } from '../icons.js'
+import { AddIcon, ChatIcon, DisableIcon, EnableIcon } from '../icons.js'
 
 export interface CoursesScreenProps {
   organizationId: string
   project: Project
   onBack: () => void
   onOpenCourse: (courseId: string | undefined) => void
+  /** WEB-28: opens a chat session for this course directly, switching the shell to its Chat tab with it already selected. */
+  onOpenChat: (courseId: string) => void
 }
 
 export function Courses({
@@ -28,6 +39,7 @@ export function Courses({
   project,
   onBack,
   onOpenCourse,
+  onOpenChat,
 }: CoursesScreenProps) {
   const [courses, setCourses] = useState<CourseSummary[] | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
@@ -134,48 +146,71 @@ export function Courses({
         // WEB-13: a card per course, stacked — never a wide table row a
         // phone would have to scroll horizontally to read.
         <ul className="flex flex-col gap-3">
-          {courses.map((course) => (
-            <li
-              key={course.id}
-              data-testid={`course-${course.id}`}
-              className="flex flex-col gap-2 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => onOpenCourse(course.id)}
-                  className="text-left text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-                >
-                  {course.title}
-                </button>
-                <p className="text-xs text-neutral-500">
-                  routes on roles{' '}
-                  <code className="rounded bg-neutral-100 px-1">
-                    {course.adminsRole}
-                  </code>{' '}
-                  /{' '}
-                  <code className="rounded bg-neutral-100 px-1">
-                    {course.studentsRole}
-                  </code>{' '}
-                  — {course.enabled ? 'enabled' : 'disabled'}
-                </p>
-              </div>
-              <Button
-                variant={course.enabled ? 'destructive' : 'secondary'}
-                icon={
-                  course.enabled ? (
-                    <DisableIcon aria-hidden="true" className="size-4" />
-                  ) : (
-                    <EnableIcon aria-hidden="true" className="size-4" />
-                  )
-                }
-                onClick={() => void handleToggle(course)}
-                disabled={busyCourseId === course.id}
+          {courses.map((course) => {
+            const busy = busyCourseId === course.id
+            // WEB-26: a kebab holding Disable/Enable — destructive-styled
+            // only for Disable, matching the danger treatment the button
+            // this replaces used to carry only while the course was
+            // enabled.
+            const items: KebabMenuItem[] = [
+              {
+                key: 'toggle',
+                label: course.enabled ? 'Disable' : 'Enable',
+                icon: course.enabled ? (
+                  <DisableIcon aria-hidden="true" className="size-4" />
+                ) : (
+                  <EnableIcon aria-hidden="true" className="size-4" />
+                ),
+                destructive: course.enabled,
+                onSelect: () => void handleToggle(course),
+              },
+            ]
+            return (
+              <li
+                key={course.id}
+                data-testid={`course-${course.id}`}
+                className="flex flex-col gap-2 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
               >
-                {course.enabled ? 'Disable' : 'Enable'}
-              </Button>
-            </li>
-          ))}
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenCourse(course.id)}
+                    className="text-left text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                  >
+                    {course.title}
+                  </button>
+                  <p className="text-xs text-neutral-500">
+                    routes on roles{' '}
+                    <code className="rounded bg-neutral-100 px-1">
+                      {course.adminsRole}
+                    </code>{' '}
+                    /{' '}
+                    <code className="rounded bg-neutral-100 px-1">
+                      {course.studentsRole}
+                    </code>{' '}
+                    — {course.enabled ? 'enabled' : 'disabled'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* WEB-28: the one action on this row worth its own
+                      control — opens a chat session for this course
+                      directly. */}
+                  <Button
+                    variant="secondary"
+                    icon={<ChatIcon aria-hidden="true" className="size-4" />}
+                    onClick={() => onOpenChat(course.id)}
+                  >
+                    Chat
+                  </Button>
+                  <KebabMenu
+                    label={`Actions for "${course.title}"`}
+                    items={items}
+                    disabled={busy}
+                  />
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>

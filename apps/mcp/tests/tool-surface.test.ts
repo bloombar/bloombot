@@ -75,6 +75,7 @@ const EXPECTED_DESTRUCTIVE: Record<string, boolean> = {
   'projects.create': false,
   'projects.archive': false,
   'projects.unarchive': false,
+  'projects.rename': false,
   'projects.duplicate': false,
   // Replaces every category and channel on every call — see this file's
   // own module comment and `tool-surface.ts`'s.

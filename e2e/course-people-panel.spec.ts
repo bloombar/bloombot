@@ -63,9 +63,12 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
@@ -118,8 +121,8 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   //    their own person id — WEB-22's own "never an email" fallback,
   //    `components/CoursePeople.tsx`'s own module comment).
   await page.reload()
-  await page.getByRole('button', { name: projectName }).click()
-  await page.getByRole('button', { name: courseTitle }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
   await expect(page.getByText('Enrolled (1)')).toBeVisible()
   const endButton = page.getByRole('button', { name: /^End /, exact: false })

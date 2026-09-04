@@ -79,9 +79,12 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
@@ -160,8 +163,8 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   //    is never shown again — this screen has nothing left to show it from
   //    (`repos/course-join-links.ts`'s own module comment).
   await page.reload()
-  await page.getByRole('button', { name: projectName }).click()
-  await page.getByRole('button', { name: courseTitle }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
   await expect(page.getByText('No expiry')).toBeVisible()
   await expect(page.getByTestId('created-join-link-url')).not.toBeVisible()
@@ -277,9 +280,12 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
@@ -379,9 +385,12 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
@@ -406,8 +415,8 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   //    on Projects (`App.tsx`'s own module comment). The once-shown secret
   //    is genuinely gone from this page now, not merely hidden.
   await page.reload()
-  await page.getByRole('button', { name: projectName }).click()
-  await page.getByRole('button', { name: courseTitle }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
   await expect(page.getByTestId('created-join-link-url')).not.toBeVisible()
 

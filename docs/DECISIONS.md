@@ -8295,3 +8295,76 @@ and is corrected by removing it above rather than left to mislead the next reade
    still open at that point, pre-fix — only the 200ms timeout would have closed it).
 
 `npm test` (2219 vitest + 90 node:test) and `npm run e2e` (29/29) both stayed green through every fix above.
+
+## D-75 — `packages/actions`/`apps/mcp`/`apps/web`: WEB-26/WEB-27/WEB-28/PROJ-6 — row-level kebab menus, the "New project" modal, project rename, and a course row's own Chat button
+
+**Problem.** `renameProject` (`packages/db/src/repos/projects.ts`) had been correct and fully tested since an
+earlier slice, with no `projects.rename` action ever calling it — the repository half of PROJ-6 existed with no
+way to reach it. Separately, `pages/Projects.tsx`'s row carried an always-present Archive button plus a
+free-text "duplicate as" input beside it, and `pages/Courses.tsx`'s row carried a single Disable/Enable button —
+neither left room for a third or fourth row action (Duplicate, Rename) without either growing the row
+indefinitely or hiding them behind *something*. WEB-26 names that something: one kebab per row. WEB-28 asks for
+a course row's own Chat button, landing directly on that course's own conversation.
+
+**Choice — `projects.rename` joins the MCP tool surface (`apps/mcp/src/tool-surface.ts`), non-destructive.**
+`tool-surface.ts`'s own module comment already draws the line this repository uses for MCP-4: an action
+qualifies as destructive only if it deletes, exports, or spends money with no restore path. Renaming a project
+changes a label; nothing is destroyed, nothing is irreversible (a second rename undoes it), and no other
+registered action on the surface with the same shape — `projects.archive`, `courses.enable`/`.disable` — is
+marked destructive either. It is added beside `projects.archive`/`.unarchive` on the "ordinary writes" half of
+`MCP_TOOL_SURFACE`, with a matching `false` row in `tests/tool-surface.test.ts`'s own `EXPECTED_DESTRUCTIVE`
+table (that test's own module comment: a tool added with no matching row fails outright, so this could not have
+been an oversight — it is a made, checked, choice).
+
+**Choice — the row menu (`KebabMenu.tsx`) is a hand-built popup, not a native `<select>` or a second
+`Modal.tsx`-style `<dialog>`.** A `<select>` cannot carry a mix of ordinary and destructive-styled actions
+(WEB-15's danger palette) or arbitrary icons, and a modal `<dialog>` is the wrong weight for a menu that has to
+sit anchored to its own row and dismiss on an outside click — `Modal.tsx`'s own native dialog makes the *whole
+document* inert while open, which a six-row list opening one menu after another would find disruptive. Built
+instead as an anchored `<div role="menu">`, opened from one `Button`, with `Escape` and outside-click both
+wired by hand (`KebabMenu.tsx`'s own module comment has the specifics) — WEB-17 requires real keyboard
+reachability and dismissal either way, native or not, and this component's own test file
+(`apps/web/tests/kebab-menu.test.tsx`) is what actually proves it, not the choice of markup.
+
+**Choice — `useModal()`'s existing `prompt` is reused for "New project," Rename and Duplicate, with no new
+modal kind.** The brief left open whether `useModal()` needed a new text-input mode; `Modal.tsx` already had one
+(`kind: 'prompt'`, built for a future need this file's own earlier module comment already anticipated) with no
+caller yet. Every one of this slice's three name-asking flows fits it exactly — a title, a label, an optional
+initial value (Rename pre-fills the project's current name), a `validate` callback (used here for the
+`.trim()`-non-empty rule every project name already carried, WEB-7's own finding 7, carried forward rather than
+dropped) — so building a second, bespoke dialog for any of the three would have duplicated `Modal.tsx` outright.
+
+**Choice — the Chat handoff (WEB-28) is solved by folding the requested course id into `Chat`'s own `key`, not
+by having `Chat` read a continuously-updated prop.** `pages/Chat.tsx`'s own `initialCourseId` is read once, at
+mount, into `selectedCourseId` — the same "seed once, do not fight a value the caller (or the reader's own
+`<select>`) has since chosen" contract WEB-25 already built it under. `Chat` is mounted with
+`key={activeOrganizationId}` (WEB-10), so a second course row's Chat click, without an organization switch in
+between, would change `initialCourseId` as a prop with no remount to make `Chat` re-read it — confirmed directly
+by writing the second-click case in `tests/shell.test.tsx` against the key `${activeOrganizationId}` alone
+first: it left the *first* clicked course still selected. Two fixes were possible: extend `Chat`'s own key
+(chosen), or add a second piece of state `Chat` reads on every render instead of only at mount. The key
+extension was preferred because it keeps `Chat`'s own "seed once" contract exactly as WEB-25 already built it —
+a second, continuously-read prop would have meant either overriding a reader's own manual `<select>` change (the
+exact thing `initialCourseId`'s "do not override a value already chosen" comment forbids) or growing `Chat`'s
+own effects to distinguish "this changed because a new Chat click arrived" from "this changed because the
+reader picked something." A fresh mount sidesteps the distinction entirely: `pages/Shell.tsx` now holds the
+requested course id in its own state (`chatCourseId`), and `key={`${activeOrganizationId}:${chatCourseId ?? ''}`}`
+gives `Chat` a clean remount, and so a fresh, correct `initialCourseId` read, on every distinct request —
+including the ordinary case (no course requested yet, `chatCourseId` empty) and the WEB-25 join-confirmation
+case (only shown when `chatCourseId` still agrees with `joinedCourse`, `pages/Shell.tsx`'s own comment on the
+render below has the exact condition). The cost is an extra `listChatCourses` round trip on a second Chat click
+for the same organization — accepted, the same tradeoff `ProjectsPanel`'s and every other tab's own
+`key={activeOrganizationId}` already makes for an organization switch, at a scale (one click, not one keystroke)
+where it is not felt.
+
+**QA-1 evidence.** `packages/actions/tests/actions.test.ts`'s three new `projects.rename` cases fail against the
+action's own absence (`renameProjectAction` unexported, `dispatch` throws reading `inputSchema` of `undefined`)
+and pass once `actions/projects.ts`/`actions/index.ts` register it. `apps/web/tests/kebab-menu.test.tsx` fails
+outright (module not found) with no `KebabMenu.tsx` at all. `apps/web/tests/projects.test.tsx` — 9 of 13 cases
+fail against the pre-change `Projects.tsx` (no "New project" button, no kebab, no Rename). `apps/web/tests/courses.test.tsx`
+— 3 of 6 fail against the pre-change `Courses.tsx` (no kebab menu, no Chat button). `apps/web/tests/shell.test.tsx`'s
+two new Chat-handoff cases both fail against the pre-change `Shell.tsx`/`ProjectsPanel.tsx`/`Courses.tsx` (no
+`onOpenChat` prop, no Chat button to click at all). All five reverts were done with `git stash push -- <files>`
+against this slice's own uncommitted change, rerun, and popped back — never a hand-edited "what it used to look
+like" reconstruction. `npm test` (2239 vitest + 90 node:test) and `npm run e2e` (30/30, one spec added by this
+slice) both green afterward.

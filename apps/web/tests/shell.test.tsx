@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../src/api/client.js'
 import type {
   AccountSummary,
+  CourseSummary,
   DiscordServerBindingSummary,
   Project,
 } from '../src/api/types.js'
@@ -448,7 +449,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
     // Back on the projects list for the newly active organization, not
     // stuck on the previous organization's stranded refusal.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('New project name')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Projects' })
+    ).toBeInTheDocument()
   })
 
   // ADMIN-1..3: a fourth tab, the same shape Discord/Projects/Chat already
@@ -1180,6 +1183,126 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         await screen.findByRole('combobox', { name: 'Organization' })
       ).toHaveValue('personal-org')
+    })
+  })
+
+  // WEB-28: a course row's own Chat button switches the shell to its Chat
+  // tab with that exact course already selected — end to end, at the shell
+  // level, since `pages/Courses.tsx`'s own test only proves the id reaches
+  // `onOpenChat`, not that the handoff `pages/Shell.tsx` owns actually lands
+  // on the right screen.
+  describe("a course row's Chat button (WEB-28)", () => {
+    const COURSE: CourseSummary = {
+      id: 'course-1',
+      organizationId: 'org-1',
+      projectId: 'project-1',
+      title: 'Web Design',
+      filePrefix: 'wd',
+      enabled: true,
+      adminsRole: 'admins-wd-fa26',
+      studentsRole: 'students-wd-fa26',
+      promptId: null,
+      instructions: null,
+      model: null,
+      vectorStoreId: null,
+      maxRequestsPerDay: null,
+      conversationScope: 'course',
+      createdAt: 0,
+    }
+
+    const SECOND_COURSE: CourseSummary = {
+      ...COURSE,
+      id: 'course-2',
+      title: 'Data Structures',
+      adminsRole: 'admins-ds-fa26',
+      studentsRole: 'students-ds-fa26',
+    }
+
+    beforeEach(() => {
+      listProjects.mockResolvedValue([
+        {
+          id: 'project-1',
+          organizationId: 'org-1',
+          name: 'Fall 2026',
+          archivedAt: null,
+          createdAt: 0,
+        },
+      ])
+      // Two courses — `Chat.tsx` only renders its own `<select>` (rather
+      // than a single course's plain-text heading) once there is more than
+      // one to choose among, and this file's own assertions below need the
+      // `<select>`'s value to actually pin *which* course landed selected.
+      listCourses.mockResolvedValue([COURSE, SECOND_COURSE])
+      listChatCourses.mockImplementation((organizationId: string) =>
+        Promise.resolve(
+          organizationId === 'org-1'
+            ? [
+                { id: 'course-1', title: 'Web Design' },
+                { id: 'course-2', title: 'Data Structures' },
+              ]
+            : []
+        )
+      )
+    })
+
+    it('clicking Chat on a course row lands on the Chat tab with that course already selected', async () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // Defaults to the Projects tab (`Shell.tsx`'s own default) — navigate
+      // into the project, then its course list.
+      fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
+      await screen.findByText('Data Structures')
+      const chatButtons = screen.getAllByRole('button', { name: 'Chat' })
+      // The *first* row's own Chat button ("Web Design") — not the
+      // drawer's nav item, which reads "Chat" too but is closed at this
+      // point.
+      fireEvent.click(chatButtons[0]!)
+
+      // Landed on the Chat tab — not merely that some "Chat" text exists
+      // (the drawer's own nav item also reads "Chat"), but the screen's own
+      // heading, and this exact course selected in its own picker.
+      expect(
+        await screen.findByRole('heading', { name: 'Chat' })
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByRole('combobox', { name: 'Course' })
+      ).toHaveValue('course-1')
+    })
+
+    it('a second Chat click, for the same organization, still lands on the newly requested course', async () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
+      // Both rows present before picking one — `findAllByRole` resolves the
+      // instant *any* match exists, which can be only the first row if the
+      // second has not committed yet; waiting for "Data Structures" by name
+      // first makes the subsequent `getAllByRole` a synchronous snapshot of
+      // the fully rendered list rather than a race against React's own
+      // commit.
+      await screen.findByText('Data Structures')
+      fireEvent.click(screen.getAllByRole('button', { name: 'Chat' })[0]!)
+      expect(
+        await screen.findByRole('combobox', { name: 'Course' })
+      ).toHaveValue('course-1')
+
+      // Back to Projects, then Chat again for the *other* course — without
+      // the fix (`Chat`'s own `key` folding in the requested course id),
+      // `Chat` stays mounted from the first click and never reads the
+      // second `initialCourseId` at all.
+      openDrawer()
+      fireEvent.click(screen.getByRole('button', { name: 'Projects' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
+      await screen.findByText('Data Structures')
+      const chatButtons = screen.getAllByRole('button', { name: 'Chat' })
+      // The row's own Chat button, not the drawer's nav item — the row for
+      // "Data Structures" carries the second one.
+      fireEvent.click(chatButtons[chatButtons.length - 1]!)
+
+      expect(
+        await screen.findByRole('combobox', { name: 'Course' })
+      ).toHaveValue('course-2')
     })
   })
 })

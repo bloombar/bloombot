@@ -94,6 +94,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'projects.create',
         'projects.archive',
         'projects.unarchive',
+        // PROJ-6 — added by this slice.
+        'projects.rename',
         'projects.list',
         'projects.duplicate',
         'courses.save',

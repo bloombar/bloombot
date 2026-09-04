@@ -21,6 +21,8 @@ import { Projects } from './Projects.js'
 
 export interface ProjectsPanelProps {
   organizationId: string
+  /** WEB-28: threaded down to `pages/Courses.tsx`'s own Chat button — see `pages/Shell.tsx`'s own module comment for what actually happens once a course id reaches here. */
+  onOpenChat: (courseId: string) => void
 }
 
 type View =
@@ -28,7 +30,10 @@ type View =
   | { kind: 'courses'; project: Project }
   | { kind: 'course-editor'; project: Project; courseId: string | undefined }
 
-export function ProjectsPanel({ organizationId }: ProjectsPanelProps) {
+export function ProjectsPanel({
+  organizationId,
+  onOpenChat,
+}: ProjectsPanelProps) {
   const [view, setView] = useState<View>({ kind: 'projects' })
 
   if (view.kind === 'projects') {
@@ -49,6 +54,7 @@ export function ProjectsPanel({ organizationId }: ProjectsPanelProps) {
         onOpenCourse={(courseId) =>
           setView({ kind: 'course-editor', project: view.project, courseId })
         }
+        onOpenChat={onOpenChat}
       />
     )
   }

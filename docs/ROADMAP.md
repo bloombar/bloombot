@@ -233,3 +233,28 @@ email addresses have accounts here. An invitation keeps that closed while making
 true.
 
 **In scope:** ENRL-10, ENRL-11, CORE-7, CORE-8, WEB-24, WEB-25, AUTH-6, ENRL-12
+
+## Phase 19 — The panel a person actually navigates
+
+A pass over the control panel's own navigation and list screens, plus the one data-model gap
+that pass turned up.
+
+The list screens grew an action per row per feature until a project row carried an Archive
+button, a Restore button, a free-text field and a Duplicate button, and the project's own
+name was the least prominent thing in it. Creating a project meant a form permanently
+parked above the list for something done twice a year. The navigation existed twice — a
+header row at `md` and above, a drawer below it — so the two had to agree, and the drawer
+was unreachable on the desktop screens instructors actually use. The header's trailing edge
+spent its width on the sentence "Acting in Foo Barstein (owner)", which is inert whenever
+there is one organization and, worse, means an account that later joins a second has no way
+to discover the choice exists at all.
+
+The data-model gap: `discord_server_bindings` has been many-servers-to-one-organization
+since TEN-3, and TEN-8 lists them in the plural, but every consumer resolves "the
+organization's binding" and refuses when there is more than one
+(`getActiveDiscordServerBindingForOrganization`'s own comment concedes this). A second
+install was recorded and then ignored. TEN-9 closes it by having a course name the server it
+routes in — which is what PROJ-3 already assumed when it scoped course-name uniqueness "in
+that server".
+
+**In scope:** WEB-26, WEB-27, WEB-28, WEB-29, WEB-30, PROJ-6, TEN-9

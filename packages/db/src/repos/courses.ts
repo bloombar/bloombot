@@ -6,9 +6,14 @@
  * there is no exception in this file (TEN-2).
  *
  * PROJ-3, the rule this file exists to protect: a course's category names
- * and its two role names must be unique across every *enabled* course in the
- * organization, regardless of project — a course in an archived project, or
- * a disabled course, is excluded. This cannot be a SQL constraint the way
+ * and its two role names must be unique across every *enabled* course **in
+ * the same Discord server** (TEN-9 — PROJ-3's own text always said "unique
+ * across every enabled course in that server"; the check used to be
+ * organization-wide because an organization only ever held one server, but
+ * TEN-9 lets it hold several, so two courses that route into different
+ * servers may now share names, and two in the same server still may not),
+ * regardless of project — a course in an archived project, or a disabled
+ * course, is excluded. This cannot be a SQL constraint the way
  * `projects`' name uniqueness is (`schema.ts`): it spans three tables
  * (`courses`, `projects`, `course_categories`), depends on two other rows'
  * state (`courses.enabled`, `projects.archivedAt`), and its refusal has to
@@ -25,9 +30,15 @@ import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
 import {
+  pickCourseServerId,
+  resolveCourseDiscordServer,
+  type CourseServerResolutionRefusal,
+} from './discord-servers.js'
+import {
   courseCategories,
   courseChannels,
   courses,
+  discordServerBindings,
   projects,
   type ConversationScope,
 } from '../schema.js'
@@ -90,6 +101,15 @@ export interface NewCourse {
   // immediately (see `docs/DECISIONS.md` D-13 for what that does — and does
   // not — do to a conversation already on disk).
   conversationScope?: ConversationScope
+  // TEN-9 — which of the organization's Discord servers this course routes
+  // in. `undefined`/`null` (both mean "not set" here — `undefined` is what a
+  // caller omits, `null` is what a re-save that wants to clear a previously
+  // set value sends) resolves through `resolveCourseDiscordServer` below:
+  // the organization's own single active binding when it has exactly one,
+  // otherwise undecidable. Validated as an *active* binding of this
+  // organization by `@bloombot/actions`' `courses.save` (TEN-5) before this
+  // ever sees it — this file only resolves, it does not re-check ownership.
+  discordServerId?: string | null
   categories: NewCourseCategory[]
 }
 
@@ -114,10 +134,15 @@ interface NameCheckInput {
  * `'projectId'` is TEN-5's guard (below), not PROJ-3's — it has no
  * conflicting course or project to name, only the id that does not belong to
  * this organization, so `conflictingProjectName`/`conflictingCourseTitle` are
- * optional rather than required for every field.
+ * optional rather than required for every field. `'discordServerId'` is
+ * TEN-9's enablement guard: which of the two undecidable cases applied is
+ * carried in `message`, not a separate field — there is no conflicting
+ * course or project to name, only a Discord server binding this course
+ * cannot resolve to.
  */
 export interface CourseNameConflict {
-  field: 'category' | 'adminsRole' | 'studentsRole' | 'projectId'
+  field:
+    'category' | 'adminsRole' | 'studentsRole' | 'projectId' | 'discordServerId'
   name: string
   conflictingProjectName?: string
   conflictingCourseTitle?: string
@@ -135,6 +160,7 @@ interface CollisionCandidate {
   adminsRole: string
   studentsRole: string
   projectName: string
+  discordServerId: string | null
 }
 
 function conflict(
@@ -155,8 +181,49 @@ function conflict(
 }
 
 /**
+ * TEN-9 — the refusal `enableCourse`, `createCourse` and `updateCourse` all
+ * return when a course's own Discord server is genuinely undecidable
+ * (`resolveCourseDiscordServer`'s two refusal reasons — *not* "no active
+ * binding at all", which that function resolves rather than refuses; see its
+ * own comment). Reported through the same `CourseNameConflict` channel as a
+ * PROJ-3 collision rather than a distinct result type, so every save path
+ * already threading `SaveCourseResult`/`EnableCourseResult` through gets this
+ * refusal for free.
+ */
+function serverResolutionConflict(
+  reason: CourseServerResolutionRefusal,
+  // Cheap-fix 5 (coordinator round 1 rework): required, not optional —
+  // `createCourse`/`updateCourse`/`enableCourse` always have the course's
+  // own title in hand (`input.title`/`existing.title`) for the course this
+  // refusal is about, and `findProjectUnarchiveConflict` — the one caller
+  // that loops over more than one course — is exactly the case that used
+  // to say "this course does not say which one it routes in" without
+  // naming which of a project's twenty enabled courses that was.
+  courseTitle: string
+): CourseNameConflict {
+  const message =
+    reason === 'ambiguous'
+      ? `Course "${courseTitle}" — this organization has more than one ` +
+        'active Discord server, and this course does not say which one it ' +
+        'routes in. Choose a server before enabling it.'
+      : `Course "${courseTitle}" — its Discord server is no longer active ` +
+        '— its install was removed. Choose an active server before ' +
+        'enabling it.'
+  return {
+    field: 'discordServerId',
+    name: reason,
+    conflictingCourseTitle: courseTitle,
+    message,
+  }
+}
+
+/**
  * PROJ-3's check. Looks across every *other* enabled course, in a
- * non-archived project, in this organization, for a category name or role
+ * non-archived project, in this organization, **routing in the same Discord
+ * server as `targetServerId`** (TEN-9 — PROJ-3's own text always said
+ * "unique across every enabled course in *that server*"; two courses in
+ * different servers may share category and role names, since Discord itself
+ * only requires uniqueness within one guild), for a category name or role
  * name `input` would collide with. `excludeCourseId` leaves the course being
  * updated out of its own candidate set — the case a naive implementation
  * misses is a course renamed into a collision that only appears because the
@@ -178,17 +245,24 @@ function conflict(
 function findCourseNameConflict(
   organizationId: string,
   input: NameCheckInput,
+  // `undefined` is itself a resolved target (`resolveCourseDiscordServer`'s
+  // "no active binding at all" case) — every candidate whose own server also
+  // resolves to `undefined` is still a legitimate collision candidate, which
+  // is what keeps this check organization-wide, exactly as it was before
+  // TEN-9, for an organization that has not installed the bot anywhere yet.
+  targetServerId: string | undefined,
   db: Executor,
   options: { excludeCourseId?: string; includeProjectId?: string } = {}
 ): CourseNameConflict | undefined {
   const { excludeCourseId, includeProjectId } = options
-  const candidates = db
+  const allCandidates = db
     .select({
       id: courses.id,
       title: courses.title,
       adminsRole: courses.adminsRole,
       studentsRole: courses.studentsRole,
       projectName: projects.name,
+      discordServerId: courses.discordServerId,
     })
     .from(courses)
     .innerJoin(projects, eq(courses.projectId, projects.id))
@@ -209,6 +283,27 @@ function findCourseNameConflict(
     )
     .all()
     .filter((candidate) => candidate.id !== excludeCourseId)
+
+  // TEN-9 — narrow to candidates that resolve to `targetServerId`. Resolved
+  // against the same active-bindings list for every candidate (one query,
+  // not one per candidate) via `pickCourseServerId` — a candidate whose own
+  // `discordServerId` is null falls back to the organization's single active
+  // binding exactly the way `resolveCourseDiscordServer` resolved `input`'s.
+  const activeBindings = db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .all()
+  const candidates = allCandidates.filter(
+    (candidate) =>
+      pickCourseServerId(candidate.discordServerId, activeBindings) ===
+      targetServerId
+  )
 
   // Role names: `input`'s admin and student role must each be absent from
   // every candidate's admin *and* student role — a role name is one shared
@@ -455,7 +550,30 @@ export function createCourse(
     // in the same transaction is what narrows the race between two
     // concurrent saves, rather than eliminating it.
     if (input.enabled && projectResult.project.archivedAt === null) {
-      const conflictFound = findCourseNameConflict(organizationId, input, tx)
+      // TEN-9 — a course may not be enabled while its own server is
+      // undecidable (`resolveCourseDiscordServer`'s two refusal reasons).
+      // Resolved before the PROJ-3 check so that check can scope its
+      // candidates to the same server rather than the whole organization.
+      const serverResolution = resolveCourseDiscordServer(
+        organizationId,
+        input.discordServerId ?? null,
+        tx
+      )
+      if (!serverResolution.ok) {
+        return {
+          ok: false,
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            input.title
+          ),
+        }
+      }
+      const conflictFound = findCourseNameConflict(
+        organizationId,
+        input,
+        serverResolution.binding?.serverId,
+        tx
+      )
       if (conflictFound) return { ok: false, conflict: conflictFound }
     }
 
@@ -477,6 +595,7 @@ export function createCourse(
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
         conversationScope: input.conversationScope ?? 'course',
+        discordServerId: input.discordServerId ?? null,
         createdAt: Date.now(),
       })
       .returning()
@@ -571,7 +690,17 @@ export function listCourses(
     .all()
 }
 
-/** The projection `routeMessage` (`@bloombot/core`'s `routing.ts`) actually reads for one course — everything `RoutableCourse` needs, plus `title` for the one place a title is needed after routing decides a course. */
+/**
+ * The projection `routeMessage` (`@bloombot/core`'s `routing.ts`) actually
+ * reads for one course — everything `RoutableCourse` needs, plus `title` for
+ * the one place a title is needed after routing decides a course.
+ * `discordServerId` is TEN-9's own addition, not something `routeMessage`
+ * reads (`routeMessage` still knows nothing about servers — TEN-3/out of
+ * scope for this slice): it is what the caller (`@bloombot/discord`'s
+ * `handle-mention.ts`) filters this list down by *before* calling
+ * `routeMessage`, so a message arriving in one server can never match a
+ * course that belongs to a different server in the same organization.
+ */
 export interface RoutableCourseRow {
   id: string
   title: string
@@ -579,6 +708,7 @@ export interface RoutableCourseRow {
   adminsRole: string
   studentsRole: string
   enabled: boolean
+  discordServerId: string | null
 }
 
 /**
@@ -609,6 +739,7 @@ export function listRoutableCourses(
       adminsRole: courses.adminsRole,
       studentsRole: courses.studentsRole,
       enabled: courses.enabled,
+      discordServerId: courses.discordServerId,
     })
     .from(courses)
     .innerJoin(projects, eq(courses.projectId, projects.id))
@@ -685,9 +816,27 @@ export function updateCourse(
 
   return db.transaction((tx) => {
     if (input.enabled && projectResult.project.archivedAt === null) {
-      const conflictFound = findCourseNameConflict(organizationId, input, tx, {
-        excludeCourseId: courseId,
-      })
+      const serverResolution = resolveCourseDiscordServer(
+        organizationId,
+        input.discordServerId ?? null,
+        tx
+      )
+      if (!serverResolution.ok) {
+        return {
+          ok: false,
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            input.title
+          ),
+        }
+      }
+      const conflictFound = findCourseNameConflict(
+        organizationId,
+        input,
+        serverResolution.binding?.serverId,
+        tx,
+        { excludeCourseId: courseId }
+      )
       if (conflictFound) return { ok: false, conflict: conflictFound }
     }
 
@@ -706,6 +855,7 @@ export function updateCourse(
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
         conversationScope: input.conversationScope ?? 'course',
+        discordServerId: input.discordServerId ?? null,
       })
       .where(
         and(
@@ -778,6 +928,27 @@ export function enableCourse(
       .get()
 
     if (project && project.archivedAt === null) {
+      // TEN-9 — the same "may not enable while undecidable" guard
+      // `createCourse`/`updateCourse` apply at save time, re-run here for
+      // the same reason the PROJ-3 check just below is re-run: a course
+      // disabled while its binding was still resolvable, then re-enabled
+      // after the organization gained (or lost) bindings, must not slip
+      // through with a server nothing can resolve.
+      const serverResolution = resolveCourseDiscordServer(
+        organizationId,
+        existing.discordServerId,
+        tx
+      )
+      if (!serverResolution.ok) {
+        return {
+          ok: false,
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            existing.title
+          ),
+        }
+      }
+
       const categories = tx
         .select({ name: courseCategories.name })
         .from(courseCategories)
@@ -790,6 +961,7 @@ export function enableCourse(
           studentsRole: existing.studentsRole,
           categories,
         },
+        serverResolution.binding?.serverId,
         tx,
         { excludeCourseId: courseId }
       )
@@ -937,8 +1109,10 @@ export function findProjectUnarchiveConflict(
   const projectCourses = db
     .select({
       id: courses.id,
+      title: courses.title,
       adminsRole: courses.adminsRole,
       studentsRole: courses.studentsRole,
+      discordServerId: courses.discordServerId,
     })
     .from(courses)
     .where(
@@ -951,6 +1125,19 @@ export function findProjectUnarchiveConflict(
     .all()
 
   for (const course of projectCourses) {
+    // TEN-9 — unarchiving brings this course back into the PROJ-3 candidate
+    // set (it is about to route again), so the same "may not route while
+    // undecidable" guard `enableCourse` applies at re-enable time applies
+    // here too.
+    const serverResolution = resolveCourseDiscordServer(
+      organizationId,
+      course.discordServerId,
+      db
+    )
+    if (!serverResolution.ok) {
+      return serverResolutionConflict(serverResolution.reason, course.title)
+    }
+
     const categories = db
       .select({ name: courseCategories.name })
       .from(courseCategories)
@@ -963,6 +1150,7 @@ export function findProjectUnarchiveConflict(
         studentsRole: course.studentsRole,
         categories,
       },
+      serverResolution.binding?.serverId,
       db,
       { excludeCourseId: course.id, includeProjectId: projectId }
     )

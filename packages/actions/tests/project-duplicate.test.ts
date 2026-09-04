@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { duplicateProjectAction } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionConflictError, ActionRefusedError } from '../src/errors.js'
-import { seedOrganizationWithProject } from './helpers/seed.js'
+import {
+  seedOrganizationWithBoundServer,
+  seedOrganizationWithProject,
+} from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -385,5 +388,51 @@ describe('projects.duplicate', () => {
         .listProjects(organizationId, testDb.db, { includeArchived: true })
         .map((project) => project.name)
     ).toEqual(['Fall 2026'])
+  })
+
+  // "Also fix" (coordinator round 1 rework, from the notes): TEN-9's own
+  // `discordServerId` was dropped from every field this action otherwise
+  // copies faithfully — rolling a term forward in a two-binding
+  // organization is the natural next thing an instructor does after that
+  // slice, and a copy that silently forgot which server its source routed
+  // in needed every course re-edited by hand before any of them could be
+  // enabled again.
+  it("copies a source course's own discordServerId, not merely every other field", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, serverId } = seedOrganizationWithBoundServer(
+      testDb.db
+    )
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall 2026' },
+      testDb.db
+    )
+    const source = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: 'Web Design',
+        filePrefix: 'wd',
+        enabled: true,
+        adminsRole: 'admins-wd-fa26',
+        studentsRole: 'students-wd-fa26',
+        discordServerId: serverId,
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!source.ok) throw new Error('setup failed: unexpected conflict')
+
+    const result = await dispatch(
+      duplicateProjectAction,
+      { projectId: project.id, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+
+    const copiedCourses = courses.listCourses(organizationId, testDb.db, {
+      projectId: result.project.id,
+    })
+    expect(copiedCourses).toHaveLength(1)
+    expect(copiedCourses[0]?.discordServerId).toBe(serverId)
   })
 })

@@ -242,23 +242,50 @@ async function sendReply(reply: ReplyPort, text: string): Promise<number> {
  * course's title, keyed by id, for the one place a title is needed after
  * routing decides a course (`overLimitRefusalText`) — `RoutableCourse` itself
  * carries no title, only what `routeMessage` reads.
+ *
+ * TEN-9 — also filters to courses that actually route in `serverId`, the
+ * guild the message arrived in: `listRoutableCourses` returns every course in
+ * the organization, which — now that an organization can bind more than one
+ * Discord server — is not the same set as "every course this server's
+ * messages may match." A course's own server is resolved the same way
+ * `resolveCourseDiscordServer` (`repos/discord-servers.ts`) resolves it
+ * (its own `discordServerId`, or the organization's single active binding
+ * when that is null and unambiguous) via the shared, query-free
+ * `pickCourseServerId`, against the organization's active bindings fetched
+ * once here rather than once per course. `routeMessage` itself still knows
+ * nothing about servers (TEN-3/out of scope for this slice) — this is what
+ * keeps a message arriving in one server from ever reaching `routeMessage`
+ * carrying a course that belongs to a different one.
  */
 function loadRoutableCourses(
   organizationId: string,
+  serverId: string,
   db: Database
 ): { routable: RoutableCourse[]; titleById: Map<string, string> } {
   const rows = courses.listRoutableCourses(organizationId, db)
+  const activeBindings = discordServers
+    .listDiscordServerBindingsForOrganization(organizationId, db)
+    .filter((binding) => binding.removedAt === null)
+
   const titleById = new Map<string, string>()
-  const routable: RoutableCourse[] = rows.map((row) => {
-    titleById.set(row.id, row.title)
-    return {
-      id: row.id,
-      categoryNames: row.categoryNames,
-      adminsRole: row.adminsRole,
-      studentsRole: row.studentsRole,
-      enabled: row.enabled,
-    }
-  })
+  const routable: RoutableCourse[] = rows
+    .filter(
+      (row) =>
+        discordServers.pickCourseServerId(
+          row.discordServerId,
+          activeBindings
+        ) === serverId
+    )
+    .map((row) => {
+      titleById.set(row.id, row.title)
+      return {
+        id: row.id,
+        categoryNames: row.categoryNames,
+        adminsRole: row.adminsRole,
+        studentsRole: row.studentsRole,
+        enabled: row.enabled,
+      }
+    })
 
   return { routable, titleById }
 }
@@ -367,7 +394,11 @@ export async function handleMention(
   )
 
   // CORE-2 — attribute the message to exactly one course.
-  const { routable, titleById } = loadRoutableCourses(organizationId, db)
+  const { routable, titleById } = loadRoutableCourses(
+    organizationId,
+    input.guildId,
+    db
+  )
   const routing = routeMessage(routable, {
     categoryName: input.categoryName,
     channelName: input.channelName,

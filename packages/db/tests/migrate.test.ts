@@ -158,6 +158,7 @@ describe('runMigrations', () => {
       'admins_role',
       'conversation_scope',
       'created_at',
+      'discord_server_id',
       'enabled',
       'file_prefix',
       'id',

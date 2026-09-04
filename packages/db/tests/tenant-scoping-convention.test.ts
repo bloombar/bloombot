@@ -37,6 +37,15 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //  - discord-servers.ts#resolveDiscordServerBinding: this *is* the lookup
 //    that establishes which organization an incoming Discord message
 //    belongs to, so it cannot itself take an organization id as input.
+//  - discord-servers.ts#pickCourseServerId: TEN-9. A pure function, not a
+//    query — it takes the organization's *already-fetched* active bindings
+//    (the caller, `resolveCourseDiscordServer` or `repos/courses.ts`'s own
+//    PROJ-3 check, is the one that ran the organization-scoped query) and
+//    only picks which one `discordServerId` resolves to. There is nothing
+//    left for an `organizationId` parameter to scope here — the tenant
+//    boundary was already enforced by whoever built `activeBindings` — so
+//    requiring one on this function specifically would be decorative, not
+//    load-bearing.
 //  - memberships.ts#listMembershipsForAccount: the same class as
 //    accounts.ts#getAccountByEmail — an account can hold a membership in
 //    more than one organization, so this is how a caller (apps/api's
@@ -113,7 +122,7 @@ const ALLOWLIST: Record<string, string[]> = {
   'cost-ledger.ts': ['listOrganizationTotals'],
   'organizations.ts': ['listTenantDeletions'],
   'course-join-links.ts': ['redeemJoinLink', 'redeemJoinLinkForWebAccount'],
-  'discord-servers.ts': ['resolveDiscordServerBinding'],
+  'discord-servers.ts': ['resolveDiscordServerBinding', 'pickCourseServerId'],
   'discord-install-states.ts': [
     'createInstallState',
     'consumeInstallState',

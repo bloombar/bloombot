@@ -11,8 +11,8 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
-import { discordServerBindings } from '../schema.js'
+import type { Database, Executor } from '../client.js'
+import { courses, discordServerBindings } from '../schema.js'
 import { getMembership } from './memberships.js'
 
 export type DiscordServerBinding = typeof discordServerBindings.$inferSelect
@@ -80,6 +80,65 @@ export interface ClaimDiscordServer {
  *    organization already is idempotent: the existing binding is returned
  *    unchanged.
  */
+/**
+ * TEN-9 — the moment a *second* active binding appears for an organization
+ * is exactly the moment a null `courses.discord_server_id` stops meaning
+ * "the organization's only server" and starts meaning "undecided which of
+ * two." Left alone, every course that had ever routed through the
+ * organization's one server before this claim would go silently unrouted
+ * the instant this claim commits: `resolveCourseDiscordServer` and
+ * `packages/discord`'s own routing filter can no longer tell "always meant
+ * this one server" apart from "genuinely never assigned," and a null column
+ * now resolves to neither. Backfilling here, once, at the exact transition
+ * from one active binding to two, converts every course that implicitly
+ * meant the organization's *previous* sole binding into one that says so
+ * explicitly — continuity preserved by recording what was always true,
+ * rather than guessed at read time. See `docs/DECISIONS.md` for why this
+ * was chosen over "fail loudly and visibly instead."
+ *
+ * Runs only on the exact 1-to-2 transition (`active.length === 2` after
+ * this claim, one of the two being the server just claimed) — a third
+ * binding, or a binding re-claimed while the organization already held two
+ * or more, changes nothing here: a null-column course in an organization
+ * that is already ambiguous is correctly refused at its next enable
+ * (`repos/courses.ts`), the outcome TEN-9 actually wants once there is no
+ * longer a single "previous" server left to attribute it to.
+ *
+ * Called from both `claimDiscordServerBinding` success paths — the fresh
+ * insert and the re-claim of a released binding — since either can be the
+ * write that takes an organization from one active binding to two.
+ */
+function backfillNullServerCoursesOnNewSecondBinding(
+  organizationId: string,
+  justClaimedServerId: string,
+  db: Executor
+): void {
+  const active = db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .all()
+  if (active.length !== 2) return
+  const previous = active.find(
+    (binding) => binding.serverId !== justClaimedServerId
+  )
+  if (!previous) return
+  db.update(courses)
+    .set({ discordServerId: previous.serverId })
+    .where(
+      and(
+        eq(courses.organizationId, organizationId),
+        isNull(courses.discordServerId)
+      )
+    )
+    .run()
+}
+
 export function claimDiscordServerBinding(
   organizationId: string,
   input: ClaimDiscordServer,
@@ -99,7 +158,7 @@ export function claimDiscordServerBinding(
 
   if (!existing) {
     try {
-      return db
+      const claimed = db
         .insert(discordServerBindings)
         .values({
           serverId: input.serverId,
@@ -109,6 +168,15 @@ export function claimDiscordServerBinding(
         })
         .returning()
         .get()
+      // TEN-9 — see `backfillNullServerCoursesOnNewSecondBinding`'s own
+      // comment: this may be the write that takes the organization from one
+      // active binding to two.
+      backfillNullServerCoursesOnNewSecondBinding(
+        organizationId,
+        input.serverId,
+        db
+      )
+      return claimed
     } catch (error) {
       // A concurrent insert claimed this snowflake first: SQLite's primary
       // key on `server_id` refuses the second insert. Report it the same way
@@ -134,7 +202,7 @@ export function claimDiscordServerBinding(
   // between the `SELECT` above and this `UPDATE` makes the row no longer
   // match, so `.get()` returns no row and this caller is refused rather than
   // silently overwriting the winner's binding.
-  return db
+  const reclaimed = db
     .update(discordServerBindings)
     .set({
       organizationId,
@@ -150,6 +218,20 @@ export function claimDiscordServerBinding(
     )
     .returning()
     .get()
+  // TEN-9 — same reasoning as the fresh-insert branch above: a re-claim of a
+  // released binding can just as well be the write that takes the
+  // organization from one active binding to two. A losing concurrent
+  // re-claim (`reclaimed` undefined — the race this function's own module
+  // comment already documents) backfills nothing, since it did not actually
+  // change the organization's active-binding count.
+  if (reclaimed) {
+    backfillNullServerCoursesOnNewSecondBinding(
+      organizationId,
+      input.serverId,
+      db
+    )
+  }
+  return reclaimed
 }
 
 /**
@@ -222,16 +304,14 @@ export function listDiscordServerBindingsForOrganization(
 }
 
 /**
- * SRV-6 — the guild a scaffold job writes to. A job payload names only a
- * course (`apps/worker/src/handlers/discord-scaffold.ts`), never a server
- * id directly, so the handler resolves the organization's one active
- * binding itself, the same way `getActiveDiscordServerBinding` resolves one
- * by an already-known server id, one level up. `undefined` when the
- * organization holds no active binding at all, or — an edge case nothing in
- * this slice creates, since an organization installs the bot into one
- * server at a time in practice — holds more than one: a scaffold run has no
- * way to guess which of two servers a course belongs to, so it refuses
- * exactly the same way as "none bound" rather than picking one arbitrarily.
+ * The "exactly one binding" reading some callers still legitimately want —
+ * kept for anything that is asking about the organization as a whole, not
+ * about a particular course. `undefined` when the organization holds no
+ * active binding, or (TEN-9) more than one: this function still cannot say
+ * which of several bindings is meant, on purpose — callers that used to
+ * reach for this to resolve *a course's* server should use
+ * `resolveCourseDiscordServer` below instead, which can, because a course
+ * carries its own `discordServerId`.
  */
 export function getActiveDiscordServerBindingForOrganization(
   organizationId: string,
@@ -248,4 +328,107 @@ export function getActiveDiscordServerBindingForOrganization(
     )
     .all()
   return active.length === 1 ? active[0] : undefined
+}
+
+/**
+ * TEN-9 — pick the server id `discordServerId` (a course's own reference,
+ * possibly `null`) resolves to, given the organization's *active* bindings
+ * already fetched. Pure and query-free so `resolveCourseDiscordServer`
+ * (below) and `repos/courses.ts`'s PROJ-3 collision check — which resolves
+ * every collision candidate's server against the same active-bindings list,
+ * not one query per candidate — can share it.
+ *
+ * A non-null `discordServerId` resolves only if it names one of
+ * `activeBindings` — a course pointed at a binding that has since been
+ * removed (TEN-6) does not fall back to anything, it is simply unresolved.
+ * A `null` `discordServerId` resolves only when there is exactly one active
+ * binding to fall back to; zero active bindings resolves to `undefined` too
+ * (nothing to fall back to, but see `resolveCourseDiscordServer` below for
+ * why that is *not* the same as "ambiguous" — the two mean opposite things
+ * for a caller deciding whether to refuse), and two-or-more is genuinely
+ * ambiguous.
+ */
+export function pickCourseServerId(
+  discordServerId: string | null,
+  activeBindings: DiscordServerBinding[]
+): string | undefined {
+  if (discordServerId !== null) {
+    return activeBindings.find(
+      (binding) => binding.serverId === discordServerId
+    )?.serverId
+  }
+  return activeBindings.length === 1
+    ? activeBindings.at(0)?.serverId
+    : undefined
+}
+
+/**
+ * Why `resolveCourseDiscordServer` refused to proceed — deliberately just
+ * these two, not three: an organization with *no* active binding at all is
+ * not undecidable, it is simply "nothing to route into yet" (see that
+ * function's own comment for why that must not block a save or an enable).
+ */
+export type CourseServerResolutionRefusal =
+  // The column is null and the organization holds two or more active
+  // bindings, so nothing picks one.
+  | 'ambiguous'
+  // The column names a binding that is no longer active (TEN-6: the install
+  // was removed after the course was pointed at it).
+  | 'removed'
+
+export type CourseServerResolution =
+  // `binding` is `undefined` exactly when the organization holds no active
+  // binding at all and the column is null — a resolved "no server", not a
+  // refusal. A caller that actually needs a guild to act on (scaffolding)
+  // treats an `undefined` binding as its own refusal; a caller only using
+  // this to decide what a course may enable or collide with (`repos/courses.ts`)
+  // does not, matching TEN-9's "an organization with exactly one active
+  // binding keeps working unchanged" all the way down to zero.
+  | { ok: true; binding: DiscordServerBinding | undefined }
+  | { ok: false; reason: CourseServerResolutionRefusal }
+
+/**
+ * TEN-9 — resolve *a course's* Discord server: its own `discordServerId`
+ * when set, or the organization's single active binding when it is null and
+ * unambiguous. Replaces `getActiveDiscordServerBindingForOrganization`'s
+ * silent "refuse a two-binding organization" behaviour for every caller
+ * that is really asking "which server does this course belong to" —
+ * `apps/worker/src/handlers/discord-scaffold.ts` and `repos/courses.ts`'s
+ * PROJ-3 collision check and enablement guard.
+ *
+ * Refuses (`ok: false`) only when it is genuinely undecidable — the column
+ * is null with two-or-more active bindings, or the column names a binding
+ * that is no longer active — never by picking one of several candidates
+ * arbitrarily. Zero active bindings is *not* a refusal: it resolves to
+ * `{ ok: true, binding: undefined }`, so a course created (and even one
+ * enabled) before an organization has installed the bot anywhere keeps
+ * working exactly as it did before this column existed — an instructor
+ * routinely defines courses before installing Discord, and TEN-9's own
+ * requirement is that this migration edits no existing course's behaviour.
+ */
+export function resolveCourseDiscordServer(
+  organizationId: string,
+  discordServerId: string | null,
+  db: Executor
+): CourseServerResolution {
+  const active = db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .all()
+
+  const resolvedId = pickCourseServerId(discordServerId, active)
+  if (resolvedId) {
+    // `resolvedId` came from `active` in `pickCourseServerId`, so this find
+    // cannot miss.
+    return { ok: true, binding: active.find((b) => b.serverId === resolvedId)! }
+  }
+  if (discordServerId !== null) return { ok: false, reason: 'removed' }
+  if (active.length === 0) return { ok: true, binding: undefined }
+  return { ok: false, reason: 'ambiguous' }
 }

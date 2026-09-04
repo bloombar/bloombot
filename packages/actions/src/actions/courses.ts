@@ -6,7 +6,13 @@
  * reads: `courses.list` and `courses.get`.
  */
 
-import { courses, projects, schema, type Database } from '@bloombot/db'
+import {
+  courses,
+  discordServers,
+  projects,
+  schema,
+  type Database,
+} from '@bloombot/db'
 import { z } from 'zod'
 
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
@@ -96,6 +102,12 @@ const saveInputSchema = z.strictObject({
   vectorStoreId: z.string().min(1).nullable().optional(),
   maxRequestsPerDay: z.number().int().positive().nullable().optional(),
   conversationScope: z.enum(schema.CONVERSATION_SCOPES).optional(),
+  // TEN-9 — which of the organization's Discord servers this course routes
+  // in. Validated below, in the policy, as an *actively bound* server of the
+  // caller's own organization — a caller naming another organization's
+  // server, or a removed binding, is refused the same "not found" way TEN-5
+  // refuses `projectId`/`id`, not told the binding exists elsewhere.
+  discordServerId: z.string().min(1).nullable().optional(),
   categories: z.array(categoryInputSchema),
 })
 type SaveInput = z.infer<typeof saveInputSchema>
@@ -132,6 +144,24 @@ export const saveCourseAction: Action<
         context.db
       )
       if (!project) return undefined
+
+      // TEN-9/TEN-5 — a caller-supplied server id must actively belong to
+      // this organization; anything else (another organization's binding, a
+      // removed one, a snowflake nobody ever claimed) refuses the whole call
+      // the same way a foreign `projectId` does, rather than a distinct
+      // error a caller could use to probe whether some other organization
+      // holds that server.
+      if (
+        input.discordServerId &&
+        !discordServers.getActiveDiscordServerBinding(
+          context.organizationId,
+          input.discordServerId,
+          context.db
+        )
+      ) {
+        return undefined
+      }
+
       if (!input.id) return { project }
 
       const existingCourse = courses.getCourse(
@@ -215,6 +245,15 @@ export const saveCourseAction: Action<
         : entity.existingCourse
           ? { conversationScope: entity.existingCourse.conversationScope }
           : {}),
+      // TEN-9 — `keepOrClear`, the same as `model`/`vectorStoreId` above:
+      // omitted keeps whatever is already stored (or `null` on create, since
+      // there is nothing yet to keep), an explicit `null` clears it back to
+      // "resolve through the organization's own single binding" — already
+      // validated as an active binding of this organization, above.
+      discordServerId: keepOrClear(
+        input.discordServerId,
+        entity.existingCourse?.discordServerId
+      ),
       categories: input.categories,
     }
 

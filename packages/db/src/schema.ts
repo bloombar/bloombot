@@ -247,6 +247,19 @@ export const courses = sqliteTable(
     })
       .notNull()
       .default('course'),
+    // TEN-9 — which of the organization's (possibly several) Discord servers
+    // this course routes in. Nullable, and unlike `conversationScope` above
+    // that nullability is not a migration convenience but the requirement
+    // itself: an organization with exactly one active binding keeps working
+    // with every existing course unedited, resolving through
+    // `repos/discord-servers.ts#resolveCourseDiscordServer`'s single-binding
+    // fallback. Only once an organization holds a second binding does a null
+    // become undecidable, and only enabling a course enforces that
+    // (`repos/courses.ts`) — a course is allowed to sit disabled with an
+    // ambiguous server rather than have a second install silently break it.
+    discordServerId: text('discord_server_id').references(
+      () => discordServerBindings.serverId
+    ),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [

@@ -47,6 +47,7 @@ const COURSE: CourseSummary = {
   vectorStoreId: null,
   maxRequestsPerDay: null,
   conversationScope: 'course',
+  discordServerId: null,
   createdAt: 0,
 }
 

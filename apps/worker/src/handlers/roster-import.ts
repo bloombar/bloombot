@@ -462,16 +462,31 @@ export function createRosterImportHandler(
       )
     }
 
-    const binding = discordServers.getActiveDiscordServerBindingForOrganization(
+    // TEN-9 — resolved through the course's own server, not "the
+    // organization's one binding": before this, an organization installing
+    // a second server (this slice's own point) made every roster import
+    // fail — including for courses in the server that had worked the day
+    // before — with a message that claimed no server was bound when two
+    // were (`getActiveDiscordServerBindingForOrganization`'s own
+    // `length === 1` guard, undefined for both "none" and "more than one").
+    const serverResolution = discordServers.resolveCourseDiscordServer(
       context.organizationId,
+      course.discordServerId,
       context.db
     )
-    if (!binding) {
+    if (!serverResolution.ok) {
+      throw new Error(
+        serverResolution.reason === 'ambiguous'
+          ? `roster.import: organization "${context.organizationId}" has more than one active Discord server, and course "${course.id}" does not say which one it routes in`
+          : `roster.import: course "${course.id}" is bound to a Discord server that is no longer active`
+      )
+    }
+    if (!serverResolution.binding) {
       throw new Error(
         `roster.import: organization "${context.organizationId}" has no active Discord server bound`
       )
     }
-    const guildId = binding.serverId
+    const guildId = serverResolution.binding.serverId
 
     const { rows: parsedRows, errors: parseErrors } = parseRosterCsv(
       payload.csvText

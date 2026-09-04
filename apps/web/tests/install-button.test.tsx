@@ -1,11 +1,15 @@
 /**
  * WEB-4: the install button's outcomes — starting the flow (a top-level
  * navigation to the authorization URL, with the organization stashed for
- * `pages/DiscordCallback.tsx` to read back), a refusal, and "already
- * installed" with a working remove control. What actually happens once
- * Discord's own consent screen returns the browser to `/discord/callback`
- * is `tests/discord-callback.test.tsx`'s own scenario, not this one — this
- * component never sees that page.
+ * `pages/DiscordCallback.tsx` to read back) and a refusal. What actually
+ * happens once Discord's own consent screen returns the browser to
+ * `/discord/callback` is `tests/discord-callback.test.tsx`'s own scenario,
+ * not this one — this component never sees that page.
+ *
+ * TEN-9 — `DiscordServerRow`'s own "already installed, with a working
+ * remove control" scenario (WEB-15) is exercised separately, below:
+ * `InstallButton` itself no longer renders that branch at all (this file's
+ * own module comment on `InstallButton.tsx`).
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
@@ -13,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import {
+  DiscordServerRow,
   InstallButton,
   PENDING_INSTALL_ORG_KEY,
 } from '../src/components/InstallButton.js'
@@ -49,13 +54,7 @@ describe('InstallButton (WEB-4)', () => {
       writable: true,
     })
 
-    renderWithModal(
-      <InstallButton
-        organizationId="org-1"
-        onRemove={vi.fn()}
-        removing={false}
-      />
-    )
+    renderWithModal(<InstallButton organizationId="org-1" />)
     fireEvent.click(screen.getByRole('button', { name: 'Install to Discord' }))
 
     await waitFor(() => expect(assign).toHaveBeenCalled())
@@ -71,26 +70,21 @@ describe('InstallButton (WEB-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(
-      <InstallButton
-        organizationId="org-1"
-        onRemove={vi.fn()}
-        removing={false}
-      />
-    )
+    renderWithModal(<InstallButton organizationId="org-1" />)
     fireEvent.click(screen.getByRole('button', { name: 'Install to Discord' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
     )
   })
+})
 
+describe('DiscordServerRow (TEN-9)', () => {
   it('already installed: shows the server id and offers remove, behind a confirmation (WEB-15)', async () => {
     const onRemove = vi.fn()
     renderWithModal(
-      <InstallButton
-        organizationId="org-1"
-        installedServerId="guild-42"
+      <DiscordServerRow
+        serverId="guild-42"
         onRemove={onRemove}
         removing={false}
       />

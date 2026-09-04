@@ -5,7 +5,7 @@
  * `packages/db`'s own tests.
  */
 
-import { courses, projects } from '@bloombot/db'
+import { accounts, courses, discordServers, projects } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -18,8 +18,15 @@ import {
   unarchiveProjectAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionConflictError, ActionInputError } from '../src/errors.js'
-import { seedOrganizationWithProject } from './helpers/seed.js'
+import {
+  ActionConflictError,
+  ActionInputError,
+  ActionRefusedError,
+} from '../src/errors.js'
+import {
+  seedOrganizationWithBoundServer,
+  seedOrganizationWithProject,
+} from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -59,6 +66,7 @@ function courseSaveInput(
     vectorStoreId: string | null
     maxRequestsPerDay: number | null
     conversationScope: 'course' | 'course_surface'
+    discordServerId: string | null
     categories: {
       name: string
       channels: { name: string; adminsOnly: boolean }[]
@@ -92,6 +100,9 @@ function courseSaveInput(
       : {}),
     ...('conversationScope' in overrides
       ? { conversationScope: overrides.conversationScope }
+      : {}),
+    ...('discordServerId' in overrides
+      ? { discordServerId: overrides.discordServerId }
       : {}),
   }
 }
@@ -615,6 +626,82 @@ describe('courses.save', () => {
     )
 
     expect(updated.conversationScope).toBe('course_surface')
+  })
+
+  // TEN-9 — `discordServerId` accepts only a server actively bound to the
+  // *caller's own* organization.
+  it("accepts a discordServerId that is actively bound to the caller's own organization", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, serverId } = seedOrganizationWithBoundServer(
+      testDb.db
+    )
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall 2026' },
+      testDb.db
+    )
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(project.id, { discordServerId: serverId }),
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.discordServerId).toBe(serverId)
+  })
+
+  // TEN-5: a server id belonging to a *different* organization is refused
+  // as not-found (`ActionRefusedError`), the same way a foreign `projectId`
+  // is — never surfaced as "that server belongs to someone else."
+  it('refuses a discordServerId that belongs to a different organization, as not-found', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const other = seedOrganizationWithBoundServer(testDb.db, 'Other Org')
+
+    const attempt = dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { discordServerId: other.serverId }),
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionRefusedError)
+    expect(courses.listCourses(organizationId, testDb.db)).toHaveLength(0)
+  })
+
+  // A removed binding is refused the same way — active bound is the only
+  // acceptable state, matching `resolveCourseDiscordServer`'s own "removed"
+  // treatment one layer down.
+  it('refuses a discordServerId whose binding has been removed', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const installer = accounts.createAccount(
+      organizationId,
+      {
+        email: `${crypto.randomUUID()}@example.edu`,
+        displayName: 'Installer',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const serverId = crypto.randomUUID()
+    discordServers.claimDiscordServerBinding(
+      organizationId,
+      { serverId, installedByAccountId: installer.id },
+      testDb.db
+    )
+    discordServers.removeDiscordServerBinding(
+      organizationId,
+      serverId,
+      testDb.db
+    )
+
+    const attempt = dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { discordServerId: serverId }),
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionRefusedError)
   })
 })
 

@@ -38,8 +38,15 @@
  * own environment) fires no transition events at all, and this app's own
  * tests must see the drawer close without resorting to fake timers.
  * `prefers-reduced-motion: reduce` collapses the same transition to `0ms`
- * (the `motion-reduce:` variant, below) rather than skipping it outright —
- * one code path either way, just a duration of zero.
+ * (the `motion-reduce:` variant, below) — a `0ms` CSS transition fires no
+ * `transitionend` at all, so the closing effect reads the identical media
+ * query directly and closes immediately rather than waiting on an event
+ * that will never come (coordinator review finding, below). The
+ * `transitionend` listener is also filtered to the dialog's own transition
+ * (`event.target !== dialog`) — every `Button` inside the drawer carries
+ * its own `transition-colors` (`Button.tsx`), and that bubbling event was
+ * closing the drawer early, mid-slide, on an unrelated hover-color
+ * transition finishing first (coordinator review finding, below).
  */
 
 import {
@@ -175,7 +182,27 @@ export function AppShell({
 
   // `closing` -> `dialog.close()`, deferred until the transition finishes —
   // whichever fires first, a real `transitionend` or the timeout fallback
-  // jsdom needs (this file's own module comment).
+  // jsdom needs (this file's own module comment). Coordinator review
+  // finding 1: `transitionend` bubbles, and every `Button` in the drawer
+  // (the close control, sign-out) carries its own `transition-colors`
+  // (`Button.tsx`) — a hover-state color transition on one of *those*,
+  // finishing before the drawer's own translate does, would bubble up and
+  // fire `finish()` early, cutting the slide short (precisely the
+  // "disappearing before it visibly finishes" behaviour WEB-29 exists to
+  // rule out). `event.target !== dialog` filters to the dialog's own
+  // transition only.
+  //
+  // Coordinator review finding 2: `prefers-reduced-motion: reduce`
+  // (`motion-reduce:duration-0`, below) makes the transform transition
+  // instant — and a `0ms` CSS transition fires no `transitionend` at all
+  // (nothing to transition from/to), so a reduced-motion caller would
+  // always fall through to the `DRAWER_TRANSITION_MS` timeout, holding the
+  // native `<dialog>` open — and the rest of the document inert — for
+  // 200ms after the drawer is already visually gone. Read directly off the
+  // same `prefers-reduced-motion` media query the CSS itself keys off, so
+  // JS and CSS can never disagree about whether *this* close will actually
+  // transition: when it matches, `finish()` runs immediately rather than
+  // waiting on a `transitionend` that will never come.
   useEffect(() => {
     if (phase !== 'closing') return
     const dialog = drawerRef.current
@@ -187,10 +214,21 @@ export function AppShell({
       dialog.close()
       setPhase('closed')
     }
-    dialog.addEventListener('transitionend', finish)
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      finish()
+      return
+    }
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target !== dialog) return
+      finish()
+    }
+    dialog.addEventListener('transitionend', onTransitionEnd)
     const timeoutId = setTimeout(finish, DRAWER_TRANSITION_MS)
     return () => {
-      dialog.removeEventListener('transitionend', finish)
+      dialog.removeEventListener('transitionend', onTransitionEnd)
       clearTimeout(timeoutId)
     }
   }, [phase])

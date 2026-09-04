@@ -1095,7 +1095,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       ).toBeInTheDocument()
     })
 
-    it("states the acting organization's name at the header's leading edge", () => {
+    it("states the acting organization's name at the header's leading edge, beside the home control — not the trailing edge with the profile control", () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
@@ -1103,9 +1103,28 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // read as a dropdown whose own current value is the active
       // organization's name — `Org One` (org-1), the initial active
       // organization.
-      expect(
-        screen.getByRole('combobox', { name: 'Organization' })
-      ).toHaveTextContent('Org One')
+      const switcher = screen.getByTestId('organization-switcher')
+      expect(switcher).toHaveTextContent('Org One')
+
+      // Coordinator review finding: the assertion above alone holds
+      // whether the switcher renders in `headerStart` (WEB-30's own
+      // "immediately right of the home control") or `headerEnd` (where
+      // sign-out used to sit, pre-WEB-30) — it only reads the switcher's
+      // own text, never where in the header it actually sits, so it does
+      // not distinguish the two. Pinned here: the switcher must share the
+      // header's *leading* group — the one the Home control renders
+      // into — not the trailing group where the profile control lives.
+      const header = screen.getByRole('banner')
+      const homeButton = within(header).getByRole('button', { name: 'Home' })
+      const leadingGroup = homeButton.closest('div')
+      expect(leadingGroup).not.toBeNull()
+      expect(leadingGroup).toContainElement(switcher)
+      // And, the negative that actually rules the regression out: the
+      // profile control's own group does not also contain it.
+      const profileButton = within(header).getByRole('button', {
+        name: 'Account settings',
+      })
+      expect(profileButton.closest('div')).not.toContainElement(switcher)
     })
 
     it('the profile control opens account settings, listing every organization and the active one', async () => {

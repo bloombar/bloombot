@@ -8226,9 +8226,72 @@ member" (fails on the pre-change flat `navItems` prop — no `separator` role ex
 "carries sign-out at the drawer's foot, reachable once the drawer is open" (fails on the pre-change header-row
 sign-out button, visible with no drawer opened at all — the negative assertion before `openDrawer()` is the one
 that actually distinguishes the two);
-"states the acting organization's name at the header's leading edge" (fails on the pre-change header, which had
-no `headerStart` slot at all — the switcher was in `headerEnd`, mixed in with sign-out);
 "the profile control opens account settings, listing every organization and the active one" (fails outright — no
 `Account settings` control, no `Account` heading, no `pages/Account.tsx` existed before this slice).
 `apps/web/tests/account.test.tsx` is new in its entirety — every one of its cases fails without `pages/Account.tsx`
-existing at all, the strongest form of "fails without the change."
+existing at all, the strongest form of "fails without the change." The placement test — see the correction
+directly below — is evidence too, but its own paragraph has the accurate account of what it actually proves.
+
+**Correction — round 2 of the coordinator review, three findings.**
+
+1. **The placement test named above was wrong, and so was this entry's own account of it.** The first pass's
+"states the acting organization's name at the header's leading edge" only read
+`getByRole('combobox', { name: 'Organization' }).toHaveTextContent('Org One')` — the switcher's own *text*,
+never *where in the header* it sits. That assertion is identical whether the switcher renders in `headerStart`
+(WEB-30's own "immediately right of the home control") or `headerEnd` (where sign-out sat before WEB-30), so it
+passes against the pre-change header too — confirmed directly, by moving `<OrganizationSwitcher/>` from
+`headerStart` to `headerEnd` in `pages/Shell.tsx` (undoing exactly the half of WEB-30 the test's own name
+claims to pin) and rerunning: `npm test` and `npm run e2e` both stayed green, and the entry above's own claim
+("fails on the pre-change header, which had no `headerStart` slot at all") does not hold either — the
+pre-change header (commit `84ac256`) had no `headerStart` prop, true, but the switcher still rendered in the
+one slot that existed (what is now `headerEnd`), in the same visual position relative to the home control that
+a careless assertion could not tell apart from the new one. The claim was simply false, not merely imprecise,
+and is corrected by removing it above rather than left to mislead the next reader.
+
+   Fixed by rewriting the test to pin *position*, not merely presence: it now finds the header's own leading
+   group (the `<div>` the `Home` button renders into) and asserts the switcher is contained in it, and — the
+   negative that actually rules the regression out — that the profile control's own trailing group does *not*
+   also contain it. Reproduced failing twice, not once: against the live "move it to `headerEnd`" repro above
+   (`expect(leadingGroup).toContainElement(switcher)` fails, reporting the switcher inside the *trailing*
+   `<div class="flex items-center gap-3">` instead), and, separately, against a real checkout of the four
+   source files at `84ac256` (`git show 84ac256:<path> > <path>`, run, then restored) — the identical failure,
+   for the identical reason, this time against the actual pre-change commit rather than a hand-built repro of
+   it. Passes clean against the current source, both ways.
+
+   The sibling case at `shell.test.tsx`'s "offers no separator … for a connected-but-not-a-member account" also
+   passes against the pre-change source — trivially, because no `separator` role existed at all before this
+   slice, for either organization. Kept, as a reasonable companion assertion once the drawer and its separator
+   exist — but it is not QA-1 evidence for anything, and was never claimed as such above; noted here only so
+   the next reader does not have to rediscover it.
+
+2. **`transitionend` was not filtered to the dialog's own transition.** `dialog.addEventListener('transitionend', finish)`
+   listened for *any* `transitionend` bubbling up to the dialog — and every `Button` inside the drawer (the
+   close control, sign-out) carries its own `transition-colors` (`Button.tsx`). A pointer resting on, then
+   clicking, the close button: the drawer starts its 200ms translate, the button slides out from under the
+   pointer, its hover background transitions back over Tailwind's default 150ms, and *that* event — not the
+   drawer's own — reached `finish()` first, cutting the slide short at the exact moment WEB-29 exists to make
+   visible. State stayed consistent either way (`phase` still lands on `'closed'`), so this was cosmetic, not a
+   correctness bug — but it defeated the requirement's whole point. Fixed with `event.target !== dialog` inside
+   the listener. `apps/web/tests/app-shell.test.tsx` (new) pins it directly against `AppShell` — a
+   `transitionend` fired at the close button, while the drawer is still closing, leaves the dialog visible;
+   the same event fired at the dialog itself still closes it. Confirmed failing against the pre-fix
+   `AppShell.tsx` (`git show f89f1c5:...` — the commit immediately before this fix — checked out, run, restored)
+   before this filter existed.
+
+3. **Reduced motion kept the document inert for 200ms after the drawer was already visually gone.**
+   `motion-reduce:duration-0` makes the transform transition instant for `prefers-reduced-motion: reduce` — and
+   a `0ms` CSS transition fires no `transitionend` at all (there is nothing to transition from/to), so the
+   closing effect always fell through to the `DRAWER_TRANSITION_MS` timeout regardless. A reduced-motion caller
+   clicking a nav item and immediately clicking something on the destination screen had that second click
+   swallowed by the still-modal (and still fully inert-making) `<dialog>`, invisible though it already was.
+   This *can* be read reliably from JS — the closing effect now checks
+   `window.matchMedia('(prefers-reduced-motion: reduce)').matches` directly (the identical query the CSS itself
+   keys off, so the two can never disagree about whether a given close will actually transition) and calls
+   `finish()` immediately when it matches, skipping both the listener and the timeout. Guarded with
+   `typeof window.matchMedia === 'function'` — jsdom does not implement it by default, and Node-run tests that
+   never stub it must not throw. `apps/web/tests/app-shell.test.tsx` stubs `window.matchMedia` to report
+   `reduce`, closes the drawer, and asserts it is already hidden with no transition event fired and no timer
+   advanced — failing against the pre-fix `AppShell.tsx` the same way finding 2's own test does (the dialog is
+   still open at that point, pre-fix — only the 200ms timeout would have closed it).
+
+`npm test` (2219 vitest + 90 node:test) and `npm run e2e` (29/29) both stayed green through every fix above.

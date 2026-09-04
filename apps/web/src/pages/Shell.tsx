@@ -23,7 +23,20 @@
  * below decides this from `account.memberships`, and `effectiveTab` is what
  * every branch below actually renders — never `activeTab` directly — so a
  * tab selection left over from a previously active membership organization
- * can never leak a screen the server would refuse in this one.
+ * can never leak a screen the server would refuse in this one. **One
+ * exception:** `'account'` (WEB-30) is permitted for a non-member too —
+ * account settings names the *account*, not the organization, so a
+ * connected-only person must be able to reach it, and to switch away from
+ * there to an organization where they are a member (`effectiveTab`'s own
+ * comment below has the precise carve-out).
+ *
+ * WEB-29: the drawer's own two groups — Projects/Chat/Transcripts (every
+ * signed-in account) and Discord/Team/Usage/Jobs (organization members
+ * only, divided by a visible separator) — are `navGroups`, below, not the
+ * flat `navItems` list this file used to build; `isMember` decides whether
+ * the second group is offered at all, the same "withheld outright, not
+ * merely disabled" reasoning this file's own module comment already gives
+ * for LINK-10.
  *
  * TEN-8/WEB-4: the Discord tab's own install state has two sources, not
  * one. `justInstalled` is the *immediate* signal — `App.tsx` sets it only
@@ -90,7 +103,7 @@ import type {
   AccountSummary,
   DiscordServerBindingSummary,
 } from '../api/types.js'
-import { AppShell } from '../components/AppShell.js'
+import { AppShell, type AppShellHandle } from '../components/AppShell.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { InstallButton } from '../components/InstallButton.js'
@@ -100,7 +113,8 @@ import {
   NavigationGuardProvider,
   useNavigationGuard,
 } from '../hooks/navigation-guard.js'
-import { SignOutIcon } from '../icons.js'
+import { ProfileIcon, SignOutIcon } from '../icons.js'
+import { Account } from './Account.js'
 import { Chat } from './Chat.js'
 import { Jobs } from './Jobs.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
@@ -244,7 +258,14 @@ function ShellInner({
   // WEB-25 — `joinedCourse` overrides that default to `'chat'`: a redeemer
   // followed this link to ask a course something, not to see Projects.
   const [activeTab, setActiveTab] = useState<
-    'discord' | 'projects' | 'chat' | 'transcripts' | 'usage' | 'team' | 'jobs'
+    | 'discord'
+    | 'projects'
+    | 'chat'
+    | 'transcripts'
+    | 'usage'
+    | 'team'
+    | 'jobs'
+    | 'account'
   >(() => (joinedCourse ? 'chat' : 'projects'))
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
@@ -274,13 +295,16 @@ function ShellInner({
   )
   // Chat is the only screen a connected-but-not-a-member account can reach
   // in this organization — forced here, rather than merely left out of
-  // `navItems` below, so a stale `activeTab` (this shell's own state,
+  // `navGroups` below, so a stale `activeTab` (this shell's own state,
   // deliberately *not* reset on an organization switch — unlike
   // `ProjectsPanel`'s/`Chat`'s own `key={activeOrganizationId}` remount,
   // which resets what is fetched *inside* a tab, not which tab is active)
   // can never render Discord, Projects or Transcripts for an organization
-  // where the server would refuse every one of them.
-  const effectiveTab = isMember ? activeTab : 'chat'
+  // where the server would refuse every one of them. `'account'` is the one
+  // exception (WEB-30, this file's own module comment): it is not
+  // organization-scoped at all, so a non-member reaching it is never a leak
+  // the way any of the other tabs would be.
+  const effectiveTab = isMember || activeTab === 'account' ? activeTab : 'chat'
 
   // TEN-8: read the organization's actual Discord binding on mount and on
   // every organization switch — `isMember` guards it the same way it guards
@@ -389,94 +413,144 @@ function ShellInner({
     }
   }
 
+  // WEB-16/WEB-29: a ref onto `AppShell`'s own drawer handle, so a nav
+  // item's own click can close the drawer itself once its guarded
+  // navigation actually proceeds, rather than `AppShell` closing it
+  // unconditionally the instant the item is clicked — `AppShellHandle`'s
+  // own doc comment (`components/AppShell.tsx`) has the full reasoning,
+  // and why the difference is what `e2e/keyboard.spec.ts`'s own focus-
+  // restoration assertion depends on.
+  const appShellRef = useRef<AppShellHandle>(null)
+  // Every drawer item's own `onClick` — set the tab, then close the drawer
+  // — wrapped in `guardedNavigate` (WEB-16) so a dirty form elsewhere in
+  // the tree gets its chance to confirm before either happens.
+  const navigateToTab = (tab: typeof activeTab) =>
+    guardedNavigate(() => {
+      setActiveTab(tab)
+      appShellRef.current?.closeDrawer()
+    })
+
+  // WEB-29: the "everyday" group — Projects, Chat, Transcripts — every
+  // signed-in account gets, member or connected-only alike; Chat is the
+  // only one of the three a connected-only account can actually reach
+  // (`effectiveTab`, above), so it is the only one offered when `isMember`
+  // is false, exactly as `navItems`' own ternary used to decide before this
+  // slice.
   const chatNavItem = {
     key: 'chat',
     label: 'Chat',
-    onClick: () => guardedNavigate(() => setActiveTab('chat')),
+    onClick: () => navigateToTab('chat'),
     active: effectiveTab === 'chat',
+  }
+  const everydayGroup = {
+    key: 'everyday',
+    items: isMember
+      ? [
+          {
+            key: 'projects',
+            label: 'Projects',
+            onClick: () => navigateToTab('projects'),
+            active: effectiveTab === 'projects',
+          },
+          chatNavItem,
+          {
+            key: 'transcripts',
+            label: 'Transcripts',
+            onClick: () => navigateToTab('transcripts'),
+            active: effectiveTab === 'transcripts',
+          },
+        ]
+      : [chatNavItem],
+  }
+  // WEB-29: the organization group — Discord, Team, Usage, Jobs — offered
+  // only to a member, and divided from the everyday group above by a
+  // visible separator (`AppShell.tsx`'s own `navGroups` rendering). LINK-10:
+  // withheld outright for a connected-but-not-a-member organization, not
+  // merely disabled or left to fail once clicked — a control every click
+  // through it would 404 against is worse offered than absent (this
+  // component's own module comment has the fuller reasoning, and what was
+  // deliberately erred toward).
+  const organizationGroup = {
+    key: 'organization',
+    label: 'Organization',
+    items: [
+      {
+        key: 'discord',
+        label: 'Discord',
+        onClick: () => navigateToTab('discord'),
+        active: effectiveTab === 'discord',
+      },
+      {
+        key: 'team',
+        label: 'Team',
+        onClick: () => navigateToTab('team'),
+        active: effectiveTab === 'team',
+      },
+      {
+        key: 'usage',
+        label: 'Usage',
+        onClick: () => navigateToTab('usage'),
+        active: effectiveTab === 'usage',
+      },
+      {
+        key: 'jobs',
+        label: 'Jobs',
+        onClick: () => navigateToTab('jobs'),
+        active: effectiveTab === 'jobs',
+      },
+    ],
   }
 
   return (
     <AppShell
+      ref={appShellRef}
       onHome={() =>
         guardedNavigate(() => setActiveTab(isMember ? 'projects' : 'chat'))
       }
-      // LINK-10: Discord, Projects and Transcripts are withheld outright for
-      // a connected-but-not-a-member organization, not merely disabled or
-      // left to fail once clicked — a control every click through it would
-      // 404 against is worse offered than absent (this component's own
-      // module comment has the fuller reasoning, and what was deliberately
-      // erred toward).
-      navItems={
-        isMember
-          ? [
-              {
-                key: 'discord',
-                label: 'Discord',
-                onClick: () => guardedNavigate(() => setActiveTab('discord')),
-                active: effectiveTab === 'discord',
-              },
-              {
-                key: 'projects',
-                label: 'Projects',
-                onClick: () => guardedNavigate(() => setActiveTab('projects')),
-                active: effectiveTab === 'projects',
-              },
-              chatNavItem,
-              {
-                key: 'transcripts',
-                label: 'Transcripts',
-                onClick: () =>
-                  guardedNavigate(() => setActiveTab('transcripts')),
-                active: effectiveTab === 'transcripts',
-              },
-              {
-                key: 'usage',
-                label: 'Usage',
-                onClick: () => guardedNavigate(() => setActiveTab('usage')),
-                active: effectiveTab === 'usage',
-              },
-              {
-                key: 'team',
-                label: 'Team',
-                onClick: () => guardedNavigate(() => setActiveTab('team')),
-                active: effectiveTab === 'team',
-              },
-              {
-                key: 'jobs',
-                label: 'Jobs',
-                onClick: () => guardedNavigate(() => setActiveTab('jobs')),
-                active: effectiveTab === 'jobs',
-              },
-            ]
-          : [chatNavItem]
+      navGroups={
+        isMember ? [everydayGroup, organizationGroup] : [everydayGroup]
       }
+      // WEB-30: the acting organization's name sits at the header's leading
+      // edge, in the space the nav row vacated — every navigation it starts
+      // still goes through `guardedNavigate` (WEB-16), unchanged from before
+      // this slice.
+      headerStart={
+        <OrganizationSwitcher
+          memberships={account.memberships}
+          connectedOrganizations={account.connectedOrganizations}
+          activeOrganizationId={activeOrganizationId}
+          onChange={(organizationId) =>
+            guardedNavigate(() => setActiveOrganizationId(organizationId))
+          }
+        />
+      }
+      // WEB-30: the header's trailing edge holds the profile control alone
+      // — the organization switcher moved to `headerStart`, sign-out moved
+      // to the drawer's foot (`drawerFooter`, below).
       headerEnd={
-        <>
-          <OrganizationSwitcher
-            memberships={account.memberships}
-            connectedOrganizations={account.connectedOrganizations}
-            activeOrganizationId={activeOrganizationId}
-            onChange={(organizationId) =>
-              guardedNavigate(() => setActiveOrganizationId(organizationId))
-            }
-          />
-          <Button
-            variant="secondary"
-            icon={<SignOutIcon aria-hidden="true" className="size-4" />}
-            // WEB-16 rework — every other navigation this shell starts goes
-            // through `guardedNavigate` (the nav row, the home control, the
-            // organization switcher, just above); signing out is a
-            // navigation too, and leaves the shell just as completely, so a
-            // dirty course form two components down deserves the same
-            // chance to confirm before it is lost that clicking any other
-            // tab already gives it.
-            onClick={() => guardedNavigate(() => void handleSignOut())}
-            disabled={signingOut}
-          >
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </Button>
-        </>
+        <Button
+          variant="ghost"
+          aria-label="Account settings"
+          icon={<ProfileIcon aria-hidden="true" className="size-5" />}
+          onClick={() => guardedNavigate(() => setActiveTab('account'))}
+        />
+      }
+      drawerFooter={
+        <Button
+          variant="secondary"
+          icon={<SignOutIcon aria-hidden="true" className="size-4" />}
+          // WEB-16 rework — every other navigation this shell starts goes
+          // through `guardedNavigate` (the drawer's own items, the home
+          // control, the organization switcher, the profile control);
+          // signing out is a navigation too, and leaves the shell just as
+          // completely, so a dirty course form two components down deserves
+          // the same chance to confirm before it is lost that clicking any
+          // other tab already gives it.
+          onClick={() => guardedNavigate(() => void handleSignOut())}
+          disabled={signingOut}
+        >
+          {signingOut ? 'Signing out…' : 'Sign out'}
+        </Button>
       }
     >
       {effectiveTab === 'discord' ? (
@@ -580,6 +654,20 @@ function ShellInner({
         <Jobs
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+        />
+      ) : effectiveTab === 'account' ? (
+        // WEB-30 — not organization-scoped (this file's own module comment
+        // on why `effectiveTab` permits it for a non-member too), so unlike
+        // every tab above it takes no `key={activeOrganizationId}`: an
+        // organization switch made *from* this screen
+        // (`onSwitchOrganization`, below) must not remount it out from under
+        // itself mid-switch.
+        <Account
+          account={account}
+          activeOrganizationId={activeOrganizationId}
+          onSwitchOrganization={(organizationId) =>
+            guardedNavigate(() => setActiveOrganizationId(organizationId))
+          }
         />
       ) : (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

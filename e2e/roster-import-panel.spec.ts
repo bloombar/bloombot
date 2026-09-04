@@ -64,6 +64,7 @@ import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
 
 import { createRosterImportHandler } from '../apps/worker/src/handlers/roster-import.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { FakeDiscordGuildServer } from './support/fake-discord-guild-server.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
@@ -140,7 +141,7 @@ test('an instructor imports a roster through the panel; an unparseable row is re
     await page.goto(`/sign-in/${token}`)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-    await page.getByRole('button', { name: 'Projects' }).click()
+    await navigateTo(page, 'Projects')
     await page.getByLabel('New project name').fill(projectName)
     await page.getByRole('button', { name: 'Create project' }).click()
     await page.getByRole('button', { name: projectName }).click()

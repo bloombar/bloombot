@@ -133,6 +133,11 @@ describe('App (WEB-1..4)', () => {
     expect(
       await screen.findByRole('combobox', { name: 'Organization' })
     ).toHaveValue('org-2')
+    // WEB-29: Discord lives in the drawer now, not a header row — opened
+    // via the hamburger before it can be clicked.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
     // The install is already showing, not a fresh "Install to Discord"
     // button.

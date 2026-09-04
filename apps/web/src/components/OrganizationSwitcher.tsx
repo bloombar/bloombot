@@ -20,6 +20,16 @@
  * to show — connecting proves an identity, LINK-3, not administrative
  * authority) and reads "(connected)" in its place, so it never claims a
  * role this account does not actually hold.
+ *
+ * WEB-30: restyled to sit at the header's leading edge, in the space the
+ * nav row vacated (`components/AppShell.tsx`'s own `headerStart` slot) —
+ * the "Acting in" prose is dropped (there is no longer room to spare for
+ * it next to the home control and, now, the organization name), leaving
+ * just the name itself: plain text for the single-organization case, or a
+ * `<select>` whose own current value already reads as the active
+ * organization's name for the multi-organization case. The `role ?? 'connected'`
+ * labelling (this file's own module comment, LINK-10) is unchanged either
+ * way.
  */
 
 import type {
@@ -64,40 +74,45 @@ export function OrganizationSwitcher({
 
   // A single option is the common case (TEN-1's personal organization,
   // created on first sign-in) — shown plainly rather than as a one-item
-  // dropdown nobody needs to operate.
+  // dropdown nobody needs to operate. WEB-30: no "Acting in" prose anymore
+  // (this file's own module comment) — just the name, and the role/
+  // "connected" label LINK-10 already required.
   if (options.length <= 1) {
     return (
       <p
-        className="text-sm text-neutral-600"
+        className="text-sm font-medium text-neutral-900"
         data-testid="organization-switcher"
       >
-        Acting in{' '}
-        <strong className="text-neutral-900">
-          {active?.organizationName ?? activeOrganizationId}
-        </strong>
-        {active ? ` (${active.role ?? 'connected'})` : ''}
+        {active?.organizationName ?? activeOrganizationId}
+        {active ? (
+          <span className="font-normal text-neutral-500">
+            {' '}
+            ({active.role ?? 'connected'})
+          </span>
+        ) : (
+          ''
+        )}
       </p>
     )
   }
 
+  // WEB-30: no wrapping "Acting in" label either — the select's own current
+  // value already reads as the active organization's name, and
+  // `aria-label` still names the control for anyone not reading it
+  // visually.
   return (
-    <label
-      className="flex items-center gap-2 text-sm text-neutral-600"
+    <select
+      aria-label="Organization"
       data-testid="organization-switcher"
+      value={activeOrganizationId}
+      onChange={(event) => onChange(event.target.value)}
+      className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm font-medium text-neutral-900 focus:border-brand-500"
     >
-      Acting in
-      <select
-        aria-label="Organization"
-        value={activeOrganizationId}
-        onChange={(event) => onChange(event.target.value)}
-        className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm text-neutral-900 focus:border-brand-500"
-      >
-        {options.map((option) => (
-          <option key={option.organizationId} value={option.organizationId}>
-            {option.organizationName} ({option.role ?? 'connected'})
-          </option>
-        ))}
-      </select>
-    </label>
+      {options.map((option) => (
+        <option key={option.organizationId} value={option.organizationId}>
+          {option.organizationName} ({option.role ?? 'connected'})
+        </option>
+      ))}
+    </select>
   )
 }

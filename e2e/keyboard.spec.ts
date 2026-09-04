@@ -12,6 +12,17 @@
  * that guards leaving it) rather than two separate fixtures — the same
  * dialog, reached the same way `course-editor.test.tsx`'s own unit tests
  * reach it, just against a real browser this time.
+ *
+ * WEB-29: every nav link this spec drives now lives inside the drawer, not
+ * a header row — opened via the hamburger before it can be clicked. The
+ * guarded nav link itself (`discordNavLink`, below) is deliberately clicked
+ * while the drawer is open rather than the drawer being expected to close
+ * first: `components/AppShell.tsx`'s own `AppShellHandle` doc comment
+ * explains why a *guarded* click leaves the drawer open (with the confirm
+ * dialog on top of it) until the guard actually resolves, which is exactly
+ * what lets this spec's own focus-restoration assertion below hold — the
+ * clicked link is still attached and focusable when `Escape` needs to
+ * restore focus to it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -35,7 +46,15 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
+  await page.getByRole('button', { name: 'Open navigation menu' }).click()
   await page.getByRole('button', { name: 'Projects' }).click()
+  // The click above closes the drawer (`AppShellHandle`'s own doc comment,
+  // `components/AppShell.tsx`) — but not instantly: WEB-29's own slide
+  // transition defers the underlying `dialog.close()` briefly, and a native
+  // modal `<dialog>` makes the rest of the document inert for as long as it
+  // stays open. Waiting for it to actually close first is what keeps the
+  // fill below from landing on an inert field.
+  await expect(page.getByRole('dialog', { name: 'Navigation' })).toBeHidden()
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -52,7 +71,10 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   // itself: this form already lives inside it (`ProjectsPanel`'s own
   // nested view), so clicking that same tab button would not be a
   // navigation away from anything — `Discord` is unambiguously a real one.
-  const discordNavLink = page.getByRole('button', { name: 'Discord' })
+  await page.getByRole('button', { name: 'Open navigation menu' }).click()
+  const discordNavLink = page
+    .getByRole('dialog', { name: 'Navigation' })
+    .getByRole('button', { name: 'Discord' })
   await discordNavLink.click()
 
   const dialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' })
@@ -76,7 +98,10 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   await expect(page.getByLabel('Title')).toHaveValue('A course I never saved')
 
   // Ask again, and this time confirm discarding — the navigation that was
-  // blocked a moment ago now completes.
+  // blocked a moment ago now completes. The drawer is still open from the
+  // first click (it was never closed — this spec's own module comment on
+  // why), so `discordNavLink` is clicked again directly, with no need to
+  // reopen the drawer first.
   await discordNavLink.click()
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Discard changes' }).click()

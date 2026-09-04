@@ -61,6 +61,7 @@ import {
 import { handleMention, type InboundMention } from '@bloombot/discord'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
 import { FakeModelClient } from './support/fake-model-client.js'
 import { FakeReplyPort } from './support/fake-reply-port.js'
@@ -90,7 +91,7 @@ test('a project and course defined entirely in the panel route and answer a matc
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Create a project (WEB-7/PROJ-1), through the panel alone.
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()

@@ -47,6 +47,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH, E2E_PUBLIC_APP_URL } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('an owner issues and copies a join link; a real visitor redeems it; revoking stops new admission without un-enrolling them (WEB-20, ENRL-4)', async ({
@@ -77,7 +78,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   await page.goto(`/sign-in/${ownerToken}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -275,7 +276,7 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
   await page.goto(`/sign-in/${ownerToken}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -377,7 +378,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   await page.goto(`/sign-in/${ownerToken}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()

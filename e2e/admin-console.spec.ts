@@ -43,6 +43,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 async function signIn(page: import('@playwright/test').Page, email: string) {
@@ -175,7 +176,7 @@ test('an instructor reads their course’s transcript in the panel, and it is wr
   }
 
   // The instructor's own read, through the panel.
-  await page.getByRole('button', { name: 'Transcripts' }).click()
+  await navigateTo(page, 'Transcripts')
   await page.getByLabel('Project').selectOption({ label: projectName })
   await page.getByLabel('Course').selectOption({ label: courseTitle })
 

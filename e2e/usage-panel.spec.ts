@@ -57,6 +57,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test("an instructor sees their course's spend and a student approaching its daily limit, from the Usage screen (COST-4)", async ({
@@ -83,7 +84,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -115,7 +116,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    (step 5, below), the same course title appears a second time in the
   //    near-limit list, and an unscoped locator would be ambiguous between
   //    the two.
-  await page.getByRole('button', { name: 'Usage' }).click()
+  await navigateTo(page, 'Usage')
   await expect(
     page.getByRole('heading', { name: 'Usage', exact: true })
   ).toBeVisible()
@@ -176,7 +177,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   // 4. One real conversation, through the chat surface — costs something
   //    real (COST-6's own estimate, this spec's own module comment) and
   //    counts against the course's own daily allowance of 1.
-  await page.getByRole('button', { name: 'Chat' }).click()
+  await navigateTo(page, 'Chat')
   await expect(page.getByText(courseTitle)).toBeVisible()
   await page
     .getByLabel('Ask a question')
@@ -208,7 +209,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    (this file's own module comment on why: a single fixture-sized
   //    reply prices under a cent, and `formatMicros` rounds to two decimal
   //    places, so `$0.00` here is not the bug this spec exists to catch).
-  await page.getByRole('button', { name: 'Usage' }).click()
+  await navigateTo(page, 'Usage')
   await expect(usageByCourse).toContainText(courseTitle)
   await expect(usageByCourse).toContainText('1 call')
   await expect(usageByCourse).not.toContainText('0 calls')

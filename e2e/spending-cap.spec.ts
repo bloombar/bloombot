@@ -35,6 +35,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test("an owner sets, then clears, their organization's spending cap — and 0 is distinct from cleared (COST-3)", async ({
@@ -80,7 +81,7 @@ test("an owner sets, then clears, their organization's spending cap — and 0 is
   }
 
   // 2. The Usage screen, before any cap is ever set.
-  await page.getByRole('button', { name: 'Usage' }).click()
+  await navigateTo(page, 'Usage')
   await expect(
     page.getByRole('heading', { name: 'Usage', exact: true })
   ).toBeVisible()

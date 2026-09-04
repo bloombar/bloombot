@@ -8133,3 +8133,165 @@ not merely argued; it remains exactly as firm as `.create`/`.list`/`.revoke`'s o
 differentiated gating, and should move in step with them if a future requirement narrows any of the four.
 `revealable`'s own key-rotation gap (above) is the same one `.reveal` itself already had — still out of scope,
 still named, not newly introduced by this field.
+
+## WEB-29/WEB-30 — the navigation drawer, the header's organization name, and account settings
+
+**Choice — `drawerFooter` is a `ReactNode` slot, not an `onSignOut`/`signOutLabel` pair.** `AppShell.tsx`'s own
+module comment states the reasoning: `pages/Shell.tsx`'s sign-out control already carries its own pending-state
+label ("Signing out…"), its own `disabled` state, and its own `guardedNavigate` wiring — reconstructing an
+equivalent set of props on `AppShellProps` so `AppShell` could render the button itself would be more surface
+for this component to know about the shell's own async state than simply accepting the whole rendered control.
+The same reasoning already governs `headerStart`/`headerEnd` (`OrganizationSwitcher`, the profile control) — one
+slot shape for every header/drawer control this shell owns, not a bespoke prop pair for the one that happens to
+have a pending state.
+
+**Choice — the drawer does not close the instant a nav item is clicked; it closes once the navigation it guards
+actually happens.** The brief left this open. The naive version — `AppShell` calling `closeDrawer()`
+unconditionally inside every item's `onClick`, the same way this component's own drawer-item handler worked
+before this slice — breaks WEB-16's own guarded-navigation case in a real browser: a click on a nav item with a
+dirty form elsewhere in the tree (`useNavigationGuard`'s `guardedNavigate`) does not navigate immediately, it
+opens a confirm dialog and *waits*. If the drawer had already started closing by then, the clicked item would be
+mid-transition (or already removed from the top layer, `dialog.close()` having already run) by the time the
+confirm dialog's own `Escape` handling tries to restore focus to whatever triggered it — the exact case
+`e2e/keyboard.spec.ts` exercises. Decided: `AppShell` exposes an imperative handle
+(`AppShellHandle { closeDrawer }`, a plain `ref` prop — React 19's own "no `forwardRef` needed" — the same
+pattern `Button.tsx` already uses for `Modal.tsx`'s focus management) rather than closing on every click itself;
+`pages/Shell.tsx`'s own `navigateToTab` helper calls `setActiveTab` *and* `appShellRef.current?.closeDrawer()`
+together, inside the `guardedNavigate` callback — so an unguarded click closes the drawer immediately (the
+common case, unchanged in effect), and a guarded click leaves the drawer open, with the confirm dialog on top of
+it, until the guard resolves. Pinned by `e2e/keyboard.spec.ts` itself: the naive version was tried directly
+(closing on every click, undoing the ref-based deferral) and reproduced the exact failure this decision exists to
+avoid — `discordNavLink` no longer focusable once `Escape` tried to restore focus to it, because the drawer's own
+`dialog.close()` had already run by then.
+
+**Choice — a guarded click's own transition timing needed a real e2e fix, not only a design one.** Even with the
+ref-based deferral above, the *unguarded* path (the "Projects" click `e2e/keyboard.spec.ts` starts with, and
+`e2e/navigation-drawer.spec.ts`'s own first item click) still closes the drawer, and WEB-29's own slide transition
+defers the underlying `dialog.close()` by `DRAWER_TRANSITION_MS` (200ms) rather than calling it immediately
+(`AppShell.tsx`'s own module comment on why). A native modal `<dialog>` makes the rest of the document inert for
+as long as it is open — so a script action against the page underneath, attempted inside that ~200ms window,
+silently lands on nothing (confirmed directly: `page.getByLabel('New project name').fill(...)` returned no
+error, but `inputValue()` read back empty, and the accessibility snapshot showed the drawer's own dialog still
+`open` at the moment of the click). `e2e/keyboard.spec.ts` now waits for the drawer to actually report `toBeHidden()`
+before interacting with the field underneath; `e2e/navigation-drawer.spec.ts` was written with this already in
+mind. This is a browser-modality property, not a bug in this slice's own code — any e2e spec added later that
+drives an *unguarded* drawer-item click and immediately interacts with the page underneath needs the same wait.
+
+**Choice — the divider is an `<hr role="separator">`, labelled with the group it introduces.** `AppShellNavGroup.label`
+("Organization") is passed through as the separator's own `aria-label`, rather than a plain unlabelled `<hr>` —
+a screen reader encountering it mid-list has something to say about what follows, the same "an icon/boundary
+never carries meaning alone" discipline `icons.ts`'s own module comment holds icons to (WEB-12).
+
+**Choice — the profile control uses Lucide's `CircleUserRound`, re-exported as `ProfileIcon`.** Chosen over
+`UserCircle` (the brief's other named option) for legibility at the small icon-only sizes this panel already
+uses (`size-5`, `AppShell.tsx`'s hamburger/home controls) — `CircleUserRound`'s heavier outline reads more
+clearly at that size than `UserCircle`'s thinner one. Either would have satisfied WEB-30; this is a visual
+judgment call, not a functional one.
+
+**Choice — the sign-out failure path is unchanged.** `handleSignOut`'s own `try { … } catch { /* nothing */ }
+finally { onSignedOut() }` (`pages/Shell.tsx`) already swallows a failed round trip and signs the caller out of
+this screen regardless, with `App.tsx`'s own `/auth/me` re-check as the actual source of truth — this slice
+moved the button from the header into the drawer's foot and nothing else about it; the brief's own note flagged
+this as an open question, and there was no new information this slice surfaces that would change that call, so
+it was left exactly as `docs/DECISIONS.md`'s own prior entries already describe it (the WEB-1..6 rework, finding
+3).
+
+**Correction — every e2e spec that reaches a tab now goes through a shared helper, not just the two the
+brief's own verification command named.** The first pass of this entry recorded leaving 16 other specs red as an
+explicit "out of scope" limit, reasoning that the brief's own scope line named only `apps/web` and its tests.
+That was wrong, and CI caught it immediately: `.github/workflows/ci.yml`'s `Run the end-to-end test (QA-7)` step
+runs the *whole* suite (`npm run e2e`), not the two specs the brief's verification command happened to name, so
+those 16 specs were never "adjacent work optionally left for later" — they were this change's own regression,
+and `.claude/CLAUDE.md`'s "all passing tests must stay reproducible as regression tests" applies to them exactly
+as it would to any other test this slice broke. Fixed here, in one shared place rather than eighteen scattered
+edits: `e2e/support/navigate.ts` (new, following `read-sign-in-token.ts`'s own "pulled out once, not
+duplicated" precedent) exports `openDrawer`, `navigateTo(page, label)` (open the drawer, click the named item,
+wait for the drawer to actually finish closing — the identical wait `e2e/keyboard.spec.ts` already needed, this
+file's own module comment has the "why" and points at the same inertness finding recorded above), and
+`signOut(page)` (the drawer-footer sign-out control WEB-30 also moved). Every spec that clicked a nav button
+directly (`admin-console`, `auth-flow`, `chat`, `chat-scroll`, `course-configuration`, `course-knowledge-files`,
+`course-people-panel`, `discord-install-panel`, `jobs-panel`, `join-links-panel`, `membership-invitation-panel`,
+`roster-import-panel`, `spending-cap`, `team-panel`, `team-panel-revoke`, `transcript-access-log`, `usage-panel`)
+now calls `navigateTo`/`signOut` instead — a mechanical, one-line-per-call-site swap; no spec's own assertions
+changed, only how each one reaches the screen it was already asserting against.
+`membership-invitation-panel.spec.ts` needed `openDrawer` alone, twice, for two presence checks
+(`colleaguePage`/`otherTab` seeing "Team" become reachable after a redemption) that were never clicks to begin
+with — the assertion itself is untouched, it is only opened where it used to be visible without opening
+anything. `npm run e2e` — the full 29-test suite, not the two specs the brief named — is now clean.
+
+**Evidence — QA-1.** Each of the following was confirmed to fail against the pre-change component (`git stash`
+of this slice's source changes, keeping the new/updated test), then pass after (`git stash pop`):
+`apps/web/tests/shell.test.tsx`'s new "divides the drawer into two groups with a visible separator, for a
+member" (fails on the pre-change flat `navItems` prop — no `separator` role exists at all);
+"carries sign-out at the drawer's foot, reachable once the drawer is open" (fails on the pre-change header-row
+sign-out button, visible with no drawer opened at all — the negative assertion before `openDrawer()` is the one
+that actually distinguishes the two);
+"the profile control opens account settings, listing every organization and the active one" (fails outright — no
+`Account settings` control, no `Account` heading, no `pages/Account.tsx` existed before this slice).
+`apps/web/tests/account.test.tsx` is new in its entirety — every one of its cases fails without `pages/Account.tsx`
+existing at all, the strongest form of "fails without the change." The placement test — see the correction
+directly below — is evidence too, but its own paragraph has the accurate account of what it actually proves.
+
+**Correction — round 2 of the coordinator review, three findings.**
+
+1. **The placement test named above was wrong, and so was this entry's own account of it.** The first pass's
+"states the acting organization's name at the header's leading edge" only read
+`getByRole('combobox', { name: 'Organization' }).toHaveTextContent('Org One')` — the switcher's own *text*,
+never *where in the header* it sits. That assertion is identical whether the switcher renders in `headerStart`
+(WEB-30's own "immediately right of the home control") or `headerEnd` (where sign-out sat before WEB-30), so it
+passes against the pre-change header too — confirmed directly, by moving `<OrganizationSwitcher/>` from
+`headerStart` to `headerEnd` in `pages/Shell.tsx` (undoing exactly the half of WEB-30 the test's own name
+claims to pin) and rerunning: `npm test` and `npm run e2e` both stayed green, and the entry above's own claim
+("fails on the pre-change header, which had no `headerStart` slot at all") does not hold either — the
+pre-change header (commit `84ac256`) had no `headerStart` prop, true, but the switcher still rendered in the
+one slot that existed (what is now `headerEnd`), in the same visual position relative to the home control that
+a careless assertion could not tell apart from the new one. The claim was simply false, not merely imprecise,
+and is corrected by removing it above rather than left to mislead the next reader.
+
+   Fixed by rewriting the test to pin *position*, not merely presence: it now finds the header's own leading
+   group (the `<div>` the `Home` button renders into) and asserts the switcher is contained in it, and — the
+   negative that actually rules the regression out — that the profile control's own trailing group does *not*
+   also contain it. Reproduced failing twice, not once: against the live "move it to `headerEnd`" repro above
+   (`expect(leadingGroup).toContainElement(switcher)` fails, reporting the switcher inside the *trailing*
+   `<div class="flex items-center gap-3">` instead), and, separately, against a real checkout of the four
+   source files at `84ac256` (`git show 84ac256:<path> > <path>`, run, then restored) — the identical failure,
+   for the identical reason, this time against the actual pre-change commit rather than a hand-built repro of
+   it. Passes clean against the current source, both ways.
+
+   The sibling case at `shell.test.tsx`'s "offers no separator … for a connected-but-not-a-member account" also
+   passes against the pre-change source — trivially, because no `separator` role existed at all before this
+   slice, for either organization. Kept, as a reasonable companion assertion once the drawer and its separator
+   exist — but it is not QA-1 evidence for anything, and was never claimed as such above; noted here only so
+   the next reader does not have to rediscover it.
+
+2. **`transitionend` was not filtered to the dialog's own transition.** `dialog.addEventListener('transitionend', finish)`
+   listened for *any* `transitionend` bubbling up to the dialog — and every `Button` inside the drawer (the
+   close control, sign-out) carries its own `transition-colors` (`Button.tsx`). A pointer resting on, then
+   clicking, the close button: the drawer starts its 200ms translate, the button slides out from under the
+   pointer, its hover background transitions back over Tailwind's default 150ms, and *that* event — not the
+   drawer's own — reached `finish()` first, cutting the slide short at the exact moment WEB-29 exists to make
+   visible. State stayed consistent either way (`phase` still lands on `'closed'`), so this was cosmetic, not a
+   correctness bug — but it defeated the requirement's whole point. Fixed with `event.target !== dialog` inside
+   the listener. `apps/web/tests/app-shell.test.tsx` (new) pins it directly against `AppShell` — a
+   `transitionend` fired at the close button, while the drawer is still closing, leaves the dialog visible;
+   the same event fired at the dialog itself still closes it. Confirmed failing against the pre-fix
+   `AppShell.tsx` (`git show f89f1c5:...` — the commit immediately before this fix — checked out, run, restored)
+   before this filter existed.
+
+3. **Reduced motion kept the document inert for 200ms after the drawer was already visually gone.**
+   `motion-reduce:duration-0` makes the transform transition instant for `prefers-reduced-motion: reduce` — and
+   a `0ms` CSS transition fires no `transitionend` at all (there is nothing to transition from/to), so the
+   closing effect always fell through to the `DRAWER_TRANSITION_MS` timeout regardless. A reduced-motion caller
+   clicking a nav item and immediately clicking something on the destination screen had that second click
+   swallowed by the still-modal (and still fully inert-making) `<dialog>`, invisible though it already was.
+   This *can* be read reliably from JS — the closing effect now checks
+   `window.matchMedia('(prefers-reduced-motion: reduce)').matches` directly (the identical query the CSS itself
+   keys off, so the two can never disagree about whether a given close will actually transition) and calls
+   `finish()` immediately when it matches, skipping both the listener and the timeout. Guarded with
+   `typeof window.matchMedia === 'function'` — jsdom does not implement it by default, and Node-run tests that
+   never stub it must not throw. `apps/web/tests/app-shell.test.tsx` stubs `window.matchMedia` to report
+   `reduce`, closes the drawer, and asserts it is already hidden with no transition event fired and no timer
+   advanced — failing against the pre-fix `AppShell.tsx` the same way finding 2's own test does (the dialog is
+   still open at that point, pre-fix — only the 200ms timeout would have closed it).
+
+`npm test` (2219 vitest + 90 node:test) and `npm run e2e` (29/29) both stayed green through every fix above.

@@ -60,6 +60,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('a signed-in account holds a conversation with an enrolled course, rendered as sanitized Markdown (WEB-10)', async ({
@@ -83,7 +84,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -159,7 +160,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
 
   // 3. The browser's own part: open Chat, ask something, read the reply —
   //    rendered as Markdown (a heading, bold text), never as raw HTML.
-  await page.getByRole('button', { name: 'Chat' }).click()
+  await navigateTo(page, 'Chat')
   await expect(page.getByText(courseTitle)).toBeVisible()
 
   await page

@@ -40,6 +40,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH, E2E_PUBLIC_APP_URL } from './support/env.js'
+import { navigateTo, openDrawer } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('an owner invites a colleague with no prior membership; a real second account redeems it and the role appears on the team screen (ENRL-10)', async ({
@@ -90,7 +91,7 @@ test('an owner invites a colleague with no prior membership; a real second accou
 
   // 2. ENRL-10: invite a colleague who has never touched this organization
   //    — the Invitations section, mounted alongside the Grant form.
-  await page.getByRole('button', { name: 'Team' }).click()
+  await navigateTo(page, 'Team')
   await expect(page.getByRole('heading', { name: 'Team' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Invitations' })).toBeVisible()
   await expect(page.getByText('No invitations issued yet.')).toBeVisible()
@@ -158,6 +159,11 @@ test('an owner invites a colleague with no prior membership; a real second accou
     await colleaguePage
       .getByRole('combobox', { name: 'Organization' })
       .selectOption({ label: `${institutionName} (instructor)` })
+    // WEB-29: Team is offered inside the drawer now, not the header row —
+    // opened here only to prove it is reachable at all, the same "a real
+    // choice, not a UUID" proof this test already gives the switcher
+    // itself, above.
+    await openDrawer(colleaguePage)
     await expect(
       colleaguePage.getByRole('button', { name: 'Team' })
     ).toBeVisible()
@@ -173,7 +179,7 @@ test('an owner invites a colleague with no prior membership; a real second accou
   //    `memberships.grant`'s own "already a member" requirement,
   //    `team-panel.spec.ts`'s own module comment).
   await page.reload()
-  await page.getByRole('button', { name: 'Team' }).click()
+  await navigateTo(page, 'Team')
   await expect(page.getByText(`${colleagueEmail} — Instructor`)).toBeVisible()
   await expect(page.getByText(/^Redeemed /)).toBeVisible()
   await expect(
@@ -308,6 +314,8 @@ test('a sign-in that completes in a different browsing context than the one that
   await otherTab
     .getByRole('combobox', { name: 'Organization' })
     .selectOption({ label: `${institutionName} (instructor)` })
+  // WEB-29: Team is offered inside the drawer now, not the header row.
+  await openDrawer(otherTab)
   await expect(otherTab.getByRole('button', { name: 'Team' })).toBeVisible()
 
   await otherTab.close()

@@ -10,7 +10,14 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { courses, jobs, organizations, projects } from '@bloombot/db'
+import {
+  accounts,
+  courses,
+  discordServers,
+  jobs,
+  organizations,
+  projects,
+} from '@bloombot/db'
 import {
   createDiscordRestClient,
   type DiscordRestClient,
@@ -1138,5 +1145,125 @@ describe('discordServers.scaffold handler', () => {
     expect(
       courses.getCourse(seeded.organizationId, seeded.courseId, testDb.db)?.id
     ).toBe(seeded.courseId)
+  })
+
+  // TEN-9 — the decisive test: an organization with *two* active bindings, a
+  // course assigned to one of them, scaffolding reaching that guild and not
+  // the other. Before this slice, `getActiveDiscordServerBindingForOrganization`
+  // refused a two-binding organization outright (its own `length === 1`
+  // guard) — this is exactly the case that used to fail with "no active
+  // Discord server bound" rather than reaching the right guild.
+  describe('an organization with more than one active binding (TEN-9)', () => {
+    it("scaffolds into the course's own server, never the organization's other active binding", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Week 1', channels: [{ name: 'general', adminsOnly: false }] },
+      ])
+
+      // A second active binding for the same organization — a second
+      // Discord server installed the bot too.
+      const secondInstaller = accounts.createAccount(
+        seeded.organizationId,
+        {
+          email: `${randomUUID()}@example.edu`,
+          displayName: 'Second Admin',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const otherGuildId = randomUUID().replace(/-/g, '').slice(0, 18)
+      discordServers.claimDiscordServerBinding(
+        seeded.organizationId,
+        { serverId: otherGuildId, installedByAccountId: secondInstaller.id },
+        testDb.db
+      )
+
+      // The seeded course's own `discordServerId` was `null` — resolvable
+      // while the organization held only one binding. Now that it holds
+      // two, it must name which one explicitly, or scaffolding could not
+      // proceed at all (the ambiguous case, covered separately below).
+      const course = courses.getCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        testDb.db
+      )
+      if (!course) throw new Error('setup failed: course not found')
+      const updated = courses.updateCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        {
+          projectId: course.projectId,
+          title: course.title,
+          filePrefix: course.filePrefix,
+          enabled: course.enabled,
+          adminsRole: course.adminsRole,
+          studentsRole: course.studentsRole,
+          discordServerId: seeded.guildId,
+          categories: course.categories,
+        },
+        testDb.db
+      )
+      if (!updated?.ok) throw new Error('setup failed: unexpected conflict')
+
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+        { id: 'role-students', name: seeded.studentsRole },
+      ])
+
+      const report = (await runScaffold(
+        seeded.organizationId,
+        seeded.courseId
+      )) as { categories: { name: string; status: string }[] }
+
+      expect(report.categories).toEqual([
+        expect.objectContaining({ name: 'Week 1', status: 'created' }),
+      ])
+
+      // The identity of the guild that received the writes, not merely
+      // "a" guild: `seeded.guildId` got the category, `otherGuildId` was
+      // never touched at all.
+      expect(
+        discordServer
+          .guildChannelsFor(seeded.guildId)
+          .some((c) => (c as Record<string, unknown>)['name'] === 'Week 1')
+      ).toBe(true)
+      expect(discordServer.guildChannelsFor(otherGuildId)).toEqual([])
+      expect(
+        discordServer
+          .writeRequests()
+          .every((request) => !request.path.includes(otherGuildId))
+      ).toBe(true)
+    })
+
+    it('refuses (rather than guessing) when the course has no server of its own and the organization holds two active bindings', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Week 1', channels: [] },
+      ])
+      const secondInstaller = accounts.createAccount(
+        seeded.organizationId,
+        {
+          email: `${randomUUID()}@example.edu`,
+          displayName: 'Second Admin',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        seeded.organizationId,
+        {
+          serverId: randomUUID().replace(/-/g, '').slice(0, 18),
+          installedByAccountId: secondInstaller.id,
+        },
+        testDb.db
+      )
+
+      // `seeded.courseId`'s own `discordServerId` is still `null`.
+      await expect(
+        runScaffold(seeded.organizationId, seeded.courseId)
+      ).rejects.toThrow(/more than one active Discord server/)
+    })
   })
 })

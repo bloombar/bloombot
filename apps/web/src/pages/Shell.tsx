@@ -106,7 +106,7 @@ import type {
 import { AppShell, type AppShellHandle } from '../components/AppShell.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
-import { InstallButton } from '../components/InstallButton.js'
+import { DiscordServerRow, InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
 import { Team } from '../components/Team.js'
 import {
@@ -143,7 +143,12 @@ export interface ShellProps {
  */
 type DiscordBindingState =
   | { status: 'loading' }
-  | { status: 'ready'; binding: DiscordServerBindingSummary | undefined }
+  // TEN-9 — every binding the organization has ever held (active or
+  // removed, `discordServers.list`'s own shape — this panel narrows to
+  // active-only itself, below, the same way it always has). Plural: an
+  // organization can now hold more than one at once, and `installedServerIds`
+  // (below) is what the render actually reads.
+  | { status: 'ready'; bindings: DiscordServerBindingSummary[] }
   | { status: 'error'; error: ApiError }
 
 /**
@@ -233,9 +238,11 @@ function ShellInner({
   // never changes after mount (it is a prop, not state this component
   // updates), so once its own server id has been removed this session it
   // must never be offered again, from *any* organization switch, not only
-  // the one immediately after removing it.
-  const [removedServerId, setRemovedServerId] = useState<string | undefined>(
-    undefined
+  // the one immediately after removing it. TEN-9 — a `Set`, not a single
+  // value: this session may remove more than one binding before a fresh
+  // fetch settles.
+  const [removedServerIds, setRemovedServerIds] = useState<Set<string>>(
+    new Set()
   )
   // Tags each `listDiscordServers` call, the same `refreshId` shape
   // `pages/Projects.tsx#refresh` already uses — an organization switch
@@ -245,7 +252,12 @@ function ShellInner({
   // *previous* organization (or for a binding this same click just removed)
   // cannot resurrect it.
   const discordFetchId = useRef(0)
-  const [removing, setRemoving] = useState(false)
+  // TEN-9 — which binding's own Remove is in flight, not a single flag: two
+  // rows render independently now, and only the one actually being removed
+  // should show "Removing…"/disable itself.
+  const [removingServerId, setRemovingServerId] = useState<string | undefined>(
+    undefined
+  )
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [signingOut, setSigningOut] = useState(false)
   // Defaults to 'projects' — the module comment above has the product
@@ -348,7 +360,7 @@ function ShellInner({
   // round trip on top of the mount's.
   useEffect(() => {
     if (!isMember) {
-      setDiscordBindingState({ status: 'ready', binding: undefined })
+      setDiscordBindingState({ status: 'ready', bindings: [] })
       return
     }
     const fetchId = ++discordFetchId.current
@@ -356,10 +368,7 @@ function ShellInner({
     listDiscordServers(activeOrganizationId).then(
       (bindings) => {
         if (fetchId !== discordFetchId.current) return
-        setDiscordBindingState({
-          status: 'ready',
-          binding: bindings.find((binding) => binding.removedAt === null),
-        })
+        setDiscordBindingState({ status: 'ready', bindings })
       },
       (caught: unknown) => {
         if (fetchId !== discordFetchId.current) return
@@ -375,46 +384,70 @@ function ShellInner({
   // request required — stands in for it, but only for the organization it
   // actually names (this file's own module comment on why) and only when
   // `handleRemove` has not already removed that exact server this session
-  // (`removedServerId`'s own comment — a `'loading'` state can be *any*
+  // (`removedServerIds`'s own comment — a `'loading'` state can be *any*
   // organization switch, not only the first render, so this must hold every
   // time, not once). Once the fetch resolves (`'ready'` or `'error'`),
   // `justInstalled` is not consulted again: a stale same-session signal must
-  // never outlive the server-truth read that supersedes it.
-  const installedServerId =
+  // never outlive the server-truth read that supersedes it. TEN-9 — plural,
+  // and narrowed to *active* bindings here (`discordServers.list` itself
+  // still returns every binding this organization has ever held, active or
+  // removed — `DiscordBindingState`'s own comment on why): every server id
+  // the Discord screen actually renders a row for.
+  const installedServerIds: string[] =
     discordBindingState.status === 'ready'
-      ? discordBindingState.binding?.serverId
+      ? discordBindingState.bindings
+          .filter((binding) => binding.removedAt === null)
+          .map((binding) => binding.serverId)
       : discordBindingState.status === 'loading' &&
           justInstalled?.organizationId === activeOrganizationId &&
-          justInstalled.serverId !== removedServerId
-        ? justInstalled.serverId
-        : undefined
+          !removedServerIds.has(justInstalled.serverId)
+        ? [justInstalled.serverId]
+        : []
 
-  const handleRemove = async () => {
-    if (!installedServerId) return
+  const handleRemove = async (serverId: string) => {
     setError(undefined)
-    setRemoving(true)
+    setRemovingServerId(serverId)
     try {
       // TEN-6 — an ordinary action, reached the same way any other action
       // in `@bloombot/actions`' catalog is (`api/client.ts#dispatchAction`'s
       // own comment on why this is not a bespoke route).
       await dispatchAction(activeOrganizationId, 'discordServers.remove', {
-        serverId: installedServerId,
+        serverId,
       })
       // Invalidates any lookup still in flight for this organization — see
       // `discordFetchId`'s own comment — so a slow `listDiscordServers`
       // response that started before this remove cannot land afterward and
       // show the just-removed binding as installed again.
       discordFetchId.current++
-      setDiscordBindingState({ status: 'ready', binding: undefined })
+      // TEN-9 — marks just this one binding removed, leaving every other
+      // active binding (and any removed history already fetched) alone,
+      // when the fetch had already resolved. While it had not yet (the
+      // `justInstalled` fallback window — `installedServerIds`'s own
+      // comment above), there is nothing else known to preserve: the only
+      // binding this render could have offered a Remove for is the one just
+      // removed, so this becomes an empty, resolved list, the same as the
+      // single-binding era's own `{ status: 'ready', binding: undefined }`.
+      setDiscordBindingState((current) =>
+        current.status === 'ready'
+          ? {
+              status: 'ready',
+              bindings: current.bindings.map((binding) =>
+                binding.serverId === serverId
+                  ? { ...binding, removedAt: Date.now() }
+                  : binding
+              ),
+            }
+          : { status: 'ready', bindings: [] }
+      )
       // Records exactly which server id this session just removed —
-      // `removedServerId`'s own comment on why a later organization switch,
+      // `removedServerIds`'s own comment on why a later organization switch,
       // not only this immediate render, needs to keep seeing it.
-      setRemovedServerId(installedServerId)
+      setRemovedServerIds((current) => new Set(current).add(serverId))
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
     } finally {
-      setRemoving(false)
+      setRemovingServerId(undefined)
     }
   }
 
@@ -612,7 +645,7 @@ function ShellInner({
             Discord
           </h1>
           {discordBindingState.status === 'loading' &&
-          installedServerId === undefined ? (
+          installedServerIds.length === 0 ? (
             // TEN-8: the lookup is in flight and `justInstalled` did not
             // already answer for this organization — rendering
             // `InstallButton` here would default to "Install," the exact
@@ -628,12 +661,26 @@ function ShellInner({
             // server that may well still be bound.
             <ErrorMessage error={discordBindingState.error} />
           ) : (
-            <InstallButton
-              organizationId={activeOrganizationId}
-              {...(installedServerId ? { installedServerId } : {})}
-              onRemove={() => void handleRemove()}
-              removing={removing}
-            />
+            // TEN-9 — every active binding gets its own row (with its own
+            // Remove), and installing another is always offered underneath
+            // — an organization is no longer limited to the single
+            // Install/Remove pair this screen used to be.
+            <div className="flex flex-col gap-4">
+              {installedServerIds.length > 0 && (
+                <ul className="flex flex-col gap-2">
+                  {installedServerIds.map((serverId) => (
+                    <li key={serverId}>
+                      <DiscordServerRow
+                        serverId={serverId}
+                        onRemove={() => void handleRemove(serverId)}
+                        removing={removingServerId === serverId}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <InstallButton organizationId={activeOrganizationId} />
+            </div>
           )}
           {error && <ErrorMessage error={error} />}
         </div>

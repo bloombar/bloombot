@@ -1,0 +1,1 @@
+ALTER TABLE `courses` ADD `discord_server_id` text REFERENCES discord_server_bindings(server_id);

@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { courses, organizations, projects, schema } from '@bloombot/db'
+import {
+  accounts,
+  courses,
+  discordServers,
+  organizations,
+  projects,
+  schema,
+} from '@bloombot/db'
 import type { courses as coursesRepo } from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -862,6 +869,247 @@ describe('courses repo', () => {
       expect(result?.ok).toBe(false)
       if (!result || result.ok) throw new Error('expected a conflict')
       expect(result.conflict.field).toBe('studentsRole')
+    })
+  })
+
+  // TEN-9 — PROJ-3's own text always said "unique across every enabled
+  // course in *that server*": two courses that route in different servers
+  // may now share a category or role name, and two in the same server still
+  // may not.
+  describe('name collisions are scoped to a server (TEN-9)', () => {
+    it('allows the same category and role names across two different servers', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverA = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '303030303030303030', installedByAccountId: installer.id },
+        testDb.db
+      )
+      const serverB = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '313131313131313131', installedByAccountId: installer.id },
+        testDb.db
+      )
+      if (!serverA || !serverB) throw new Error('expected both to claim')
+
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            discordServerId: serverA.serverId,
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      // Same category and role names, but routed into `serverB` — this must
+      // not collide, since PROJ-3 is now scoped per server, not per
+      // organization.
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          discordServerId: serverB.serverId,
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
+
+    it('still refuses the same category name for two courses both in the same server', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer2@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverA = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '323232323232323232', installedByAccountId: installer.id },
+        testDb.db
+      )
+      const serverB = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '333333333333333333', installedByAccountId: installer.id },
+        testDb.db
+      )
+      if (!serverA || !serverB) throw new Error('expected both to claim')
+
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            discordServerId: serverA.serverId,
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'students-ds-fa26',
+          discordServerId: serverA.serverId,
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('category')
+    })
+
+    it('refuses to enable a course while its server is ambiguous (null column, two active bindings)', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer3@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '343434343434343434', installedByAccountId: installer.id },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '353535353535353535', installedByAccountId: installer.id },
+        testDb.db
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, { discordServerId: null }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('discordServerId')
+      expect(result.conflict.name).toBe('ambiguous')
+    })
+
+    it('refuses to enable a course whose own server has since been removed', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer4@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverId = '363636363636363636'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installer.id },
+        testDb.db
+      )
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            enabled: false,
+            discordServerId: serverId,
+          }),
+          testDb.db
+        )
+      )
+      discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+
+      const result = courses.enableCourse(orgA, created.id, testDb.db)
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('discordServerId')
+      expect(result.conflict.name).toBe('removed')
+    })
+
+    it('a null discordServerId in an organization with exactly one active binding still collides with another null-server course, unchanged', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer5@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '373737373737373737', installedByAccountId: installer.id },
+        testDb.db
+      )
+
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            discordServerId: null,
+            categories: [{ name: 'GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'students-ds-fa26',
+          discordServerId: null,
+          categories: [{ name: 'GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('category')
+    })
+
+    it('creating and enabling a course stays unrestricted in an organization with no Discord binding at all', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, { discordServerId: null }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
     })
   })
 

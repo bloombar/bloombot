@@ -224,6 +224,12 @@ export interface CourseSummary {
   vectorStoreId: string | null
   maxRequestsPerDay: number | null
   conversationScope: 'course' | 'course_surface'
+  // TEN-9 — which of the organization's (possibly several) Discord servers
+  // this course routes in. `null` resolves through the organization's own
+  // single active binding when it has exactly one (`repos/discord-servers.ts#resolveCourseDiscordServer`);
+  // `pages/CourseEditor.tsx`'s own server selector only offers a choice at
+  // all once the organization holds more than one active binding.
+  discordServerId: string | null
   createdAt: number
 }
 

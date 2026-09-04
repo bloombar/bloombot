@@ -10,8 +10,10 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accounts,
   conversations,
   courses,
+  discordServers,
   enrolments,
   people,
   projects,
@@ -1064,5 +1066,127 @@ describe('handleMention — CORE-2/finding 13: an ambiguous route is dropped, no
     expect(model.calls).toHaveLength(0)
     expect(reply.sent).toHaveLength(0)
     expect(logger.errorCalls.length).toBeGreaterThan(0)
+  })
+})
+
+describe('handleMention — TEN-9: routing never crosses a Discord server boundary', () => {
+  // The decisive case: an organization holds two Discord servers, and a
+  // *second* course — routing in the *other* server — happens to share this
+  // organization's category name (TEN-9 lets that happen now: PROJ-3's own
+  // uniqueness check is scoped per server, `repos/courses.ts`). A message
+  // arriving in the first server must still match only the course that
+  // actually routes there — never becoming `routing-ambiguous` by picking up
+  // the other server's course, and never answering through the wrong one.
+  it('a message in one server does not match a same-category course that routes in a different server of the same organization', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { categoryName: 'Shared Category' }
+    )
+
+    // A second Discord server, bound to the *same* organization.
+    const secondInstaller = accounts.createAccount(
+      organizationId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'Admin 2',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const otherGuildId = randomUUID()
+    discordServers.claimDiscordServerBinding(
+      organizationId,
+      { serverId: otherGuildId, installedByAccountId: secondInstaller.id },
+      testDb.db
+    )
+
+    // The first course's own `discordServerId` was `null` — resolvable
+    // while the organization held only one binding. Now that it holds two,
+    // it must name which one explicitly, the same "may not route while
+    // undecidable" rule `repos/courses.ts#enableCourse` enforces on a fresh
+    // enable (this course is already enabled, so nothing re-checks it until
+    // it is saved or enabled again — naming its server here is this test's
+    // own setup, not something this slice retroactively enforces on a
+    // course already routing).
+    const firstCourse = courses.getCourse(organizationId, courseId, testDb.db)
+    if (!firstCourse) throw new Error('setup failed: course not found')
+    const firstCourseUpdated = courses.updateCourse(
+      organizationId,
+      courseId,
+      {
+        projectId: firstCourse.projectId,
+        title: firstCourse.title,
+        filePrefix: firstCourse.filePrefix,
+        enabled: firstCourse.enabled,
+        adminsRole: firstCourse.adminsRole,
+        studentsRole: firstCourse.studentsRole,
+        promptId: firstCourse.promptId,
+        instructions: firstCourse.instructions,
+        model: firstCourse.model,
+        vectorStoreId: firstCourse.vectorStoreId,
+        maxRequestsPerDay: firstCourse.maxRequestsPerDay,
+        conversationScope: firstCourse.conversationScope,
+        discordServerId: guildId,
+        categories: firstCourse.categories,
+      },
+      testDb.db
+    )
+    if (!firstCourseUpdated?.ok) {
+      throw new Error(`setup failed: ${firstCourseUpdated?.conflict.message}`)
+    }
+
+    // A second course, in the *other* guild, sharing the first course's own
+    // category name — allowed now (TEN-9), since PROJ-3 no longer treats
+    // this as a collision once the two courses route in different servers.
+    const otherProject = projects.createProject(
+      organizationId,
+      { name: `Other Term ${randomUUID()}` },
+      testDb.db
+    )
+    const otherCourseResult = courses.createCourse(
+      organizationId,
+      {
+        projectId: otherProject.id,
+        title: 'Other Server Course',
+        filePrefix: `osc-${randomUUID().slice(0, 8)}`,
+        enabled: true,
+        adminsRole: `admins-${randomUUID()}`,
+        studentsRole: `students-${randomUUID()}`,
+        discordServerId: otherGuildId,
+        categories: [{ name: 'Shared Category', channels: [] }],
+      },
+      testDb.db
+    )
+    if (!otherCourseResult.ok) {
+      throw new Error(`setup failed: ${otherCourseResult.conflict.message}`)
+    }
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Shared Category' }),
+      deps
+    )
+
+    // Matched — not ambiguous: the other server's course was never a
+    // candidate at all.
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+
+    // The identity of which course actually answered: exactly one
+    // conversation exists for `courseId` (the first server's course), and
+    // none at all for the other server's course.
+    const conversationsForFirst = conversations.listConversationsForCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    )
+    expect(conversationsForFirst).toHaveLength(1)
+    const conversationsForOther = conversations.listConversationsForCourse(
+      organizationId,
+      otherCourseResult.course.id,
+      testDb.db
+    )
+    expect(conversationsForOther).toHaveLength(0)
   })
 })

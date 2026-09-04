@@ -423,6 +423,10 @@ export interface SaveCourseInput {
   model?: string | null
   vectorStoreId?: string | null
   maxRequestsPerDay?: number | null
+  // TEN-9 — same omitted-preserves/explicit-null-clears rule as the other
+  // nullable fields above; validated server-side as an active binding of
+  // the caller's own organization (`courses.save`'s own policy).
+  discordServerId?: string | null
   categories: SaveCourseCategoryInput[]
 }
 

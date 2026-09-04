@@ -10,7 +10,11 @@ import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { Course, Project } from '../src/api/types.js'
+import type {
+  Course,
+  DiscordServerBindingSummary,
+  Project,
+} from '../src/api/types.js'
 import { CourseEditor } from '../src/pages/CourseEditor.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
@@ -24,6 +28,7 @@ const {
   saveCourseInstructions,
   listCourseJoinLinks,
   listCourseEnrolments,
+  listDiscordServers,
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
@@ -34,6 +39,7 @@ const {
   saveCourseInstructions: vi.fn(),
   listCourseJoinLinks: vi.fn(),
   listCourseEnrolments: vi.fn(),
+  listDiscordServers: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -51,6 +57,7 @@ vi.mock('../src/api/client.js', async () => {
     saveCourseInstructions,
     listCourseJoinLinks,
     listCourseEnrolments,
+    listDiscordServers,
   }
 })
 
@@ -69,6 +76,11 @@ beforeEach(() => {
   listCourseInstructionRevisions.mockResolvedValue([])
   listCourseJoinLinks.mockResolvedValue([])
   listCourseEnrolments.mockResolvedValue([])
+  // TEN-9 — no active bindings by default, so the server selector stays
+  // hidden unless a test opts into two or more (`activeBindings.length > 1`,
+  // `pages/CourseEditor.tsx`'s own guard); individual tests below override
+  // this where the selector is what they are actually testing.
+  listDiscordServers.mockResolvedValue([])
 })
 
 const PROJECT: Project = {
@@ -94,6 +106,7 @@ const COURSE: Course = {
   vectorStoreId: 'vs-1',
   maxRequestsPerDay: 20,
   conversationScope: 'course',
+  discordServerId: null,
   createdAt: 0,
   categories: [
     {
@@ -351,6 +364,97 @@ describe('CourseEditor (WEB-8)', () => {
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
     expect(saveCourse).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * TEN-9 — the server selector: offered only once there is an actual choice
+ * ("one binding is not a choice worth making anybody make", the brief's own
+ * words), and threaded through to `courses.save` only while it is offered.
+ */
+describe('CourseEditor Discord server selector (TEN-9)', () => {
+  const BINDING_A: DiscordServerBindingSummary = {
+    serverId: 'guild-a',
+    organizationId: 'org-1',
+    installedByAccountId: 'account-1',
+    installedAt: 0,
+    removedAt: null,
+  }
+  const BINDING_B: DiscordServerBindingSummary = {
+    serverId: 'guild-b',
+    organizationId: 'org-1',
+    installedByAccountId: 'account-1',
+    installedAt: 0,
+    removedAt: null,
+  }
+
+  it('stays hidden when the organization holds zero or one active binding', async () => {
+    listDiscordServers.mockResolvedValue([BINDING_A])
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.queryByLabelText('Discord server')).not.toBeInTheDocument()
+  })
+
+  it('offers a choice once the organization holds two or more active bindings, and saves the one chosen', async () => {
+    listDiscordServers.mockResolvedValue([BINDING_A, BINDING_B])
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-b' })
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    const select = await screen.findByLabelText('Discord server')
+    fireEvent.change(select, { target: { value: 'guild-b' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ discordServerId: 'guild-b' })
+      )
+    )
+  })
+
+  it('does not send discordServerId at all while the selector is hidden — never forces every course to null the moment a second server is installed', async () => {
+    listDiscordServers.mockResolvedValue([])
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourse).toHaveBeenCalled())
+    const [, sentInput] = saveCourse.mock.calls[0] as [string, object]
+    expect(sentInput).not.toHaveProperty('discordServerId')
   })
 })
 

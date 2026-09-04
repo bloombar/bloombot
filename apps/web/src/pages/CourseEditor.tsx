@@ -71,10 +71,19 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { ApiError, getCourse, saveCourse } from '../api/client.js'
+import {
+  ApiError,
+  getCourse,
+  listDiscordServers,
+  saveCourse,
+} from '../api/client.js'
 import { disableCourse, enableCourse } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
-import type { Course, Project } from '../api/types.js'
+import type {
+  Course,
+  DiscordServerBindingSummary,
+  Project,
+} from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
@@ -195,6 +204,11 @@ function blankForm() {
     model: '',
     vectorStoreId: '',
     maxRequestsPerDay: '',
+    // TEN-9 — `null` resolves through the organization's own single active
+    // binding, the same "not configured yet" reading `promptId`/`model`
+    // etc. above already carry — a brand-new course starts undecided, not
+    // pinned to whichever server happens to be active right now.
+    discordServerId: null as string | null,
     categories: [] as EditableCategory[],
   }
 }
@@ -211,6 +225,7 @@ function formFromCourse(course: Course) {
     vectorStoreId: course.vectorStoreId ?? '',
     maxRequestsPerDay:
       course.maxRequestsPerDay === null ? '' : String(course.maxRequestsPerDay),
+    discordServerId: course.discordServerId,
     categories: course.categories.map((category) => ({
       key: newKey(),
       name: category.name,
@@ -273,6 +288,40 @@ export function CourseEditor({
   // enabled. The button below always reads `confirmedEnabled`; only the
   // checkbox reads `form.enabled`.
   const [confirmedEnabled, setConfirmedEnabled] = useState(false)
+  // TEN-9 — every binding this organization has ever held (active or
+  // removed, `discordServers.list`'s own shape), fetched once per
+  // organization. Only the active ones (`activeBindings`, below) decide
+  // whether the server selector renders at all — "one binding is not a
+  // choice worth making anybody make" (this slice's own brief) — so a
+  // removed binding never offers itself as a choice, but is still fetched
+  // rather than narrowed server-side, matching `pages/Shell.tsx`'s own
+  // `listDiscordServers` read.
+  const [discordBindings, setDiscordBindings] = useState<
+    DiscordServerBindingSummary[]
+  >([])
+  const activeBindings = discordBindings.filter(
+    (binding) => binding.removedAt === null
+  )
+
+  useEffect(() => {
+    let stale = false
+    listDiscordServers(organizationId).then(
+      (bindings) => {
+        if (!stale) setDiscordBindings(bindings)
+      },
+      () => {
+        // Best-effort: a failed lookup here just means the selector stays
+        // hidden (`activeBindings.length` reads `0`) — an organization with
+        // exactly one binding, or none, keeps saving exactly as it always
+        // has (TEN-9's own requirement), and a genuinely ambiguous course
+        // still gets refused server-side, with the reason surfaced through
+        // this form's ordinary `ErrorMessage` (`handleSave`'s own catch).
+      }
+    )
+    return () => {
+      stale = true
+    }
+  }, [organizationId])
 
   useEffect(() => {
     // Finding 8 (WEB-7 rework): guards against an out-of-order response —
@@ -368,6 +417,16 @@ export function CourseEditor({
         // `courseInstructions.save` instead.
         model: form.model.trim() === '' ? null : form.model.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
+        // TEN-9 — sent only while the selector is actually offered
+        // (`activeBindings.length > 1`): a course this form does not offer
+        // a choice for is not a field this form manages this render, the
+        // same "omitted preserves what is stored" treatment `promptId`/
+        // `vectorStoreId` get above, rather than forcing every course back
+        // to `null` the moment an organization happens to install a second
+        // server.
+        ...(activeBindings.length > 1
+          ? { discordServerId: form.discordServerId }
+          : {}),
         categories,
       }
       const saved = await saveCourse(organizationId, input)
@@ -630,6 +689,39 @@ export function CourseEditor({
             />
           </FormField>
         </div>
+
+        {/* TEN-9 — offered only once there is an actual choice to make:
+            "one binding is not a choice worth making anybody make" (this
+            slice's own brief). An organization with zero or one active
+            binding never sees this at all — the course still resolves
+            correctly through `resolveCourseDiscordServer`'s own single-binding
+            fallback, unedited. */}
+        {activeBindings.length > 1 && (
+          <FormField
+            label="Discord server"
+            {...fieldErrorProp(error, 'discordServerId')}
+          >
+            <select
+              aria-label="Discord server"
+              value={form.discordServerId ?? ''}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  discordServerId:
+                    event.target.value === '' ? null : event.target.value,
+                }))
+              }
+              className={textInputClasses}
+            >
+              <option value="">Choose a server…</option>
+              {activeBindings.map((binding) => (
+                <option key={binding.serverId} value={binding.serverId}>
+                  {binding.serverId}
+                </option>
+              ))}
+            </select>
+          </FormField>
+        )}
       </section>
 
       <div className="grid gap-4 sm:grid-cols-2">

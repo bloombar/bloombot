@@ -354,30 +354,32 @@ export function createDiscordScaffoldHandler(
       )
     }
 
-    const binding = discordServers.getActiveDiscordServerBindingForOrganization(
+    // TEN-9 — the guild this course scaffolds into is resolved through the
+    // course's *own* server, not "the organization's one binding": an
+    // organization holding two or more active bindings is an ordinary case
+    // now, not the edge case this handler used to refuse identically to
+    // "none bound" (`getActiveDiscordServerBindingForOrganization`'s own
+    // module comment, before this slice). `resolveCourseDiscordServer`'s
+    // three outcomes each get their own message so an instructor reading
+    // the job's failure can tell them apart.
+    const serverResolution = discordServers.resolveCourseDiscordServer(
       context.organizationId,
+      course.discordServerId,
       context.db
     )
-    if (!binding) {
-      // `getActiveDiscordServerBindingForOrganization` returns `undefined`
-      // both for "no active binding at all" and for "more than one"
-      // (`repos/discord-servers.ts`'s own module comment) — a single
-      // message for both reads as "none bound" to an instructor who has, in
-      // fact, bound two. Finding 8 of the SRV-6..8 rework: count them here
-      // to say which one actually happened.
-      const activeBindingCount = discordServers
-        .listDiscordServerBindingsForOrganization(
-          context.organizationId,
-          context.db
-        )
-        .filter((row) => row.removedAt === null).length
+    if (!serverResolution.ok) {
       throw new Error(
-        activeBindingCount > 1
-          ? `discordServers.scaffold: organization "${context.organizationId}" has ${activeBindingCount} active Discord server bindings — cannot tell which one this course belongs to`
-          : `discordServers.scaffold: organization "${context.organizationId}" has no active Discord server bound`
+        serverResolution.reason === 'ambiguous'
+          ? `discordServers.scaffold: organization "${context.organizationId}" has more than one active Discord server, and course "${course.id}" does not say which one it routes in`
+          : `discordServers.scaffold: course "${course.id}" is bound to a Discord server that is no longer active`
       )
     }
-    const guildId = binding.serverId
+    if (!serverResolution.binding) {
+      throw new Error(
+        `discordServers.scaffold: organization "${context.organizationId}" has no active Discord server bound`
+      )
+    }
+    const guildId = serverResolution.binding.serverId
 
     const [existingChannels, roles, botUserId] = await Promise.all([
       deps.discordRestClient.listGuildChannels(deps.botToken, guildId),

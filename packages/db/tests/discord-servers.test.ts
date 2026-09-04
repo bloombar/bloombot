@@ -576,4 +576,118 @@ describe('discord-servers repo', () => {
       ).toBeUndefined()
     })
   })
+
+  // TEN-9 — replaces `getActiveDiscordServerBindingForOrganization` for every
+  // caller resolving *a course's* server rather than "the organization's
+  // one binding".
+  describe('resolveCourseDiscordServer', () => {
+    it("resolves a null column through the organization's single active binding", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '202020202020202020'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      const result = discordServers.resolveCourseDiscordServer(
+        orgA,
+        null,
+        testDb.db
+      )
+
+      expect(result).toMatchObject({ ok: true, binding: { serverId } })
+    })
+
+    it('resolves a null column to a resolved "no server" — not a refusal — when the organization has no active binding at all', () => {
+      testDb = createTestDatabase()
+      const { orgA } = seedTwoOrganizationsWithInstallers(testDb)
+
+      expect(
+        discordServers.resolveCourseDiscordServer(orgA, null, testDb.db)
+      ).toEqual({ ok: true, binding: undefined })
+    })
+
+    it('refuses a null column as ambiguous when the organization holds two or more active bindings', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '212121212121212121',
+          installedByAccountId: installerA.id,
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '222222222222222222',
+          installedByAccountId: installerA.id,
+        },
+        testDb.db
+      )
+
+      expect(
+        discordServers.resolveCourseDiscordServer(orgA, null, testDb.db)
+      ).toEqual({ ok: false, reason: 'ambiguous' })
+    })
+
+    it("resolves a course's own server even when the organization holds two active bindings", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverA = '232323232323232323'
+      const serverB = '242424242424242424'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: serverA, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: serverB, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      expect(
+        discordServers.resolveCourseDiscordServer(orgA, serverB, testDb.db)
+      ).toMatchObject({ ok: true, binding: { serverId: serverB } })
+    })
+
+    it('refuses a column naming a binding that has since been removed', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '252525252525252525'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      discordServers.removeDiscordServerBinding(orgA, serverId, testDb.db)
+
+      expect(
+        discordServers.resolveCourseDiscordServer(orgA, serverId, testDb.db)
+      ).toEqual({ ok: false, reason: 'removed' })
+    })
+
+    // TEN-5/TEN-2: a column naming another organization's (even active)
+    // binding is refused exactly the same way as a removed one — not
+    // resolved across the tenant boundary.
+    it("refuses a column naming another organization's binding", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, installerB } =
+        seedTwoOrganizationsWithInstallers(testDb)
+      const serverId = '262626262626262626'
+      discordServers.claimDiscordServerBinding(
+        orgB,
+        { serverId, installedByAccountId: installerB.id },
+        testDb.db
+      )
+
+      expect(
+        discordServers.resolveCourseDiscordServer(orgA, serverId, testDb.db)
+      ).toEqual({ ok: false, reason: 'removed' })
+    })
+  })
 })

@@ -824,6 +824,28 @@ already installed rather than only what this browser session happened to install
 listing is scoped like every other read: a server bound to another organization is not in
 it, and its existence is not disclosed.
 
+#### TEN-9 An organization may hold several Discord servers, and a course names the one it belongs to
+
+TEN-8 already lets an organization list the Discord servers bound to it, and TEN-3's
+binding is many-servers-to-one-organization by construction, so an institution running two
+servers — a department's and a single large course's, say — is a shape the data model
+always allowed. Nothing above it supported that shape: every consumer resolved "the
+organization's binding" and refused when there was more than one, so a second install was
+recorded and then ignored.
+
+A course therefore names the Discord server it routes in. The reference is nullable, and an
+organization holding exactly one active binding keeps working unchanged — the single server
+is what an unset course resolves to, so no existing course has to be edited. When an
+organization holds more than one, a course must name one before it can be enabled: a course
+that could route in either server is a course whose scaffolding target and category-name
+uniqueness are both undecidable, and guessing is worse than refusing.
+
+PROJ-3's uniqueness check is scoped to the server the course routes in, which is what that
+requirement already says ("unique across every enabled course in that server"), and the
+panel offers the choice wherever a course is defined. A server that no longer has an active
+binding cannot be chosen, and a course pointing at a removed binding is refused enablement
+rather than silently routed elsewhere.
+
 ### 16. Projects
 
 #### PROJ-1 Courses are grouped into projects
@@ -860,6 +882,14 @@ Everything the control panel displays about projects and courses is read through
 action layer, not through a route that reaches the database on its own. A read is an
 action with a policy like any other, so a screen cannot show a record the caller would not
 have been allowed to open, and the audit index covers reading as well as writing.
+
+#### PROJ-6 A project can be renamed
+
+A term is named before its courses exist and is frequently named wrong — "Fall 26" for
+"Fall 2026", a course code where a term belongs. Renaming is the same write PROJ-2's
+archive already is: reversible, non-destructive, and subject to PROJ-1's own
+one-active-name-per-organization uniqueness, so a rename onto a live project's name is
+refused by naming the project it collides with rather than by a constraint error.
 
 ### 17. Quality, Types & Tooling
 
@@ -2025,3 +2055,58 @@ Every control is reachable and operable by keyboard, focus is always visible, an
 contrast of text and controls meets WCAG AA. The panel is administrative software used
 daily by people whose institutions require this, and retrofitting it costs more than
 building it in.
+
+#### WEB-26 A row's actions are collected into one menu
+
+A list row carries several actions — archive, duplicate, rename for a project; disable for a
+course — and rendering each as its own button turns a list into a wall of controls where the
+row's own name is the least prominent thing in it. Every secondary action on a row lives in
+a single per-row menu, opened from one control, leaving the row itself to show what the row
+is and at most one action worth its own button. The menu is a real menu: reachable by
+keyboard, closed by `Escape`, labelled with the row it acts on, so "Archive" in a list of
+six projects is never ambiguous about which project it archives.
+
+#### WEB-27 A project is created from beside its heading, and named in a modal
+
+Creating a project is offered as one primary button beside the "Projects" heading — the same
+position and the same treatment "New course" already has beside a project's heading — not as
+a text field and a button occupying the top of the list. The name is asked for in a modal
+when the button is pressed, so the list is not permanently carrying a form for something
+done a few times a term.
+
+#### WEB-28 A course row opens a chat for that course
+
+A project's course list offers, on each row, a way straight into a chat session for that
+course. Verifying that a course actually answers is the thing an instructor does immediately
+after configuring one, and today it costs a tab change and a course re-selection to reach a
+screen that was one click away.
+
+#### WEB-29 The primary navigation is a drawer, not a header row
+
+The primary navigation lives in a full-height panel opened by a hamburger control placed
+left of the home control, at every screen width. It slides in from the leading edge when
+opened and slides back out when closed rather than appearing and disappearing, so it is
+visible where it came from and where it went. The header does not also repeat the
+navigation: one place to find it, at every size, rather than two that must agree.
+
+Sign-out is in that panel, with the navigation it belongs beside. The panel separates the
+links every signed-in person has from those only an organization's administrators have, with
+a visible divider between the two groups, so the shape of what this account can do is
+legible without reading every label.
+
+#### WEB-30 The header carries a profile control, and account settings is where organizations are seen and switched
+
+The header's trailing edge carries a profile control, not a sentence naming the organization
+being acted in. Activating it opens the account's own settings screen: who this account is,
+the organizations it belongs to and the relationship it holds in each, and the other metadata
+the platform holds about it.
+
+That screen is also where the acting organization is chosen. TEN-7 requires the choice to be
+between names a person recognizes, and WEB-3 required it to be visible — but a control that
+renders as plain text whenever there is exactly one organization means an account that later
+joins a second has no way to discover the choice exists, and the common case renders as an
+inert sentence occupying the header. The organizations screen always lists every organization
+this account can act in, marks the active one, and switches to another when it is chosen —
+whether there is one of them or five. The panel continues to show which organization is
+active somewhere always visible, so the answer to "where am I acting" never requires opening
+a screen.

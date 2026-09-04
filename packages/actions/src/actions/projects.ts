@@ -6,7 +6,13 @@
  * `projects.rename` (PROJ-6).
  */
 
-import { courses, organizations, projects, type Database } from '@bloombot/db'
+import {
+  courses,
+  courseWebSources,
+  organizations,
+  projects,
+  type Database,
+} from '@bloombot/db'
 import { z } from 'zod'
 
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
@@ -290,8 +296,13 @@ export interface DuplicateProjectOutput {
  * categories, channels, instructions and settings — rosters and transcripts
  * are per-course/per-person tables `courses.createCourse` never touches, so
  * leaving them alone needs no special handling here, only not copying them.
- * Knowledge-file attachments do not exist yet (see `docs/DECISIONS.md`), so
- * there is nothing to copy for them either.
+ * Knowledge-file attachments are *not* copied (see `docs/DECISIONS.md`):
+ * they are provider-side objects (`courseAttachments.attach`'s own upload,
+ * a vector store) this action has no business re-uploading on a course's
+ * behalf. A course's own websites (FILE-6/MDL-9) carry none of that
+ * weight — a plain, instructor-visible row this platform already owns
+ * outright, the same "settings," not "provider state" — so they *are*
+ * copied, below, the same as `promptId`/`instructions`/`vectorStoreId`.
  *
  * PROJ-3 decision (`docs/DECISIONS.md`): every copied course is created
  * *disabled*, regardless of the source course's own `enabled` flag. A
@@ -410,6 +421,25 @@ export const duplicateProjectAction: Action<
         // than asserted, the same discipline every other action in this file
         // holds itself to for a race nothing here causes on purpose.
         if (!result.ok) throw new ActionConflictError(result.conflict)
+
+        // FILE-6/MDL-9 (also-fix) — copied the same as every other field
+        // above, not dropped: without this, rolling a term forward
+        // silently lost every course's own websites while `coursesCopied`
+        // still reported success, and an instructor would not learn a
+        // duplicated course answers ungrounded until a student asked it
+        // something the original's websites used to cover.
+        for (const webSource of courseWebSources.listWebSourcesForCourse(
+          organizationId,
+          source.id,
+          tx
+        )) {
+          courseWebSources.addWebSource(
+            organizationId,
+            { courseId: result.course.id, domain: webSource.domain },
+            tx
+          )
+        }
+
         coursesCopied += 1
       }
 

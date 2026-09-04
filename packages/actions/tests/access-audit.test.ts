@@ -142,6 +142,17 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // `createRevealCourseJoinLinkAction`), reused rather than duplicated so
   // the two gates cannot drift apart under a future edit to either alone.
   'courseJoinLinks.reveal': { resource: 'courseJoinLink', access: 'write' },
+  // FILE-6/WEB-31: resolves the course itself, write — a course belonging
+  // to another organization resolves to nothing (TEN-5), the same as
+  // `courseAttachments.attach`'s own identical descriptor above.
+  'courseWebSources.add': { resource: 'course', access: 'write' },
+  // FILE-6: a read of the course's own websites, never a write to any of
+  // them — the same `courseJoinLinks.list` shape above.
+  'courseWebSources.list': { resource: 'course', access: 'read' },
+  // FILE-6: resolves the website itself, write — a website belonging to
+  // another organization resolves to nothing (TEN-5), the same as
+  // `courseAttachments.detach`'s own identical shape above.
+  'courseWebSources.remove': { resource: 'courseWebSource', access: 'write' },
   // ENRL-2: resolves the person whose enrolments are being listed, read.
   'enrolments.listForPerson': { resource: 'person', access: 'read' },
   // ENRL-2: the policy *is* the check — it resolves the active enrolment

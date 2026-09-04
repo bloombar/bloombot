@@ -21,6 +21,7 @@ describe('buildResponsesRequestBody (MDL-2): stored prompt vs. inline instructio
       promptId: 'pmpt_abc123',
       instructions: 'ignored because promptId wins (D-3)',
       vectorStoreId: null,
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'When is the midterm?',
     })
@@ -35,6 +36,7 @@ describe('buildResponsesRequestBody (MDL-2): stored prompt vs. inline instructio
       promptId: null,
       instructions: 'You are a helpful teaching assistant.',
       vectorStoreId: null,
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'When is the midterm?',
     })
@@ -51,6 +53,7 @@ describe('buildResponsesRequestBody (MDL-2): stored prompt vs. inline instructio
       promptId: null,
       instructions: null,
       vectorStoreId: null,
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'hi',
     })
@@ -65,6 +68,7 @@ describe('buildResponsesRequestBody (MDL-2): stored prompt vs. inline instructio
       promptId: 'pmpt_abc123',
       instructions: null,
       vectorStoreId: null,
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'hi',
     })
@@ -84,6 +88,7 @@ describe('buildResponsesRequestBody (MDL-3): file search only when the course ha
       promptId: 'pmpt_abc123',
       instructions: null,
       vectorStoreId: 'vs_course_1',
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'hi',
     })
@@ -99,11 +104,64 @@ describe('buildResponsesRequestBody (MDL-3): file search only when the course ha
       promptId: 'pmpt_abc123',
       instructions: null,
       vectorStoreId: null,
+      webSourceDomains: [],
       conversationId: 'conv_1',
       question: 'hi',
     })
 
     expect(body.tools).toBeUndefined()
+  })
+})
+
+describe('buildResponsesRequestBody (MDL-9/FILE-6): web search only when the course has named websites, restricted to exactly those domains (WEB-31)', () => {
+  it('sends the web_search tool restricted to the course own domains when set', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4.1',
+      promptId: 'pmpt_abc123',
+      instructions: null,
+      vectorStoreId: null,
+      webSourceDomains: ['example.edu', 'docs.python.org'],
+      conversationId: 'conv_1',
+      question: 'hi',
+    })
+
+    expect(body.tools).toEqual([
+      {
+        type: 'web_search',
+        filters: { allowed_domains: ['example.edu', 'docs.python.org'] },
+      },
+    ])
+  })
+
+  it('sends no tools field at all when the course has no vector store and no websites', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4.1',
+      promptId: 'pmpt_abc123',
+      instructions: null,
+      vectorStoreId: null,
+      webSourceDomains: [],
+      conversationId: 'conv_1',
+      question: 'hi',
+    })
+
+    expect(body.tools).toBeUndefined()
+  })
+
+  it('sends both file_search and web_search when a course has both a vector store and websites', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4.1',
+      promptId: 'pmpt_abc123',
+      instructions: null,
+      vectorStoreId: 'vs_course_1',
+      webSourceDomains: ['example.edu'],
+      conversationId: 'conv_1',
+      question: 'hi',
+    })
+
+    expect(body.tools).toEqual([
+      { type: 'file_search', vector_store_ids: ['vs_course_1'] },
+      { type: 'web_search', filters: { allowed_domains: ['example.edu'] } },
+    ])
   })
 })
 

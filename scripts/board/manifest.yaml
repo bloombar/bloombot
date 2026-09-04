@@ -3173,7 +3173,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 19
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-30
   title: The header carries a profile control, and account settings is where
@@ -3191,5 +3191,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 19
-  status: Backlog
+  status: In progress
   review: false

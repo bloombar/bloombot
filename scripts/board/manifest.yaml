@@ -3207,7 +3207,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 20
-  status: In review
+  status: Done
   review: false
   note: baseline (not claimed by a roadmap phase)
 - id: MDL-9
@@ -3222,7 +3222,7 @@
   section: §31 Model Adapter
   family: MDL
   phase: 20
-  status: In review
+  status: Done
   review: false
   note: baseline (not claimed by a roadmap phase)
 - id: WEB-31
@@ -3238,5 +3238,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 20
-  status: In review
+  status: Done
   review: false

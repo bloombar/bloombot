@@ -45,6 +45,7 @@ export const MILESTONE_TITLE = {
   17: 'Phase 17 — Retention, reliability and the last admission gap',
   18: 'Phase 18 — Inviting a colleague',
   19: 'Phase 19 — The panel a person actually navigates',
+  20: 'Phase 20 — Websites as course knowledge',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

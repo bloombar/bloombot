@@ -258,3 +258,18 @@ routes in — which is what PROJ-3 already assumed when it scoped course-name un
 that server".
 
 **In scope:** WEB-26, WEB-27, WEB-28, WEB-29, WEB-30, PROJ-6, TEN-9
+
+## Phase 20 — Websites as course knowledge
+
+FILE-1 made a course's knowledge the files an instructor uploads, and MDL-3 grounds every
+answer in them. Plenty of a course's material is never a file, though: the department's
+syllabus page, the library guide, the documentation the course is taught against. Today an
+instructor's only option is to save a page as a PDF and upload it, which goes stale the
+moment the site changes.
+
+The provider's Responses API can restrict web search to a list of domains, which is exactly
+the shape of "the sites this course is taught from". A course keeps a list of them beside its
+files, the adapter turns that list into a domain-restricted `web_search` tool, and a course
+that names none is answered exactly as it is today — no tool, no unrestricted search.
+
+**In scope:** FILE-6, MDL-9, WEB-31

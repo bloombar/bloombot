@@ -34,6 +34,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('an owner grants the instructor role to a second account from the Team panel, and sees it listed (ENRL-5)', async ({
@@ -83,7 +84,7 @@ test('an owner grants the instructor role to a second account from the Team pane
   // 3. The Team panel lists both — neither shows a grantor: the owner's own
   //    founding row, and this seeded row, both write no `grantedByAccountId`
   //    (`schema.ts`'s own comment on the column).
-  await page.getByRole('button', { name: 'Team' }).click()
+  await navigateTo(page, 'Team')
   await expect(page.getByRole('heading', { name: 'Team' })).toBeVisible()
   await expect(page.getByText(`${ownerDisplayName} — Owner`)).toBeVisible()
   await expect(page.getByText(`${secondDisplayName} — Assistant`)).toBeVisible()

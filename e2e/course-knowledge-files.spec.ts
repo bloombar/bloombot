@@ -73,6 +73,7 @@ import {
 } from '../apps/worker/src/handlers/course-attachments.js'
 import { E2E_ATTACHMENT_STORAGE_DIR, E2E_DATABASE_PATH } from './support/env.js'
 import { FakeOpenAiFilesServer } from './support/fake-openai-files-server.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
@@ -171,7 +172,7 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
     await page.goto(`/sign-in/${token}`)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-    await page.getByRole('button', { name: 'Projects' }).click()
+    await navigateTo(page, 'Projects')
     await page.getByLabel('New project name').fill(projectName)
     await page.getByRole('button', { name: 'Create project' }).click()
     await page.getByRole('button', { name: projectName }).click()

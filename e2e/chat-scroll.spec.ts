@@ -34,6 +34,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 /**
@@ -76,7 +77,7 @@ test('the composer stays reachable without scrolling the page once the thread ov
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()
@@ -170,7 +171,7 @@ test('the composer stays reachable without scrolling the page once the thread ov
   }
 
   // 3. The browser's own part.
-  await page.getByRole('button', { name: 'Chat' }).click()
+  await navigateTo(page, 'Chat')
   const thread = page.getByTestId('chat-thread')
   await expect(thread).toContainText('Question 19')
 

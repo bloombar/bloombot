@@ -29,6 +29,7 @@ import {
   Ban,
   CheckCircle2,
   ChevronDown,
+  CircleUserRound,
   Clock,
   Copy,
   Download,
@@ -53,7 +54,7 @@ import {
   XCircle,
 } from 'lucide-react'
 
-/** Open the navigation drawer on a narrow screen (WEB-13/WEB-14). */
+/** Open the navigation drawer (WEB-14/WEB-29). */
 export const MenuIcon = Menu
 /** Return to the panel's own landing screen — sits beside the menu control in the fixed header (WEB-14). */
 export const HomeIcon = Home
@@ -61,6 +62,8 @@ export const HomeIcon = Home
 export const CloseIcon = X
 /** Sign out of the account. */
 export const SignOutIcon = LogOut
+/** WEB-30: the header's trailing-edge control that opens account settings. */
+export const ProfileIcon = CircleUserRound
 
 /** Edit an existing record (a course, a category, a channel name). */
 export const EditIcon = Pencil

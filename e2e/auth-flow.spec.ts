@@ -12,6 +12,7 @@
 
 import { expect, test } from '@playwright/test'
 
+import { navigateTo, signOut } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('sign in by emailed link, land in an organization, sign out, and stay signed out', async ({
@@ -41,7 +42,7 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   // The Discord tab is not the default one anymore (finding 10 of the
   // WEB-7 rework — `pages/Shell.tsx`'s own module comment) — this opens it
   // explicitly, the way an instructor reaching for the install button would.
-  await page.getByRole('button', { name: 'Discord' }).click()
+  await navigateTo(page, 'Discord')
   await expect(page.getByTestId('install-button')).toBeVisible()
 
   // The URL is replaced, not left on the single-use link — a reload must
@@ -51,7 +52,7 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   // 4. Sign out, and confirm the session actually ended server-side: a
   //    fresh navigation must land back on the sign-in screen, not merely
   //    the same tab forgetting a piece of client state.
-  await page.getByRole('button', { name: 'Sign out' }).click()
+  await signOut(page)
   await expect(
     page.getByRole('heading', { name: 'Sign in to Bloombot' })
   ).toBeVisible()

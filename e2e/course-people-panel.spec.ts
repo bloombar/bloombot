@@ -39,6 +39,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
+import { navigateTo } from './support/navigate.js'
 import { readSignInToken } from './support/read-sign-in-token.js'
 
 test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL-9)', async ({
@@ -61,7 +62,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   await page.goto(`/sign-in/${ownerToken}`)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await navigateTo(page, 'Projects')
   await page.getByLabel('New project name').fill(projectName)
   await page.getByRole('button', { name: 'Create project' }).click()
   await page.getByRole('button', { name: projectName }).click()

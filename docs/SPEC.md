@@ -2104,9 +2104,14 @@ the platform holds about it.
 That screen is also where the acting organization is chosen. TEN-7 requires the choice to be
 between names a person recognizes, and WEB-3 required it to be visible — but a control that
 renders as plain text whenever there is exactly one organization means an account that later
-joins a second has no way to discover the choice exists, and the common case renders as an
-inert sentence occupying the header. The organizations screen always lists every organization
-this account can act in, marks the active one, and switches to another when it is chosen —
-whether there is one of them or five. The panel continues to show which organization is
-active somewhere always visible, so the answer to "where am I acting" never requires opening
-a screen.
+joins a second has no way to discover the choice exists. The organizations screen always
+lists every organization this account can act in, marks the active one, and switches to
+another when it is chosen — whether there is one of them or five.
+
+The header states the acting organization by name, immediately right of the home control,
+where the navigation row used to be: the answer to "where am I acting" is on screen at all
+times and never requires opening a screen to get. When the account can act in more than one,
+that name is itself the control that switches between them — a dropdown listing every
+organization available to it — so switching stays one interaction from anywhere in the panel
+and the account settings screen is the fuller view rather than the only way in. When there is
+exactly one, the name is stated plainly, with no control to operate.

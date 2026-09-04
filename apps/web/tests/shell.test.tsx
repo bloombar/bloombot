@@ -740,12 +740,15 @@ describe('Shell (WEB-3, WEB-4)', () => {
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
-      // Not "Install to Discord" — a fetched binding this session never
-      // created still renders as installed.
+      // A fetched binding this session never created still renders as
+      // installed. TEN-9 — "Install to Discord" is offered too, now,
+      // alongside an existing binding: an organization can bind more than
+      // one server, so this is "install another," not a state this screen
+      // used to treat as mutually exclusive with "already installed."
       expect(await screen.findByText(/guild-99/)).toBeInTheDocument()
       expect(
-        screen.queryByRole('button', { name: 'Install to Discord' })
-      ).not.toBeInTheDocument()
+        screen.getByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
 
       // Remove is reachable for a binding this session did not create —
       // `handleRemove`'s own `if (!installedServerId) return` used to make
@@ -821,6 +824,78 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         screen.queryByRole('button', { name: 'Install to Discord' })
       ).not.toBeInTheDocument()
+    })
+  })
+
+  // --- TEN-9: an organization can bind more than one Discord server -------
+  describe('multiple active Discord server bindings (TEN-9)', () => {
+    const BINDING_A: DiscordServerBindingSummary = {
+      serverId: 'guild-a',
+      organizationId: 'org-1',
+      installedByAccountId: 'account-other',
+      installedAt: Date.now() - 86_400_000,
+      removedAt: null,
+    }
+    const BINDING_B: DiscordServerBindingSummary = {
+      serverId: 'guild-b',
+      organizationId: 'org-1',
+      installedByAccountId: 'account-other',
+      installedAt: Date.now() - 43_200_000,
+      removedAt: null,
+    }
+
+    it('lists every active binding with its own Remove, and still offers installing another', async () => {
+      listDiscordServers.mockResolvedValue([BINDING_A, BINDING_B])
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      openDrawer()
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+
+      expect(await screen.findByText(/guild-a/)).toBeInTheDocument()
+      expect(screen.getByText(/guild-b/)).toBeInTheDocument()
+      // One "Install to Discord" pair per binding — never one Install/Remove
+      // pair for the whole organization the way this screen used to be.
+      expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
+      expect(
+        screen.getByRole('button', { name: 'Install to Discord' })
+      ).toBeInTheDocument()
+    })
+
+    it('removing one binding leaves the other listed, still active', async () => {
+      dispatchAction.mockResolvedValue({ result: undefined })
+      listDiscordServers.mockResolvedValue([BINDING_A, BINDING_B])
+
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      openDrawer()
+      fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+      await screen.findByText(/guild-a/)
+
+      // Two rows, each with its own Remove — click the first one's.
+      const [firstRemove] = screen.getAllByRole('button', { name: 'Remove' })
+      if (!firstRemove) throw new Error('expected a Remove button')
+      fireEvent.click(firstRemove)
+      const dialog = await screen.findByRole('dialog')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+
+      await waitFor(() =>
+        expect(dispatchAction).toHaveBeenCalledWith(
+          'org-1',
+          'discordServers.remove',
+          { serverId: 'guild-a' }
+        )
+      )
+      // `guild-a`'s own row is gone; `guild-b` is untouched and still
+      // offers its own Remove — the identity of which binding was removed,
+      // not merely that a removal happened.
+      await waitFor(() =>
+        expect(screen.queryByText(/guild-a/)).not.toBeInTheDocument()
+      )
+      expect(screen.getByText(/guild-b/)).toBeInTheDocument()
+      expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1)
     })
   })
 
@@ -1215,6 +1290,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       vectorStoreId: null,
       maxRequestsPerDay: null,
       conversationScope: 'course',
+      discordServerId: null,
       createdAt: 0,
     }
 

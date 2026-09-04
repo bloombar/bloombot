@@ -3097,7 +3097,7 @@
   section: §16 Projects
   family: PROJ
   phase: 19
-  status: In review
+  status: Done
   review: false
 - id: TEN-9
   title: An organization may hold several Discord servers, and a course names the
@@ -3115,7 +3115,7 @@
   section: §15 Tenancy & Server Registration
   family: TEN
   phase: 19
-  status: Backlog
+  status: In review
   review: false
 - id: WEB-26
   title: A row's actions are collected into one menu
@@ -3131,7 +3131,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 19
-  status: In review
+  status: Done
   review: false
 - id: WEB-27
   title: A project is created from beside its heading, and named in a modal
@@ -3144,7 +3144,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 19
-  status: In review
+  status: Done
   review: false
 - id: WEB-28
   title: A course row opens a chat for that course
@@ -3156,7 +3156,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 19
-  status: In review
+  status: Done
   review: false
 - id: WEB-29
   title: The primary navigation is a drawer, not a header row

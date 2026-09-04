@@ -8443,3 +8443,234 @@ counts: `npm test` unchanged in shape (one new `describe`/`it` in `shell.test.ts
 rename across every existing case in `kebab-menu.test.tsx`), `npm run e2e` still 30/30 — the row-menu spec's own
 `getByRole('menu'/'menuitem', ...)` calls updated to `'group'`/`'button'` and its Chat click updated to the
 row-naming `aria-label`, not a behavior change.
+
+## D-76 — `packages/db`/`packages/actions`/`apps/worker`/`packages/discord`/`apps/web`: TEN-9 — an organization holds several Discord servers, and a course names the one it belongs to
+
+**Problem.** `discordServerBindings` had been many-servers-to-one-organization since TEN-3 (the guild snowflake
+is the primary key, the organization id an ordinary column), and TEN-8 already lists bindings in the plural —
+but nothing downstream ever handled more than one. `getActiveDiscordServerBindingForOrganization`
+(`repos/discord-servers.ts`) returned `active.length === 1 ? active[0] : undefined` — its own comment conceded
+it refused a two-binding organization exactly as if none were bound — and `pages/Shell.tsx` rendered
+`bindings.find((b) => b.removedAt === null)`, silently picking the first. A second install was recorded and
+then ignored everywhere: scaffolding refused to run, PROJ-3's name-uniqueness check stayed organization-wide
+(so two courses in different servers could never share a category or role name, even though only one guild's
+own namespace was ever at stake), and a message arriving in one server could in principle match a course that
+routes in a different server of the same organization, since routing never consulted a server at all.
+
+**Choice 1 — a course's own `discordServerId`, nullable, resolved rather than required.** The requirement's own
+text: an organization with exactly one active binding keeps working unchanged, and no existing course has to be
+edited. That rules out a `NOT NULL` column with a migration that backfills one — it would force a choice onto
+every course that has never needed to make one. Instead `courses.discordServerId` is nullable, and
+`repos/discord-servers.ts#resolveCourseDiscordServer` is the one place that turns "a course's own id, possibly
+null" plus "the organization's active bindings" into an actual server: the column when set, the organization's
+single active binding when it is null and unambiguous.
+
+**Choice 2 — zero active bindings is not the same refusal as two.** The first draft treated "no active binding
+at all" identically to "two or more" — both `resolveCourseDiscordServer` outcomes returned `{ ok: false }`, and
+`createCourse`/`updateCourse` refused to save (not merely enable) an enabled course the instant an organization
+with no Discord binding at all tried to route one. That broke ~400 existing tests across `packages/db`'s own
+fixtures (`seedOrgWithCourse` and friends) the moment it ran, and for a real reason: an instructor routinely
+defines a course before installing the bot anywhere, and the legacy config importer creates courses with no
+Discord anything. The fix, caught in review before this landed: `resolveCourseDiscordServer` resolves — does
+not refuse — a null column against zero active bindings, returning `{ ok: true, binding: undefined }`, a
+resolved "no server," not a refusal. `repos/courses.ts`'s PROJ-3 check treats that as its own bucket (every
+null-column candidate in a zero-binding organization still collides with every other one, reproducing the
+pre-TEN-9 organization-wide check exactly when there is nothing to scope by); a caller that actually needs a
+real guild to act on — `discordServers.scaffold`'s worker handler — treats an `undefined` binding as its own,
+distinct refusal ("no active Discord server bound"), since there is genuinely nowhere to scaffold into. Only
+`'ambiguous'` (null column, two or more active bindings) and `'removed'` (column names a binding no longer
+active) block *enabling* a course; creating or updating one, and saving a disabled course, never refuse on
+account of the server field at all.
+
+**Choice 3 — enablement, not every save, is where "undecidable" is refused.** The brief's own text: "prefer
+refusing to enable over silently rerouting a live course." A course may sit disabled with an ambiguous or
+stale server reference — nothing about defining one requires a Discord server to already make sense of it — but
+`createCourse`/`updateCourse` (when the save is `enabled: true` against a non-archived project) and
+`enableCourse` each re-run `resolveCourseDiscordServer` and refuse with a named reason before the PROJ-3 check
+even runs. An organization that gains a second binding after a course was already enabled with a null column is
+**not** retroactively disabled or re-checked — the same "grandfathered until the next save" treatment
+`enableCourse`'s own PROJ-3 re-check already gives a course whose names collided while it sat disabled. This was
+the open question the brief left for judgment; the alternative (sweeping every enabled course on every new
+binding claim) would silently reroute or disable a live course as a side effect of an unrelated install, which
+is exactly the outcome this choice avoids.
+
+**Choice 4 — PROJ-3 candidates are resolved against the same active-bindings snapshot as the input, not
+re-queried per candidate.** `pickCourseServerId` (`repos/discord-servers.ts`) is a pure function over an
+already-fetched `DiscordServerBinding[]`, shared by `resolveCourseDiscordServer` and
+`repos/courses.ts#findCourseNameConflict`'s own candidate filter — one query for the organization's active
+bindings, not one per candidate course. It is allowlisted in `tenant-scoping-convention.test.ts` (TEN-2) with
+its own comment: it takes no `organizationId` because it queries nothing at all — the tenant boundary is
+already enforced by whoever built the `activeBindings` array it is handed.
+
+**Choice 5 — the two named integration points, and no others.** The brief named exactly two call sites that
+"resolve the organization's binding and give up when there are two": `discord-scaffold.ts`'s worker handler and
+PROJ-3's own check. Both now resolve through a course's own server. `apps/worker/src/handlers/roster-import.ts`
+calls the same `getActiveDiscordServerBindingForOrganization` this slice deliberately left in place (for the
+"exactly one binding" reading some callers still legitimately want) and has the identical defect — a roster
+import cannot target a course's own server in a two-binding organization — but it was not named in the brief,
+and fixing it was left out, deliberately, rather than expanding the slice's own blast radius past what was
+scoped and reviewed. Noted here so it is not mistaken for an oversight nobody saw.
+
+**Choice 6 — inbound routing filters by server before `routeMessage` ever runs, not inside it.**
+`routeMessage` (`packages/core/src/routing.ts`) still knows nothing about Discord servers at all (TEN-3 stands:
+out of scope for this slice to touch how a message resolves to an *organization*). `packages/discord/src/handle-mention.ts#loadRoutableCourses`
+is what changed: it now takes the arriving guild id and filters `listRoutableCourses`' organization-wide list
+down to courses whose own resolved server (`pickCourseServerId`, the same helper PROJ-3 uses) matches it,
+*before* handing the list to `routeMessage`. A message arriving in one server can therefore never become
+`routing-ambiguous` by picking up a same-named category or role from a course that routes in a different server
+of the same organization — it simply never sees that course at all.
+
+**QA-1 evidence.** Every new test below was confirmed to fail against the pre-slice source, for the reason
+named, before being confirmed to pass against the fix:
+- `packages/db/tests/discord-servers.test.ts`'s new `resolveCourseDiscordServer` cases: `TypeError:
+  discordServers.resolveCourseDiscordServer is not a function` (the function did not exist) for four cases; the
+  fifth and sixth (organization-scoped resolution) also failed pre-fix.
+- `packages/db/tests/courses.test.ts`'s new "name collisions are scoped to a server" cases: the
+  cross-server-allowed case failed with `expected false to be true` (the save was refused as a collision); the
+  two enablement-refusal cases failed with `expected true to be false` (the course enabled instead of refusing).
+- `packages/actions/tests/actions.test.ts`'s three new `courses.save` cases: the cross-tenant and removed-binding
+  cases failed with `ActionInputError: Unrecognized key: "discordServerId"` (the field did not exist in the
+  schema at all).
+- `apps/worker/tests/handlers/discord-scaffold.test.ts`'s decisive two-binding case — the brief's own named
+  scenario — failed pre-fix with exactly the refusal the brief predicted: `discordServers.scaffold: organization
+  "…" has 2 active Discord server bindings — cannot tell which one this course belongs to`, thrown by
+  `getActiveDiscordServerBindingForOrganization`'s own `length === 1` guard, never reaching either guild.
+- `packages/discord/tests/handle-mention.test.ts`'s new cross-server routing case failed pre-fix at *setup*, not
+  at the routing assertion: `repos/courses.ts` refused to create the second, same-category course at all
+  (`Category name "Shared Category" is already used by course "Test Course"...`) — proving PROJ-3 was still
+  organization-wide before this slice, the precondition the routing fix depends on.
+- `e2e/discord-multi-server.spec.ts`, the full-stack case: failed pre-fix waiting for the "Enable" button that
+  never appeared, because `pages/CourseEditor.tsx` never rendered a "Discord server" selector at all pre-slice
+  — the save could not proceed the way the test drives it.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean; `npm run
+e2e` 31/31 (30 pre-existing plus this slice's own `discord-multi-server.spec.ts`); `npm run test:coverage`
+floors held (`packages/core`/`packages/actions`/`packages/db/repos` unchanged in shape).
+
+## D-77 — `packages/db`/`packages/actions`/`apps/worker`/`apps/web`: TEN-9 round 1 rework — a second server must not silently unroute the first, `roster.import` left lying about "no active Discord server bound," and a stale server assignment must stay recoverable
+
+D-76's own slice shipped `33937d5` and was reviewed at high effort in fresh context. Every number reproduced
+(2265 vitest, 90 node, 31 e2e, coverage floors held), the migration, routing, PROJ-3 scoping, TEN-5 shapes and
+the `pickCourseServerId` tenant-scoping allowlist were all confirmed correct in the paths they covered. Three
+must-fixes surfaced, the second serious enough that the coordinator overruled D-76's own "out of brief"
+deferral; two cheap-fixes and one "also fix, from the notes" followed from the same review.
+
+**Must-fix 1 — installing a second server silently stopped every pre-existing course answering in the first.**
+D-76's own Choice 3 ("grandfathered until the next save") left every already-enabled, null-`discordServerId`
+course untouched at the moment an organization gained a second binding — correct for the *write* side, but the
+*read* side (`packages/discord/src/handle-mention.ts#loadRoutableCourses`, filtering by resolved server before
+`routeMessage` runs) had no way to resolve a null column once `pickCourseServerId(null, [A, B])` stopped being
+unambiguous. The result: an owner installs an unrelated second server, and every existing course in the first
+server goes silently `unrouted` — no reply, logged at `info`, indistinguishable from an ordinary off-topic
+message, with nothing in the panel to say why.
+
+**Choice: backfill, not fail loudly.** The brief that reopened this offered two acceptable outcomes — keep
+routing in "the server it has always routed in," or fail loudly and visibly. Failing loudly was rejected: it
+would have meant either disabling every affected course the instant an unrelated server is installed (exactly
+the "silently reroutes or disables a live course as a side effect of an unrelated install" outcome D-76's own
+Choice 3 already ruled out for the *write* side, now happening on the *read* side instead) or logging at `error`
+for every ordinary message that continued to go unanswered — neither is "visible" to a student, only to whoever
+reads worker logs. Backfilling is precise instead of approximate: `repos/discord-servers.ts#claimDiscordServerBinding`
+now calls `backfillNullServerCoursesOnNewSecondBinding` on both its success paths (a fresh insert and a re-claim
+of a released binding), which checks whether the organization now holds exactly two active bindings — the exact
+1-to-2 transition, not a third binding or a re-claim while already ambiguous — and if so, sets every
+still-null-`discordServerId` course in the organization to the *other* (pre-existing) binding's server id. This
+converts "implicitly meant the organization's one server" into "explicitly says so," continuity preserved by
+recording what was always true rather than guessed at read time — the same reasoning `NULL courses.discord_server_id`
+started with (an organization with exactly one active binding keeps working unchanged), carried one step further
+so it stays unchanged *through* a second install, not merely up to it. A course created *after* the organization
+is already ambiguous is deliberately left null — it never had a single "previous" server to attribute it to, and
+is correctly refused at its own next enable (`repos/courses.ts`), which is what "genuinely undecided" is supposed
+to look like.
+
+**Must-fix 2 — `roster.import` overruled out of D-76's own deferral.** D-76's Choice 5 left `apps/worker/src/handlers/roster-import.ts`
+on `getActiveDiscordServerBindingForOrganization`, reasoning it was not one of the brief's two named integration
+points. The coordinator read the brief's own `repos/discord-servers.ts` bullet again — "no caller should be left
+silently refusing a two-binding organization" — and overruled the deferral: that sentence has no "except this
+one" in it. Worse than the pre-TEN-9 state, too: `getActiveDiscordServerBindingForOrganization` returns
+`undefined` for *both* "none bound" and "more than one," so the handler's own error message
+(`"...has no active Discord server bound"`) lied the moment a second binding existed, and applied to *every*
+course's roster import, including ones in the server that had worked the day before. Fixed the same way
+`discord-scaffold.ts` already was: `resolveCourseDiscordServer(context.organizationId, course.discordServerId, context.db)`,
+the course already loaded three lines above, its own three outcomes each reported with their own message.
+
+**Must-fix 3 — a course pinned to a since-removed binding was unrecoverable in the panel.** `activeBindings.length > 1`
+alone decided whether `pages/CourseEditor.tsx` rendered the server selector at all. An owner removes the second
+of two bindings through `pages/Shell.tsx`'s own per-row Remove (this same phase's own addition); the organization
+drops back to one active binding, the selector disappears, and `keepOrClear`'s own omission (`handleSave`) then
+preserves the now-inactive id forever — every save of the enabled course refused with "…no longer active…", every
+re-enable refused the same way, and no control anywhere in the product to choose a different server or clear the
+stale one. Fixed by widening the gate to `activeBindings.length > 1 || baseline.discordServerId !== null` — offered
+whenever there is an actual choice *or* the course, as loaded, already names one explicitly, active or not — with
+the stale id rendered as its own, clearly-labeled, disabled `<option>` (so the control reads as "pinned to
+`guild-b` (no longer active)," not as if nothing were selected) and the blank option still able to clear it to
+`null`. One further bug caught while building the fix, not merely reviewing it: gating the *send* decision on
+`form.discordServerId !== null` (the live, edited value, matching the render gate's first draft) meant clearing
+the field to `null` — choosing the blank option — flipped the gate itself to `false` mid-edit, which then omitted
+the field from the save payload entirely, silently un-doing the very clear the instructor just asked for (an
+omitted field means "keep what is stored," `handleSave`'s own rule). The gate now reads `baseline.discordServerId`,
+not `form.discordServerId` — `baseline` only changes on a fresh load or a successful save, so it stays fixed for
+the whole edit regardless of what the user chooses along the way, the same stability `isDirty`'s own comparison
+already relies on it for.
+
+**Cheap-fix 4 — `updateCourse`'s and `findProjectUnarchiveConflict`'s own server-resolution refusal branches had
+no test.** `createCourse`'s and `enableCourse`'s each did; coverage named the other two by line. Both now have
+one — `findProjectUnarchiveConflict`'s is the more interesting of the two: a new way for an *unrelated* operation
+(unarchiving a project) to fail, introduced by this phase, that nothing had exercised at all.
+
+**Cheap-fix 5 — the unarchive refusal named no course.** `serverResolutionConflict` took only a reason; every
+call site now also supplies the course's own title (`input.title` for `createCourse`/`updateCourse`, `existing.title`
+for `enableCourse`, `course.title` — newly selected — for `findProjectUnarchiveConflict`'s own loop), so a project
+holding twenty enabled courses says which one is undecided rather than only that one is. The PROJ-3 collision
+path this cheap-fix does *not* touch (`findCourseNameConflict`'s own `conflict()` builder) already named the
+conflicting course and project correctly — confirmed by the reviewer, unchanged here.
+
+**Also fixed, from the notes — `projects.duplicate` dropped `discordServerId`.** Every other field a source
+course carries is copied faithfully into its duplicate (`packages/actions/src/actions/projects.ts`); `discordServerId`
+was not, silently. Rolling a term forward in a two-binding organization is the natural next thing an instructor
+does after this phase's own slice, and copying a course field is not the project-level server assignment TEN-9's
+own brief put out of scope (that was about *assigning* a server to a project, not about a duplicate forgetting a
+field the source course already had). Added to the copy, with a test that seeds a real bound server and asserts
+the duplicate's own `discordServerId` matches the source's.
+
+**Left alone, documented rather than fixed — `packages/legacy-import/src/import-config.ts`'s re-run clears a
+panel-set `discordServerId`.** `toNewCourse` never sets the field at all, and `updateCourse` (`repos/courses.ts`)
+writes `discordServerId: input.discordServerId ?? null` unconditionally — the repo layer's own `NewCourse` has no
+`keepOrClear` semantics of its own; that convention lives one layer up, in `courses.save`'s own `execute`
+(`packages/actions/src/actions/courses.ts`), which `import-config.ts` does not go through (it calls
+`coursesRepo.updateCourse` directly). So a re-import of the same `bot_config.yml` — the legacy importer's own
+documented, idempotent "repair a previous run's settings" behaviour (this file's own "finding 3" comment) — wipes
+any server an instructor has since assigned through the panel. For an *enabled* course in a two-binding
+organization this fails loudly (the same enablement guard TEN-9 always had — `updateCourse`'s own
+`resolveCourseDiscordServer` check refuses the write outright, so nothing routes wrong, it just refuses); for a
+*disabled* one the assignment is quietly lost, recoverable only by re-assigning it again by hand. Not fixed here:
+`packages/legacy-import` is out of this phase's own scope (D-76's own module comment on `roster-import.ts`
+already draws that line for a different file in the same package boundary), and the fix belongs with whoever
+next touches the legacy import path — either give it the same `keepOrClear` convention `courses.save` uses, or
+have it read the existing row's own `discordServerId` forward the way it already does for nothing else. Recorded
+here as a known limit, not silently left for someone to rediscover.
+
+**QA-1 evidence, round 1 rework.**
+- Must-fix 1's decisive test (`packages/discord/tests/handle-mention.test.ts`, "installing a second server does
+  not stop a pre-existing null-server course answering...") was run against the pre-fix `discord-servers.ts`
+  first (the fresh-insert/re-claim backfill calls removed, nothing else touched) and failed exactly as the
+  scenario predicts: `expected 'unrouted' to be 'answered'` — the student got no reply at all. A companion
+  `packages/db/tests/discord-servers.test.ts` suite (`claiming a second active binding backfills null-server
+  courses (TEN-9)`) pins the backfill itself at the repo layer, including that it does not touch another
+  organization's course, a course that already named a server explicitly, or a course created after the
+  organization was already ambiguous.
+- Must-fix 2's two new `apps/worker/tests/handlers/roster-import.test.ts` cases both failed pre-fix with the
+  exact defect named: `Error: roster.import: organization "…" has no active Discord server bound` — thrown by
+  `getActiveDiscordServerBindingForOrganization`'s own `undefined`-for-both-reasons return — for the case where
+  two bindings *were* in fact bound, and for the "more than one active" assertion, which received that same
+  lying message instead of the expected one.
+- Must-fix 3's two new `apps/web/tests/course-editor.test.tsx` cases both failed pre-fix at
+  `screen.findByLabelText('Discord server')` timing out — the selector never rendered at all once the
+  organization dropped back to one active binding, for either the "shows the selector for a stale binding" case
+  or the "clearing a stale assignment" case.
+- The "also fixed" `projects.duplicate` case (`packages/actions/tests/project-duplicate.test.ts`) failed pre-fix
+  with `expected null to be '<serverId>'` — the duplicate's own `discordServerId` came back `null` regardless of
+  what the source course carried.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean; `npm run e2e`
+31/31, unchanged from D-76 (no e2e spec touched by this rework); `npm run test:coverage` floors held.

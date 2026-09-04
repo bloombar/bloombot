@@ -4,6 +4,10 @@
  * organization, created on first sign-in) sees it named plainly; an
  * account in more than one organization gets a control that switches
  * between them and reports which one is now active.
+ *
+ * WEB-30: restyled for the header's leading edge — no "Acting in" prose,
+ * either case (`components/OrganizationSwitcher.tsx`'s own module comment
+ * on why there is no longer room to spare for it).
  */
 
 import { fireEvent, render, screen } from '@testing-library/react'
@@ -37,6 +41,11 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
       'owner'
     )
+    // WEB-30: no "Acting in" prose — the header has no room to spare for it
+    // alongside the name itself.
+    expect(screen.getByTestId('organization-switcher')).not.toHaveTextContent(
+      'Acting in'
+    )
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
   })
 
@@ -68,6 +77,9 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     expect(select).toHaveValue('org-1')
     expect(select).toHaveTextContent('Acme U')
     expect(select).toHaveTextContent('Northwind College')
+    // WEB-30: no wrapping "Acting in" label — the select's own current
+    // value already reads as the active organization's name.
+    expect(screen.queryByText('Acting in')).not.toBeInTheDocument()
 
     fireEvent.change(select, { target: { value: 'org-2' } })
 

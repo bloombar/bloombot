@@ -73,6 +73,17 @@ vi.mock('../src/api/client.js', async () => {
   }
 })
 
+// WEB-29: every nav item this file exercises (Discord/Projects/Chat/
+// Transcripts/Usage/Team/Jobs, plus Sign out) now lives inside the drawer,
+// not a header row visible at every width — a click needs the hamburger
+// opened first. The drawer closes itself once an item is clicked
+// (`AppShell.tsx`'s own `closeDrawer` call alongside `item.onClick`), so
+// this is called again before every subsequent nav click in the same test,
+// not only the first.
+function openDrawer() {
+  fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+}
+
 const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'instructor@example.edu',
@@ -189,6 +200,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     // default one anymore — finding 10 — so this test opens it explicitly.)
     // This assertion runs before `listDiscordServers` has resolved (no
     // `await` above it) — proving the banner does not wait on the fetch.
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
     expect(screen.getByText(/guild-42/)).toBeInTheDocument()
 
@@ -281,6 +293,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
     // Switch away from the organization this mounted with...
@@ -314,6 +327,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         onSignedOut={vi.fn()}
       />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
@@ -341,6 +355,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={onSignedOut} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
     // If `handleSignOut`'s `try/finally` had no `catch` (finding 3 of the
@@ -378,6 +393,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       target: { value: 'A course I never saved' },
     })
 
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
     const dialog = await screen.findByRole('dialog', {
@@ -442,6 +458,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Transcripts' }))
 
     expect(
@@ -466,6 +483,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
 
     expect(
@@ -498,6 +516,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
       target: { value: 'org-2' },
     })
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
 
     await screen.findByRole('heading', { name: 'Usage' })
@@ -514,6 +533,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Team' }))
 
     expect(
@@ -536,6 +556,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
       target: { value: 'org-2' },
     })
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Team' }))
 
     await screen.findByRole('heading', { name: 'Team' })
@@ -552,6 +573,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     renderWithModal(
       <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
     )
+    openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Jobs' }))
 
     expect(
@@ -577,6 +599,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         screen.getByRole('combobox', { name: 'Organization' })
       ).toHaveValue('personal-org')
+      openDrawer()
       expect(
         screen.getByRole('button', { name: 'Discord' })
       ).toBeInTheDocument()
@@ -595,7 +618,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
       })
 
       // Discord, Projects and Transcripts are gone — not merely disabled —
-      // once this organization is active.
+      // once this organization is active. The drawer is opened first so
+      // this actually proves absence, not merely that a closed drawer has
+      // nothing to show.
+      openDrawer()
       expect(
         screen.queryByRole('button', { name: 'Discord' })
       ).not.toBeInTheDocument()
@@ -618,6 +644,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
       )
       // Select Discord while still on the membership organization...
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(
         screen.getByRole('heading', { name: 'Discord' })
@@ -650,7 +677,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Home' }))
 
       // Still Chat — 'projects' (this shell's own ordinary home) is not a
-      // screen this account can reach here.
+      // screen this account can reach here. Drawer opened first, the same
+      // "actually prove absence" reasoning the switch test above uses.
+      openDrawer()
       expect(
         screen.queryByRole('button', { name: 'Projects' })
       ).not.toBeInTheDocument()
@@ -697,6 +726,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
       // Not "Install to Discord" — a fetched binding this session never
@@ -741,6 +771,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
       // An owner seeing "Install" for a server that is already bound is the
@@ -765,6 +796,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
       // Rendering "Install" here would be the exact same bug this slice
@@ -821,6 +853,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
           onSignedOut={vi.fn()}
         />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
 
@@ -874,6 +907,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(await screen.findByText(/guild-1/)).toBeInTheDocument()
 
@@ -919,6 +953,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderWithModal(
         <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
       expect(await screen.findByText(/guild-active/)).toBeInTheDocument()
@@ -947,6 +982,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
           onSignedOut={vi.fn()}
         />
       )
+      openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       // `justInstalled` is the immediate signal while the mount fetch above
       // is still in flight (this file's own regression test, above).
@@ -1000,6 +1036,131 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // caller with no membership — this must never even be attempted for
       // an organization the account is only connected to, not a member of.
       expect(listDiscordServers).not.toHaveBeenCalledWith('institution-org')
+    })
+  })
+
+  // --- WEB-29/WEB-30: the drawer's own divider, sign-out, the header's
+  // organization name, and the profile control reaching account settings ---
+  describe('the navigation drawer and account settings (WEB-29, WEB-30)', () => {
+    it('divides the drawer into two groups with a visible separator, for a member', () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      openDrawer()
+      const nav = screen.getByRole('navigation', { name: 'Main' })
+      const separator = screen.getByRole('separator')
+      expect(nav).toContainElement(separator)
+      // The everyday group (Projects, Chat, Transcripts) precedes the
+      // separator; the organization group (Discord, Team, Usage, Jobs)
+      // follows it.
+      const projects = screen.getByRole('button', { name: 'Projects' })
+      const discord = screen.getByRole('button', { name: 'Discord' })
+      expect(
+        projects.compareDocumentPosition(separator) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(
+        separator.compareDocumentPosition(discord) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    })
+
+    it('offers no separator, and no organization group, for a connected-but-not-a-member account', () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // The account's own membership organization (`personal-org`) is the
+      // initial active one, and offers every tab — the connected-only
+      // organization (LINK-10) is what has no organization group at all.
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+      openDrawer()
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument()
+    })
+
+    it('carries sign-out at the drawer’s foot, reachable once the drawer is open', () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // Not reachable before the drawer opens — it lives in the drawer now,
+      // not the header (this file's own `openDrawer` helper on why every
+      // other nav click in this file needs it too).
+      expect(
+        screen.queryByRole('button', { name: 'Sign out' })
+      ).not.toBeInTheDocument()
+      openDrawer()
+      expect(
+        screen.getByRole('button', { name: 'Sign out' })
+      ).toBeInTheDocument()
+    })
+
+    it("states the acting organization's name at the header's leading edge", () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // A single option would read plainly; two memberships (this account)
+      // read as a dropdown whose own current value is the active
+      // organization's name — `Org One` (org-1), the initial active
+      // organization.
+      expect(
+        screen.getByRole('combobox', { name: 'Organization' })
+      ).toHaveTextContent('Org One')
+    })
+
+    it('the profile control opens account settings, listing every organization and the active one', async () => {
+      renderWithModal(
+        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
+      expect(
+        await screen.findByRole('heading', { name: 'Account' })
+      ).toBeInTheDocument()
+      // Scoped to the account page itself — `Org One` is also the header's
+      // own switcher option, still on screen underneath.
+      const accountPage = within(screen.getByTestId('account-page'))
+      expect(
+        accountPage.getByText('instructor@example.edu')
+      ).toBeInTheDocument()
+      expect(accountPage.getByText(/Org One/).closest('li')).toHaveTextContent(
+        'Active'
+      )
+    })
+
+    it('a connected-but-not-a-member account can still reach account settings, and switch from there to an organization where it is a member', async () => {
+      renderWithModal(
+        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
+      )
+      // Switch to the connected-only organization first — the account's own
+      // membership organization (`personal-org`) is otherwise already
+      // active by default, which would not actually exercise the
+      // non-member case this test names.
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+      await screen.findByRole('heading', { name: 'Chat' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
+      expect(
+        await screen.findByRole('heading', { name: 'Account' })
+      ).toBeInTheDocument()
+
+      // Scoped to the account page itself — `Student` (the account's own
+      // personal organization's name) is also the header's own switcher
+      // option, still on screen underneath.
+      const membershipRow = within(screen.getByTestId('account-page'))
+        .getByText(/Student/)
+        .closest('li')
+      fireEvent.click(
+        membershipRow!.querySelector('button') as HTMLButtonElement
+      )
+
+      // Switched — and, being a member there, the ordinary tab set is
+      // offered again (`effectiveTab`'s own `'account'` carve-out, this
+      // file's own module comment).
+      expect(
+        await screen.findByRole('combobox', { name: 'Organization' })
+      ).toHaveValue('personal-org')
     })
   })
 })

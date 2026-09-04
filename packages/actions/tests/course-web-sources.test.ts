@@ -3,11 +3,13 @@
  * actions, modelled on `course-join-links.test.ts`'s own shape.
  */
 
+import { courseWebSources as courseWebSourcesRepo } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   addCourseWebSourceAction,
   listCourseWebSourcesAction,
+  MAX_COURSE_WEB_SOURCES,
   removeCourseWebSourceAction,
 } from '../src/actions/course-web-sources.js'
 import { dispatch } from '../src/dispatch.js'
@@ -83,6 +85,46 @@ describe('courseWebSources.add (FILE-6, WEB-31)', () => {
       { organizationId, db: testDb.db, accountId: ownerId }
     )
     expect(listed).toHaveLength(1)
+  })
+
+  // MDL-9/`MAX_COURSE_WEB_SOURCES`'s own doc comment — past OpenAI's own
+  // 100-domain `allowed_domains` ceiling, every model request for this
+  // course would build an invalid `tools` entry, so the 101st add refuses
+  // rather than silently landing a row the provider could never honor.
+  it('refuses the 101st website with a clear, named limit — never a silent 101st row', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    // Seeded directly through the repo, not one dispatch per row — this
+    // test is about the cap `execute` itself enforces, not about
+    // re-proving `.add` a hundred times over.
+    for (let i = 0; i < MAX_COURSE_WEB_SOURCES; i++) {
+      courseWebSourcesRepo.addWebSource(
+        organizationId,
+        { courseId: course.id, domain: `site-${i}.example.edu` },
+        testDb.db
+      )
+    }
+
+    const rejection = dispatch(
+      addCourseWebSourceAction,
+      { courseId: course.id, domain: 'one-too-many.example.edu' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    await expect(rejection).rejects.toBeInstanceOf(ActionConflictError)
+    await rejection.catch((error: unknown) => {
+      expect((error as ActionConflictError).message).toContain(
+        `${MAX_COURSE_WEB_SOURCES} websites`
+      )
+    })
+
+    const listed = await dispatch(
+      listCourseWebSourcesAction,
+      { courseId: course.id },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+    expect(listed).toHaveLength(MAX_COURSE_WEB_SOURCES)
   })
 
   it('refuses a course id belonging to another organization (ACT-2/TEN-5)', async () => {

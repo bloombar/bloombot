@@ -19,6 +19,19 @@ import type { Action } from '../types.js'
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
 type WebSource = NonNullable<ReturnType<typeof courseWebSources.getWebSource>>
 
+// OpenAI's own ceiling on `web_search`'s `filters.allowed_domains` — 100
+// domains (MDL-9's own provider shape, `packages/openai/src/responses.ts`).
+// A course whose own row count already reached this before an `.add` runs
+// is refused rather than let a 101st domain land: past the cap, every
+// model request for that course would build an *invalid* `tools` entry,
+// which fails every question this course is asked from then on, with only
+// a log line and no signal in the panel that anything is wrong. The same
+// "an explicit, tested, named ceiling rather than a silent provider
+// rejection" discipline `MAX_COURSE_ATTACHMENT_BYTES`'s own doc comment
+// (`apps/api/src/routes/actions.ts`) already holds itself to for a
+// different provider ceiling.
+export const MAX_COURSE_WEB_SOURCES = 100
+
 // D-12/D-18's own shape (`projects.ts#createProject`'s doc comment): the
 // database is what actually refuses a duplicate domain
 // (`course_web_sources_course_domain_unique`, `schema.ts`) — this package
@@ -89,6 +102,22 @@ export const addCourseWebSourceAction: Action<
       throw new Error(
         `courseWebSources.add: input schema accepted a domain execute could not normalize ("${input.domain}") — should be unreachable`
       )
+    }
+
+    // MAX_COURSE_WEB_SOURCES's own doc comment above — checked before the
+    // insert, not caught as a second kind of constraint violation after
+    // it: there is no database constraint enforcing this cap (it is a
+    // provider ceiling, not a uniqueness rule), so nothing would otherwise
+    // stop a 101st row from landing.
+    const existing = courseWebSources.listWebSourcesForCourse(
+      organizationId,
+      entity.id,
+      db
+    )
+    if (existing.length >= MAX_COURSE_WEB_SOURCES) {
+      throw new ActionConflictError({
+        message: `This course already names ${MAX_COURSE_WEB_SOURCES} websites, the most a single course may ground its answers in.`,
+      })
     }
 
     try {

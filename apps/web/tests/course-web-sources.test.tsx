@@ -134,6 +134,36 @@ describe('CourseWebSources (FILE-6)', () => {
     expect(screen.getByText('No websites added yet.')).toBeInTheDocument()
   })
 
+  // MDL-9/MAX_COURSE_WEB_SOURCES — a course at OpenAI's own 100-domain cap
+  // refuses the same way a duplicate does: surfaced through the existing
+  // `ErrorMessage` path, no new UI affordance.
+  it('adding past the course own website cap surfaces the refusal', async () => {
+    listCourseWebSources.mockResolvedValue([])
+    addCourseWebSource.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          message:
+            'This course already names 100 websites, the most a single course may ground its answers in.',
+        },
+      })
+    )
+
+    renderWithModal(
+      <CourseWebSources organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No websites added yet.')
+
+    fireEvent.change(screen.getByLabelText('Website'), {
+      target: { value: 'one-too-many.example.edu' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add website' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('This course already names 100 websites')
+    expect(screen.getByText('No websites added yet.')).toBeInTheDocument()
+  })
+
   it('remove confirms first — cancelling leaves the website exactly as it was', async () => {
     listCourseWebSources.mockResolvedValue([
       webSource({ domain: 'example.edu' }),

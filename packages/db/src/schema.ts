@@ -1399,7 +1399,7 @@ export const membershipInvitations = sqliteTable(
 // into a `web_search` tool restricted to exactly this list of domains
 // (`packages/openai/src/responses.ts`'s own `filters.allowed_domains`). One
 // row per `(courseId, domain)` pair — `domain` is always the *normalized*
-// form `packages/core`'s `normalizeWebSourceDomain` produces (WEB-31: bare,
+// form `@bloombot/schemas`'s `normalizeWebSourceDomain` produces (WEB-31: bare,
 // lowercased, no scheme/path/port), never whatever an instructor happened
 // to type, so the unique constraint below actually catches
 // `https://Example.edu/` and `example.edu` as the same site rather than
@@ -1419,11 +1419,11 @@ export const courseWebSources = sqliteTable(
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
-    // The same "organization first" index shape most scoped tables in this
-    // file carry (`membership_invitations_organization_id_idx`, above), and
-    // what `repos/course-web-sources.ts#listWebSourcesForCourse` filters a
+    // What `repos/course-web-sources.ts#listWebSourcesForCourse` filters a
     // course's own websites by.
     index('course_web_sources_course_id_idx').on(table.courseId),
+    // The same "organization first" index shape most scoped tables in this
+    // file carry (`membership_invitations_organization_id_idx`, above).
     index('course_web_sources_organization_id_idx').on(table.organizationId),
     // A course never names the same domain twice — the same "let the
     // database refuse it, never trust an application check" discipline

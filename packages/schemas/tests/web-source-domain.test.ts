@@ -30,6 +30,14 @@ describe('normalizeWebSourceDomain: accepted and reduced to its bare domain (WEB
     { input: 'www.example.edu', domain: 'www.example.edu' },
     { input: 'https://www.example.edu/', domain: 'www.example.edu' },
     { input: 'https://user:pass@example.edu/', domain: 'example.edu' },
+    // A backslash counts as a path separator alongside `/`, `?` and `#` —
+    // WHATWG URL parsing (a real browser) treats it as equivalent to `/`
+    // in a special URL, so this must resolve to the same host a browser
+    // would show an instructor, not to whatever follows it.
+    {
+      input: 'https://example.edu\\some\\path',
+      domain: 'example.edu',
+    },
   ]
 
   for (const { input, domain } of cases) {
@@ -58,6 +66,14 @@ describe('normalizeWebSourceDomain: refused (WEB-31)', () => {
     {
       input: `${'a'.repeat(250)}.edu`,
       label: 'a value over 253 characters once reduced',
+    },
+    { input: 'a..b.edu', label: 'an empty label' },
+    { input: '.example.edu', label: 'a leading empty label' },
+    { input: '-evil.edu', label: 'a label starting with a hyphen' },
+    { input: 'example.edu-', label: 'a label ending with a hyphen' },
+    {
+      input: `${'a'.repeat(70)}.edu`,
+      label: 'a label over 63 characters',
     },
   ]
 

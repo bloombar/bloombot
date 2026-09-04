@@ -14,7 +14,7 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Executor } from '../client.js'
 import { courseWebSources } from '../schema.js'
 
 export type CourseWebSource = typeof courseWebSources.$inferSelect
@@ -42,7 +42,7 @@ export interface NewCourseWebSource {
 export function addWebSource(
   organizationId: string,
   input: NewCourseWebSource,
-  db: Database
+  db: Executor
 ): CourseWebSource {
   return db
     .insert(courseWebSources)
@@ -61,7 +61,7 @@ export function addWebSource(
 export function getWebSource(
   organizationId: string,
   webSourceId: string,
-  db: Database
+  db: Executor
 ): CourseWebSource | undefined {
   return db
     .select()
@@ -79,7 +79,7 @@ export function getWebSource(
 export function listWebSourcesForCourse(
   organizationId: string,
   courseId: string,
-  db: Database
+  db: Executor
 ): CourseWebSource[] {
   return db
     .select()
@@ -97,7 +97,7 @@ export function listWebSourcesForCourse(
 export function deleteWebSource(
   organizationId: string,
   webSourceId: string,
-  db: Database
+  db: Executor
 ): boolean {
   const result = db
     .delete(courseWebSources)

@@ -44,6 +44,20 @@ const MAX_DOMAIN_LENGTH = 253
 // scope for this slice; see `docs/DECISIONS.md`.
 const VALID_HOST_CHARACTERS_RE = /^[a-z0-9.-]+$/
 
+// RFC 1035 §2.3.4/§3.1 — a label (the text between dots) is 1-63
+// characters, alphanumeric at both ends, with hyphens allowed only in the
+// interior. `VALID_HOST_CHARACTERS_RE` above only bounds the *alphabet* a
+// domain uses; without this, `a..b.edu` (an empty label), `.example.edu`
+// (a leading empty label), `-evil.edu`/`example.edu-` (a label starting or
+// ending with a hyphen) and a label over 63 characters all passed that
+// check and were stored and shown back to an instructor as a working
+// website — one `allowed_domains` (MDL-9) can never actually match, so the
+// course silently answers ungrounded by whatever the instructor thought
+// they had just configured. Anchored per-label (`^...$`) against each
+// piece `rest.split('.')` produces, not the whole string at once — a dot
+// itself is never inside a label.
+const VALID_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+
 /** A bare IPv4 literal ("192.0.2.1") — refused (WEB-31's own "an IP-literal-only input"): `allowed_domains` restricts by domain, and an IP address is never one. */
 function isIpv4Literal(host: string): boolean {
   return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
@@ -59,13 +73,14 @@ function refuse(reason: string): WebSourceDomainResult {
  * stores, or refuse it.
  *
  * Accepted and reduced (WEB-31): a leading `http://`/`https://` scheme, a
- * path/query/fragment (whatever follows the first `/`, `?` or `#`), a
- * userinfo prefix (`user:pass@host`, never expected from an instructor but
- * stripped rather than tripping the invalid-character refusal on the `@`),
- * a port, and any trailing dots — then lowercased. **Never stripped**: a
- * leading `www.` — a site served only at `www.example.edu` would otherwise
- * have its own working domain silently rewritten to one that answers
- * nothing.
+ * path/query/fragment (whatever follows the first `/`, `?`, `#` or `\\` —
+ * the `pathStart` regex's own doc comment, below, on why a backslash counts
+ * too), a userinfo prefix (`user:pass@host`, never expected from an
+ * instructor but stripped rather than tripping the invalid-character
+ * refusal on the `@`), a port, and any trailing dots — then lowercased.
+ * **Never stripped**: a leading `www.` — a site served only at
+ * `www.example.edu` would otherwise have its own working domain silently
+ * rewritten to one that answers nothing.
  *
  * Refused, always with a plain-English `reason` an instructor's own error
  * message can surface directly (WEB-31): an empty string (before or after
@@ -73,11 +88,17 @@ function refuse(reason: string): WebSourceDomainResult {
  * left containing whitespace; anything left with no dot (a bare
  * `localhost`, or a single label); a bare IPv4 literal
  * (`isIpv4Literal`, above); anything longer than `MAX_DOMAIN_LENGTH`
- * characters once reduced; and anything left containing a character
- * outside `VALID_HOST_CHARACTERS_RE` (a stray space already refused above,
- * but also e.g. an underscore, a literal `@` that survived because it was
- * not preceded by userinfo, or a bracketed IPv6 literal — none of the
- * shapes WEB-31 asks this to accept).
+ * characters once reduced; anything left containing a character outside
+ * `VALID_HOST_CHARACTERS_RE` (a stray space already refused above, but also
+ * e.g. an underscore, a literal `@` that survived because it was not
+ * preceded by userinfo, or a bracketed IPv6 literal — none of the shapes
+ * WEB-31 asks this to accept); and any label (the text between dots) that
+ * is empty, starts or ends with a hyphen, or is over 63 characters
+ * (`VALID_LABEL_RE`'s own doc comment, above) — a domain that passes the
+ * character-set check but fails this one is exactly as unusable to
+ * `allowed_domains` (MDL-9) as one that fails the character-set check
+ * outright, so both refuse identically rather than one silently storing a
+ * site that can never actually match.
  */
 export function normalizeWebSourceDomain(input: string): WebSourceDomainResult {
   const trimmed = input.trim()
@@ -88,8 +109,17 @@ export function normalizeWebSourceDomain(input: string): WebSourceDomainResult {
 
   let rest = trimmed.replace(/^https?:\/\//i, '')
 
-  // Path, query or fragment — whatever follows the first `/`, `?` or `#`.
-  const pathStart = rest.search(/[/?#]/)
+  // Path, query or fragment — whatever follows the first `/`, `?`, `#` or
+  // `\\`. The backslash is not a path separator in the URL spec's own
+  // prose, but WHATWG URL parsing (what every real browser, and this
+  // platform's own students, actually use) treats it as equivalent to `/`
+  // in a special ("http"/"https") URL — without this,
+  // `https://example.edu\\@evil.com` normalized to `evil.com` (the `@`
+  // rule below reads it as userinfo on `evil.com`) while a real browser
+  // resolves the very same string's host as `example.edu`, so this
+  // function and the surface it exists to protect an instructor from
+  // disagreed about which site a pasted URL even names.
+  const pathStart = rest.search(/[/?#\\]/)
   if (pathStart !== -1) rest = rest.slice(0, pathStart)
 
   // Userinfo (`user:pass@host`) — this file's own doc comment on why this
@@ -124,6 +154,18 @@ export function normalizeWebSourceDomain(input: string): WebSourceDomainResult {
     return refuse(
       'A website contains characters that are not part of a valid domain.'
     )
+  }
+  // RFC 1035 §2.3.4/§3.1 (`VALID_LABEL_RE`'s own doc comment, above) — the
+  // character-set check just above is necessary but not sufficient: it
+  // passes `a..b.edu`, `.example.edu`, `-evil.edu`, `example.edu-` and a
+  // 70-character label, none of which `allowed_domains` (MDL-9) can ever
+  // actually match.
+  for (const label of rest.split('.')) {
+    if (!VALID_LABEL_RE.test(label)) {
+      return refuse(
+        'Enter a valid domain — each part between dots must start and end with a letter or digit, and be no more than 63 characters.'
+      )
+    }
   }
 
   return { ok: true, domain: rest }

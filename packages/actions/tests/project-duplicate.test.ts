@@ -6,7 +6,13 @@
  * created disabled, including the case that would otherwise collide.
  */
 
-import { conversations, courses, people, projects } from '@bloombot/db'
+import {
+  conversations,
+  courses,
+  courseWebSources,
+  people,
+  projects,
+} from '@bloombot/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { duplicateProjectAction } from '../src/actions/index.js'
@@ -434,5 +440,71 @@ describe('projects.duplicate', () => {
     })
     expect(copiedCourses).toHaveLength(1)
     expect(copiedCourses[0]?.discordServerId).toBe(serverId)
+  })
+
+  // FILE-6/MDL-9 (also-fix, coordinator round 2 rework): a source course's
+  // own websites were dropped the same way `discordServerId` was before
+  // the fix above — rolling a term forward silently lost every course's
+  // websites while `coursesCopied` still reported success, and nothing
+  // told an instructor their duplicated course now answers ungrounded.
+  it("copies a source course's own websites into its duplicate", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    const source = courses.createCourse(
+      organizationId,
+      {
+        projectId,
+        title: 'Web Design',
+        filePrefix: 'wd',
+        enabled: true,
+        adminsRole: 'admins-wd-fa26',
+        studentsRole: 'students-wd-fa26',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!source.ok) throw new Error('setup failed: unexpected conflict')
+    courseWebSources.addWebSource(
+      organizationId,
+      { courseId: source.course.id, domain: 'example.edu' },
+      testDb.db
+    )
+    courseWebSources.addWebSource(
+      organizationId,
+      { courseId: source.course.id, domain: 'docs.python.org' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      duplicateProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+
+    const copiedCourses = courses.listCourses(organizationId, testDb.db, {
+      projectId: result.project.id,
+    })
+    expect(copiedCourses).toHaveLength(1)
+    const copiedWebSources = courseWebSources.listWebSourcesForCourse(
+      organizationId,
+      copiedCourses[0]!.id,
+      testDb.db
+    )
+    expect(copiedWebSources.map((s) => s.domain).sort()).toEqual([
+      'docs.python.org',
+      'example.edu',
+    ])
+
+    // The source course's own websites are unchanged — this is a copy, not
+    // a move.
+    expect(
+      courseWebSources
+        .listWebSourcesForCourse(organizationId, source.course.id, testDb.db)
+        .map((s) => s.domain)
+        .sort()
+    ).toEqual(['docs.python.org', 'example.edu'])
   })
 })

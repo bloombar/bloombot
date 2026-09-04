@@ -88,6 +88,7 @@ import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
 import { CoursePeople } from '../components/CoursePeople.js'
+import { CourseWebSources } from '../components/CourseWebSources.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses, textInputClasses } from '../components/fieldStyles.js'
 import { FormField } from '../components/FormField.js'
@@ -917,6 +918,25 @@ export function CourseEditor({
             the provider — it cannot be undone.
           </p>
           <CourseAttachments
+            organizationId={organizationId}
+            courseId={courseId}
+          />
+        </section>
+      )}
+
+      {/* FILE-6/MDL-9: a course's websites — same gate as Knowledge files
+          above, a website belongs to an existing course. */}
+      {courseId !== undefined && (
+        <section aria-label="Websites" className="flex flex-col gap-2">
+          <h2 className="text-section-title font-semibold text-neutral-900">
+            Websites
+          </h2>
+          <p className="text-sm text-neutral-600">
+            Sites this course is grounded in, alongside its knowledge files.
+            Bloombot searches only the domains named here — never the open web.
+            Removing one takes effect immediately.
+          </p>
+          <CourseWebSources
             organizationId={organizationId}
             courseId={courseId}
           />

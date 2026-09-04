@@ -1324,6 +1324,15 @@ course.
 An attachment belongs to an organization and is reachable only through it, and the stored bytes are
 not addressable by anybody who guesses an id. Course material is not public.
 
+#### FILE-6 A course's knowledge also includes websites an instructor names
+
+Some of a course's material never becomes a file: a department's syllabus page, a library guide, the
+documentation a course is taught against. An instructor names those websites on the course, one entry
+per site, and the platform keeps them as part of that course's knowledge alongside its uploaded files.
+An entry is a bare domain — no scheme, no path — because that is what grounding a search against a site
+actually needs, and a course with no entries answers exactly as it does today. A website belongs to an
+organization and is reachable only through it, the same scoping FILE-5 gives a file.
+
 ### 24. Cost Ledger, Caps & Monitoring
 
 #### COST-1 Every model call is recorded with what it cost
@@ -1712,6 +1721,14 @@ below it are not being used, and no new course can acquire one.
 When a course has a vector store, every request enables file search against it, so answers
 come from that course's uploaded notes, syllabus and schedule rather than from the model's
 general knowledge. A course without one is answered without the tool rather than refused.
+
+#### MDL-9 Answers can be grounded in the websites a course names
+
+When a course names websites (FILE-6), a request enables the provider's web search restricted to exactly
+those sites, so an answer can quote the course's own reading rather than the open web. A course that
+names none is answered without the tool at all rather than with an unrestricted search: an instructor
+who has not chosen sources has not asked for the whole internet. Web search and file search are not
+exclusive — a course with both files and websites is grounded in both on the same request.
 
 #### MDL-4 Continuity is an upstream conversation the platform remembers
 
@@ -2115,3 +2132,12 @@ that name is itself the control that switches between them — a dropdown listin
 organization available to it — so switching stays one interaction from anywhere in the panel
 and the account settings screen is the fuller view rather than the only way in. When there is
 exactly one, the name is stated plainly, with no control to operate.
+
+#### WEB-31 A course's websites are added and removed in the panel
+
+FILE-6 makes websites part of a course's knowledge, and the course screen manages them the way it
+already manages join links: a list of what the course is grounded in, one field and one button to add
+a site, and a per-entry removal behind a confirmation, since removing one changes what the course
+answers from. A site typed with a scheme or a trailing path is accepted and reduced to its domain
+rather than refused, because pasting a URL from a browser's address bar is what an instructor will
+actually do. A duplicate is reported as already present, not added twice.

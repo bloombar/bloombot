@@ -27,6 +27,7 @@ const {
   listCourseInstructionRevisions,
   saveCourseInstructions,
   listCourseJoinLinks,
+  listCourseWebSources,
   listCourseEnrolments,
   listDiscordServers,
 } = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ const {
   listCourseInstructionRevisions: vi.fn(),
   saveCourseInstructions: vi.fn(),
   listCourseJoinLinks: vi.fn(),
+  listCourseWebSources: vi.fn(),
   listCourseEnrolments: vi.fn(),
   listDiscordServers: vi.fn(),
 }))
@@ -56,25 +58,29 @@ vi.mock('../src/api/client.js', async () => {
     listCourseInstructionRevisions,
     saveCourseInstructions,
     listCourseJoinLinks,
+    listCourseWebSources,
     listCourseEnrolments,
     listDiscordServers,
   }
 })
 
-// WEB-18/WEB-19/WEB-20/WEB-22: every "existing course" case in this file
-// renders `components/CourseAttachments.tsx`, `components/CourseInstructions.tsx`,
-// `components/JoinLinks.tsx` and `components/CoursePeople.tsx` too, each of
-// which fetches on mount — an empty list by default so none of those
-// requests ever goes un-stubbed here; `tests/course-attachments.test.tsx`,
-// `tests/course-instructions.test.tsx`, `tests/join-links.test.tsx` and
-// `tests/course-people.test.tsx` are what actually exercise those
-// components' own behaviour. `components/RosterImport.tsx` fetches nothing
-// on mount (it only ever calls out once an instructor picks a file and
-// clicks Import), so it needs no stub here.
+// WEB-18/WEB-19/WEB-20/WEB-22/FILE-6: every "existing course" case in this
+// file renders `components/CourseAttachments.tsx`,
+// `components/CourseInstructions.tsx`, `components/JoinLinks.tsx`,
+// `components/CourseWebSources.tsx` and `components/CoursePeople.tsx` too,
+// each of which fetches on mount — an empty list by default so none of
+// those requests ever goes un-stubbed here; `tests/course-attachments.test.tsx`,
+// `tests/course-instructions.test.tsx`, `tests/join-links.test.tsx`,
+// `tests/course-web-sources.test.tsx` and `tests/course-people.test.tsx` are
+// what actually exercise those components' own behaviour.
+// `components/RosterImport.tsx` fetches nothing on mount (it only ever calls
+// out once an instructor picks a file and clicks Import), so it needs no
+// stub here.
 beforeEach(() => {
   listCourseAttachments.mockResolvedValue([])
   listCourseInstructionRevisions.mockResolvedValue([])
   listCourseJoinLinks.mockResolvedValue([])
+  listCourseWebSources.mockResolvedValue([])
   listCourseEnrolments.mockResolvedValue([])
   // TEN-9 — no active bindings by default, so the server selector stays
   // hidden unless a test opts into two or more (`activeBindings.length > 1`,

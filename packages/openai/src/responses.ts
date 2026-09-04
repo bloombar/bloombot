@@ -24,6 +24,15 @@ export interface BuildResponsesRequestInput {
   instructions: string | null
   /** MDL-3 — enables `file_search` against this store when set; omitted entirely otherwise. */
   vectorStoreId: string | null
+  /**
+   * MDL-9/FILE-6 — enables a `web_search` tool restricted to exactly these
+   * domains when non-empty (WEB-31's own "restricted", never an
+   * unrestricted search); omitted entirely when empty, the same "no tool
+   * for nothing configured" treatment `vectorStoreId: null` already gets
+   * for `file_search` — a course that names no websites is answered
+   * exactly as before this shipped.
+   */
+  webSourceDomains: string[]
   /** MDL-4 — the upstream conversation this turn belongs to. */
   conversationId: string
   question: string
@@ -38,7 +47,10 @@ export interface ResponsesRequestBody {
   store: true
   prompt?: { id: string }
   instructions?: string
-  tools?: Array<{ type: 'file_search'; vector_store_ids: string[] }>
+  tools?: Array<
+    | { type: 'file_search'; vector_store_ids: string[] }
+    | { type: 'web_search'; filters: { allowed_domains: string[] } }
+  >
 }
 
 /**
@@ -74,7 +86,22 @@ export function buildResponsesRequestBody(
   // MDL-3 — grounded in the course's own material when it has any.
   if (input.vectorStoreId) {
     body.tools = [
+      ...(body.tools ?? []),
       { type: 'file_search', vector_store_ids: [input.vectorStoreId] },
+    ]
+  }
+
+  // MDL-9/FILE-6 — grounded in the course's own named websites when it has
+  // any, restricted to exactly that list (WEB-31) — never an unrestricted
+  // `web_search`, and coexisting with `file_search` above in the same
+  // array when a course has both a vector store and websites configured.
+  if (input.webSourceDomains.length > 0) {
+    body.tools = [
+      ...(body.tools ?? []),
+      {
+        type: 'web_search',
+        filters: { allowed_domains: input.webSourceDomains },
+      },
     ]
   }
 

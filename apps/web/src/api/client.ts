@@ -34,6 +34,7 @@ import type {
   CourseInstructionRevisionSummary,
   CourseJoinLinkSummary,
   CourseSummary,
+  CourseWebSourceSummary,
   CreatedCourseJoinLink,
   DiscordPersonLinkPreviewResponse,
   DiscordServerBindingSummary,
@@ -650,6 +651,49 @@ export function revealCourseJoinLink(
     'courseJoinLinks.reveal',
     { linkId }
   )
+}
+
+/**
+ * FILE-6/MDL-9 — a course's own websites: listing them, adding one (a full
+ * URL or a bare domain — `courseWebSources.add`'s own reduction, WEB-31),
+ * and removing one. Each a thin wrapper over `dispatchAction`, the same
+ * generic action route every other screen in this app already reaches
+ * through.
+ */
+
+/** FILE-6: a course's own websites — what `components/CourseWebSources.tsx` reads. */
+export function listCourseWebSources(
+  organizationId: string,
+  courseId: string
+): Promise<CourseWebSourceSummary[]> {
+  return dispatchAction<CourseWebSourceSummary[]>(
+    organizationId,
+    'courseWebSources.list',
+    { courseId }
+  )
+}
+
+/** FILE-6/WEB-31: add a website to a course — `domain` may be a full URL or a bare domain; `courseWebSources.add` reduces it to the bare form this stores. */
+export function addCourseWebSource(
+  organizationId: string,
+  courseId: string,
+  domain: string
+): Promise<CourseWebSourceSummary> {
+  return dispatchAction<CourseWebSourceSummary>(
+    organizationId,
+    'courseWebSources.add',
+    { courseId, domain }
+  )
+}
+
+/** FILE-6: remove a website from a course — the course's answers are no longer grounded by it. */
+export function removeCourseWebSource(
+  organizationId: string,
+  webSourceId: string
+): Promise<{ removed: boolean }> {
+  return dispatchAction(organizationId, 'courseWebSources.remove', {
+    webSourceId,
+  })
 }
 
 /**

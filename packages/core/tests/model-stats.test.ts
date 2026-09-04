@@ -9,6 +9,7 @@ const REQUEST: ModelRequest = {
   promptId: null,
   instructions: 'Be helpful.',
   vectorStoreId: null,
+  webSourceDomains: [],
   model: null,
   upstreamThreadId: null,
   question: 'q',

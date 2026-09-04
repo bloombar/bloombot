@@ -71,6 +71,7 @@ import {
   conversations,
   costLedger,
   courses,
+  courseWebSources,
   people,
   usage,
   type Database,
@@ -544,10 +545,21 @@ export async function answerQuestion(
     let newUpstreamThreadId: string | null = null
     let failed = false
     try {
+      // MDL-9 — read alongside `course.vectorStoreId` above, the same
+      // "course's own configured knowledge" this call already gathers:
+      // a course with no websites named gets `[]`, which `ModelRequest`'s
+      // own doc comment already says means "omit the tool entirely" to
+      // every adapter, the same as `vectorStoreId: null` already does for
+      // `file_search`.
+      const webSourceDomains = courseWebSources
+        .listWebSourcesForCourse(organizationId, course.id, db)
+        .map((source) => source.domain)
+
       const modelAnswer = await model.ask({
         promptId: course.promptId,
         instructions: course.instructions,
         vectorStoreId: course.vectorStoreId,
+        webSourceDomains,
         model: course.model,
         upstreamThreadId: conversation.upstreamThreadId,
         question: modelText,

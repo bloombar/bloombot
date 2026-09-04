@@ -54,6 +54,11 @@ import {
   revokeCourseJoinLinkAction,
 } from './course-join-links.js'
 import {
+  addCourseWebSourceAction,
+  listCourseWebSourcesAction,
+  removeCourseWebSourceAction,
+} from './course-web-sources.js'
+import {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
   listEnrolmentsForCourseAction,
@@ -127,6 +132,11 @@ export {
   type CourseJoinLinkSummary,
   type RevealedCourseJoinLink,
 } from './course-join-links.js'
+export {
+  addCourseWebSourceAction,
+  listCourseWebSourcesAction,
+  removeCourseWebSourceAction,
+} from './course-web-sources.js'
 export {
   checkEnrolmentAccessAction,
   endEnrolmentAction,
@@ -238,6 +248,9 @@ export function createPlatformRegistry(options?: {
   registry.register(
     createRevealCourseJoinLinkAction(options?.joinLinkEncryptionKey)
   )
+  registry.register(addCourseWebSourceAction)
+  registry.register(listCourseWebSourcesAction)
+  registry.register(removeCourseWebSourceAction)
   registry.register(listEnrolmentsForPersonAction)
   registry.register(checkEnrolmentAccessAction)
   registry.register(endEnrolmentAction)

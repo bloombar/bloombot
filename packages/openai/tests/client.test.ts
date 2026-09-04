@@ -27,6 +27,7 @@ function baseRequest(overrides: Partial<ModelRequest> = {}): ModelRequest {
     promptId: null,
     instructions: 'Be helpful.',
     vectorStoreId: null,
+    webSourceDomains: [],
     model: null,
     upstreamThreadId: null,
     question: 'When is the midterm?',
@@ -139,6 +140,71 @@ describe('createOpenAiModelClient', () => {
       )!
       const body = responsesRequest.body as Record<string, unknown>
       expect(body.tools).toBeUndefined()
+    })
+  })
+
+  describe('MDL-9/FILE-6: web search only when the course has named websites', () => {
+    it("sends the web_search tool restricted to the course's own domains", async () => {
+      server.respondToConversations({ status: 200, body: { id: 'conv_1' } })
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('the answer'),
+      })
+
+      await client.ask(
+        baseRequest({ webSourceDomains: ['example.edu', 'docs.python.org'] })
+      )
+
+      const responsesRequest = server.requests.find(
+        (r) => r.path === '/responses'
+      )!
+      const body = responsesRequest.body as Record<string, unknown>
+      expect(body.tools).toEqual([
+        {
+          type: 'web_search',
+          filters: { allowed_domains: ['example.edu', 'docs.python.org'] },
+        },
+      ])
+    })
+
+    it('sends no tool at all for a course with no websites', async () => {
+      server.respondToConversations({ status: 200, body: { id: 'conv_1' } })
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('the answer'),
+      })
+
+      await client.ask(baseRequest({ webSourceDomains: [] }))
+
+      const responsesRequest = server.requests.find(
+        (r) => r.path === '/responses'
+      )!
+      const body = responsesRequest.body as Record<string, unknown>
+      expect(body.tools).toBeUndefined()
+    })
+
+    it('sends both file_search and web_search when a course has both configured', async () => {
+      server.respondToConversations({ status: 200, body: { id: 'conv_1' } })
+      server.respondToResponses({
+        status: 200,
+        body: fakeResponsesPayload('the answer'),
+      })
+
+      await client.ask(
+        baseRequest({
+          vectorStoreId: 'vs_course_1',
+          webSourceDomains: ['example.edu'],
+        })
+      )
+
+      const responsesRequest = server.requests.find(
+        (r) => r.path === '/responses'
+      )!
+      const body = responsesRequest.body as Record<string, unknown>
+      expect(body.tools).toEqual([
+        { type: 'file_search', vector_store_ids: ['vs_course_1'] },
+        { type: 'web_search', filters: { allowed_domains: ['example.edu'] } },
+      ])
     })
   })
 

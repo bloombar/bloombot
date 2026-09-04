@@ -23,3 +23,8 @@ export {
   type RosterParseResult,
   type RosterRow,
 } from './roster.js'
+
+export {
+  normalizeWebSourceDomain,
+  type WebSourceDomainResult,
+} from './web-source-domain.js'

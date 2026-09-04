@@ -1259,8 +1259,19 @@ describe('discordServers.scaffold handler', () => {
         },
         testDb.db
       )
+      // TEN-9's own backfill (`repos/discord-servers.ts#claimDiscordServerBinding`,
+      // D-77) resolves the course's own null column onto the organization's
+      // *previous* sole binding the instant the claim above ran — correctly,
+      // for a course that had one. This test wants the genuinely-undecided
+      // state instead (a course with no single "previous" server to
+      // attribute it to), so it clears the column back to null directly,
+      // below the repo layer, the same device
+      // `packages/db/tests/courses.test.ts`'s own unarchive-conflict test
+      // uses for the identical reason.
+      testDb.db.$client
+        .prepare('UPDATE courses SET discord_server_id = NULL WHERE id = ?')
+        .run(seeded.courseId)
 
-      // `seeded.courseId`'s own `discordServerId` is still `null`.
       await expect(
         runScaffold(seeded.organizationId, seeded.courseId)
       ).rejects.toThrow(/more than one active Discord server/)

@@ -191,16 +191,30 @@ function conflict(
  * refusal for free.
  */
 function serverResolutionConflict(
-  reason: CourseServerResolutionRefusal
+  reason: CourseServerResolutionRefusal,
+  // Cheap-fix 5 (coordinator round 1 rework): required, not optional —
+  // `createCourse`/`updateCourse`/`enableCourse` always have the course's
+  // own title in hand (`input.title`/`existing.title`) for the course this
+  // refusal is about, and `findProjectUnarchiveConflict` — the one caller
+  // that loops over more than one course — is exactly the case that used
+  // to say "this course does not say which one it routes in" without
+  // naming which of a project's twenty enabled courses that was.
+  courseTitle: string
 ): CourseNameConflict {
   const message =
     reason === 'ambiguous'
-      ? 'This organization has more than one active Discord server, and this ' +
-        'course does not say which one it routes in. Choose a server before ' +
+      ? `Course "${courseTitle}" — this organization has more than one ` +
+        'active Discord server, and this course does not say which one it ' +
+        'routes in. Choose a server before enabling it.'
+      : `Course "${courseTitle}" — its Discord server is no longer active ` +
+        '— its install was removed. Choose an active server before ' +
         'enabling it.'
-      : "This course's Discord server is no longer active — its install " +
-        'was removed. Choose an active server before enabling it.'
-  return { field: 'discordServerId', name: reason, message }
+  return {
+    field: 'discordServerId',
+    name: reason,
+    conflictingCourseTitle: courseTitle,
+    message,
+  }
 }
 
 /**
@@ -548,7 +562,10 @@ export function createCourse(
       if (!serverResolution.ok) {
         return {
           ok: false,
-          conflict: serverResolutionConflict(serverResolution.reason),
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            input.title
+          ),
         }
       }
       const conflictFound = findCourseNameConflict(
@@ -807,7 +824,10 @@ export function updateCourse(
       if (!serverResolution.ok) {
         return {
           ok: false,
-          conflict: serverResolutionConflict(serverResolution.reason),
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            input.title
+          ),
         }
       }
       const conflictFound = findCourseNameConflict(
@@ -922,7 +942,10 @@ export function enableCourse(
       if (!serverResolution.ok) {
         return {
           ok: false,
-          conflict: serverResolutionConflict(serverResolution.reason),
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            existing.title
+          ),
         }
       }
 
@@ -1086,6 +1109,7 @@ export function findProjectUnarchiveConflict(
   const projectCourses = db
     .select({
       id: courses.id,
+      title: courses.title,
       adminsRole: courses.adminsRole,
       studentsRole: courses.studentsRole,
       discordServerId: courses.discordServerId,
@@ -1111,7 +1135,7 @@ export function findProjectUnarchiveConflict(
       db
     )
     if (!serverResolution.ok) {
-      return serverResolutionConflict(serverResolution.reason)
+      return serverResolutionConflict(serverResolution.reason, course.title)
     }
 
     const categories = db

@@ -456,6 +456,76 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     const [, sentInput] = saveCourse.mock.calls[0] as [string, object]
     expect(sentInput).not.toHaveProperty('discordServerId')
   })
+
+  // Must-fix 3 (coordinator round 1 rework): a course pinned to a
+  // since-removed binding must stay recoverable in the panel — before this
+  // fix, `activeBindings.length > 1` alone made the selector disappear the
+  // moment the organization dropped back to one active binding, and
+  // `handleSave`'s own omission (the test above) then preserved the stale
+  // id forever, with nothing in the product to fix it.
+  it('shows the selector for a course pinned to a binding that is no longer active, even though only one binding remains active', async () => {
+    // `guild-b` (what `COURSE` below is pinned to) is not in this list at
+    // all — the organization removed it, and now holds only `guild-a`.
+    listDiscordServers.mockResolvedValue([BINDING_A])
+    getCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-b' })
+    saveCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-a' })
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    // The selector renders — not hidden by `activeBindings.length > 1`
+    // alone — and the stale id is shown, not silently blank.
+    const select = await screen.findByLabelText('Discord server')
+    expect(select).toHaveValue('guild-b')
+    expect(screen.getByText(/guild-b \(no longer active\)/)).toBeInTheDocument()
+
+    // Re-pointing to the one active binding is possible, and is sent.
+    fireEvent.change(select, { target: { value: 'guild-a' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ discordServerId: 'guild-a' })
+      )
+    )
+  })
+
+  it('clearing a stale server assignment back to null is also possible, and sent explicitly', async () => {
+    listDiscordServers.mockResolvedValue([BINDING_A])
+    getCourse.mockResolvedValue({ ...COURSE, discordServerId: 'guild-b' })
+    saveCourse.mockResolvedValue({ ...COURSE, discordServerId: null })
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    const select = await screen.findByLabelText('Discord server')
+    fireEvent.change(select, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ discordServerId: null })
+      )
+    )
+  })
 })
 
 /**

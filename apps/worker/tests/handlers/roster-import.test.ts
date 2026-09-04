@@ -12,7 +12,15 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { enrolments, jobs, organizations, people } from '@bloombot/db'
+import {
+  accounts,
+  courses,
+  discordServers,
+  enrolments,
+  jobs,
+  organizations,
+  people,
+} from '@bloombot/db'
 import {
   createDiscordRestClient,
   type DiscordRestClient,
@@ -1013,6 +1021,126 @@ describe('roster.import handler', () => {
         id: originalEnrolment.id,
         endedAt: expect.any(Number),
       })
+    })
+  })
+  // TEN-9 — the same defect `discord-scaffold.test.ts` covers for
+  // scaffolding, one level over: an organization holding two active
+  // bindings must not have every roster import refuse ("no active Discord
+  // server bound," a message that lied when two were in fact bound) —
+  // resolved through the course's own server instead.
+  describe('an organization with more than one active binding (TEN-9)', () => {
+    it("imports into the course's own server, never the organization's other active binding", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory([1])
+
+      const secondInstaller = accounts.createAccount(
+        seeded.organizationId,
+        {
+          email: `${randomUUID()}@example.edu`,
+          displayName: 'Second Admin',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const otherGuildId = randomUUID().replace(/-/g, '').slice(0, 18)
+      discordServers.claimDiscordServerBinding(
+        seeded.organizationId,
+        { serverId: otherGuildId, installedByAccountId: secondInstaller.id },
+        testDb.db
+      )
+
+      // The seeded course's own `discordServerId` was `null` — resolvable
+      // while the organization held only one binding. Now that it holds
+      // two, it must name which one explicitly.
+      const course = courses.getCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        testDb.db
+      )
+      if (!course) throw new Error('setup failed: course not found')
+      const updated = courses.updateCourse(
+        seeded.organizationId,
+        seeded.courseId,
+        {
+          projectId: course.projectId,
+          title: course.title,
+          filePrefix: course.filePrefix,
+          enabled: course.enabled,
+          adminsRole: course.adminsRole,
+          studentsRole: course.studentsRole,
+          discordServerId: seeded.guildId,
+          categories: course.categories,
+        },
+        testDb.db
+      )
+      if (!updated?.ok) throw new Error('setup failed: unexpected conflict')
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,ada#1234,adalovelace',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.parseErrors).toEqual([])
+      // The identity of the guild the import actually ran against — not
+      // merely that it ran somewhere — and that every write landed there,
+      // never `otherGuildId`.
+      expect(report.guildId).toBe(seeded.guildId)
+      expect(
+        discordServer
+          .writeRequests()
+          .every((request) => !request.path.includes(otherGuildId))
+      ).toBe(true)
+    })
+
+    it('refuses (rather than lying about "no active Discord server bound") when the course has no server of its own and the organization holds two active bindings', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory([1])
+
+      const secondInstaller = accounts.createAccount(
+        seeded.organizationId,
+        {
+          email: `${randomUUID()}@example.edu`,
+          displayName: 'Second Admin',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        seeded.organizationId,
+        {
+          serverId: randomUUID().replace(/-/g, '').slice(0, 18),
+          installedByAccountId: secondInstaller.id,
+        },
+        testDb.db
+      )
+      // TEN-9's own backfill (`repos/discord-servers.ts#claimDiscordServerBinding`,
+      // D-77) resolves the course's own null column onto the organization's
+      // *previous* sole binding the instant the claim above ran — correctly,
+      // for a course that had one. This test wants the genuinely-undecided
+      // state instead (a course with no single "previous" server to
+      // attribute it to), so it clears the column back to null directly,
+      // below the repo layer, the same device
+      // `packages/db/tests/courses.test.ts`'s own unarchive-conflict test
+      // uses for the identical reason.
+      testDb.db.$client
+        .prepare('UPDATE courses SET discord_server_id = NULL WHERE id = ?')
+        .run(seeded.courseId)
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,ada#1234,adalovelace',
+      ].join('\n')
+
+      await expect(
+        runImport(seeded.organizationId, seeded.courseId, csv)
+      ).rejects.toThrow(/more than one active Discord server/)
     })
   })
 })

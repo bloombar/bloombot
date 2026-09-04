@@ -1189,4 +1189,66 @@ describe('handleMention — TEN-9: routing never crosses a Discord server bounda
     )
     expect(conversationsForOther).toHaveLength(0)
   })
+
+  // Must-fix 1 (coordinator round 1 rework): installing a *second* Discord
+  // server for an organization must not silently stop every pre-existing
+  // course answering in the server it has always answered in. Before this
+  // fix, every enabled course's `discordServerId` was `null` (it never had
+  // to name a server while the organization held only one) — the instant a
+  // second binding was claimed, `pickCourseServerId(null, [A, B])` returned
+  // `undefined` for every one of them, `routeMessage` saw an empty
+  // candidate list, and a student `@`-mentioning the bot in the *original*
+  // server got `unrouted`: no reply, logged at `info`, indistinguishable
+  // from an ordinary off-topic message. `docs/DECISIONS.md` D-76 has the
+  // fuller reasoning for the fix this test pins: claiming a second binding
+  // backfills every null-`discordServerId` course onto the organization's
+  // *previous* sole binding, at the exact moment that column stops being
+  // unambiguous — continuity preserved, not merely detected too late.
+  it('installing a second server does not stop a pre-existing null-server course answering in the server it has always answered in', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { categoryName: 'Week 1' }
+    )
+    // `courseId`'s own `discordServerId` is still `null` here — exactly
+    // every course that existed before this slice.
+
+    const secondInstaller = accounts.createAccount(
+      organizationId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'Admin 2',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    // The organization's *second* Discord server — installed for an
+    // unrelated department, the scenario's own framing. This is the write
+    // that must not silently break the first server's own routing.
+    discordServers.claimDiscordServerBinding(
+      organizationId,
+      {
+        serverId: randomUUID(),
+        installedByAccountId: secondInstaller.id,
+      },
+      testDb.db
+    )
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: 'Week 1' }),
+      deps
+    )
+
+    // The student in the original server still gets answered — not
+    // `unrouted`, which is what an install in a different server used to
+    // silently cause.
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+
+    // The backfill itself, named: the course's own `discordServerId` now
+    // says explicitly what it always implicitly meant.
+    const course = courses.getCourse(organizationId, courseId, testDb.db)
+    expect(course?.discordServerId).toBe(guildId)
+  })
 })

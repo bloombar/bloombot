@@ -12,7 +12,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
-import { discordServerBindings } from '../schema.js'
+import { courses, discordServerBindings } from '../schema.js'
 import { getMembership } from './memberships.js'
 
 export type DiscordServerBinding = typeof discordServerBindings.$inferSelect
@@ -80,6 +80,65 @@ export interface ClaimDiscordServer {
  *    organization already is idempotent: the existing binding is returned
  *    unchanged.
  */
+/**
+ * TEN-9 — the moment a *second* active binding appears for an organization
+ * is exactly the moment a null `courses.discord_server_id` stops meaning
+ * "the organization's only server" and starts meaning "undecided which of
+ * two." Left alone, every course that had ever routed through the
+ * organization's one server before this claim would go silently unrouted
+ * the instant this claim commits: `resolveCourseDiscordServer` and
+ * `packages/discord`'s own routing filter can no longer tell "always meant
+ * this one server" apart from "genuinely never assigned," and a null column
+ * now resolves to neither. Backfilling here, once, at the exact transition
+ * from one active binding to two, converts every course that implicitly
+ * meant the organization's *previous* sole binding into one that says so
+ * explicitly — continuity preserved by recording what was always true,
+ * rather than guessed at read time. See `docs/DECISIONS.md` for why this
+ * was chosen over "fail loudly and visibly instead."
+ *
+ * Runs only on the exact 1-to-2 transition (`active.length === 2` after
+ * this claim, one of the two being the server just claimed) — a third
+ * binding, or a binding re-claimed while the organization already held two
+ * or more, changes nothing here: a null-column course in an organization
+ * that is already ambiguous is correctly refused at its next enable
+ * (`repos/courses.ts`), the outcome TEN-9 actually wants once there is no
+ * longer a single "previous" server left to attribute it to.
+ *
+ * Called from both `claimDiscordServerBinding` success paths — the fresh
+ * insert and the re-claim of a released binding — since either can be the
+ * write that takes an organization from one active binding to two.
+ */
+function backfillNullServerCoursesOnNewSecondBinding(
+  organizationId: string,
+  justClaimedServerId: string,
+  db: Executor
+): void {
+  const active = db
+    .select()
+    .from(discordServerBindings)
+    .where(
+      and(
+        eq(discordServerBindings.organizationId, organizationId),
+        isNull(discordServerBindings.removedAt)
+      )
+    )
+    .all()
+  if (active.length !== 2) return
+  const previous = active.find(
+    (binding) => binding.serverId !== justClaimedServerId
+  )
+  if (!previous) return
+  db.update(courses)
+    .set({ discordServerId: previous.serverId })
+    .where(
+      and(
+        eq(courses.organizationId, organizationId),
+        isNull(courses.discordServerId)
+      )
+    )
+    .run()
+}
+
 export function claimDiscordServerBinding(
   organizationId: string,
   input: ClaimDiscordServer,
@@ -99,7 +158,7 @@ export function claimDiscordServerBinding(
 
   if (!existing) {
     try {
-      return db
+      const claimed = db
         .insert(discordServerBindings)
         .values({
           serverId: input.serverId,
@@ -109,6 +168,15 @@ export function claimDiscordServerBinding(
         })
         .returning()
         .get()
+      // TEN-9 — see `backfillNullServerCoursesOnNewSecondBinding`'s own
+      // comment: this may be the write that takes the organization from one
+      // active binding to two.
+      backfillNullServerCoursesOnNewSecondBinding(
+        organizationId,
+        input.serverId,
+        db
+      )
+      return claimed
     } catch (error) {
       // A concurrent insert claimed this snowflake first: SQLite's primary
       // key on `server_id` refuses the second insert. Report it the same way
@@ -134,7 +202,7 @@ export function claimDiscordServerBinding(
   // between the `SELECT` above and this `UPDATE` makes the row no longer
   // match, so `.get()` returns no row and this caller is refused rather than
   // silently overwriting the winner's binding.
-  return db
+  const reclaimed = db
     .update(discordServerBindings)
     .set({
       organizationId,
@@ -150,6 +218,20 @@ export function claimDiscordServerBinding(
     )
     .returning()
     .get()
+  // TEN-9 — same reasoning as the fresh-insert branch above: a re-claim of a
+  // released binding can just as well be the write that takes the
+  // organization from one active binding to two. A losing concurrent
+  // re-claim (`reclaimed` undefined — the race this function's own module
+  // comment already documents) backfills nothing, since it did not actually
+  // change the organization's active-binding count.
+  if (reclaimed) {
+    backfillNullServerCoursesOnNewSecondBinding(
+      organizationId,
+      input.serverId,
+      db
+    )
+  }
+  return reclaimed
 }
 
 /**

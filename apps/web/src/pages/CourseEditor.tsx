@@ -291,7 +291,7 @@ export function CourseEditor({
   // TEN-9 — every binding this organization has ever held (active or
   // removed, `discordServers.list`'s own shape), fetched once per
   // organization. Only the active ones (`activeBindings`, below) decide
-  // whether the server selector renders at all — "one binding is not a
+  // whether the server selector *offers a choice* — "one binding is not a
   // choice worth making anybody make" (this slice's own brief) — so a
   // removed binding never offers itself as a choice, but is still fetched
   // rather than narrowed server-side, matching `pages/Shell.tsx`'s own
@@ -302,6 +302,39 @@ export function CourseEditor({
   const activeBindings = discordBindings.filter(
     (binding) => binding.removedAt === null
   )
+  // Must-fix 3 (coordinator round 1 rework): `activeBindings.length > 1`
+  // alone stranded a course whose own `discordServerId` names a binding
+  // that has since been removed — the owner removes the second of two
+  // bindings through `pages/Shell.tsx`'s own per-row Remove, this drops
+  // back to one active binding, the selector disappears, and
+  // `keepOrClear` (`handleSave`, below) keeps preserving the now-inactive
+  // id forever: every save of an enabled course is refused
+  // ("...no longer active..."), with no control anywhere in the panel to
+  // choose a different one or clear it. Offered whenever there is an
+  // actual choice to make (2+ active bindings) *or* the course, as loaded
+  // (`baseline`, not the live `form`), already names one explicitly,
+  // active or not — the second half is what makes a stale assignment
+  // recoverable rather than only diagnosable. `baseline`, deliberately,
+  // not `form`: reading `form.discordServerId` here would make clearing
+  // the field to `null` (choosing the blank option, below) flip this
+  // condition to `false` mid-edit, which would then omit the field from
+  // the save payload entirely — silently un-doing the very clear the
+  // instructor just asked for, since an omitted field means "keep what is
+  // stored" (`handleSave`'s own comment). `baseline` never changes except
+  // when a fresh record is loaded or a save actually succeeds, so this
+  // stays stable for the whole edit, the same way `isDirty`'s own
+  // comparison already relies on it.
+  const offersServerSelector =
+    activeBindings.length > 1 || baseline.discordServerId !== null
+  // The course's own id, when it is not one of `activeBindings` — a stale
+  // reference the `<select>` below still has to show *as* an option (not
+  // silently fall back to showing nothing selected, which would look
+  // identical to "cleared" while the form still carries the stale value).
+  const staleServerId =
+    form.discordServerId !== null &&
+    !activeBindings.some((binding) => binding.serverId === form.discordServerId)
+      ? form.discordServerId
+      : undefined
 
   useEffect(() => {
     let stale = false
@@ -418,13 +451,14 @@ export function CourseEditor({
         model: form.model.trim() === '' ? null : form.model.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
         // TEN-9 — sent only while the selector is actually offered
-        // (`activeBindings.length > 1`): a course this form does not offer
-        // a choice for is not a field this form manages this render, the
-        // same "omitted preserves what is stored" treatment `promptId`/
-        // `vectorStoreId` get above, rather than forcing every course back
-        // to `null` the moment an organization happens to install a second
-        // server.
-        ...(activeBindings.length > 1
+        // (`offersServerSelector`, kept in lockstep with the render gate
+        // above — must-fix 3, coordinator round 1 rework): a course this
+        // form does not offer a choice for is not a field this form
+        // manages this render, the same "omitted preserves what is stored"
+        // treatment `promptId`/`vectorStoreId` get above, rather than
+        // forcing every course back to `null` the moment an organization
+        // happens to install a second server.
+        ...(offersServerSelector
           ? { discordServerId: form.discordServerId }
           : {}),
         categories,
@@ -690,13 +724,19 @@ export function CourseEditor({
           </FormField>
         </div>
 
-        {/* TEN-9 — offered only once there is an actual choice to make:
-            "one binding is not a choice worth making anybody make" (this
-            slice's own brief). An organization with zero or one active
-            binding never sees this at all — the course still resolves
-            correctly through `resolveCourseDiscordServer`'s own single-binding
-            fallback, unedited. */}
-        {activeBindings.length > 1 && (
+        {/* TEN-9 — offered once there is an actual choice to make (2+
+            active bindings — "one binding is not a choice worth making
+            anybody make", this slice's own brief) *or* the course already
+            names a server explicitly, even one that is no longer active
+            (must-fix 3, coordinator round 1 rework) — otherwise a course
+            pinned to a since-removed binding has no way in the product to
+            be re-pointed or cleared, only a refusal that names the problem
+            with no control to fix it. An organization with zero or one
+            active binding and a course that has never named one never sees
+            this at all — it still resolves correctly through
+            `resolveCourseDiscordServer`'s own single-binding fallback,
+            unedited. */}
+        {offersServerSelector && (
           <FormField
             label="Discord server"
             {...fieldErrorProp(error, 'discordServerId')}
@@ -714,6 +754,18 @@ export function CourseEditor({
               className={textInputClasses}
             >
               <option value="">Choose a server…</option>
+              {/* The stale option itself, shown so a course pinned to a
+                  removed binding reads as exactly that in the control,
+                  rather than looking identical to "cleared" while the form
+                  still carries the old id — selectable only in the sense
+                  that leaving it selected is what a re-save would already
+                  do; `disabled` steers toward picking an active server or
+                  clearing to `null` instead. */}
+              {staleServerId && (
+                <option value={staleServerId} disabled>
+                  {staleServerId} (no longer active)
+                </option>
+              )}
               {activeBindings.map((binding) => (
                 <option key={binding.serverId} value={binding.serverId}>
                   {binding.serverId}

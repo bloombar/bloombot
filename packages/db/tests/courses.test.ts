@@ -1053,6 +1053,134 @@ describe('courses repo', () => {
       expect(result.conflict.name).toBe('removed')
     })
 
+    // Cheap-fix 4 (coordinator round 1 rework): `updateCourse`'s own
+    // server-resolution refusal branch — `createCourse`'s and
+    // `enableCourse`'s each already had a test above; `updateCourse`'s did
+    // not.
+    it('refuses an update that would enable a course while its server is ambiguous', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer-update-ambiguous@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverA = discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '444444444444444401',
+          installedByAccountId: installer.id,
+        },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '444444444444444402',
+          installedByAccountId: installer.id,
+        },
+        testDb.db
+      )
+      if (!serverA) throw new Error('setup failed: expected a claim')
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            enabled: false,
+            discordServerId: serverA.serverId,
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.updateCourse(
+        orgA,
+        created.id,
+        courseInput(projectA.id, {
+          enabled: true,
+          discordServerId: null,
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('discordServerId')
+      expect(result.conflict.name).toBe('ambiguous')
+      // Cheap-fix 5: names the course the refusal is about.
+      expect(result.conflict.conflictingCourseTitle).toBe(created.title)
+    })
+
+    // Cheap-fix 4: `findProjectUnarchiveConflict`'s own server-resolution
+    // refusal — a new way for unarchiving a project to fail, introduced by
+    // this slice, that had no test at all.
+    it('refuses to unarchive a project holding an enabled course whose server is ambiguous, naming the course', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer-unarchive-ambiguous@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverA = discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '444444444444444403',
+          installedByAccountId: installer.id,
+        },
+        testDb.db
+      )
+      if (!serverA) throw new Error('setup failed: expected a claim')
+      // Enabled, with a null server, while the organization still holds
+      // only one active binding — resolvable, and legal, at the time.
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, { discordServerId: null }),
+          testDb.db
+        )
+      )
+      projects.archiveProject(orgA, projectA.id, testDb.db)
+      // A second binding is claimed *after* the project (and its course)
+      // is archived — TEN-9's own backfill only runs against currently
+      // null-server courses at the moment of the claim, and this course's
+      // own column is still null at that moment, so it is backfilled too;
+      // clear it back to null directly (below the repo layer) to reach the
+      // genuinely-ambiguous state this test targets: a project reactivating
+      // an enabled course whose own server this organization can no longer
+      // resolve.
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        {
+          serverId: '444444444444444404',
+          installedByAccountId: installer.id,
+        },
+        testDb.db
+      )
+      testDb.db.$client
+        .prepare('UPDATE courses SET discord_server_id = NULL WHERE id = ?')
+        .run(created.id)
+
+      const conflict = courses.findProjectUnarchiveConflict(
+        orgA,
+        projectA.id,
+        testDb.db
+      )
+
+      expect(conflict?.field).toBe('discordServerId')
+      expect(conflict?.name).toBe('ambiguous')
+      // Cheap-fix 5: names which of the project's own courses is undecided.
+      expect(conflict?.conflictingCourseTitle).toBe(created.title)
+    })
+
     it('a null discordServerId in an organization with exactly one active binding still collides with another null-server course, unchanged', () => {
       testDb = createTestDatabase()
       const { orgA, projectA } = seedTwoOrganizations(testDb)

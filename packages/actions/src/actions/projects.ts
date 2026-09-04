@@ -385,6 +385,14 @@ export const duplicateProjectAction: Action<
             vectorStoreId: source.vectorStoreId,
             maxRequestsPerDay: source.maxRequestsPerDay,
             conversationScope: source.conversationScope,
+            // TEN-9 (also-fix, coordinator round 1 rework) — copied like
+            // every other field above, not dropped: rolling a term forward
+            // in a two-binding organization is the natural next thing an
+            // instructor does after this slice, and a duplicate that
+            // silently forgot which server its source routed in would need
+            // every copied course edited by hand before any of them could
+            // be enabled again.
+            discordServerId: source.discordServerId,
             categories: source.categories.map((category) => ({
               name: category.name,
               channels: category.channels.map((channel) => ({

@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   accounts,
   closeDatabase,
+  courses,
   discordServers,
   openDatabase,
   organizations,
+  projects,
   schema,
   type Database,
 } from '@bloombot/db'
@@ -351,6 +353,173 @@ describe('discord-servers repo', () => {
     expect(
       discordServers.resolveDiscordServerBinding(serverId, testDb.db)
     ).toMatchObject({ organizationId: orgB })
+  })
+
+  // TEN-9 (must-fix 1, coordinator round 1 rework) — claiming a *second*
+  // active binding backfills every null-`discordServerId` course onto the
+  // organization's previous sole binding, at the exact moment that column
+  // stops being unambiguous. See `docs/DECISIONS.md` D-76 for why: without
+  // this, installing an unrelated second server silently stopped every
+  // pre-existing course routing at all (`packages/discord/tests/handle-mention.test.ts`'s
+  // own "installing a second server does not stop..." case is the full,
+  // routing-level pin of this same fix).
+  describe('claiming a second active binding backfills null-server courses (TEN-9)', () => {
+    function seedNullServerCourse(
+      testDatabase: TestDatabase,
+      organizationId: string,
+      options: { enabled?: boolean } = {}
+    ) {
+      const project = projects.createProject(
+        organizationId,
+        { name: `Term ${randomUUID()}` },
+        testDatabase.db
+      )
+      const result = courses.createCourse(
+        organizationId,
+        {
+          projectId: project.id,
+          title: 'Existing Course',
+          filePrefix: `ec-${randomUUID().slice(0, 8)}`,
+          enabled: options.enabled ?? true,
+          adminsRole: `admins-${randomUUID()}`,
+          studentsRole: `students-${randomUUID()}`,
+          categories: [],
+        },
+        testDatabase.db
+      )
+      if (!result.ok) {
+        throw new Error(`setup failed: ${result.conflict.message}`)
+      }
+      return result.course
+    }
+
+    it("backfills a pre-existing null-server course onto the organization's previous sole binding once a second is claimed", () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const firstServerId = '777777777777777701'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: firstServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      const course = seedNullServerCourse(testDb, orgA)
+      expect(course.discordServerId).toBeNull()
+
+      const secondServerId = '777777777777777702'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: secondServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      const reloaded = courses.getCourse(orgA, course.id, testDb.db)
+      expect(reloaded?.discordServerId).toBe(firstServerId)
+    })
+
+    it('does not touch a course that already names a server explicitly', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const firstServerId = '777777777777777703'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: firstServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      const course = seedNullServerCourse(testDb, orgA)
+      const explicitlySet = courses.updateCourse(
+        orgA,
+        course.id,
+        {
+          projectId: course.projectId,
+          title: course.title,
+          filePrefix: course.filePrefix,
+          enabled: course.enabled,
+          adminsRole: course.adminsRole,
+          studentsRole: course.studentsRole,
+          discordServerId: firstServerId,
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!explicitlySet?.ok)
+        throw new Error('setup failed: unexpected conflict')
+
+      const secondServerId = '777777777777777704'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: secondServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      const reloaded = courses.getCourse(orgA, course.id, testDb.db)
+      expect(reloaded?.discordServerId).toBe(firstServerId)
+    })
+
+    it('does not backfill a third binding — only the exact 1-to-2 transition', () => {
+      testDb = createTestDatabase()
+      const { orgA, installerA } = seedTwoOrganizationsWithInstallers(testDb)
+      const firstServerId = '777777777777777705'
+      const secondServerId = '777777777777777706'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: firstServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: secondServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      // A course created *after* the organization is already ambiguous never
+      // had a single "previous" server to attribute it to. It cannot even
+      // be created enabled with a null column at that point
+      // (`repos/courses.ts`'s own enablement guard) — created disabled here,
+      // the state a genuinely undecided course is left in, not guessed at
+      // by this backfill.
+      const course = seedNullServerCourse(testDb, orgA, { enabled: false })
+
+      const thirdServerId = '777777777777777707'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: thirdServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+
+      const reloaded = courses.getCourse(orgA, course.id, testDb.db)
+      expect(reloaded?.discordServerId).toBeNull()
+    })
+
+    it("does not backfill another organization's course", () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, installerA, installerB } =
+        seedTwoOrganizationsWithInstallers(testDb)
+      const firstServerId = '777777777777777708'
+      discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: firstServerId, installedByAccountId: installerA.id },
+        testDb.db
+      )
+      const courseInOrgA = seedNullServerCourse(testDb, orgA)
+
+      // Org B's own second binding must not touch Org A's course.
+      const orgBFirstServerId = '777777777777777709'
+      discordServers.claimDiscordServerBinding(
+        orgB,
+        { serverId: orgBFirstServerId, installedByAccountId: installerB.id },
+        testDb.db
+      )
+      discordServers.claimDiscordServerBinding(
+        orgB,
+        {
+          serverId: '777777777777777710',
+          installedByAccountId: installerB.id,
+        },
+        testDb.db
+      )
+
+      const reloaded = courses.getCourse(orgA, courseInOrgA.id, testDb.db)
+      expect(reloaded?.discordServerId).toBeNull()
+    })
   })
 
   // TEN-2: removing through the wrong organization affects zero rows rather

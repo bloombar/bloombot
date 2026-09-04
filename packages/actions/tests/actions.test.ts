@@ -13,6 +13,7 @@ import {
   createProjectAction,
   disableCourseAction,
   enableCourseAction,
+  renameProjectAction,
   saveCourseAction,
   unarchiveProjectAction,
 } from '../src/actions/index.js'
@@ -139,6 +140,83 @@ describe('projects.create', () => {
       error = caught as ActionConflictError
     }
     expect(error?.conflict).toMatchObject({ name: 'Fall 2027' })
+  })
+})
+
+describe('projects.rename (PROJ-6)', () => {
+  it("renames a project in the caller's organization", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+
+    const renamed = await dispatch(
+      renameProjectAction,
+      { projectId, name: 'Autumn 2026' },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(renamed).toMatchObject({ id: projectId, name: 'Autumn 2026' })
+    expect(
+      projects.getProject(organizationId, projectId, testDb.db)
+    ).toMatchObject({ name: 'Autumn 2026' })
+  })
+
+  // `renameProject` (`repos/projects.ts`) already builds this refusal — see
+  // that file's own comments on the rename-or-archive race — this only
+  // proves the action converts it into `ActionConflictError` (D-18) rather
+  // than letting it reach the caller as `SaveProjectResult`'s own `{ ok:
+  // false }` shape unwrapped.
+  it('refuses a rename that collides with another active project, naming it', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    const other = projects.createProject(
+      organizationId,
+      { name: 'Spring 2027' },
+      testDb.db
+    )
+
+    const attempt = dispatch(
+      renameProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionConflictError)
+    let error: ActionConflictError | undefined
+    try {
+      await attempt
+    } catch (caught) {
+      error = caught as ActionConflictError
+    }
+    expect(error?.conflict).toMatchObject({
+      name: 'Spring 2027',
+      conflictingProjectId: other.id,
+    })
+  })
+
+  // TEN-2: a project scoped to a *different* organization is not found at
+  // all — `resolveOwnProject` (`actions/projects.ts`) is the same policy
+  // `projects.archive`/`projects.unarchive` already use.
+  it('cannot rename a project belonging to a different organization', async () => {
+    testDb = createTestDatabase()
+    const { projectId } = seedOrganizationWithProject(testDb.db, 'Fall 2026')
+    const otherOrganizationId = seedOrganizationWithProject(
+      testDb.db,
+      'Other Org Project'
+    ).organizationId
+
+    const attempt = dispatch(
+      renameProjectAction,
+      { projectId, name: 'Hijacked' },
+      { organizationId: otherOrganizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow()
   })
 })
 

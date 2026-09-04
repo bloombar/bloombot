@@ -1,8 +1,9 @@
 /**
  * Actions over `packages/db`'s `projects` repo (PROJ-1, PROJ-2, PROJ-4,
- * PROJ-5), proving the action shape against a real repository —
+ * PROJ-5, PROJ-6), proving the action shape against a real repository —
  * `projects.create`, `projects.archive`, `projects.unarchive`,
- * `projects.list` (PROJ-5's read) and `projects.duplicate` (PROJ-4).
+ * `projects.list` (PROJ-5's read), `projects.duplicate` (PROJ-4) and
+ * `projects.rename` (PROJ-6).
  */
 
 import { courses, organizations, projects, type Database } from '@bloombot/db'
@@ -208,6 +209,51 @@ export const unarchiveProjectAction: Action<
     if (!result) throw new ActionRefusedError()
     // PROJ-3/PROJ-2's own collision, named (unlike ACT-3's refusal above) —
     // see `docs/DECISIONS.md` for why that asymmetry is deliberate.
+    if (!result.ok) throw new ActionConflictError(result.conflict)
+    return result.project
+  },
+}
+
+const renameInputSchema = z.object({
+  projectId: z.string().min(1),
+  name: z.string().min(1),
+})
+type RenameInput = z.infer<typeof renameInputSchema>
+
+/**
+ * PROJ-6: rename a project, over `renameProject` (`repos/projects.ts`),
+ * which has been sitting there with no caller. `renameProject` already
+ * enforces PROJ-1's active-name uniqueness and already builds the "collides
+ * with project X" refusal itself — this action does not re-detect that
+ * race, only converts the repo's own `SaveProjectResult` into the
+ * `ActionConflictError` shape every other write in this file already uses
+ * (D-18), the same conversion `projects.unarchive` (above) does for
+ * `UnarchiveProjectResult`.
+ */
+export const renameProjectAction: Action<
+  'projects.rename',
+  RenameInput,
+  Project,
+  Project
+> = {
+  name: 'projects.rename',
+  description: 'Rename a project (PROJ-6), leaving its courses untouched.',
+  inputSchema: renameInputSchema,
+  policy: {
+    descriptor: { resource: 'project', access: 'write' },
+    resolve: resolveOwnProject,
+  },
+  execute: ({ organizationId, entity, input, db }) => {
+    const result = projects.renameProject(
+      organizationId,
+      entity.id,
+      input.name,
+      db
+    )
+    // `undefined` only if the project vanished between `resolve` and here —
+    // a race nothing in this package causes on purpose, the same guard
+    // `projects.unarchive` (above) holds itself to.
+    if (!result) throw new ActionRefusedError()
     if (!result.ok) throw new ActionConflictError(result.conflict)
     return result.project
   },

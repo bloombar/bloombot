@@ -92,9 +92,12 @@ test('a project and course defined entirely in the panel route and answer a matc
 
   // 2. Create a project (WEB-7/PROJ-1), through the panel alone.
   await navigateTo(page, 'Projects')
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   // 3. Define a course in it (WEB-8): title, roles (CFG-3), one category
   //    (CFG-4) — the two names that decide routing (WEB-9) — and enable it.

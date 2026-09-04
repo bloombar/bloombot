@@ -55,9 +55,12 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   // stays open. Waiting for it to actually close first is what keeps the
   // fill below from landing on an inert field.
   await expect(page.getByRole('dialog', { name: 'Navigation' })).toBeHidden()
-  await page.getByLabel('New project name').fill(projectName)
-  await page.getByRole('button', { name: 'Create project' }).click()
-  await page.getByRole('button', { name: projectName }).click()
+  // WEB-27: "New project" opens a modal that asks for the name.
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
 
   // Start a new course and make the form dirty — never saved.
   await page.getByRole('button', { name: 'New course' }).click()

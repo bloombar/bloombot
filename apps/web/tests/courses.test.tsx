@@ -1,6 +1,7 @@
 /**
- * `pages/Courses.tsx` (WEB-8, PROJ-5): a project's own course list, and the
- * quick enable/disable toggle each row offers alongside the full editor.
+ * `pages/Courses.tsx` (WEB-8, PROJ-5): a project's own course list, the
+ * quick enable/disable toggle each row offers behind its own kebab menu
+ * (WEB-26), and its own Chat button (WEB-28).
  */
 
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
@@ -49,6 +50,13 @@ const COURSE: CourseSummary = {
   createdAt: 0,
 }
 
+/** Opens a course row's own kebab menu, by its own `aria-label` (WEB-26) — every menu item test below goes through this rather than reaching the item directly, so it also proves the item is actually reachable behind the row's own control. */
+function openCourseMenu(courseTitle: string) {
+  fireEvent.click(
+    screen.getByRole('button', { name: `Actions for "${courseTitle}"` })
+  )
+}
+
 afterEach(() => {
   vi.resetAllMocks()
 })
@@ -63,6 +71,7 @@ describe('Courses (WEB-8)', () => {
         project={PROJECT}
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
       />
     )
 
@@ -70,7 +79,10 @@ describe('Courses (WEB-8)', () => {
     expect(listCourses).toHaveBeenCalledWith('org-1', 'project-1')
   })
 
-  it('disables an enabled course from the list, without opening the editor', async () => {
+  // WEB-26: Disable/Enable moved behind the row's own kebab menu — this
+  // pins that the item is reachable *there*, not merely that the text
+  // "Disable" exists somewhere on the page.
+  it('disables an enabled course from its kebab menu, without opening the editor', async () => {
     listCourses.mockResolvedValue([COURSE])
     disableCourse.mockResolvedValue({ disabled: true })
 
@@ -80,11 +92,14 @@ describe('Courses (WEB-8)', () => {
         project={PROJECT}
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+    openCourseMenu('Web Design')
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Disable' }))
     // WEB-15: destructive, so it confirms first (`components/modal/`).
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
@@ -94,7 +109,7 @@ describe('Courses (WEB-8)', () => {
     )
   })
 
-  it('enables a disabled course from the list', async () => {
+  it('enables a disabled course from its kebab menu', async () => {
     listCourses.mockResolvedValue([{ ...COURSE, enabled: false }])
     enableCourse.mockResolvedValue({ enabled: true })
 
@@ -104,15 +119,43 @@ describe('Courses (WEB-8)', () => {
         project={PROJECT}
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
       />
     )
     await screen.findByText('Web Design')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    openCourseMenu('Web Design')
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Enable' }))
 
     await waitFor(() =>
       expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
     )
+  })
+
+  // WEB-28: the row's own Chat button hands the course id straight up —
+  // `pages/Shell.tsx`'s own tests cover what happens once it reaches the
+  // shell (landing on the Chat tab with this course selected).
+  it('clicking Chat on a course row hands its id up to onOpenChat', async () => {
+    listCourses.mockResolvedValue([COURSE])
+    const onOpenChat = vi.fn()
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={onOpenChat}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Chat about "Web Design"' })
+    )
+
+    expect(onOpenChat).toHaveBeenCalledWith('course-1')
   })
 
   it('a stale, out-of-order response for a superseded project cannot overwrite the current one (finding 8 of the WEB-7 rework)', async () => {
@@ -138,6 +181,7 @@ describe('Courses (WEB-8)', () => {
         project={PROJECT}
         onBack={vi.fn()}
         onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
       />
     )
     const otherProject: Project = {
@@ -152,6 +196,7 @@ describe('Courses (WEB-8)', () => {
           project={otherProject}
           onBack={vi.fn()}
           onOpenCourse={vi.fn()}
+          onOpenChat={vi.fn()}
         />
       )
     )
@@ -180,6 +225,7 @@ describe('Courses (WEB-8)', () => {
         project={PROJECT}
         onBack={vi.fn()}
         onOpenCourse={onOpenCourse}
+        onOpenChat={vi.fn()}
       />
     )
     await screen.findByText('Web Design')

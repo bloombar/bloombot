@@ -44,6 +44,7 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  MoreVertical,
   Pencil,
   Plus,
   Power,
@@ -99,6 +100,8 @@ export const RevealIcon = Eye
 export const ExternalLinkIcon = ExternalLink
 /** A collapsible section, or a select control, is closed and can be opened. */
 export const ExpandIcon = ChevronDown
+/** WEB-26: a row's own overflow menu — the kebab control that opens it. */
+export const KebabIcon = MoreVertical
 
 /** ADMIN-1: a course's transcript. */
 export const TranscriptIcon = FileText

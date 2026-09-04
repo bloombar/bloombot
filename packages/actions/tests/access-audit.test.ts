@@ -24,6 +24,9 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'projects.create': { resource: 'organization', access: 'write' },
   'projects.archive': { resource: 'project', access: 'write' },
   'projects.unarchive': { resource: 'project', access: 'write' },
+  // PROJ-6: resolves the project being renamed, the same `resolveOwnProject`
+  // shape `projects.archive`/`projects.unarchive` already use above.
+  'projects.rename': { resource: 'project', access: 'write' },
   // PROJ-5: no existing project to resolve on a list either — the same
   // "organization" resource `projects.create` resolves, read rather than
   // written.

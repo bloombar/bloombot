@@ -13,6 +13,7 @@ import {
   conversations,
   costLedger,
   courses,
+  courseWebSources,
   organizations,
   people,
   schema,
@@ -1878,5 +1879,68 @@ describe('answerQuestion (JOB-4): admission bounds concurrent model calls', () =
     ).toBeLessThanOrEqual(1)
 
     await holding
+  })
+})
+
+describe('answerQuestion (MDL-9): a courses own websites are read into ModelRequest.webSourceDomains', () => {
+  it('a course with no websites passes an empty array, never null or undefined', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'web',
+        text: 'Any websites?',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(model.calls).toHaveLength(1)
+    expect(model.calls[0]?.webSourceDomains).toEqual([])
+  })
+
+  it("a course's own named websites pass through as bare domains", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    courseWebSources.addWebSource(
+      organizationId,
+      { courseId, domain: 'example.edu' },
+      testDb.db
+    )
+    courseWebSources.addWebSource(
+      organizationId,
+      { courseId, domain: 'docs.python.org' },
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'web',
+        text: 'Any websites?',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(model.calls).toHaveLength(1)
+    expect(model.calls[0]?.webSourceDomains?.slice().sort()).toEqual([
+      'docs.python.org',
+      'example.edu',
+    ])
   })
 })

@@ -1393,3 +1393,49 @@ export const membershipInvitations = sqliteTable(
     ),
   ]
 )
+
+// FILE-6/MDL-9 — a course's own websites: named by an instructor alongside
+// its uploaded knowledge files, and turned by `@bloombot/openai`'s adapter
+// into a `web_search` tool restricted to exactly this list of domains
+// (`packages/openai/src/responses.ts`'s own `filters.allowed_domains`). One
+// row per `(courseId, domain)` pair — `domain` is always the *normalized*
+// form `packages/core`'s `normalizeWebSourceDomain` produces (WEB-31: bare,
+// lowercased, no scheme/path/port), never whatever an instructor happened
+// to type, so the unique constraint below actually catches
+// `https://Example.edu/` and `example.edu` as the same site rather than
+// letting both land as separate rows that the model would then be told to
+// treat as two different allowed domains for no reason a caller could see.
+export const courseWebSources = sqliteTable(
+  'course_web_sources',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    domain: text('domain').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // The same "organization first" index shape most scoped tables in this
+    // file carry (`membership_invitations_organization_id_idx`, above), and
+    // what `repos/course-web-sources.ts#listWebSourcesForCourse` filters a
+    // course's own websites by.
+    index('course_web_sources_course_id_idx').on(table.courseId),
+    index('course_web_sources_organization_id_idx').on(table.organizationId),
+    // A course never names the same domain twice — the same "let the
+    // database refuse it, never trust an application check" discipline
+    // `projects_org_name_active_unique` (above) already holds itself to.
+    // Scoped to `courseId` alone, not `(organizationId, courseId)`: a
+    // course id already belongs to exactly one organization
+    // (`courses.organizationId`), so adding `organizationId` to this
+    // constraint would only widen what SQLite has to compare on every
+    // insert without changing which rows it actually lets collide.
+    uniqueIndex('course_web_sources_course_domain_unique').on(
+      table.courseId,
+      table.domain
+    ),
+  ]
+)

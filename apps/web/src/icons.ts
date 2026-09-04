@@ -36,6 +36,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  Globe,
   Hammer,
   Home,
   Info,
@@ -94,6 +95,8 @@ export const ImportIcon = Upload
 export const CopyIcon = Copy
 /** A course join link itself (WEB-20). */
 export const JoinLinkIcon = Link2
+/** A website a course names as knowledge (FILE-6). */
+export const WebsiteIcon = Globe
 /** ENRL-12: show a live join link's secret again. */
 export const RevealIcon = Eye
 /** Leave this panel for another site (Discord's own consent screen, a footer link). */

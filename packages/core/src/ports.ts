@@ -27,6 +27,22 @@ export interface ModelRequest {
   instructions: string | null
   /** The course's configured vector store (`courses.vectorStoreId`), or `null` when it has none. */
   vectorStoreId: string | null
+  /**
+   * MDL-9/FILE-6 — the bare domains a course's own `course_web_sources`
+   * names (`@bloombot/db`'s repo of the same name), already normalized
+   * (WEB-31) by whichever action added them — this field is never
+   * responsible for reducing a domain to its bare form itself, only for
+   * carrying the list an adapter turns into a domain-restricted
+   * `web_search` tool (`@bloombot/openai`'s own `responses.ts`). Empty
+   * (`[]`), never `null`: unlike `vectorStoreId`, which distinguishes "a
+   * course has one" from "a course has none" with `string | null`, a
+   * course's websites are inherently a list, and "no websites configured"
+   * is naturally an empty one rather than a second sentinel meaning the
+   * same thing — an adapter reads `webSourceDomains.length === 0` the same
+   * way it already reads `vectorStoreId === null`: omit the tool entirely,
+   * never send an unrestricted search.
+   */
+  webSourceDomains: string[]
   /** The course's configured model name (`courses.model`), or `null` to let the adapter fall back to its own default. */
   model: string | null
   /** The conversation's upstream model thread id (`conversations.upstreamThreadId`), or `null` on its first turn. */

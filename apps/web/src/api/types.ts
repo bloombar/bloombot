@@ -274,6 +274,22 @@ export interface CourseAttachmentSummary {
 }
 
 /**
+ * FILE-6/MDL-9 — one of a course's websites, as `courseWebSources.list`
+ * returns it. Mirrors `packages/actions/src/actions/course-web-sources.ts`'s
+ * own `courseWebSources.CourseWebSource` (`@bloombot/db`'s repo row) by
+ * hand, the same "not imported from the workspace" discipline this file's
+ * own module comment already explains — `domain` is already the
+ * normalized, bare form an instructor's typed URL was reduced to (WEB-31),
+ * never the raw string they entered.
+ */
+export interface CourseWebSourceSummary {
+  id: string
+  courseId: string
+  domain: string
+  createdAt: number
+}
+
+/**
  * WEB-20 — one of a course's join links, as `courseJoinLinks.list` returns
  * it. Mirrors `packages/actions/src/actions/course-join-links.ts`'s own
  * `CourseJoinLinkSummary` by hand, the same "not imported from the

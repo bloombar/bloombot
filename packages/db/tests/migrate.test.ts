@@ -69,6 +69,7 @@ describe('runMigrations', () => {
       'course_channels',
       'course_instruction_revisions',
       'course_join_links',
+      'course_web_sources',
       'courses',
       'discord_install_states',
       'discord_server_bindings',
@@ -136,6 +137,14 @@ describe('runMigrations', () => {
       'organization_id',
       'removed_at',
       'server_id',
+    ])
+    // FILE-6/MDL-9 — added by this slice.
+    expect(schema.course_web_sources).toEqual([
+      'course_id',
+      'created_at',
+      'domain',
+      'id',
+      'organization_id',
     ])
     expect(schema.discord_install_states).toEqual([
       'account_id',

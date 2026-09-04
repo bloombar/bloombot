@@ -184,6 +184,7 @@ export function createOpenAiModelClient(
         promptId: request.promptId,
         instructions: request.instructions,
         vectorStoreId: request.vectorStoreId,
+        webSourceDomains: request.webSourceDomains,
         conversationId,
         question: request.question,
       })

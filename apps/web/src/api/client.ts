@@ -323,8 +323,8 @@ export function dispatchAction<TResult = unknown>(
 }
 
 /**
- * WEB-7: the project actions — `projects.list/create/archive/unarchive/duplicate`
- * (PROJ-1, PROJ-2, PROJ-4, PROJ-5) — each a thin, typed wrapper over
+ * WEB-7: the project actions — `projects.list/create/archive/unarchive/rename/duplicate`
+ * (PROJ-1, PROJ-2, PROJ-4, PROJ-5, PROJ-6) — each a thin, typed wrapper over
  * `dispatchAction`, the same route every other action goes through. No new
  * route and no new action: these exist only so a caller in `pages/` writes
  * `listProjects(organizationId)` rather than repeating the action's name and
@@ -365,6 +365,18 @@ export function unarchiveProject(
 ): Promise<Project> {
   return dispatchAction<Project>(organizationId, 'projects.unarchive', {
     projectId,
+  })
+}
+
+/** PROJ-6/WEB-26: rename a project — the same thin wrapper shape as `archiveProject`/`duplicateProject` above, over `projects.rename`. */
+export function renameProject(
+  organizationId: string,
+  projectId: string,
+  name: string
+): Promise<Project> {
+  return dispatchAction<Project>(organizationId, 'projects.rename', {
+    projectId,
+    name,
   })
 }
 

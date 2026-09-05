@@ -17,6 +17,9 @@ const ROUTES: Route[] = [
   { kind: 'home' },
   { kind: 'account' },
   { kind: 'platform-admin' },
+  { kind: 'admin-organizations' },
+  { kind: 'admin-organization', organizationId: 'org-1' },
+  { kind: 'admin-deletions' },
   { kind: 'discord-callback' },
   { kind: 'sign-in', token: 'tok_abc123' },
   { kind: 'connect', organizationId: 'org-1' },
@@ -62,6 +65,9 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/chat/course-1',
     '/account',
     '/platform-admin',
+    '/platform-admin/organizations',
+    '/platform-admin/organizations/org-1',
+    '/platform-admin/deletions',
   ])('parses the exact literal path %s', (path) => {
     expect(parseRoute(path).kind).not.toBe('not-found')
   })
@@ -83,6 +89,8 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/invitations',
     '/account/extra',
     '/platform-admin/sub',
+    '/platform-admin/organizations/org-1/extra',
+    '/platform-admin/deletions/extra',
   ])('malformed or unknown path %s lands on not-found', (path) => {
     expect(parseRoute(path)).toEqual({ kind: 'not-found' })
   })

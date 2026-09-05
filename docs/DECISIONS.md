@@ -8734,3 +8734,34 @@ since "reload holds place" is this slice's own explicit requirement.
 **Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2401 vitest,
 90 node); `npm run e2e` 34/34 (31 pre-existing plus 3 new `tests/routing.test.ts` unit cases folded into vitest's
 own count, and 2 new `e2e/routing.spec.ts` cases); `npm run board:derive` leaves the manifest unchanged.
+
+## D-79 — `apps/web`: WEB-33 — the admin console's own screens, each its own address
+
+`pages/Admin.tsx` split into three addresses under `/platform-admin` (`routing/route.ts#AdminRoute`):
+`'admin-organizations'` (the list, unchanged in content from what the single flat page rendered before this
+slice), `'admin-organization'` (one organization's own card, new in this slice) and `'admin-deletions'` (ADMIN-5's
+own audit trail, moved out of the list page into its own address). `'platform-admin'` itself — the console's one
+entry point from outside the app — keeps exactly the behaviour D-78 already gives `/`: it resolves to
+`'admin-organizations'` and replaces its own history entry, never somewhere the browser's own Back button should
+return into, the same reasoning that already applies to `/` itself.
+
+**No single-organization read exists, so `'admin-organization'` resolves against the list already in state,
+the same way `pages/ProjectsPanel.tsx`'s own `useResolvedProject` resolves a project id.** There is no
+`admin.organizations.get` action — only `fetchAdminOrganizations`'s own list, which `OrganizationsList` already
+holds in state — so `OrganizationDetail` searches that same array for the id the route names rather than adding
+a second fetch this console does not otherwise need. An id absent from that list (deleted since, or never real)
+renders `pages/NotFound.tsx`, exactly the treatment the rest of the panel already gives an unmatched id.
+
+**The per-organization Delete action stays inline in the list, not moved behind the new detail screen.** The
+brief's own existing e2e coverage (`e2e/admin-console.spec.ts`'s pre-existing ADMIN-5 test) drives the delete
+flow directly from the organizations list with no click-through, and nothing in this slice's brief asked to move
+it — an operator can still delete an organization without first opening its own address, and can also do so from
+that address, since `OrganizationDetail` renders the identical Delete control.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2412
+vitest, 90 node, up from 2401/90 — 11 new `apps/web` unit cases: 5 `tests/routing.test.ts` round-trip/parse
+additions, 6 `tests/admin.test.tsx` additions covering the entry-point resolution, the detail screen and its own
+not-found case); `npx playwright test` 35/35 (34 pre-existing plus one new `e2e/admin-console.spec.ts` case
+covering a cold deep link to an organization's own address, panel navigation moving the address bar, browser
+back returning to the organizations list, and an unmatched organization id rendering not-found); `npm run
+board:derive` leaves the manifest unchanged.

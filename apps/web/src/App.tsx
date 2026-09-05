@@ -24,13 +24,13 @@
  *    (`pages/Invitation.tsx`); reachable signed in or signed out, the same
  *    reason `'join-link'` is above — the account an invitation is addressed
  *    to may never have signed in before.
- *  - `route.kind === 'platform-admin'` — ADMIN-4's console (`pages/Admin.tsx`);
+ *  - an `AdminRoute` (`routing/route.ts`) — ADMIN-4's console
+ *    (`pages/Admin.tsx`), with WEB-33's own sub-addresses now real screens
+ *    inside it (that page's own module comment has the breakdown);
  *    reachable by any signed-in account (deliberately *not* `/admin`,
  *    `apps/api`'s own mount for this screen's reads and writes — see
  *    `vite.config.ts`'s own comment on that path), with `routes/admin.ts`
- *    the one place AUTH-4 is actually enforced. WEB-33 (its own
- *    sub-addresses) is a later slice — this route stays a single flat page
- *    for now, as it already was.
+ *    the one place AUTH-4 is actually enforced.
  *  - a `ShellRoute` (`routing/route.ts`) naming an organization or the
  *    account screen — the signed-in shell (`pages/Shell.tsx`), once this
  *    account's own accessibility to it is checked (below).
@@ -68,7 +68,12 @@ import { NotFound } from './pages/NotFound.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
-import { isShellRoute, parseRoute, type Route } from './routing/route.js'
+import {
+  isAdminRoute,
+  isShellRoute,
+  parseRoute,
+  type Route,
+} from './routing/route.js'
 import { useRoute } from './routing/useRoute.js'
 
 // AUTH-6: the same-origin check every destination this app is ever handed —
@@ -398,7 +403,7 @@ export function App() {
   }
 
   if (session.kind === 'signed-in') {
-    // ADMIN-4 — reached at `/platform-admin`, deliberately outside `Shell`'s
+    // ADMIN-4 — reached under `/platform-admin`, deliberately outside `Shell`'s
     // own organization-scoped nav (`Admin.tsx`'s own module comment has
     // why) and deliberately *not* `/admin`: `apps/api`'s own
     // `routes/admin.ts` is mounted at `/admin` (`vite.config.ts`'s own
@@ -411,8 +416,13 @@ export function App() {
     // `not_platform_administrator` refusal `ErrorMessage` already knows
     // how to say in words, not a client-side guess at who is allowed to
     // even try.
-    if (route.kind === 'platform-admin') {
-      return <Admin onBack={returnToShell} />
+    //
+    // WEB-33 — every screen inside the console (`pages/Admin.tsx`'s own
+    // `route` prop) is now real, so this passes `route`/`navigate` straight
+    // through rather than only `onBack`; `isAdminRoute` narrows the same
+    // way `isShellRoute` does for `Shell`, just below.
+    if (isAdminRoute(route)) {
+      return <Admin route={route} navigate={navigate} onBack={returnToShell} />
     }
 
     // WEB-34: `/` resolves and replaces before this ever renders anything

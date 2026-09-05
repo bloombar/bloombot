@@ -60,6 +60,23 @@ export type AccountRoute = { kind: 'account' }
 export type ShellRoute = OrganizationRoute | AccountRoute
 
 /**
+ * WEB-33 — every address `pages/Admin.tsx` renders, under its own
+ * `/platform-admin` prefix (deliberately distinct from `apps/api`'s own
+ * `/admin` mount — `App.tsx`'s own module comment has why). `'platform-admin'`
+ * itself is kept as the console's one entry point from outside the app — it
+ * resolves to `'admin-organizations'` and replaces, the same "one-time
+ * landing address, not somewhere back should return into" treatment `App.tsx`'s
+ * own `'home'` already gets — while every address beneath it is a real,
+ * bookmarkable screen `pages/Admin.tsx` navigates between with an ordinary
+ * push.
+ */
+export type AdminRoute =
+  | { kind: 'platform-admin' }
+  | { kind: 'admin-organizations' }
+  | { kind: 'admin-organization'; organizationId: string }
+  | { kind: 'admin-deletions' }
+
+/**
  * Every address this whole app can be asked to render, signed in or out.
  * The five below `ShellRoute` are unchanged by this slice (`App.tsx`'s own
  * module comment on why: a one-time entry point, never somewhere "back"
@@ -69,13 +86,13 @@ export type ShellRoute = OrganizationRoute | AccountRoute
  */
 export type Route =
   | ShellRoute
+  | AdminRoute
   | { kind: 'home' }
   | { kind: 'sign-in'; token: string }
   | { kind: 'discord-callback' }
   | { kind: 'connect'; organizationId: string }
   | { kind: 'join-link'; secret: string }
   | { kind: 'invitation'; secret: string }
-  | { kind: 'platform-admin' }
   | { kind: 'not-found' }
 
 /**
@@ -109,8 +126,24 @@ export function parseRoute(pathname: string): Route {
   const [first, second, ...rest] = segments
 
   if (first === 'account' && segments.length === 1) return { kind: 'account' }
-  if (first === 'platform-admin' && segments.length === 1) {
-    return { kind: 'platform-admin' }
+
+  // WEB-33 — the admin console's own sub-addresses, `/platform-admin/...`.
+  // `/platform-admin` alone (no `second` at all) is the console's one entry
+  // point (`AdminRoute`'s own doc comment on why); everything else here
+  // reads as a literal transcription of the brief's own scheme, the same
+  // segment-count-first discipline the `/o/:organizationId/...` tree below
+  // already holds itself to.
+  if (first === 'platform-admin') {
+    if (segments.length === 1) return { kind: 'platform-admin' }
+    if (second === 'organizations' && rest.length === 0) {
+      return { kind: 'admin-organizations' }
+    }
+    if (second === 'organizations' && rest.length === 1 && rest[0]) {
+      return { kind: 'admin-organization', organizationId: rest[0] }
+    }
+    if (second === 'deletions' && rest.length === 0) {
+      return { kind: 'admin-deletions' }
+    }
   }
   if (first === 'discord' && second === 'callback' && segments.length === 2) {
     return { kind: 'discord-callback' }
@@ -198,6 +231,12 @@ export function buildPath(route: Route): string {
       return '/account'
     case 'platform-admin':
       return '/platform-admin'
+    case 'admin-organizations':
+      return '/platform-admin/organizations'
+    case 'admin-organization':
+      return `/platform-admin/organizations/${route.organizationId}`
+    case 'admin-deletions':
+      return '/platform-admin/deletions'
     case 'discord-callback':
       return '/discord/callback'
     case 'sign-in':
@@ -252,6 +291,19 @@ export function isShellRoute(route: Route): route is ShellRoute {
     case 'usage':
     case 'jobs':
     case 'account':
+      return true
+    default:
+      return false
+  }
+}
+
+/** WEB-33 — `App.tsx`'s own guard for whether `route` is one `pages/Admin.tsx` can render, the same "narrow before constructing the element" shape `isShellRoute` already gives `pages/Shell.tsx`. */
+export function isAdminRoute(route: Route): route is AdminRoute {
+  switch (route.kind) {
+    case 'platform-admin':
+    case 'admin-organizations':
+    case 'admin-organization':
+    case 'admin-deletions':
       return true
     default:
       return false

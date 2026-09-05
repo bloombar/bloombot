@@ -114,15 +114,15 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
     await studentContext.close()
   }
 
-  // 4. Back in the owner's own panel: reload, navigate back to this same
-  //    course, and the People panel now lists the student as enrolled —
-  //    admitted through the join link, and offering only End (this student
-  //    joined with no display name set anywhere, so the row falls back to
-  //    their own person id — WEB-22's own "never an email" fallback,
-  //    `components/CoursePeople.tsx`'s own module comment).
+  // 4. Back in the owner's own panel: reload — WEB-32/WEB-34's own
+  //    "a reload holds the panel's place," so this reload lands directly
+  //    back on this exact course's own address, no re-navigation through
+  //    Projects needed — and the People panel now lists the student as
+  //    enrolled — admitted through the join link, and offering only End
+  //    (this student joined with no display name set anywhere, so the row
+  //    falls back to their own person id — WEB-22's own "never an email"
+  //    fallback, `components/CoursePeople.tsx`'s own module comment).
   await page.reload()
-  await page.getByRole('button', { name: projectName, exact: true }).click()
-  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
   await expect(page.getByText('Enrolled (1)')).toBeVisible()
   const endButton = page.getByRole('button', { name: /^End /, exact: false })

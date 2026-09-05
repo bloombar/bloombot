@@ -9,8 +9,8 @@
  * and neither was `fetchMe()` rejecting outright (finding 3).
  */
 
-import { screen, fireEvent } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
@@ -38,6 +38,9 @@ const {
   confirmDiscordPersonLink,
   redeemCourseJoinLink,
   redeemMembershipInvitation,
+  listChatCourses,
+  getChatMessages,
+  requestSignInLink,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
@@ -49,6 +52,15 @@ const {
   confirmDiscordPersonLink: vi.fn(),
   redeemCourseJoinLink: vi.fn(),
   redeemMembershipInvitation: vi.fn(),
+  // WEB-32/WEB-34 — `App.tsx`'s own home resolution now navigates a
+  // redeemed join link straight to `/o/:organizationId/chat/:courseId`
+  // (`resolveHomeRoute`), so the `Chat` screen it lands on actually mounts,
+  // the same reason `listProjects`/`listDiscordServers` above are mocked.
+  listChatCourses: vi.fn(),
+  getChatMessages: vi.fn(),
+  // WEB-34 — what a signed-out deep link actually carries: the destination
+  // is handed to `requestSignInLink`, so this is where it can be observed.
+  requestSignInLink: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -67,6 +79,9 @@ vi.mock('../src/api/client.js', async () => {
     confirmDiscordPersonLink,
     redeemCourseJoinLink,
     redeemMembershipInvitation,
+    listChatCourses,
+    getChatMessages,
+    requestSignInLink,
   }
 })
 
@@ -133,6 +148,13 @@ describe('App (WEB-1..4)', () => {
     expect(
       await screen.findByRole('combobox', { name: 'Organization' })
     ).toHaveValue('org-2')
+    // WEB-34: `/` is never a real address — it resolves, once the session
+    // is known, to the account's own canonical landing address (Projects,
+    // for a member) under whichever organization the install actually
+    // bound — org-2, not org-1. Checked before navigating any further below
+    // — clicking into the Discord tab is itself a real navigation now
+    // (WEB-32) and moves the address on to `/o/org-2/discord`.
+    expect(window.location.pathname).toBe('/o/org-2/projects')
     // WEB-29: Discord lives in the drawer now, not a header row — opened
     // via the hamburger before it can be clicked.
     fireEvent.click(
@@ -142,7 +164,46 @@ describe('App (WEB-1..4)', () => {
     // The install is already showing, not a fresh "Install to Discord"
     // button.
     await screen.findByText(/guild-99/)
-    expect(window.location.pathname).toBe('/')
+  })
+
+  // Defensive — `resolveHomeRoute` checks `justInstalled.organizationId`
+  // against the account's own memberships before ever trusting it (a value
+  // this app did not itself just hand back); an organization it does not
+  // administer falls back to the first membership instead.
+  it('a justInstalled organization the account is not actually a member of is ignored, defensively, falling back to the first membership', async () => {
+    // `PENDING_INSTALL_ORG_KEY` names the organization `justInstalled` ends
+    // up naming (`DiscordCallback.tsx`'s own `installOrganizationId`) — set
+    // to an organization this account does not administer at all, standing
+    // in for a stale or corrupted value in `sessionStorage`.
+    sessionStorage.setItem(PENDING_INSTALL_ORG_KEY, 'org-9')
+    completeDiscordInstall.mockResolvedValue({ serverId: 'guild-9' })
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(
+      null,
+      '',
+      '/discord/callback?code=abc&state=xyz&guild_id=guild-9'
+    )
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org One')
+    expect(window.location.pathname).toBe('/o/org-1/projects')
   })
 
   it('an unreachable apps/api reports it and offers a retry, rather than hanging on "Loading…" forever (finding 3 of the WEB-1..6 rework)', async () => {
@@ -364,7 +425,9 @@ describe('App — a redeemed destination that is not a same-origin path is refus
       expect(
         await screen.findByTestId('organization-switcher')
       ).toBeInTheDocument()
-      expect(window.location.pathname).toBe('/')
+      // WEB-34: `/` resolves to this account's own canonical landing
+      // address — Projects, under its one membership organization.
+      expect(window.location.pathname).toBe('/o/personal-org/projects')
     }
   )
 })
@@ -453,6 +516,95 @@ describe('App — /join/:secret (ENRL-8)', () => {
   })
 })
 
+// WEB-25/WEB-32/WEB-34: `resolveHomeRoute` is what now decides which
+// organization and tab `/` resolves to — before this slice that logic lived
+// in `pages/Shell.tsx`'s own `activeOrganizationId`/`activeTab`
+// initializers; moved here because a `useState` initializer cannot itself
+// produce a real, bookmarkable address the way `App.tsx`'s own `navigate`
+// can.
+describe('App — / home resolution (WEB-25, WEB-34)', () => {
+  it('a redeemed join link resolves home to that organization’s own Chat, with the joined course already selected', async () => {
+    redeemCourseJoinLink.mockResolvedValue({
+      organizationId: 'institution-org',
+      courseId: 'course-1',
+      alreadyEnrolled: false,
+    })
+    listChatCourses.mockResolvedValue([{ id: 'course-1', title: 'A Course' }])
+    getChatMessages.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        // The account's own personal organization (TEN-1) is first, and
+        // would otherwise be `resolveHomeRoute`'s own fallback — this test
+        // proves the joined organization wins instead, exactly like
+        // `pages/Shell.tsx`'s own former initializer used to.
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [
+          {
+            organizationId: 'institution-org',
+            organizationName: 'A University',
+          },
+        ],
+      },
+    })
+    window.history.pushState(null, '', '/join/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Chat' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/o/institution-org/chat/course-1')
+    expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+      'A University'
+    )
+  })
+
+  // Defensive — `resolveHomeRoute` checks `joinedCourse.organizationId`
+  // against the account's own memberships/connections before ever trusting
+  // it, the same way `justInstalled` is checked in the Discord install test
+  // above; a value naming an organization the account cannot reach at all
+  // falls back to the first membership instead.
+  it('a joinedCourse organization the account can neither administer nor reach is ignored, defensively, falling back to the first membership', async () => {
+    redeemCourseJoinLink.mockResolvedValue({
+      organizationId: 'org-9',
+      courseId: 'course-1',
+      alreadyEnrolled: false,
+    })
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'instructor@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/join/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Projects' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/o/org-1/projects')
+  })
+})
+
 describe('App — /invitations/:secret (ENRL-10)', () => {
   it('signed out, renders the invitation screen own sign-in prompt rather than the ordinary shell', async () => {
     fetchMe.mockResolvedValue({ account: null })
@@ -536,5 +688,77 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
       expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
     )
     expect(window.location.pathname).toBe('/invitations/secret-abc')
+  })
+})
+
+// WEB-34 (review finding) — a bookmark or a shared link followed while
+// signed out asks for a sign-in, and the address must ride along on the
+// issued token, so redeeming the emailed link lands on the screen the
+// visitor actually clicked rather than on home resolution's default.
+describe('App — a deep link followed while signed out keeps its address', () => {
+  beforeEach(() => {
+    fetchMe.mockResolvedValue({ account: null })
+    requestSignInLink.mockResolvedValue(undefined)
+  })
+
+  it('carries the address on the sign-in request', async () => {
+    window.history.replaceState(null, '', '/o/org-1/projects/project-1')
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        '/o/org-1/projects/project-1'
+      )
+    })
+  })
+
+  it('carries a parseable address even when the link arrived with a query string, rather than one that would sign the visitor in onto not-found', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/o/org-1/projects/project-1?utm_source=email'
+    )
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        '/o/org-1/projects/project-1'
+      )
+    })
+  })
+
+  it('carries nothing at all for an address this app cannot parse back', async () => {
+    window.history.replaceState(null, '', '/nothing-here')
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        undefined
+      )
+    })
   })
 })

@@ -8674,3 +8674,112 @@ here as a known limit, not silently left for someone to rediscover.
 
 **Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean; `npm run e2e`
 31/31, unchanged from D-76 (no e2e spec touched by this rework); `npm run test:coverage` floors held.
+
+## D-78 — `apps/web`: WEB-32/WEB-34 — a hand-rolled router, and canonical URLs for every signed-in screen
+
+A small, dependency-free routing module (`apps/web/src/routing/route.ts`, `useRoute.ts`) replaces `App.tsx`'s own
+per-path regex checks and `pages/Shell.tsx`/`pages/ProjectsPanel.tsx`/`pages/Chat.tsx`'s own component-local
+`view`/`activeTab`/`selectedCourseId` state with one parsed `Route` value, threaded down as a prop, and one
+`navigate` function every screen calls instead of a setter. Several judgment calls fell out of that move that the
+brief left to this slice:
+
+**Home resolution moved from `pages/Shell.tsx` to `App.tsx`.** Before this slice, which organization (and,
+for a join-link redemption, which course) a fresh mount opened on was a `useState` lazy initializer inside
+`ShellInner`, reading `justInstalled`/`joinedCourse` props. A `useState` initializer can decide what a component
+*renders*, but it cannot produce a real, bookmarkable address — `/` has to resolve to something concrete before
+`Shell` ever mounts, so that decision (`resolveHomeRoute`) moved up to `App.tsx`, which owns the router. The
+tests that used to prove it (an install landing on the right organization, a redeemed join link landing on Chat
+with the course selected, both defensive "ignored, falls back to the first membership" cases) moved with it,
+from `tests/shell.test.tsx` to `tests/app.test.tsx`'s own new "App — / home resolution" describe block, driving
+the real round trip (a Discord callback, a redeemed join link) rather than a prop `Shell` no longer reads for
+that purpose.
+
+**A connected-only account's fallback organization, when it has no membership at all, changed from `''` to its
+first connected organization.** The code this replaces defaulted straight to `account.memberships[0]?.organizationId
+?? ''` — survivable only because `activeOrganizationId` was component state nothing outside the component
+depended on being a real id. A canonical URL cannot name `/o//chat`, so `resolveHomeRoute` falls back one step
+further, to `account.connectedOrganizations[0]?.organizationId`, for the one case (no membership anywhere) that
+can actually reach it. Not observed to matter in practice — TEN-1 gives every account a personal organization on
+first sign-in, so a real account always has at least one membership — but the router has to produce *some*
+address, and a real one is more honest than a malformed one.
+
+**LINK-10's forced-Chat treatment substitutes the screen *and* corrects the address.** A
+connected-but-not-a-member account reaching an organization-scoped address it may not see (say,
+`/o/:id/discord`) renders `Chat`, and `Shell` then replaces the address with `/o/:id/chat`. The first revision
+of this slice left the address alone — the pre-existing behaviour never changed an address either, because
+there was no address to change — but a review found the consequence that reasoning missed: with real URLs, a
+mismatch is no longer momentary. It is bookmarkable, shareable, and reproduced on every reload, so the reader
+is left with an address that names a screen they will never be shown. Replacing (never pushing) costs no
+history entry and keeps the two in agreement. `isMember`'s own server-side enforcement (`docs/DECISIONS.md`
+D-50) is what actually makes this safe either way; this is about honesty, not access.
+
+**Browser back into a dirty form is guarded, like every other navigation (WEB-16).** The first revision of
+this slice recorded the opposite — that `popstate` cannot be intercepted, since the address has already
+changed by the time it fires, and that the resulting gap was pre-existing. A review established it was
+neither. It was not pre-existing: before the panel had addresses it pushed no history entries at all, so Back
+left the *document*, and the `beforeunload` handler `hooks/useUnsavedChangesGuard.ts` registers while dirty
+produced the browser's own native "leave site?" prompt. Making Back an in-app navigation removed that prompt
+and put nothing in its place, silently discarding edits — a regression this slice introduced. And it is
+interceptable: `routing/useRoute.ts` re-`pushState`s the address it was on, runs the registered guard, and
+only honours the move once the guard resolves `true`. Confirming costs one history entry (the destination is
+pushed rather than popped to, since calling `history.back()` after the guard resolves would fire `popstate`
+again and ask a second time); refusing leaves the reader exactly where they were, screen and address both.
+`hooks/navigation-guard.tsx` grew a module-level mirror of the registered guard for this, because
+`useRoute` is called by `App.tsx`, which renders the provider *below* itself and so cannot read the context.
+
+**Existing e2e specs assuming "a reload always lands back on Projects" were the regression they claimed to be
+guarding against.** Three specs (`course-people-panel.spec.ts`, `join-links-panel.spec.ts` twice) reloaded mid-way
+through a course-scoped screen and then re-navigated through Projects by hand, with a module comment stating
+plainly that a reload always lands back on Projects because this app "routes most screens through client-side
+state, not a URL." That comment was true before this slice and is now exactly the defect WEB-32/WEB-34 exist to
+fix — a reload holds the panel's place instead, so the extra re-navigation clicks started timing out (the row
+they clicked was never rendered, because the reload had already landed past it). Fixed by deleting the
+re-navigation and asserting directly on the screen the reload now lands on — the correct fix, not a workaround,
+since "reload holds place" is this slice's own explicit requirement.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2401 vitest,
+90 node); `npm run e2e` 34/34 (31 pre-existing plus 3 new `tests/routing.test.ts` unit cases folded into vitest's
+own count, and 2 new `e2e/routing.spec.ts` cases); `npm run board:derive` leaves the manifest unchanged.
+
+**Four smaller corrections from the same review.** `navigate` treats a navigation to the address already on
+screen as a no-op — drawer items stay clickable while active, and pushing there stacked one identical entry
+per click, leaving Back apparently inert. `CourseEditor`'s `onSaved` replaces rather than pushes: it fires on
+every save, not only the first, so pushing stacked an entry per save and, after a create, left Back on the
+blank creation form for a course that already existed. `pages/Chat.tsx` validates the address's own `courseId`
+against the enrolled list and shows `NotFound` when it is not there, the same treatment `ProjectsPanel`
+already gave an unknown `projectId` — without it a link to somebody else's course rendered a *different*
+course's title while every read went out against the id in the address. And a deep link followed while signed
+out now rides along on the issued sign-in token (`SignIn`'s own `destination` prop, AUTH-6's same-origin check
+applied here too), so redeeming the emailed link lands on the bookmarked screen rather than on whatever home
+resolution would have picked.
+
+## D-79 — `apps/web`: WEB-33 — the admin console's own screens, each its own address
+
+`pages/Admin.tsx` split into three addresses under `/platform-admin` (`routing/route.ts#AdminRoute`):
+`'admin-organizations'` (the list, unchanged in content from what the single flat page rendered before this
+slice), `'admin-organization'` (one organization's own card, new in this slice) and `'admin-deletions'` (ADMIN-5's
+own audit trail, moved out of the list page into its own address). `'platform-admin'` itself — the console's one
+entry point from outside the app — keeps exactly the behaviour D-78 already gives `/`: it resolves to
+`'admin-organizations'` and replaces its own history entry, never somewhere the browser's own Back button should
+return into, the same reasoning that already applies to `/` itself.
+
+**No single-organization read exists, so `'admin-organization'` resolves against the list already in state,
+the same way `pages/ProjectsPanel.tsx`'s own `useResolvedProject` resolves a project id.** There is no
+`admin.organizations.get` action — only `fetchAdminOrganizations`'s own list, which `OrganizationsList` already
+holds in state — so `OrganizationDetail` searches that same array for the id the route names rather than adding
+a second fetch this console does not otherwise need. An id absent from that list (deleted since, or never real)
+renders `pages/NotFound.tsx`, exactly the treatment the rest of the panel already gives an unmatched id.
+
+**The per-organization Delete action stays inline in the list, not moved behind the new detail screen.** The
+brief's own existing e2e coverage (`e2e/admin-console.spec.ts`'s pre-existing ADMIN-5 test) drives the delete
+flow directly from the organizations list with no click-through, and nothing in this slice's brief asked to move
+it — an operator can still delete an organization without first opening its own address, and can also do so from
+that address, since `OrganizationDetail` renders the identical Delete control.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2412
+vitest, 90 node, up from 2401/90 — 11 new `apps/web` unit cases: 5 `tests/routing.test.ts` round-trip/parse
+additions, 6 `tests/admin.test.tsx` additions covering the entry-point resolution, the detail screen and its own
+not-found case); `npx playwright test` 35/35 (34 pre-existing plus one new `e2e/admin-console.spec.ts` case
+covering a cold deep link to an organization's own address, panel navigation moving the address bar, browser
+back returning to the organizations list, and an unmatched organization id rendering not-found); `npm run
+board:derive` leaves the manifest unchanged.

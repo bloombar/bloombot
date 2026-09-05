@@ -6,10 +6,25 @@
  * (finding 2 of the WEB-1..6 rework): WEB-3's central claim went untested,
  * and `tests/organization-switcher.test.tsx` explicitly defers "what active
  * means" to this component.
+ *
+ * WEB-32/WEB-34 — `Shell` no longer owns `activeOrganizationId`/`activeTab`
+ * as local state; both are derived from the `route` prop this file's own
+ * `renderShell` helper (below) now supplies, with a tiny in-test `navigate`
+ * that updates it the same way `routing/useRoute.ts` would in the real app
+ * (this file does not need a real `window.history` round trip — that is
+ * `tests/routing.test.ts`'s own job, and `e2e/`'s for the browser address
+ * bar itself). The tests that used to prove *which* organization a fresh
+ * mount opens on (an install, a redeemed join link, the plain "first
+ * membership" default) moved to `tests/app.test.tsx` — that choice is
+ * `App.tsx`'s own `resolveHomeRoute` now, not anything this component
+ * decides; `renderShell`'s own default `route` picks a fixed, deterministic
+ * screen instead, matching what `resolveHomeRoute` would already choose
+ * for the accounts below with no `justInstalled`/`joinedCourse` in play.
  */
 
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 
 import { ApiError } from '../src/api/client.js'
 import type {
@@ -18,8 +33,55 @@ import type {
   DiscordServerBindingSummary,
   Project,
 } from '../src/api/types.js'
-import { Shell } from '../src/pages/Shell.js'
+import { Shell, type ShellProps } from '../src/pages/Shell.js'
+import {
+  isShellRoute,
+  type Route,
+  type ShellRoute,
+} from '../src/routing/route.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
+
+/**
+ * WEB-32 — mounts `Shell` behind a tiny stateful wrapper standing in for
+ * `App.tsx`'s own `useRoute()`: `navigate` updates the wrapper's own `route`
+ * state exactly the way a real navigation would, so every existing
+ * "click a nav item, assert what renders" test in this file keeps working
+ * unchanged. Defaults to Projects under the first membership (or Chat under
+ * the first connected organization, for an account with none) when no
+ * `route` is given — the same screen `App.tsx`'s own `resolveHomeRoute`
+ * picks for an account with no `justInstalled`/`joinedCourse` in play,
+ * which is the only case any test in this file still needs Shell itself to
+ * decide anything about.
+ */
+function renderShell(
+  props: Omit<ShellProps, 'route' | 'navigate'> & { route?: ShellRoute }
+) {
+  const account = props.account
+  const defaultOrganizationId =
+    account.memberships[0]?.organizationId ??
+    account.connectedOrganizations[0]?.organizationId ??
+    ''
+  const defaultIsMember = account.memberships.some(
+    (membership) => membership.organizationId === defaultOrganizationId
+  )
+  const initialRoute: ShellRoute =
+    props.route ??
+    (defaultIsMember
+      ? { kind: 'projects', organizationId: defaultOrganizationId }
+      : { kind: 'chat', organizationId: defaultOrganizationId })
+
+  function Harness() {
+    const [route, setRoute] = useState<ShellRoute>(initialRoute)
+    const navigate = (next: Route) => {
+      // `Shell` only ever constructs a `ShellRoute` itself — this mirrors
+      // `App.tsx`'s own guard (`isShellRoute`) rather than assuming it.
+      if (isShellRoute(next)) setRoute(next)
+    }
+    return <Shell {...props} route={route} navigate={navigate} />
+  }
+
+  return renderWithModal(<Harness />)
+}
 
 // `listProjects`/`listCourses` are mocked here too, not just
 // `dispatchAction` — finding 10 of the WEB-7 rework changed `activeTab`'s
@@ -156,136 +218,78 @@ afterEach(() => {
 })
 
 describe('Shell (WEB-3, WEB-4)', () => {
-  it('with no install just completed, defaults to the first membership', () => {
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'org-1'
-    )
-  })
+  // WEB-25/WEB-32, moved here from `tests/chat.test.tsx` (review finding):
+  // the invariant is "the join-confirmation banner names the *joined*
+  // course, never whichever one is merely selected", and since WEB-32 it is
+  // enforced by `Shell` — it passes `joinConfirmation` to `Chat` only while
+  // `route.courseId` still names the course the redemption resolved. The
+  // test that used to guard it reproduced that same condition inside its own
+  // wrapper component, so it held by construction and stayed green with the
+  // real gate deleted. Driven through `Shell` here instead: deleting the
+  // `route.courseId === joinedCourse.courseId` clause from `Shell.tsx` makes
+  // this fail, which is the whole point of it.
+  it('the join-confirmation banner is dropped once the reader selects a different course, rather than following them and naming the wrong one (WEB-25)', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+      { id: 'course-2', title: 'Advanced Testing' },
+    ])
 
-  // TEN-8 regression: `justInstalled` must keep working as the *immediate*
-  // signal it always was — the banner has to show right away, before
-  // `listDiscordServers` has even resolved, or a fresh install would flash
-  // "Install" for the round trip this slice added. `listDiscordServers`
-  // itself is mocked to resolve with the same binding `justInstalled`
-  // already named, matching what the server would actually report once
-  // asked — so this also proves the fetched value does not contradict, or
-  // flicker away, what `justInstalled` already showed.
-  it('an install that just completed for a *different* organization than the first membership opens the panel on that organization, not the first one (finding 2 of the WEB-1..6 rework)', async () => {
-    listDiscordServers.mockImplementation((organizationId: string) =>
-      Promise.resolve(
-        organizationId === 'org-2'
-          ? [
-              {
-                serverId: 'guild-42',
-                organizationId: 'org-2',
-                installedByAccountId: 'account-1',
-                installedAt: Date.now(),
-                removedAt: null,
-              },
-            ]
-          : []
+    renderShell({
+      account: CONNECTED_NON_MEMBER_ACCOUNT,
+      onSignedOut: vi.fn(),
+      joinedCourse: {
+        organizationId: 'institution-org',
+        courseId: 'course-2',
+        alreadyEnrolled: false,
+      },
+      route: {
+        kind: 'chat',
+        organizationId: 'institution-org',
+        courseId: 'course-2',
+      },
+    })
+
+    const banner = await screen.findByTestId('join-confirmation')
+    expect(banner).toHaveTextContent("You're enrolled in Advanced Testing.")
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Course' }), {
+      target: { value: 'course-1' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: 'Course' })).toHaveValue(
+        'course-1'
       )
-    )
-    renderWithModal(
-      <Shell
-        account={MULTI_MEMBERSHIP_ACCOUNT}
-        justInstalled={{ organizationId: 'org-2', serverId: 'guild-42' }}
-        onSignedOut={vi.fn()}
-      />
-    )
-    // The switcher shows the organization the install actually bound —
-    // before this fix it stayed on org-1 (memberships[0]) while the API had
-    // bound the server to org-2.
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'org-2'
-    )
-    // And the installed banner is visible on first render of the Discord
-    // tab, not only after a manual switch — `installedServerId` only
-    // matches when `activeOrganizationId` equals
-    // `justInstalled.organizationId`. (The Discord tab itself is not the
-    // default one anymore — finding 10 — so this test opens it explicitly.)
-    // This assertion runs before `listDiscordServers` has resolved (no
-    // `await` above it) — proving the banner does not wait on the fetch.
-    openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
-    expect(screen.getByText(/guild-42/)).toBeInTheDocument()
-
-    // Let the fetch settle before this test ends — otherwise its `.then`
-    // fires after `cleanup()` has already unmounted this render.
-    await waitFor(() =>
-      expect(listDiscordServers).toHaveBeenCalledWith('org-2')
-    )
+    })
+    expect(screen.queryByTestId('join-confirmation')).not.toBeInTheDocument()
   })
 
-  it('a justInstalled organization the account is not actually a member of is ignored, defensively, in favour of the first membership', () => {
-    renderWithModal(
-      <Shell
-        account={MULTI_MEMBERSHIP_ACCOUNT}
-        justInstalled={{ organizationId: 'org-9', serverId: 'guild-42' }}
-        onSignedOut={vi.fn()}
-      />
-    )
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'org-1'
-    )
-  })
+  // WEB-32/WEB-34 (review finding) — a connected-only account is forced to
+  // Chat for an organization-scoped screen it cannot see, and the *address*
+  // is corrected to match rather than left naming a screen that is not on
+  // display. Rendered directly rather than through `renderShell`, so the
+  // `navigate` this asserts on is a spy: the harness's own `navigate` only
+  // moves its state, and the correction is precisely a call `Shell` makes
+  // rather than a screen it renders.
+  it('an address naming a screen a connected-only account cannot see is replaced with the chat address it actually renders', async () => {
+    const navigate = vi.fn()
 
-  // WEB-25 — a redeemed join link opens directly on the joined course's own
-  // organization and the Chat tab, not wherever this account's own first
-  // membership happens to be (`CONNECTED_NON_MEMBER_ACCOUNT`'s own
-  // `personal-org` — TEN-1's own personal organization, created for every
-  // account, and exactly the organization that used to strand a redeemer on
-  // Projects with nothing relevant there: `docs/SPEC.md`'s own WEB-25 names
-  // this precise defect, "several clicks away behind a course picker they
-  // have no reason to understand"). `joinedCourse.organizationId` is only
-  // ever a *connected* organization here (LINK-10: a join-link redemption
-  // enrols a person, not a membership), so this also proves the initializer
-  // checks `connectedOrganizations`, not only `memberships` the way
-  // `justInstalled`'s own check (above) does.
-  it('a redeemed join link opens directly on that organization and the Chat tab, not the first membership', async () => {
     renderWithModal(
       <Shell
         account={CONNECTED_NON_MEMBER_ACCOUNT}
-        joinedCourse={{
-          organizationId: 'institution-org',
-          courseId: 'course-1',
-          alreadyEnrolled: false,
-        }}
         onSignedOut={vi.fn()}
+        route={{ kind: 'discord', organizationId: 'institution-org' }}
+        navigate={navigate}
       />
     )
 
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'institution-org'
-    )
-    // Fails without the fix: this shell's own default tab is 'projects',
-    // which this connected-only organization cannot even offer.
-    expect(
-      await screen.findByRole('heading', { name: 'Chat' })
-    ).toBeInTheDocument()
-    expect(screen.getByTestId('join-confirmation')).toHaveTextContent(
-      "You're enrolled in A Course."
-    )
-  })
-
-  it('a joinedCourse organization the account can neither administer nor reach is ignored, defensively, in favour of the first membership', () => {
-    renderWithModal(
-      <Shell
-        account={MULTI_MEMBERSHIP_ACCOUNT}
-        joinedCourse={{
-          organizationId: 'org-9',
-          courseId: 'course-1',
-          alreadyEnrolled: false,
-        }}
-        onSignedOut={vi.fn()}
-      />
-    )
-    expect(screen.getByRole('combobox', { name: 'Organization' })).toHaveValue(
-      'org-1'
-    )
+    expect(await screen.findByTestId('chat-screen')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(navigate).toHaveBeenCalledWith(
+        { kind: 'chat', organizationId: 'institution-org' },
+        { replace: true }
+      )
+    })
   })
 
   it('carries the actively selected organization into every request, not the one Shell mounted with (WEB-3)', async () => {
@@ -299,9 +303,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       writable: true,
     })
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -329,15 +331,16 @@ describe('Shell (WEB-3, WEB-4)', () => {
   it('removing an installed server dispatches against the actively selected organization', async () => {
     dispatchAction.mockResolvedValue({ result: undefined })
 
-    renderWithModal(
-      <Shell
-        account={MULTI_MEMBERSHIP_ACCOUNT}
-        justInstalled={{ organizationId: 'org-2', serverId: 'guild-42' }}
-        onSignedOut={vi.fn()}
-      />
-    )
-    openDrawer()
-    fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
+    // WEB-32 — the Discord tab for org-2 is the address this mounts on
+    // directly, rather than relying on `justInstalled` to have picked
+    // org-2 as the active organization (that is `App.tsx`'s own
+    // `resolveHomeRoute` job now, this file's own module comment above).
+    renderShell({
+      account: MULTI_MEMBERSHIP_ACCOUNT,
+      justInstalled: { organizationId: 'org-2', serverId: 'guild-42' },
+      onSignedOut: vi.fn(),
+      route: { kind: 'discord', organizationId: 'org-2' },
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     // WEB-15: destructive, so it confirms first (`components/modal/`).
@@ -361,9 +364,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     signOut.mockRejectedValue(new ApiError(0, { error: 'network_error' }))
     const onSignedOut = vi.fn()
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={onSignedOut} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
@@ -391,9 +392,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     listCourses.mockResolvedValue([])
     const onSignedOut = vi.fn()
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={onSignedOut} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut })
     await screen.findByText('Fall 2026')
     fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))
     await screen.findByRole('button', { name: 'New course' })
@@ -436,9 +435,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
 
     await screen.findByText('Fall 2026')
     fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))
@@ -466,9 +463,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   // take — switching to it renders `pages/Transcripts.tsx`, not the
   // Projects panel it defaulted to on mount.
   it('switches to the Transcripts tab', async () => {
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Transcripts' }))
 
@@ -491,9 +486,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       studentsNearLimit: [],
     })
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
 
@@ -521,9 +514,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       studentsNearLimit: [],
     })
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
       target: { value: 'org-2' },
     })
@@ -541,9 +532,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   it("switches to the Team tab, and passes the caller's own owner role through as isOwner", async () => {
     listMemberships.mockResolvedValue([])
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Team' }))
 
@@ -561,9 +550,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   it('the Team tab withholds the grant form for a non-owner membership', async () => {
     listMemberships.mockResolvedValue([])
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
       target: { value: 'org-2' },
     })
@@ -581,9 +568,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   it('switches to the Jobs tab, and lists the active organization’s own jobs', async () => {
     listJobs.mockResolvedValue([])
 
-    renderWithModal(
-      <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-    )
+    renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Jobs' }))
 
@@ -604,9 +589,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
   // stays reachable.
   describe('a connected-but-not-a-member organization (LINK-10)', () => {
     it('mounts on the account`s own membership organization by default, offering every tab', () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       expect(
         screen.getByRole('combobox', { name: 'Organization' })
       ).toHaveValue('personal-org')
@@ -620,9 +606,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('switching to the connected-only organization offers only Chat, and Chat is what actually renders', async () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
 
       fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
         target: { value: 'institution-org' },
@@ -651,9 +638,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('a tab selected before the switch (Discord) does not leak into the connected-only organization', async () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       // Select Discord while still on the membership organization...
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
@@ -677,9 +665,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('the home control returns to Chat, not Projects, while a connected-only organization is active', async () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
         target: { value: 'institution-org' },
       })
@@ -698,9 +687,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('the switcher offers the connected organization labelled "connected", never a membership role it does not have', () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       const select = screen.getByRole('combobox', { name: 'Organization' })
       expect(select).toHaveTextContent('A University (connected)')
     })
@@ -734,9 +724,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       dispatchAction.mockResolvedValue({ result: undefined })
       listDiscordServers.mockResolvedValue([EXISTING_BINDING])
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -782,9 +770,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
           })
       )
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -807,9 +793,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         new ApiError(500, { error: 'internal_error' })
       )
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -847,9 +831,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     it('lists every active binding with its own Remove, and still offers installing another', async () => {
       listDiscordServers.mockResolvedValue([BINDING_A, BINDING_B])
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -867,9 +849,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       dispatchAction.mockResolvedValue({ result: undefined })
       listDiscordServers.mockResolvedValue([BINDING_A, BINDING_B])
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       await screen.findByText(/guild-a/)
@@ -932,13 +912,11 @@ describe('Shell (WEB-3, WEB-4)', () => {
         return Promise.resolve({ result: undefined })
       })
 
-      renderWithModal(
-        <Shell
-          account={MULTI_MEMBERSHIP_ACCOUNT}
-          justInstalled={{ organizationId: 'org-1', serverId: 'guild-42' }}
-          onSignedOut={vi.fn()}
-        />
-      )
+      renderShell({
+        account: MULTI_MEMBERSHIP_ACCOUNT,
+        justInstalled: { organizationId: 'org-1', serverId: 'guild-42' },
+        onSignedOut: vi.fn(),
+      })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(await screen.findByText(/guild-42/)).toBeInTheDocument()
@@ -990,9 +968,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         )
       )
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(await screen.findByText(/guild-1/)).toBeInTheDocument()
@@ -1036,9 +1012,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         },
       ])
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
@@ -1061,13 +1035,11 @@ describe('Shell (WEB-3, WEB-4)', () => {
           })
       )
 
-      renderWithModal(
-        <Shell
-          account={MULTI_MEMBERSHIP_ACCOUNT}
-          justInstalled={{ organizationId: 'org-1', serverId: 'guild-42' }}
-          onSignedOut={vi.fn()}
-        />
-      )
+      renderShell({
+        account: MULTI_MEMBERSHIP_ACCOUNT,
+        justInstalled: { organizationId: 'org-1', serverId: 'guild-42' },
+        onSignedOut: vi.fn(),
+      })
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       // `justInstalled` is the immediate signal while the mount fetch above
@@ -1106,9 +1078,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('cheap-fix: does not fetch a Discord binding for an organization the account is not a member of', async () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       await waitFor(() =>
         expect(listDiscordServers).toHaveBeenCalledWith('personal-org')
       )
@@ -1129,9 +1102,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
   // organization name, and the profile control reaching account settings ---
   describe('the navigation drawer and account settings (WEB-29, WEB-30)', () => {
     it('divides the drawer into two groups with a visible separator, for a member', () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       openDrawer()
       const nav = screen.getByRole('navigation', { name: 'Main' })
       const separator = screen.getByRole('separator')
@@ -1152,9 +1123,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('offers no separator, and no organization group, for a connected-but-not-a-member account', () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       // The account's own membership organization (`personal-org`) is the
       // initial active one, and offers every tab — the connected-only
       // organization (LINK-10) is what has no organization group at all.
@@ -1166,9 +1138,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('carries sign-out at the drawer’s foot, reachable once the drawer is open', () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       // Not reachable before the drawer opens — it lives in the drawer now,
       // not the header (this file's own `openDrawer` helper on why every
       // other nav click in this file needs it too).
@@ -1182,9 +1152,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it("states the acting organization's name at the header's leading edge, beside the home control — not the trailing edge with the profile control", () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       // A single option would read plainly; two memberships (this account)
       // read as a dropdown whose own current value is the active
       // organization's name — `Org One` (org-1), the initial active
@@ -1214,9 +1182,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('the profile control opens account settings, listing every organization and the active one', async () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
       expect(
         await screen.findByRole('heading', { name: 'Account' })
@@ -1233,9 +1199,10 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('a connected-but-not-a-member account can still reach account settings, and switch from there to an organization where it is a member', async () => {
-      renderWithModal(
-        <Shell account={CONNECTED_NON_MEMBER_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
       // Switch to the connected-only organization first — the account's own
       // membership organization (`personal-org`) is otherwise already
       // active by default, which would not actually exercise the
@@ -1330,9 +1297,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('clicking Chat on a course row lands on the Chat tab with that course already selected', async () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       // Defaults to the Projects tab (`Shell.tsx`'s own default) — navigate
       // into the project, then its course list.
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
@@ -1357,9 +1322,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     it('a second Chat click, for the same organization, still lands on the newly requested course', async () => {
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
       await screen.findByText('Data Structures')
       fireEvent.click(
@@ -1371,9 +1334,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       // Back to Projects, then Chat again for the *other* course — `Chat`
       // unmounts entirely on the way there (it lives in a ternary chain
-      // with `ProjectsPanel`, `Shell.tsx`'s own render), so this proves
-      // `chatCourseId` (shell state, not `Chat`'s own `key`) is what a
-      // fresh mount actually reads.
+      // with `ProjectsPanel`, `Shell.tsx`'s own render), so this proves the
+      // route's own `courseId` (WEB-32, not shell state) is what a fresh
+      // mount actually reads.
       openDrawer()
       fireEvent.click(screen.getByRole('button', { name: 'Projects' }))
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
@@ -1387,22 +1350,20 @@ describe('Shell (WEB-3, WEB-4)', () => {
       ).toHaveValue('course-2')
     })
 
-    // Must-fix 1 (round 1 rework): `chatCourseId` used to survive an
-    // organization switch untouched — nothing cleared it, and the render
-    // that turns it into `initialCourseId` carried no `activeOrganizationId`
-    // guard the way the `joinedCourse` branch right above it always has.
-    // Org Two's own courses do not include `course-1` at all, so `Chat`'s
-    // freshly mounted `selectedCourseId` (seeded from the stale
-    // `chatCourseId`) never matches anything `listChatCourses('org-2')`
-    // returns, and — because it is *not* `undefined` — the `current ?? ...`
-    // guard in `Chat.tsx`'s own fetch effect never overwrites it with Org
-    // Two's own first course either. The `<select>` itself still renders
-    // *something* (a browser falls back to its first `<option>` when a
-    // controlled value matches none — this is the "picker lies" defect the
-    // brief named, not a crash), so this asserts on what actually drives a
-    // sent question — `getChatMessages`'s own call — rather than the
-    // `<select>`'s displayed value, which looks identical whether the bug
-    // is present or fixed.
+    // Must-fix 1 (round 1 rework): before WEB-32, a course a previous Chat
+    // click requested was held in shell state (`chatCourseId`) that used to
+    // survive an organization switch untouched, seeding a freshly mounted
+    // `Chat`'s `selectedCourseId` with a course id belonging to the
+    // *previous* organization. WEB-32/WEB-34 structurally rules that class
+    // of bug out rather than guarding against it by hand: `routeForTab`
+    // (`routing/route.ts`), the one function `pages/Shell.tsx#changeActiveOrganization`
+    // ever builds a route through, never carries a course id across an
+    // organization switch at all — there is no stale value left to seed
+    // `Chat` with. Kept as a regression test anyway (the same "defended, not
+    // assumed" discipline this codebase already holds itself to): this
+    // asserts on what actually drives a sent question — `getChatMessages`'s
+    // own call — rather than the `<select>`'s displayed value, which looked
+    // identical whether the original bug was present or fixed.
     it('switching organizations clears a course a previous Chat click requested — it must not survive into a different organization', async () => {
       listChatCourses.mockImplementation((organizationId: string) =>
         Promise.resolve(
@@ -1420,9 +1381,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         )
       )
 
-      renderWithModal(
-        <Shell account={MULTI_MEMBERSHIP_ACCOUNT} onSignedOut={vi.fn()} />
-      )
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       fireEvent.click(await screen.findByRole('button', { name: 'Fall 2026' }))
       await screen.findByText('Data Structures')
       fireEvent.click(

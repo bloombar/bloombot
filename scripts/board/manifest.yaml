@@ -3303,7 +3303,7 @@
   section: §34 Web Control Panel
   family: ROST
   phase: 22
-  status: In progress
+  status: In review
   review: false
 - id: WEB-35
   title: A course's settings are organised into tabs, not one long form
@@ -3337,5 +3337,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: In review
+  status: Done
   review: false

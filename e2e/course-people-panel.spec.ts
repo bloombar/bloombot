@@ -80,7 +80,8 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
 
   // 2. WEB-22: before anyone is enrolled, the People panel shows both
-  //    empty states.
+  //    empty states. WEB-35: People is its own tab.
+  await page.getByRole('tab', { name: 'People' }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
   await expect(page.getByText('Nobody is enrolled yet.')).toBeVisible()
   await expect(page.getByText("Nobody's enrolment has ended.")).toBeVisible()
@@ -88,6 +89,8 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   // 3. Admit a real, independent student through a join link — the same
   //    device `join-links-panel.spec.ts` uses to get a genuine second
   //    enrolment onto this course without reaching into the database.
+  //    WEB-35: join links are on the General tab.
+  await page.getByRole('tab', { name: 'General' }).click()
   await page.getByRole('button', { name: 'Create join link' }).click()
   const urlNode = page.getByTestId('created-join-link-url')
   await expect(urlNode).toBeVisible()
@@ -123,6 +126,9 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   //    falls back to their own person id — WEB-22's own "never an email"
   //    fallback, `components/CoursePeople.tsx`'s own module comment).
   await page.reload()
+  // WEB-35: reload holds the General tab last navigated to (step 3) — back
+  // to People to see the enrolment.
+  await page.getByRole('tab', { name: 'People' }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
   await expect(page.getByText('Enrolled (1)')).toBeVisible()
   const endButton = page.getByRole('button', { name: /^End /, exact: false })

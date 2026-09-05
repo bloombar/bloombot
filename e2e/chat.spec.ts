@@ -103,7 +103,9 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
 
   // WEB-19/FILE-4: instructions are saved through their own versioned
   // action, offered only once the course exists — see
-  // `course-configuration.spec.ts`'s own comment on the same step.
+  // `course-configuration.spec.ts`'s own comment on the same step. WEB-35:
+  // it is on the AI tab.
+  await page.getByRole('tab', { name: 'AI' }).click()
   await page
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly.')

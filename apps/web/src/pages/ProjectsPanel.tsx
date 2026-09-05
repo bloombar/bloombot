@@ -152,6 +152,10 @@ export function ProjectsPanel({
                   organizationId,
                   projectId: project.id,
                   courseId,
+                  // WEB-35 — opening a course from the list always lands on
+                  // its General tab, the same landing point a bare
+                  // `/courses/:courseId` URL parses to.
+                  tab: 'general',
                 }
           )
         }
@@ -168,6 +172,28 @@ export function ProjectsPanel({
       organizationId={organizationId}
       project={project}
       courseId={route.kind === 'course-editor' ? route.courseId : undefined}
+      // WEB-35 — omitted entirely on `'new-course'`, rather than passed as
+      // `undefined`: a course that does not exist yet has no tab address
+      // (`CourseEditor`'s own module comment on why), and `tab`'s own
+      // exact-optional type (`tsconfig.base.json`) means "omitted" and
+      // "explicitly `undefined`" are not the same key, the same
+      // `{...(x ? {...} : {})}` device `pages/CourseEditor.tsx`'s own
+      // `fieldErrorProp` already uses for the same reason.
+      {...(route.kind === 'course-editor' ? { tab: route.tab } : {})}
+      // WEB-35 — a tab click pushes its own address, the same "navigate,
+      // don't just re-render" convention this file already applies to
+      // every other control here; a no-op on `'new-course'`, which renders
+      // no tab bar to click at all.
+      onNavigateTab={(tab) => {
+        if (route.kind !== 'course-editor') return
+        navigate({
+          kind: 'course-editor',
+          organizationId,
+          projectId: project.id,
+          courseId: route.courseId,
+          tab,
+        })
+      }}
       onCancel={() =>
         navigate({
           kind: 'project-courses',
@@ -183,7 +209,9 @@ export function ProjectsPanel({
       // on an empty creation screen for a course that already exists, where
       // saving again would create a duplicate. Replacing keeps the address
       // honest (the saved course's own) while leaving the entry behind it
-      // the screen the instructor actually came from.
+      // the screen the instructor actually came from. WEB-35 — the tab
+      // carried through is whatever was already showing (`'general'` for a
+      // fresh create, which has no tab of its own yet to preserve).
       onSaved={(course: Course) =>
         navigate(
           {
@@ -191,6 +219,7 @@ export function ProjectsPanel({
             organizationId,
             projectId: project.id,
             courseId: course.id,
+            tab: route.kind === 'course-editor' ? route.tab : 'general',
           },
           { replace: true }
         )

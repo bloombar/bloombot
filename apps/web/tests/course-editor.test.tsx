@@ -16,7 +16,7 @@ import type {
   Project,
 } from '../src/api/types.js'
 import { CourseEditor } from '../src/pages/CourseEditor.js'
-import { renderWithModal } from './helpers/render-with-modal.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 const {
   getCourse,
@@ -167,6 +167,9 @@ describe('CourseEditor (WEB-8)', () => {
 
     expect(await screen.findByDisplayValue('Web Design')).toBeInTheDocument()
     expect(getCourse).toHaveBeenCalledWith('org-1', 'course-1')
+
+    // WEB-35: the role names and categories are on the Discord tab now.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     expect(screen.getByDisplayValue('admins-wd-fa26')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Web Design - GLOBAL')).toBeInTheDocument()
   })
@@ -186,6 +189,8 @@ describe('CourseEditor (WEB-8)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: Model is on the AI tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     // Clear the model field, which the source course had set...
     fireEvent.change(screen.getByLabelText('Model'), {
       target: { value: '' },
@@ -265,6 +270,8 @@ describe('CourseEditor (WEB-8)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: Max requests per day is on the AI tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     // Fat-finger the cap: '5O' (letter O), not '50'.
     fireEvent.change(screen.getByLabelText('Max requests per day'), {
       target: { value: '5O' },
@@ -282,6 +289,55 @@ describe('CourseEditor (WEB-8)', () => {
     // Never reaches the API at all — `Number('5O')` is `NaN`, which
     // `JSON.stringify` would have turned into `null` and cleared the
     // stored cap silently had this gone through.
+    expect(saveCourse).not.toHaveBeenCalled()
+  })
+
+  // Rework round 1, must-fix 7: `switchToTabForField` had no coverage at
+  // all for the client-side `maxRequestsPerDay` refusal — every existing
+  // case already started on the AI tab, so a version that only switched
+  // tabs for a *server*-refused save would have passed this suite
+  // unnoticed.
+  it('a client-side "Max requests per day" refusal switches to the AI tab when it is not already showing', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Model')
+
+    // Fat-finger the cap while on the AI tab...
+    fireEvent.change(screen.getByLabelText('Max requests per day'), {
+      target: { value: '5O' },
+    })
+    // ...then leave, without saving, to a tab with nothing wrong on it.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    // Fails without the fix: the client-side refusal fires before
+    // `courses.save` is ever called, entirely inside `handleSave` itself —
+    // a version of `switchToTabForField` only wired into the server-refused
+    // catch would leave the reader on General, looking at a top-level
+    // `ErrorMessage` with no field-level message anywhere in view.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    const field = screen.getByLabelText('Max requests per day')
+    expect(field).toHaveAttribute('aria-invalid', 'true')
     expect(saveCourse).not.toHaveBeenCalled()
   })
 
@@ -374,6 +430,229 @@ describe('CourseEditor (WEB-8)', () => {
 })
 
 /**
+ * WEB-35: the settings tabs themselves — the address changes on a click,
+ * an edit made on one tab survives switching to another, and a refused save
+ * naming a field on a tab other than the one showing switches there so the
+ * inline message is actually visible (WEB-16).
+ */
+describe('CourseEditor settings tabs (WEB-35)', () => {
+  it('renders five tabs for an existing course, and none at all for a new one', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    const { rerender } = renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.getByRole('tablist')).toBeInTheDocument()
+    for (const name of ['General', 'AI', 'Discord', 'Roster', 'People']) {
+      expect(screen.getByRole('tab', { name })).toBeInTheDocument()
+    }
+
+    rerender(
+      withModal(
+        <CourseEditor
+          organizationId="org-1"
+          project={PROJECT}
+          courseId={undefined}
+          onSaved={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      )
+    )
+    // A new course cannot have join links, a roster import, people,
+    // attachments, instructions or websites — nothing here to tab between.
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  it('switching tabs calls onNavigateTab, and an edit made on one tab survives switching to another', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onNavigateTab = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="general"
+        onNavigateTab={onNavigateTab}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    // Edit Title on General, then switch away and back — Fails without the
+    // fix: `form`/`baseline` would have to live per-tab for this edit to be
+    // lost, which this slice's brief explicitly rules out.
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+    expect(onNavigateTab).toHaveBeenCalledWith('ai')
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+  })
+
+  // Rework round 1, must-fix 1/7: this is the case that actually broke —
+  // `CourseInstructions` keeps its own text in its own `useState`, entirely
+  // outside `form`/`baseline`, so a fix that only kept `form` intact across
+  // a tab switch (the test above) would leave this one red: mounting only
+  // the active tab's panel unmounted `CourseInstructions` the moment its
+  // own tab stopped being the one showing, destroying whatever was typed
+  // and never saved.
+  it('an edit typed into Instructions on the AI tab survives switching away and back, unsaved', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onCancel = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByLabelText('Model')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+
+    // Away, to a tab with no relation to Instructions at all, and back.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    // Fails without the fix: `CourseInstructions` unmounted on the way to
+    // Discord, so its own `text` state — never saved — was gone; remounting
+    // it on the way back re-fetched the empty revision list this file's own
+    // `beforeEach` stubs, rendering blank rather than what was typed.
+    expect(screen.getByLabelText('Instructions')).toHaveValue(
+      'Cite the syllabus.'
+    )
+
+    // `instructionsDirty` is still consistent with that surviving edit —
+    // Cancel still prompts, exactly as it would have without ever
+    // switching tabs at all (this file's own WEB-19 dirty-bridge tests,
+    // below, cover the no-tab-switch case).
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  // Rework round 1, must-fix 7: the Back/Forward re-seeding path — nothing
+  // in the suite above ever re-rendered `CourseEditor` with a changed `tab`
+  // prop alone, the one path a browser Back/Forward between tabs actually
+  // takes (`routing/useRoute.ts`'s own `popstate` handler lets the new
+  // `tab` prop through directly for a same-screen pop, `pages/CourseEditor.tsx`'s
+  // own module comment).
+  it('a changed tab prop alone (a browser Back/Forward between tabs) moves the active tab', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    const { rerender } = renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Model')
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // No click on any tab control — only the prop itself changes, the same
+    // as `pages/ProjectsPanel.tsx` re-rendering this component once
+    // `routing/useRoute.ts` moves `route.tab` in response to a pop.
+    rerender(
+      withModal(
+        <CourseEditor
+          organizationId="org-1"
+          project={PROJECT}
+          courseId="course-1"
+          tab="roster"
+          onSaved={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      )
+    )
+
+    expect(screen.getByRole('tab', { name: 'Roster' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
+  })
+
+  it('a refused save naming a field on another tab switches to that tab so the inline message is visible', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(400, {
+        error: 'action_input_invalid',
+        issues: [
+          {
+            path: ['adminsRole'],
+            message: 'This role no longer exists on the bound Discord server.',
+          },
+        ],
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="general"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    // Fails without the fix: `adminsRole`'s own `FormField` — and its
+    // inline error — lives on the Discord tab, not General.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
+      'This role no longer exists on the bound Discord server.'
+    )
+  })
+})
+
+/**
  * TEN-9 — the server selector: offered only once there is an actual choice
  * ("one binding is not a choice worth making anybody make", the brief's own
  * words), and threaded through to `courses.save` only while it is offered.
@@ -409,6 +688,8 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the selector lives on the Discord tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     expect(screen.queryByLabelText('Discord server')).not.toBeInTheDocument()
   })
 
@@ -428,6 +709,8 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the selector lives on the Discord tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     const select = await screen.findByLabelText('Discord server')
     fireEvent.change(select, { target: { value: 'guild-b' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
@@ -487,6 +770,8 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the selector lives on the Discord tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     // The selector renders — not hidden by `activeBindings.length > 1`
     // alone — and the stale id is shown, not silently blank.
     const select = await screen.findByLabelText('Discord server')
@@ -521,6 +806,8 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the selector lives on the Discord tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     const select = await screen.findByLabelText('Discord server')
     fireEvent.change(select, { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
@@ -590,6 +877,8 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the notice and the read-only field are on the AI tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     expect(
       screen.getByText(/answered through a stored OpenAI prompt/)
     ).toBeInTheDocument()
@@ -619,6 +908,8 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: the AI tab is where either would show, if either showed.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     expect(
       screen.queryByText(/answered through a stored OpenAI prompt/)
     ).not.toBeInTheDocument()
@@ -934,6 +1225,8 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: Instructions is on the AI tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     // Nothing in the main form's own fields changes — only the Instructions
     // textarea, which `pages/CourseEditor.tsx` no longer manages at all
     // (WEB-19).
@@ -981,6 +1274,8 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-35: Instructions is on the AI tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     fireEvent.change(screen.getByLabelText('Instructions'), {
       target: { value: 'Cite the syllabus.' },
     })

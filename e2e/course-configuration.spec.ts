@@ -125,6 +125,9 @@ test('a project and course defined entirely in the panel route and answer a matc
   // and Discord-channels sections below it use). "Current" only renders
   // once `courseInstructions.list` actually reads back the revision this
   // save just recorded.
+  // WEB-35: Instructions now lives on its own AI tab, not the single
+  // scrolling form this course editor used to be.
+  await page.getByRole('tab', { name: 'AI' }).click()
   await page.getByLabel('Instructions').fill(courseInstructions)
   await page.getByRole('button', { name: 'Save instructions' }).click()
   await expect(page.getByText('Current')).toBeVisible()
@@ -248,4 +251,121 @@ test('a project and course defined entirely in the panel route and answer a matc
   } finally {
     closeDatabase(db)
   }
+})
+
+/**
+ * WEB-35, end to end: the course editor's five settings tabs are real
+ * addresses — a click changes the address bar, a reload holds the tab, and
+ * an edit made on one tab is not lost switching to (and saving from)
+ * another. `e2e/routing.spec.ts` already covers the course editor's own
+ * address round trip (WEB-32/WEB-34); this is the tab-specific slice of
+ * that same guarantee.
+ */
+test("a course's settings tabs are real addresses — switching, reloading and saving from another tab (WEB-35)", async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web35-${suffix}@example.edu`
+
+  await page.goto('/')
+  await page.getByLabel('Email').fill(email)
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
+  await expect(page.getByTestId('link-requested')).toContainText(email)
+  const token = await readSignInToken(email)
+  await page.goto(`/sign-in/${token}`)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  // A course seeded directly against the database — this test is about the
+  // tabs, not re-driving the create-course UI a second time (QA-8's own
+  // test, above, already covers that).
+  const db = openDatabase(E2E_DATABASE_PATH)
+  let organizationId: string
+  let projectId: string
+  let courseId: string
+  try {
+    const account = accounts.getAccountByEmail(email, db)
+    if (!account) throw new Error('setup failed: account not found')
+    const [membership] = memberships.listMembershipsForAccount(account.id, db)
+    if (!membership) throw new Error('setup failed: membership not found')
+    organizationId = membership.organizationId
+    const project = projects.createProject(
+      organizationId,
+      { name: `Fall 2026 — ${suffix}` },
+      db
+    )
+    projectId = project.id
+    const created = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: `Web Design — ${suffix}`,
+        filePrefix: `wd-${suffix}`,
+        enabled: true,
+        adminsRole: `admins-${suffix}`,
+        studentsRole: `students-${suffix}`,
+        promptId: 'prompt-1',
+        categories: [],
+      },
+      db
+    )
+    if (!created.ok) throw new Error('setup failed: course creation refused')
+    courseId = created.course.id
+  } finally {
+    closeDatabase(db)
+  }
+
+  // A bare course address (no tab segment) lands on General.
+  await page.goto(
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+  )
+  await expect(page.getByRole('tab', { name: 'General' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+
+  // Switching to AI changes the address itself — a tab is a real address,
+  // not only local component state.
+  await page.getByRole('tab', { name: 'AI' }).click()
+  await expect(page).toHaveURL(
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}/ai`
+  )
+  await expect(page.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+
+  // A reload holds the tab — still AI, not bounced back to General. Done
+  // with nothing unsaved in the form, so this is purely about the address,
+  // not about surviving a reload's own full remount (which — a real
+  // browser reload, unlike an in-panel tab switch — legitimately does
+  // discard whatever was not yet saved).
+  await page.reload()
+  await expect(page).toHaveURL(
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}/ai`
+  )
+  await expect(page.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+
+  // Edit Title on General, then switch away and back — the edit survives:
+  // `form`/`baseline` is one object CourseEditor owns regardless of which
+  // tab is showing, not split apart per tab.
+  const editedTitle = `Web Design — ${suffix} (edited)`
+  await page.getByRole('tab', { name: 'General' }).click()
+  await page.getByLabel('Title').fill(editedTitle)
+  await page.getByRole('tab', { name: 'Roster' }).click()
+  await page.getByRole('tab', { name: 'General' }).click()
+  await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
+
+  // Saving from a tab other than General still saves that edit — the one
+  // "Save course" button is not tab-scoped, so an edit made on General is
+  // never stranded while looking at another tab.
+  await page.getByRole('tab', { name: 'Roster' }).click()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(
+    page.getByRole('heading', { name: editedTitle, level: 1 })
+  ).toBeVisible()
+  await page.getByRole('tab', { name: 'General' }).click()
+  await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
 })

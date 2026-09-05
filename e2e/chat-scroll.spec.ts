@@ -98,6 +98,8 @@ test('the composer stays reachable without scrolling the page once the thread ov
   // action, offered only once the course exists — without at least one
   // revision, `answerQuestion` declines every request as `not-configured`
   // (the same step `chat.spec.ts`'s own module comment already explains).
+  // WEB-35: it is on the AI tab.
+  await page.getByRole('tab', { name: 'AI' }).click()
   await page
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly.')

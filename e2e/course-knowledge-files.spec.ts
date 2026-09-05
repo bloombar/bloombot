@@ -187,6 +187,8 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
     await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
     await page.getByRole('button', { name: 'Save course' }).click()
 
+    // WEB-35: Knowledge files is on the AI tab.
+    await page.getByRole('tab', { name: 'AI' }).click()
     // WEB-18: the knowledge-files screen only appears once the course
     // actually has an id — the same "existing record only" gate the
     // Discord channels section already uses.

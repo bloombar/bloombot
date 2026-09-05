@@ -22,7 +22,12 @@ import {
   hasNavigationGuard,
   runGuardedNavigation,
 } from '../hooks/navigation-guard.js'
-import { buildPath, parseRoute, type Route } from './route.js'
+import {
+  buildPath,
+  isSameCourseEditorScreen,
+  parseRoute,
+  type Route,
+} from './route.js'
 
 export interface UseRouteResult {
   route: Route
@@ -56,6 +61,11 @@ export function useRoute(): UseRouteResult {
   // nothing in its place, which is a regression this slice introduced and
   // this handler closes.
   //
+  // WEB-35 — one exception: a pop that only moves a course editor's own
+  // tab is not a "leave" at all (`route.ts#isSameCourseEditorScreen`'s own
+  // comment on why), so it bypasses the guard entirely below, even with
+  // one registered.
+  //
   // The browser has already moved by the time `popstate` fires, so the
   // order here is: put the address back where it was (`pushState`, so the
   // screen on display and the address bar agree while the confirmation is
@@ -68,16 +78,28 @@ export function useRoute(): UseRouteResult {
   useEffect(() => {
     const onPopState = () => {
       const nextPath = window.location.pathname
-      if (!hasNavigationGuard()) {
+      const nextRoute = parseRoute(nextPath)
+      // WEB-35/WEB-16 — a pop that only moves a course editor's own tab
+      // never leaves the screen a dirty form's guard is protecting
+      // (`route.ts#isSameCourseEditorScreen`'s own comment on why): nothing
+      // unmounts for that move, so consulting the guard here produced a
+      // modal that lied about what either answer would do. Bypassed
+      // unconditionally for that case, even with a guard registered —
+      // `pages/CourseEditor.tsx` itself owns rendering the tab the new
+      // route names, same as any other prop change.
+      if (
+        !hasNavigationGuard() ||
+        isSameCourseEditorScreen(parseRoute(currentPathRef.current), nextRoute)
+      ) {
         currentPathRef.current = nextPath
-        setRoute(parseRoute(nextPath))
+        setRoute(nextRoute)
         return
       }
       window.history.pushState(null, '', currentPathRef.current)
       runGuardedNavigation(() => {
         window.history.pushState(null, '', nextPath)
         currentPathRef.current = nextPath
-        setRoute(parseRoute(nextPath))
+        setRoute(nextRoute)
       })
     }
     window.addEventListener('popstate', onPopState)

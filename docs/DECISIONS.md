@@ -8783,3 +8783,65 @@ not-found case); `npx playwright test` 35/35 (34 pre-existing plus one new `e2e/
 covering a cold deep link to an organization's own address, panel navigation moving the address bar, browser
 back returning to the organizations list, and an unmatched organization id rendering not-found); `npm run
 board:derive` leaves the manifest unchanged.
+
+## D-80 — `apps/web`: WEB-35 — the course editor's five settings tabs, each its own address
+
+`pages/CourseEditor.tsx` renders an existing course under five named tabs (General/AI/Discord/Roster/People)
+instead of one long scrolling form; the selected tab is part of the course's own canonical address
+(`routing/route.ts#CourseEditorTab`, `/o/:organizationId/projects/:projectId/courses/:courseId/:tab`). A bare
+`/courses/:courseId` (no tab segment — every pre-WEB-35 bookmark or link into this address) parses to the
+General tab; `buildPath` never emits that shorter form itself, always the explicit segment, so every address
+this app builds is the exact one that would parse back to it. `form`/`baseline` stay one object regardless of
+which tab is showing — `activeTab` is local UI state, seeded from the route and re-seeded on prop change (a
+browser Back/Forward between tabs), so switching tabs can never strand an edit, and a click calls
+`onNavigateTab` (an ordinary push, not routed through the unsaved-changes guard, which only ever intercepts a
+`popstate` — `routing/useRoute.ts`'s own `navigate` is not guarded at all) rather than only flipping local
+state, matching the rest of the panel's own "navigate, don't just re-render" convention.
+
+**The brief's own "What this course routes on" bordered box is dropped for the Discord tab, kept for a new
+course.** A new course (`courseId === undefined`) has no tab address to invent — none of the sections this
+slice moved into tabs exist for it yet (join links, roster import, people, attachments, instructions,
+websites are all already gated on `courseId !== undefined`, unchanged) — so it keeps its original single-form
+layout untouched, bordered box and all. The Discord tab is already its own visually distinct region once tabs
+exist, so the same box around the same roles/server fields read as a redundant border around a border; its
+intro paragraph is kept, the box itself is not, on the Discord tab only.
+
+**A refused save switches to the tab the refused field lives on.** `FIELD_TABS` maps a `SaveCourseInput`
+field name to the tab its own `FormField` renders on; both the client-side `maxRequestsPerDay` refusal and a
+server-refused `courses.save` read the first named issue and switch tabs if it is not already the one
+showing, so `fieldErrorProp`'s own inline message is actually visible next to the field it concerns (WEB-16),
+not stranded on a tab nobody is looking at with only the top `ErrorMessage` to show for it.
+
+**Rework round 1 (two reviewers, seven must-fixes).** Conditionally rendering only the active tab's panel —
+this decision's own first draft — unmounted whatever was not showing, which cost `CourseInstructions` and
+`JoinLinks` their own local state (an in-progress edit, a shown-once plaintext secret) and killed
+`RosterImport`/`CourseAttachments`/`ScaffoldButton`'s in-flight polling outright. Fixed by keeping every tab's
+panel mounted from the first time it is opened onward — hidden with the `hidden` attribute, never
+conditionally rendered — while a never-visited tab still does not mount (`visitedTabs`, `pages/CourseEditor.tsx`),
+so a course editor still does not fetch attachments, people or websites until asked; this also means
+"switching tabs can never strand an edit" is now true of the whole screen, not merely `form`/`baseline`, and
+the module comment says so. Four smaller, related findings: (1) a Back/Forward that only moves the tab used to
+consult the unsaved-changes guard like any other `popstate`, producing a modal that lied about what either
+answer would do — fixed with `route.ts#isSameCourseEditorScreen`, which `routing/useRoute.ts`'s own `popstate`
+handler now checks first, bypassing the guard entirely for a pop that never actually leaves the screen; (2)
+`switchToTabForField` compared a refusal's target tab against `activeTab` captured in a closure from before
+`handleSave`'s own `await`, so a tab switched mid-save read stale — fixed by comparing against a ref kept in
+lockstep instead; (3) `/o/:org/projects/:p/courses/new/:tab` read `new` as a literal course id rather than
+`new-course`'s own reserved segment, reaching `getCourse(org, 'new')` — fixed by repeating the same exclusion
+the four-segment rule already states; (4) only the refusal's first issue ever steered the tab, and `model` had
+no `fieldErrorProp` at all, so a refusal naming it switched tabs and pushed history for a message that then
+rendered nowhere — fixed by reading the first *mapped* issue and giving Model the same inline-error treatment
+every other field in `FIELD_TABS` already has. The tab bar also gained the WAI-ARIA tabs keyboard interaction
+it claimed but did not implement — roving `tabIndex`, Left/Right/Home/End moving and activating selection, and
+focus following a save-refusal's own auto-switch so it is never silent.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all clean (2448
+vitest passing, 90 node — the `scripts/board/derive.test.mjs` failure D-80's own first draft called out is
+gone now that `scripts/board/config.mjs` carries phase 22's milestone); `npx playwright test` 37/37 unchanged
+from the first draft. New unit coverage for round 1: `tests/routing.test.ts` (`isSameCourseEditorScreen`, the
+`courses/new/:tab` refusal, the bare-URL-to-General and per-tab parse assertions made exact rather than
+`.kind !== 'not-found'`), `tests/use-route.test.tsx` (a same-screen tab pop bypasses the guard, asked never),
+`tests/course-editor.test.tsx` (an Instructions edit survives an actual tab switch rather than only a `form`
+field, a changed `tab` prop alone moving the active tab, and the client-side `maxRequestsPerDay` refusal
+switching tabs from somewhere other than AI) — each confirmed red against the pre-rework code before the fix
+landed.

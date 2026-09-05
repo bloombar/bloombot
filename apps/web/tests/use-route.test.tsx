@@ -165,6 +165,69 @@ describe('useRoute (WEB-32, WEB-34)', () => {
       expect(screen.getByTestId('route-kind')).toHaveTextContent('projects')
     })
   })
+
+  /**
+   * WEB-35 (rework round 1, must-fix 2/7) — a Back/Forward that only moves
+   * a course editor's own tab must bypass the guard entirely, even with
+   * one registered: nothing unmounts for that move
+   * (`pages/CourseEditor.tsx` keeps every visited tab mounted, hidden), so
+   * consulting the guard produced a modal that lied either way — "Discard
+   * changes" discarded nothing, "Keep editing" stranded the reader on
+   * whichever tab the address had already moved to.
+   */
+  describe('a same-screen tab move bypasses the guard entirely (WEB-35, WEB-16)', () => {
+    const COURSE_GENERAL: Route = {
+      kind: 'course-editor',
+      organizationId: 'org-1',
+      projectId: 'proj-1',
+      courseId: 'course-1',
+      tab: 'general',
+    }
+    const COURSE_AI: Route = { ...COURSE_GENERAL, tab: 'ai' }
+
+    function CourseTabHarness({ onGuardAsked }: { onGuardAsked: () => void }) {
+      const { route, navigate } = useRoute()
+      return (
+        <div>
+          <p data-testid="route-tab">
+            {route.kind === 'course-editor' ? route.tab : ''}
+          </p>
+          <button type="button" onClick={() => navigate(COURSE_AI)}>
+            go to ai
+          </button>
+          <RegisterGuard guardResult={false} onGuardAsked={onGuardAsked} />
+        </div>
+      )
+    }
+
+    it('a Back that only changes the tab moves the tab directly, without ever asking the guard', async () => {
+      window.history.replaceState(null, '', buildPath(COURSE_GENERAL))
+      const onGuardAsked = vi.fn()
+      render(
+        <NavigationGuardProvider>
+          <CourseTabHarness onGuardAsked={onGuardAsked} />
+        </NavigationGuardProvider>
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'go to ai' }))
+      expect(screen.getByTestId('route-tab')).toHaveTextContent('ai')
+
+      // The browser's own Back — the address is already back at General by
+      // the time `popstate` fires, same as `goThenPressBack` above.
+      window.history.replaceState(null, '', buildPath(COURSE_GENERAL))
+      await act(async () => {
+        window.dispatchEvent(new PopStateEvent('popstate'))
+        await Promise.resolve()
+      })
+
+      // Fails without the fix: a guard registered here (`guardResult:
+      // false`, "refused") would have pushed the address back to `ai` and
+      // shown a modal for a move that unmounts nothing at all.
+      expect(onGuardAsked).not.toHaveBeenCalled()
+      expect(screen.getByTestId('route-tab')).toHaveTextContent('general')
+      expect(window.location.pathname).toBe(buildPath(COURSE_GENERAL))
+    })
+  })
 })
 
 /** Registers a guard on mount, the way `useUnsavedChangesGuard` does while a form is dirty. */

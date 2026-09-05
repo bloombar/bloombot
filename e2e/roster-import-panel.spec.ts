@@ -157,6 +157,8 @@ test('an instructor imports a roster through the panel; an unparseable row is re
     await page.getByRole('button', { name: 'Add category' }).click()
     await page.getByLabel('Category name').fill(categoryName)
     await page.getByRole('button', { name: 'Save course' }).click()
+    // WEB-35: Roster is its own tab.
+    await page.getByRole('tab', { name: 'Roster' }).click()
     await expect(page.getByRole('heading', { name: 'Roster' })).toBeVisible()
 
     // 2. Bind a Discord server directly (`course-configuration.spec.ts`'s

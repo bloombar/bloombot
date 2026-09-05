@@ -136,10 +136,15 @@ test('a cold load of a deep course URL renders that course, panel navigation and
   ).toBeVisible()
 
   // Into the course again, from its own row this time — the address moves
-  // forward to the course's own address once more.
+  // forward to the course's own address once more. WEB-35: opening a course
+  // from its row always names the General tab explicitly
+  // (`pages/ProjectsPanel.tsx`'s own `onOpenCourse`) — `buildPath` never
+  // emits the bare, tab-less form itself (`routing/route.ts`'s own module
+  // comment on `CourseEditorTab`), even though that shorter form still
+  // parses to the same screen (step 1, above).
   await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page).toHaveURL(
-    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}/general`
   )
   await expect(
     page.getByRole('heading', { name: courseTitle, level: 1 })
@@ -202,7 +207,7 @@ test("the browser's own Back button asks before leaving a dirty course form, and
   await page.goto(`/o/${organizationId}/projects/${projectId}`)
   await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page).toHaveURL(
-    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}/general`
   )
   await page.getByLabel('Title').fill(`${courseTitle} (edited)`)
 
@@ -215,7 +220,7 @@ test("the browser's own Back button asks before leaving a dirty course form, and
   ).toBeVisible()
   await page.getByRole('button', { name: 'Keep editing' }).click()
   await expect(page).toHaveURL(
-    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}/general`
   )
   await expect(page.getByLabel('Title')).toHaveValue(`${courseTitle} (edited)`)
 

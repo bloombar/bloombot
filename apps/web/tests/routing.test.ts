@@ -8,7 +8,12 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { buildPath, parseRoute, type Route } from '../src/routing/route.js'
+import {
+  buildPath,
+  isSameCourseEditorScreen,
+  parseRoute,
+  type Route,
+} from '../src/routing/route.js'
 
 // One example of every named variant — `'not-found'` is deliberately not
 // here (this file's own module comment on `route.ts` explains why it is
@@ -28,11 +33,43 @@ const ROUTES: Route[] = [
   { kind: 'projects', organizationId: 'org-1' },
   { kind: 'project-courses', organizationId: 'org-1', projectId: 'proj-1' },
   { kind: 'new-course', organizationId: 'org-1', projectId: 'proj-1' },
+  // WEB-35 — one example per course-editor tab, so the round-trip property
+  // holds for each of the five, not just whichever one happened to be
+  // written down before tabs existed.
   {
     kind: 'course-editor',
     organizationId: 'org-1',
     projectId: 'proj-1',
     courseId: 'course-1',
+    tab: 'general',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'ai',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'discord',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'roster',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'people',
   },
   { kind: 'chat', organizationId: 'org-1' },
   { kind: 'chat', organizationId: 'org-1', courseId: 'course-1' },
@@ -60,7 +97,6 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/projects/',
     '/o/org-1/projects/proj-1',
     '/o/org-1/projects/proj-1/courses/new',
-    '/o/org-1/projects/proj-1/courses/course-1',
     '/o/org-1/chat',
     '/o/org-1/chat/course-1',
     '/account',
@@ -72,6 +108,43 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     expect(parseRoute(path).kind).not.toBe('not-found')
   })
 
+  // WEB-35 (rework round 1, must-fix 7) — the literal-path block above only
+  // ever asserted `.kind !== 'not-found'`, which would have stayed green
+  // even if every one of these five parsed to the wrong tab, or if the
+  // bare form's own novel decision (no tab segment names `'general'`,
+  // rather than falling through to `'not-found'`) silently broke. Asserted
+  // directly, against the whole parsed route, instead.
+  it('a bare course address with no tab segment parses to the General tab', () => {
+    expect(parseRoute('/o/org-1/projects/proj-1/courses/course-1')).toEqual({
+      kind: 'course-editor',
+      organizationId: 'org-1',
+      projectId: 'proj-1',
+      courseId: 'course-1',
+      tab: 'general',
+    })
+  })
+
+  it.each([
+    ['general', 'general'],
+    ['ai', 'ai'],
+    ['discord', 'discord'],
+    ['roster', 'roster'],
+    ['people', 'people'],
+  ] as const)(
+    'a course address naming the %s tab parses to it',
+    (segment, tab) => {
+      expect(
+        parseRoute(`/o/org-1/projects/proj-1/courses/course-1/${segment}`)
+      ).toEqual({
+        kind: 'course-editor',
+        organizationId: 'org-1',
+        projectId: 'proj-1',
+        courseId: 'course-1',
+        tab,
+      })
+    }
+  )
+
   it.each([
     '/nonsense',
     '/o',
@@ -81,6 +154,16 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o//projects',
     '/o/org-1/projects/proj-1/courses',
     '/o/org-1/projects/proj-1/courses/',
+    // WEB-35 — an unrecognised tab name is not a tab this scheme has, the
+    // same "falls through to not-found rather than guessing" rule every
+    // other unknown segment already gets.
+    '/o/org-1/projects/proj-1/courses/course-1/nonsense',
+    // WEB-35 (rework round 1, must-fix 4) — `new` is `new-course`'s own
+    // reserved fourth segment (`parseRoute`'s own comment on why that rule
+    // has to run first); a fifth, tab segment tacked onto it must not read
+    // `new` as a literal course id instead — fails without the fix,
+    // reaching `getCourse(org, 'new')`.
+    '/o/org-1/projects/proj-1/courses/new/general',
     '/o/org-1/nope',
     '/sign-in',
     '/sign-in/',
@@ -93,5 +176,49 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/platform-admin/deletions/extra',
   ])('malformed or unknown path %s lands on not-found', (path) => {
     expect(parseRoute(path)).toEqual({ kind: 'not-found' })
+  })
+})
+
+describe('isSameCourseEditorScreen (WEB-35, WEB-16)', () => {
+  const BASE: Route = {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'general',
+  }
+
+  it('is true for the same course, differing only in tab', () => {
+    expect(isSameCourseEditorScreen(BASE, { ...BASE, tab: 'ai' })).toBe(true)
+  })
+
+  it('is false for a different course', () => {
+    expect(
+      isSameCourseEditorScreen(BASE, { ...BASE, courseId: 'course-2' })
+    ).toBe(false)
+  })
+
+  it('is false for a different project or organization', () => {
+    expect(
+      isSameCourseEditorScreen(BASE, { ...BASE, projectId: 'proj-2' })
+    ).toBe(false)
+    expect(
+      isSameCourseEditorScreen(BASE, { ...BASE, organizationId: 'org-2' })
+    ).toBe(false)
+  })
+
+  it('is false when either side is not a course-editor route at all', () => {
+    expect(
+      isSameCourseEditorScreen(BASE, {
+        kind: 'projects',
+        organizationId: 'org-1',
+      })
+    ).toBe(false)
+    expect(
+      isSameCourseEditorScreen(
+        { kind: 'projects', organizationId: 'org-1' },
+        BASE
+      )
+    ).toBe(false)
   })
 })

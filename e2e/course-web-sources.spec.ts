@@ -80,6 +80,9 @@ test('an owner adds a website (typed as a URL), sees it reduced to its domain, a
   await page.getByRole('button', { name: 'Save course' }).click()
   await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
 
+  // WEB-35: Websites is on the AI tab.
+  await page.getByRole('tab', { name: 'AI' }).click()
+
   // 2. FILE-6/WEB-31: add a website, typed as a full URL — the panel shows
   //    it back as the bare domain `courseWebSources.add` reduced it to.
   // Scoped to the panel's own "Websites" region — "example.edu" also

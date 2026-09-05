@@ -47,6 +47,7 @@ export const MILESTONE_TITLE = {
   19: 'Phase 19 — The panel a person actually navigates',
   20: 'Phase 20 — Websites as course knowledge',
   21: 'Phase 21 — Addressable screens',
+  22: 'Phase 22 — Course settings, organised',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

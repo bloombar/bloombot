@@ -94,6 +94,10 @@ describe('ProjectsPanel (WEB-32, WEB-34)', () => {
         organizationId: 'org-1',
         projectId: 'project-1',
         courseId: 'course-1',
+        // WEB-35 — a create has no tab of its own to preserve, so the save
+        // lands on General, same as the route this component built for the
+        // `new-course` screen it came from.
+        tab: 'general',
       })
       expect(call[1]).toEqual({ replace: true })
     }

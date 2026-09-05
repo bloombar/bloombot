@@ -106,6 +106,8 @@ test("an instructor sees their course's spend and a student approaching its dail
   // declined outright by `answerQuestion` (`chat.spec.ts`'s own identical
   // step) — this course needs something to actually answer against before
   // step 4 below asks it anything.
+  // WEB-35: Instructions is on the AI tab.
+  await page.getByRole('tab', { name: 'AI' }).click()
   await page
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly.')

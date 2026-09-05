@@ -289,3 +289,12 @@ This phase gives every screen a canonical, organization-scoped address, drives t
 address rather than from component state, and makes history, reload and a pasted link all agree.
 
 **In scope:** WEB-32, WEB-33, WEB-34
+
+## Phase 22 — Course settings, organised
+
+The course settings screen has accumulated every surface a course owns — roles, model, instructions,
+knowledge files, websites, categories, roster, people — as one form scrolled top to bottom. Phase 21
+gave every screen an address; this phase gives the biggest screen an internal structure worth
+addressing, and closes the gap between seeing a person’s name and reading what they asked.
+
+**In scope:** WEB-35, WEB-36

@@ -2209,3 +2209,18 @@ transcript screen opens with that course and that person already chosen and thei
 already read, rather than with empty pickers. An ended enrolment links the same way as an active
 one: ending an enrolment never deleted the transcript (ENRL-6), and reading it is exactly what an
 instructor needs after somebody leaves.
+
+#### ROST-13 A course no longer carries a file prefix
+
+Every course carries a short `file_prefix` — `wd`, `py` — and the panel asks an instructor to type
+one. It exists for the era this platform replaced: rosters and questionnaires were CSV files a person
+dropped into `results/` by hand, and the prefix was the only thing that said which file belonged to
+which course. A course now has its own upload area and its own imports, and the platform tracks what
+belongs to it; nothing in the platform reads the prefix for any purpose. It is a required field that
+asks an instructor to solve a problem the product already solved.
+
+A course no longer has a file prefix: the field goes from the panel, from what a course can be saved
+with, and from the stored record, and duplicating a project no longer copies one. The legacy import
+still accepts a legacy config that names a prefix — those files exist and must keep importing — it
+simply no longer carries the value forward. The Python scripts of the pre-platform workflow keep
+reading their own config as they always have; they are not what this requirement is about.

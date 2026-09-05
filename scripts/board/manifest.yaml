@@ -3256,7 +3256,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 21
-  status: In review
+  status: Done
   review: false
 - id: WEB-33
   title: The admin console's screens are addressable too
@@ -3269,7 +3269,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 21
-  status: In review
+  status: Done
   review: false
 - id: WEB-34
   title: Back, forward, reload and a pasted link all agree
@@ -3286,5 +3286,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 21
-  status: In review
+  status: Done
   review: false

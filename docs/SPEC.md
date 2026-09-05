@@ -2176,3 +2176,36 @@ a redeemed sign-in link, a completed OAuth callback — keep replacing their his
 pushing one, since they must not be reachable by pressing back. An address naming something this
 account cannot see, or nothing at all, says so on a screen of its own and offers the way home rather
 than rendering an empty panel. WEB-16's unsaved-changes guard still runs before any of it.
+
+#### WEB-35 A course's settings are organised into tabs, not one long form
+
+A course's settings screen is one continuous form that has grown to hold everything a course has:
+routing roles, title and enable state, the model and its instructions, knowledge files and websites,
+Discord categories and channels, the roster import, and everyone the course has ever enrolled. An
+instructor looking for one of those scrolls past all of the others, and the Save button sits at the
+bottom of the whole thing, far from most of what it saves.
+
+The screen is divided into named tabs, each holding the settings that belong together: **General**
+(title, enable/disable, join links), **AI** (model, prompt id, requests-per-day cap, instructions,
+knowledge files, websites), **Discord** (admins and students roles, the server it is bound to, the
+categories and channels to create, and the control that creates them), **Roster** (the file prefix
+that names a course's roster files, the roster import, and the channels it creates) and **People**
+(everyone the course has ever enrolled). A tab is part of the course's own address (WEB-32), so a
+tab can be linked to and survives a reload; a course that does not exist yet offers only the tabs
+whose contents it can have. Editing on one tab and switching to another does not lose the edit, the
+unsaved-changes guard (WEB-16) still runs on leaving the screen, and a save refused for a field on
+another tab shows that tab rather than leaving the refusal pointing at something nobody can see.
+
+#### WEB-36 A person in a course links to their transcript
+
+A course's People tab lists everyone it has ever enrolled, active and ended alike, but a name there
+is inert text. Reading what one of those people actually asked means going to Transcripts and
+re-choosing the project, the course and the person from three separate pickers — for somebody whose
+name is already on screen.
+
+Every name in both lists links to that person's transcript for the course being looked at. The link
+carries the course and the person in its address, so it can be sent to a colleague, and the
+transcript screen opens with that course and that person already chosen and their conversation
+already read, rather than with empty pickers. An ended enrolment links the same way as an active
+one: ending an enrolment never deleted the transcript (ENRL-6), and reading it is exactly what an
+instructor needs after somebody leaves.

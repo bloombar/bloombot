@@ -3288,3 +3288,37 @@
   phase: 21
   status: Done
   review: false
+- id: WEB-35
+  title: A course's settings are organised into tabs, not one long form
+  full: "A course's settings screen is one continuous form that has grown to hold
+    everything a course has: routing roles, title and enable state, the model
+    and its instructions, knowledge files and websites, Discord categories and
+    channels, the roster import, and everyone the course has ever enrolled. An
+    instructor looking for one of those scrolls past all of the others, and the
+    Save button sits at the bottom of the whole thing, far from most of what it
+    saves. The screen is divided into named tabs, each holding the settings that
+    belong together: General (title, enable/disable, join links), AI (model,
+    prompt id, requests-per-day cap, instructions, knowledge files, websites),
+    Discord (admins and…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
+- id: WEB-36
+  title: A person in a course links to their transcript
+  full: A course's People tab lists everyone it has ever enrolled, active and
+    ended alike, but a name there is inert text. Reading what one of those
+    people actually asked means going to Transcripts and re-choosing the
+    project, the course and the person from three separate pickers — for
+    somebody whose name is already on screen. Every name in both lists links to
+    that person's transcript for the course being looked at. The link carries
+    the course and the person in its address, so it can be sent to a colleague,
+    and the transcript screen opens with that course and that person already
+    chosen and their conversation already read, rather than with empty pickers.
+    An ended enrolment links the same way as an…
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false

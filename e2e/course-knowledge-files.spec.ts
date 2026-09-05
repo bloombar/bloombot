@@ -182,7 +182,6 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
 
     await page.getByRole('button', { name: 'New course' }).click()
     await page.getByLabel('Title').fill(courseTitle)
-    await page.getByLabel('File prefix').fill(`wd-${suffix}`)
     await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
     await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
     await page.getByRole('button', { name: 'Save course' }).click()

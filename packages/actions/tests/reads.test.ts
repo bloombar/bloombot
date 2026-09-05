@@ -114,7 +114,6 @@ describe('courses.list', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',
@@ -161,7 +160,6 @@ describe('courses.get', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',
@@ -198,7 +196,6 @@ describe('courses.get', () => {
       {
         projectId: projectBId,
         title: 'Org B Course',
-        filePrefix: 'ob',
         enabled: true,
         adminsRole: 'admins-ob',
         studentsRole: 'students-ob',

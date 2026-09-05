@@ -89,7 +89,6 @@ export function seedOrganizationWithCourse(
     {
       projectId,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: overrides.adminsRole ?? `admins-${randomUUID()}`,
       studentsRole: overrides.studentsRole ?? `students-${randomUUID()}`,

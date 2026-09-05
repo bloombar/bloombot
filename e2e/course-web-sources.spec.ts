@@ -73,7 +73,6 @@ test('an owner adds a website (typed as a URL), sees it reduced to its domain, a
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`ws-${suffix}`)
   await page.getByLabel('Admins role').fill(`admins-ws-${suffix}`)
   await page.getByLabel('Students role').fill(`students-ws-${suffix}`)
   await page.getByLabel('Enabled').check()

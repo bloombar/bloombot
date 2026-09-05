@@ -94,7 +94,6 @@ test('a project is created through the "New project" modal, renamed through its 
     .click()
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`t-${suffix}`)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()

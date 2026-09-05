@@ -46,7 +46,6 @@ function seedTwoOrganizationsWithCourses(testDatabase: TestDatabase) {
     {
       projectId: projectA.id,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: 'admins-wd',
       studentsRole: 'students-wd',
@@ -59,7 +58,6 @@ function seedTwoOrganizationsWithCourses(testDatabase: TestDatabase) {
     {
       projectId: projectB.id,
       title: 'Data Structures',
-      filePrefix: 'ds',
       enabled: true,
       adminsRole: 'admins-ds',
       studentsRole: 'students-ds',

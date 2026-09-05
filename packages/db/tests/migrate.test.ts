@@ -169,7 +169,6 @@ describe('runMigrations', () => {
       'created_at',
       'discord_server_id',
       'enabled',
-      'file_prefix',
       'id',
       'instructions',
       'max_requests_per_day',

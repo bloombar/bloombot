@@ -46,7 +46,6 @@ function seedCourse(
     {
       projectId,
       title: 'Test Course',
-      filePrefix: 'tc',
       enabled: true,
       adminsRole: overrides.adminsRole ?? 'admins-tc',
       studentsRole: overrides.studentsRole ?? 'students-tc',

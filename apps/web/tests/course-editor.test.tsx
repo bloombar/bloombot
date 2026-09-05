@@ -102,7 +102,6 @@ const COURSE: Course = {
   organizationId: 'org-1',
   projectId: 'project-1',
   title: 'Web Design',
-  filePrefix: 'wd',
   enabled: true,
   adminsRole: 'admins-wd-fa26',
   studentsRole: 'students-wd-fa26',

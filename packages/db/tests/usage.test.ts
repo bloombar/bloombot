@@ -28,7 +28,6 @@ function courseInput(
   return {
     projectId,
     title: 'Web Design',
-    filePrefix: 'wd',
     enabled: true,
     adminsRole: 'admins-wd',
     studentsRole: 'students-wd',

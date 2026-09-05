@@ -38,8 +38,23 @@
  * comment on that rule — but `buildPath` never relies on that default: it
  * always emits the explicit tab segment, so every address this app itself
  * constructs is the exact one that would parse back to it.
+ *
+ * The single source of truth for the five ids — the type below, the
+ * runtime guard (`isCourseEditorTab`) and `pages/CourseEditor.tsx`'s own
+ * tab bar (which maps this same array into id/label pairs) all derive from
+ * this one array, rather than each spelling the five names out separately
+ * (a rework finding: a sixth tab used to mean editing three places that
+ * had to agree by hand).
  */
-export type CourseEditorTab = 'general' | 'ai' | 'discord' | 'roster' | 'people'
+export const COURSE_EDITOR_TABS = [
+  'general',
+  'ai',
+  'discord',
+  'roster',
+  'people',
+] as const
+
+export type CourseEditorTab = (typeof COURSE_EDITOR_TABS)[number]
 
 /** WEB-32 — an organization-scoped screen inside `pages/ProjectsPanel.tsx`; a deep link only ever carries the ids the address itself names (a `projectId`, a `courseId`), never the whole record — `pages/ProjectsPanel.tsx`'s own module comment has how those ids are resolved into the `Project`/`Course` the screens underneath actually take. */
 export type ProjectsRoute =
@@ -120,13 +135,7 @@ function segmentsOf(pathname: string): string[] {
 
 /** WEB-35 — a runtime guard for `CourseEditorTab`, since a URL segment is just a string until it is checked against the five names `pages/CourseEditor.tsx` actually renders; anything else (a typo, an old bookmark to a tab this app never had) is not a tab this scheme recognises, so `parseRoute` falls through to `'not-found'` rather than guessing. */
 function isCourseEditorTab(segment: string): segment is CourseEditorTab {
-  return (
-    segment === 'general' ||
-    segment === 'ai' ||
-    segment === 'discord' ||
-    segment === 'roster' ||
-    segment === 'people'
-  )
+  return (COURSE_EDITOR_TABS as readonly string[]).includes(segment)
 }
 
 /**
@@ -227,13 +236,29 @@ export function parseRoute(pathname: string): Route {
       }
     }
     // WEB-35 — the explicit form, one segment per tab, the only one
-    // `buildPath` itself ever produces.
+    // `buildPath` itself ever produces. `rest[3] !== 'new'` mirrors the
+    // same exclusion the `new-course` rule above states directly (must-fix
+    // 4, rework round 1): without it, `/courses/new/general` read `new` as
+    // a literal course id — `rest[3]` is truthy, so nothing else here would
+    // catch it — and reached `getCourse(org, 'new')` instead of
+    // `'not-found'`.
     if (
       rest.length === 5 &&
       rest[0] === 'projects' &&
       rest[1] &&
       rest[2] === 'courses' &&
       rest[3] &&
+      rest[3] !== 'new' &&
+      // `rest[4] !== undefined` looks redundant next to `rest.length === 5`
+      // above, but it is not dead: `noUncheckedIndexedAccess` types
+      // `rest[4]` as `string | undefined` no matter how many earlier
+      // conditions already guarantee an element is there at that index —
+      // TS does not narrow an index expression's type across separate
+      // conditions the way it narrows a plain variable, so
+      // `isCourseEditorTab(rest[4])` alone does not typecheck without
+      // this. Confirmed against this repo's own compiler settings
+      // (`tsc --build`, not a bare `--noEmit` on one project's own
+      // solution file, which checks nothing at all) rather than assumed.
       rest[4] !== undefined &&
       isCourseEditorTab(rest[4])
     ) {
@@ -385,6 +410,31 @@ export function isProjectsRoute(route: Route): route is ProjectsRoute {
     default:
       return false
   }
+}
+
+/**
+ * WEB-35/WEB-16 — true when `a` and `b` are the same course editor screen,
+ * differing at most in which tab is showing. `routing/useRoute.ts`'s own
+ * `popstate` handler uses this to bypass the unsaved-changes guard for a
+ * Back/Forward that only moves the tab: nothing on screen actually
+ * unmounts for that move (`pages/CourseEditor.tsx` keeps every visited
+ * tab's panel mounted, hidden, precisely so a tab switch is never a real
+ * "leave"), so treating it as one produced a modal that lied — "Discard
+ * changes" discarded nothing (there was nothing to discard), and "Keep
+ * editing" stranded the reader on whichever tab the pop had already moved
+ * the address to. This decision belongs here, next to the rest of what
+ * this module already knows about a course editor's own address, rather
+ * than inline in the hook, which has no other reason to know the shape of
+ * a `course-editor` route at all.
+ */
+export function isSameCourseEditorScreen(a: Route, b: Route): boolean {
+  return (
+    a.kind === 'course-editor' &&
+    b.kind === 'course-editor' &&
+    a.organizationId === b.organizationId &&
+    a.projectId === b.projectId &&
+    a.courseId === b.courseId
+  )
 }
 
 /** The drawer tab a `ShellRoute` belongs under (`pages/Shell.tsx`'s own `navGroups`) — every `ProjectsRoute` variant collapses to `'projects'`, matching `pages/ProjectsPanel.tsx`'s own single entry in that drawer. */

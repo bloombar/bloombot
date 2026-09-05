@@ -75,19 +75,37 @@
  * from the `tab` prop `pages/ProjectsPanel.tsx` reads off the route, and a
  * click on a tab calls `onNavigateTab` so that address changes too, the
  * same "a tab is a real address" discipline WEB-32/WEB-34 already hold this
- * whole panel to. `activeTab` only ever decides *what is rendered* — the
- * form's own `form`/`baseline` state below is unchanged by this slice, one
- * object regardless of which tab is showing, so switching tabs can never
- * strand an edit made on another one (this file's own `isDirty` still
- * compares the same two objects it always has). A brand-new course
- * (`courseId === undefined`) has none of this — it cannot have join links,
- * a roster import, people, attachments, instructions or websites (they are
- * all already gated on `courseId !== undefined`, unchanged by this slice),
- * so there is nothing worth splitting into tabs; it keeps the single-form
- * layout it always had, and `tab`/`onNavigateTab` are simply not read.
+ * whole panel to.
+ *
+ * Rework round 1, must-fix 1: every tab this course editor has ever shown
+ * stays mounted — hidden with the `hidden` attribute, never unmounted —
+ * once it has been shown once (`visitedTabs`, below); a tab never opened
+ * this render still does not mount at all, so a course editor still does
+ * not fetch attachments, people or websites until asked. Conditionally
+ * rendering each panel (mounting only the active one) used to unmount
+ * whatever was not showing, which cost `CourseInstructions` and
+ * `JoinLinks` their own local state (an in-progress edit, a shown-once
+ * plaintext secret) and killed `RosterImport`/`CourseAttachments`'s
+ * in-flight polling outright — so switching tabs now genuinely cannot
+ * strand anything on this whole screen, not merely the `form`/`baseline`
+ * object every tab already shared. `activeTab` only ever decides which
+ * mounted panel is *visible*.
+ *
+ * A brand-new course (`courseId === undefined`) has none of this — it
+ * cannot have join links, a roster import, people, attachments,
+ * instructions or websites (they are all already gated on
+ * `courseId !== undefined`, unchanged by this slice), so there is nothing
+ * worth splitting into tabs; it keeps the single-form layout it always
+ * had, and `tab`/`onNavigateTab` are simply not read.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react'
 
 import {
   ApiError,
@@ -102,7 +120,10 @@ import type {
   DiscordServerBindingSummary,
   Project,
 } from '../api/types.js'
-import type { CourseEditorTab } from '../routing/route.js'
+import {
+  COURSE_EDITOR_TABS as COURSE_EDITOR_TAB_IDS,
+  type CourseEditorTab,
+} from '../routing/route.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
@@ -145,14 +166,18 @@ export interface CourseEditorProps {
   onCancel: () => void
 }
 
-/** WEB-35 — the five tabs, in the order `pages/CourseEditor.tsx` renders them and the brief itself lists them. */
-const COURSE_EDITOR_TABS: { id: CourseEditorTab; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'ai', label: 'AI' },
-  { id: 'discord', label: 'Discord' },
-  { id: 'roster', label: 'Roster' },
-  { id: 'people', label: 'People' },
-]
+/** WEB-35 — a label for each of `routing/route.ts#COURSE_EDITOR_TABS`'s own ids — the tab bar's own concern, not the routing module's, so it stays here rather than growing that array into something UI-shaped. */
+const TAB_LABELS: Record<CourseEditorTab, string> = {
+  general: 'General',
+  ai: 'AI',
+  discord: 'Discord',
+  roster: 'Roster',
+  people: 'People',
+}
+
+/** WEB-35 (rework round 1, cheap fix) — derived from `routing/route.ts#COURSE_EDITOR_TABS`, the one array the type, the parser's runtime guard and this tab bar all now agree with — a sixth tab is one edit there, plus one label above. */
+const COURSE_EDITOR_TABS: { id: CourseEditorTab; label: string }[] =
+  COURSE_EDITOR_TAB_IDS.map((id) => ({ id, label: TAB_LABELS[id] }))
 
 /**
  * WEB-35/WEB-16: which tab a given `SaveCourseInput` field's name lives
@@ -163,7 +188,10 @@ const COURSE_EDITOR_TABS: { id: CourseEditorTab; label: string }[] = [
  * here too even though no single `FormField` reads it through
  * `fieldErrorProp` — the fieldset itself lives on the Discord tab, so a
  * collision naming it still lands somewhere the category/channel rows are
- * visible.
+ * visible. Every field named here has a `fieldErrorProp` somewhere in this
+ * form (rework round 1, must-fix 5: `model` used not to, which meant a
+ * refusal naming it switched tabs and pushed a history entry for a message
+ * that then rendered nowhere at all — `aiFields`, below, now reads it).
  */
 const FIELD_TABS: Record<string, CourseEditorTab> = {
   title: 'general',
@@ -319,18 +347,95 @@ export function CourseEditor({
   // (that path sets this directly, below, so the tab switches on the same
   // render as the click rather than waiting on the parent to feed the new
   // `tab` back down) but a browser Back/Forward between tabs does, since
-  // that changes `tab` without going through this component's own click
-  // handler at all (WEB-34).
+  // `routing/useRoute.ts`'s own `popstate` handler bypasses the
+  // unsaved-changes guard for exactly this move
+  // (`route.ts#isSameCourseEditorScreen`) and lets the new `tab` prop
+  // through directly (WEB-34).
   const [activeTab, setActiveTab] = useState<CourseEditorTab>(tab ?? 'general')
+  // Rework round 1, must-fix 3: `switchToTabForField` runs inside a
+  // `handleSave` that has just crossed an `await` (the server round trip),
+  // so a plain closure over `activeTab` would read whatever tab was active
+  // when `handleSave` was *called*, not the one showing when the refusal
+  // actually lands — a save started on General, followed by a click to AI
+  // before the response arrives, compared the refusal's tab against a
+  // `'general'` that is no longer true. Kept in lockstep with `activeTab`
+  // everywhere the latter is set, rather than read fresh from state,
+  // exactly so `switchToTabForField` (and the keyboard handler below) can
+  // read the *current* tab through a ref without waiting on a render.
+  const activeTabRef = useRef(activeTab)
+  // Rework round 1, must-fix 1: every tab ever shown for this course stays
+  // mounted from here on (hidden, not unmounted) — seeded with whichever
+  // tab is showing first, the same "General unless the address says
+  // otherwise" reasoning `activeTab` itself already uses. Reset to just
+  // the incoming tab whenever `courseId` changes (the data-loading effect,
+  // below) — otherwise a tab visited on one course would wrongly start
+  // "already visited," and therefore mounted and fetching, the moment a
+  // different course loaded into this same, reused component instance.
+  const [visitedTabs, setVisitedTabs] = useState<Set<CourseEditorTab>>(
+    () => new Set([tab ?? 'general'])
+  )
   useEffect(() => {
-    setActiveTab(tab ?? 'general')
+    const next = tab ?? 'general'
+    activeTabRef.current = next
+    setActiveTab(next)
+    setVisitedTabs((current) =>
+      current.has(next) ? current : new Set(current).add(next)
+    )
   }, [tab])
+  // Rework round 1, must-fix 6: the WAI-ARIA tabs keyboard interaction —
+  // roving `tabIndex` (`course-editor-tab`'s own `tabIndex` prop, below)
+  // plus Left/Right/Home/End moving *and activating* selection (automatic
+  // activation, the same model a native `<select>` gives arrow keys) —
+  // needs to move DOM focus itself, not only React state, so each tab
+  // button's own element is kept here through a ref callback.
+  const tabButtonRefs = useRef<Map<CourseEditorTab, HTMLButtonElement>>(
+    new Map()
+  )
   const goToTab = useCallback(
     (next: CourseEditorTab) => {
+      activeTabRef.current = next
       setActiveTab(next)
+      setVisitedTabs((current) =>
+        current.has(next) ? current : new Set(current).add(next)
+      )
       onNavigateTab?.(next)
+      // Rework round 1, must-fix 6: also runs for a save-refusal's own
+      // auto-switch (`switchToTabForField`, below) — moving focus there is
+      // what makes that switch not silent; harmless on an ordinary click,
+      // which already put focus on this same button.
+      tabButtonRefs.current.get(next)?.focus()
     },
     [onNavigateTab]
+  )
+  // Rework round 1, must-fix 6: Left/Right cycle with wraparound (the
+  // WAI-ARIA "tabs (automatic activation)" pattern), Home/End jump to the
+  // first/last tab — attached to the `tablist` itself so focus anywhere in
+  // the row reaches it, not to each individual `tab` button.
+  const handleTabListKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      const ids = COURSE_EDITOR_TAB_IDS
+      const currentIndex = ids.indexOf(activeTabRef.current)
+      let nextIndex: number
+      switch (event.key) {
+        case 'ArrowRight':
+          nextIndex = (currentIndex + 1) % ids.length
+          break
+        case 'ArrowLeft':
+          nextIndex = (currentIndex - 1 + ids.length) % ids.length
+          break
+        case 'Home':
+          nextIndex = 0
+          break
+        case 'End':
+          nextIndex = ids.length - 1
+          break
+        default:
+          return
+      }
+      event.preventDefault()
+      goToTab(ids[nextIndex]!)
+    },
+    [goToTab]
   )
   const [form, setForm] = useState<FormState>(blankForm())
   // WEB-16: the form's own last agreed-with-the-server state — set
@@ -447,6 +552,16 @@ export function CourseEditor({
     // that lands is stale and must not overwrite what the current props
     // asked for.
     let stale = false
+    // Rework round 1, must-fix 1: a freshly loaded course starts with only
+    // its own incoming tab "visited" — carrying a previous course's own
+    // visited set into this one would wrongly mount (and fetch for) a tab
+    // nobody has opened on *this* course yet, the moment the same
+    // `CourseEditor` instance is reused for a different `courseId`
+    // (`pages/ProjectsPanel.tsx` does not remount it between courses).
+    const initialTab = tab ?? 'general'
+    activeTabRef.current = initialTab
+    setActiveTab(initialTab)
+    setVisitedTabs(new Set([initialTab]))
     if (courseId === undefined) {
       const blank = blankForm()
       setForm(blank)
@@ -484,16 +599,20 @@ export function CourseEditor({
   // client-side `maxRequestsPerDay` refusal and its server-refused catch,
   // below, so both refusal paths land the instructor on a tab where
   // `fieldErrorProp`'s inline message is actually visible, not only the
-  // top-level `ErrorMessage`.
+  // top-level `ErrorMessage`. Reads `activeTabRef.current`, not `activeTab`
+  // (rework round 1, must-fix 3) — this runs from inside `handleSave`,
+  // after an `await` on the server round trip, so a plain closure over
+  // `activeTab` would compare against whatever tab was active when the
+  // save *started*, not the one showing once the refusal actually lands.
   const switchToTabForField = useCallback(
     (fieldName: string | number | undefined) => {
       const targetTab =
         typeof fieldName === 'string' ? FIELD_TABS[fieldName] : undefined
       // Idempotent: a field already on the tab showing must not push a
       // redundant, identical history entry.
-      if (targetTab && targetTab !== activeTab) goToTab(targetTab)
+      if (targetTab && targetTab !== activeTabRef.current) goToTab(targetTab)
     },
-    [goToTab, activeTab]
+    [goToTab]
   )
 
   const handleSave = async () => {
@@ -578,13 +697,20 @@ export function CourseEditor({
     } catch (caught) {
       if (caught instanceof ApiError) {
         setError(caught)
-        // WEB-35/WEB-16: a refused save whose first issue names a field on
-        // a tab other than the one showing switches there, so
-        // `fieldErrorProp`'s own inline message (rendered next to the
-        // field it concerns) is actually on screen — otherwise the top
-        // `ErrorMessage` would be the only sign anything was refused at
-        // all, on a tab with nothing else wrong with it.
-        switchToTabForField(caught.body.issues?.[0]?.path[0])
+        // WEB-35/WEB-16: switches to the first *mapped* issue's own tab,
+        // not merely the first issue (rework round 1, must-fix 5) — a
+        // refusal whose first issue names a field this form does not
+        // render at all (`projectId`, `enabled`) while a later one names
+        // `title` used to leave the switch never firing, stranding the
+        // inline message `fieldErrorProp` renders on whichever tab
+        // happened to be showing. Otherwise the top `ErrorMessage` would
+        // be the only sign anything was refused at all, on a tab with
+        // nothing else wrong with it.
+        const mappedIssue = caught.body.issues?.find(
+          (issue) =>
+            typeof issue.path[0] === 'string' && issue.path[0] in FIELD_TABS
+        )
+        switchToTabForField(mappedIssue?.path[0])
       } else throw caught
     } finally {
       setSaving(false)
@@ -1016,6 +1142,7 @@ export function CourseEditor({
         <FormField
           label="Model"
           help="Leave blank to use the platform default."
+          {...fieldErrorProp(error, 'model')}
         >
           <input
             aria-label="Model"
@@ -1194,20 +1321,35 @@ export function CourseEditor({
               `onNavigateTab` rather than only flipping local state — the
               same "navigate, don't just re-render" convention
               `pages/ProjectsPanel.tsx` and `pages/Shell.tsx` already hold
-              every other screen in this panel to. */}
+              every other screen in this panel to.
+
+              Rework round 1, must-fix 6: the WAI-ARIA tabs keyboard
+              interaction — roving `tabIndex` (only the selected tab is
+              ever `0`, so Tab enters/leaves the whole row in one stop, the
+              same as a native control) and Left/Right/Home/End moving *and
+              activating* selection (`handleTabListKeyDown`, above), which
+              also moves focus onto the newly active button
+              (`goToTab`'s own final line) — including when a refused save
+              switches tabs on its own, so that move is never silent. */}
           <div
             role="tablist"
             aria-label="Course settings"
             className="flex gap-1 border-b border-neutral-200"
+            onKeyDown={handleTabListKeyDown}
           >
             {COURSE_EDITOR_TABS.map((courseTab) => (
               <button
                 key={courseTab.id}
+                ref={(element) => {
+                  if (element) tabButtonRefs.current.set(courseTab.id, element)
+                  else tabButtonRefs.current.delete(courseTab.id)
+                }}
                 type="button"
                 role="tab"
                 id={`course-tab-${courseTab.id}`}
                 aria-selected={activeTab === courseTab.id}
                 aria-controls={`course-tabpanel-${courseTab.id}`}
+                tabIndex={activeTab === courseTab.id ? 0 : -1}
                 onClick={() => goToTab(courseTab.id)}
                 className={
                   activeTab === courseTab.id
@@ -1220,173 +1362,205 @@ export function CourseEditor({
             ))}
           </div>
 
-          {activeTab === 'general' && (
-            <div
-              role="tabpanel"
-              id="course-tabpanel-general"
-              aria-labelledby="course-tab-general"
-              className="flex flex-col gap-6"
-            >
-              <div className="grid gap-4 sm:grid-cols-2">{titleField}</div>
-              {enabledControl}
+          {/* Rework round 1, must-fix 1: this wrapper — id, aria-labelledby,
+              `hidden` — stays mounted for every one of the five tabs,
+              always, so a `role="tab"`'s own `aria-controls` never points
+              at an id that does not exist in the DOM (rework round 1,
+              finding 6). Only the *content* inside is gated on
+              `visitedTabs`, and it is that content — not this div — whose
+              mount is what a fetch or a piece of local state actually
+              depends on. */}
+          <div
+            role="tabpanel"
+            id="course-tabpanel-general"
+            aria-labelledby="course-tab-general"
+            hidden={activeTab !== 'general'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('general') && (
+              <>
+                {titleField}
+                {enabledControl}
 
-              {/* WEB-20: a course's join links — belongs to an existing
-                  course. */}
-              <section aria-label="Join links" className="flex flex-col gap-2">
-                <h2 className="text-section-title font-semibold text-neutral-900">
-                  Join links
-                </h2>
-                <p className="text-sm text-neutral-600">
-                  Share a link that lets a student enrol themselves, without a
-                  Discord role — each link&apos;s secret is shown only once,
-                  right after you create it.
-                </p>
-                <JoinLinks
+                {/* WEB-20: a course's join links — belongs to an existing
+                    course. */}
+                <section
+                  aria-label="Join links"
+                  className="flex flex-col gap-2"
+                >
+                  <h2 className="text-section-title font-semibold text-neutral-900">
+                    Join links
+                  </h2>
+                  <p className="text-sm text-neutral-600">
+                    Share a link that lets a student enrol themselves, without a
+                    Discord role — each link&apos;s secret is shown only once,
+                    right after you create it.
+                  </p>
+                  <JoinLinks
+                    organizationId={organizationId}
+                    courseId={courseId}
+                  />
+                </section>
+              </>
+            )}
+          </div>
+
+          <div
+            role="tabpanel"
+            id="course-tabpanel-ai"
+            aria-labelledby="course-tab-ai"
+            hidden={activeTab !== 'ai'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('ai') && (
+              <>
+                {aiFields}
+
+                {/* WEB-19/FILE-4: see this file's own module comment for
+                    why this section owns its own save and reports its own
+                    dirtiness up. Mounted only once this tab is first
+                    visited (rework round 1, must-fix 1) and never
+                    unmounted after — an in-progress edit here used to be
+                    silently destroyed by switching away, which also left
+                    `instructionsDirty` (below) stuck `true` over a change
+                    that no longer existed anywhere. */}
+                <CourseInstructions
                   organizationId={organizationId}
                   courseId={courseId}
+                  onDirtyChange={handleInstructionsDirtyChange}
                 />
-              </section>
-            </div>
-          )}
 
-          {activeTab === 'ai' && (
-            <div
-              role="tabpanel"
-              id="course-tabpanel-ai"
-              aria-labelledby="course-tab-ai"
-              className="flex flex-col gap-6"
-            >
-              {aiFields}
+                {/* WEB-18/FILE-1: a course's knowledge files. */}
+                <section
+                  aria-label="Knowledge files"
+                  className="flex flex-col gap-2"
+                >
+                  <h2 className="text-section-title font-semibold text-neutral-900">
+                    Knowledge files
+                  </h2>
+                  <p className="text-sm text-neutral-600">
+                    The notes, syllabus and schedule this course is grounded in.
+                    Detaching one stops it grounding answers immediately, and
+                    reaches the provider — it cannot be undone.
+                  </p>
+                  <CourseAttachments
+                    organizationId={organizationId}
+                    courseId={courseId}
+                  />
+                </section>
 
-              {/* WEB-19/FILE-4: see this file's own module comment for why
-                  this section owns its own save and reports its own
-                  dirtiness up. */}
-              <CourseInstructions
-                organizationId={organizationId}
-                courseId={courseId}
-                onDirtyChange={handleInstructionsDirtyChange}
-              />
+                {/* FILE-6/MDL-9: a course's websites, alongside its
+                    knowledge files. */}
+                <section aria-label="Websites" className="flex flex-col gap-2">
+                  <h2 className="text-section-title font-semibold text-neutral-900">
+                    Websites
+                  </h2>
+                  <p className="text-sm text-neutral-600">
+                    Sites this course is grounded in, alongside its knowledge
+                    files. Bloombot searches only the domains named here — never
+                    the open web. Removing one takes effect immediately.
+                  </p>
+                  <CourseWebSources
+                    organizationId={organizationId}
+                    courseId={courseId}
+                  />
+                </section>
+              </>
+            )}
+          </div>
 
-              {/* WEB-18/FILE-1: a course's knowledge files. */}
-              <section
-                aria-label="Knowledge files"
-                className="flex flex-col gap-2"
-              >
-                <h2 className="text-section-title font-semibold text-neutral-900">
-                  Knowledge files
-                </h2>
+          <div
+            role="tabpanel"
+            id="course-tabpanel-discord"
+            aria-labelledby="course-tab-discord"
+            hidden={activeTab !== 'discord'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('discord') && (
+              <>
+                {/* WEB-35 — the intro copy from the former "What this
+                    course routes on" box, kept, with the bordered box
+                    itself dropped: the Discord tab is already its own
+                    visually distinct region, so a second border around the
+                    same fields read as redundant. See `docs/DECISIONS.md`
+                    if this needs reconsidering. */}
                 <p className="text-sm text-neutral-600">
-                  The notes, syllabus and schedule this course is grounded in.
-                  Detaching one stops it grounding answers immediately, and
-                  reaches the provider — it cannot be undone.
+                  A message reaches this course by the Discord category it
+                  arrived in, or by the author&apos;s role — these names have to
+                  match your Discord server exactly.
                 </p>
-                <CourseAttachments
-                  organizationId={organizationId}
-                  courseId={courseId}
-                />
-              </section>
+                {rolesAndServerFields}
 
-              {/* FILE-6/MDL-9: a course's websites, alongside its knowledge
-                  files. */}
-              <section aria-label="Websites" className="flex flex-col gap-2">
-                <h2 className="text-section-title font-semibold text-neutral-900">
-                  Websites
-                </h2>
-                <p className="text-sm text-neutral-600">
-                  Sites this course is grounded in, alongside its knowledge
-                  files. Bloombot searches only the domains named here — never
-                  the open web. Removing one takes effect immediately.
-                </p>
-                <CourseWebSources
-                  organizationId={organizationId}
-                  courseId={courseId}
-                />
-              </section>
-            </div>
-          )}
+                {categoriesFieldset}
 
-          {activeTab === 'discord' && (
-            <div
-              role="tabpanel"
-              id="course-tabpanel-discord"
-              aria-labelledby="course-tab-discord"
-              className="flex flex-col gap-6"
-            >
-              {/* WEB-35 — the intro copy from the former "What this course
-                  routes on" box, kept, with the bordered box itself dropped:
-                  the Discord tab is already its own visually distinct
-                  region, so a second border around the same fields read as
-                  redundant. See `docs/DECISIONS.md` if this needs
-                  reconsidering. */}
-              <p className="text-sm text-neutral-600">
-                A message reaches this course by the Discord category it arrived
-                in, or by the author&apos;s role — these names have to match
-                your Discord server exactly.
-              </p>
-              {rolesAndServerFields}
+                {/* SRV-6: scaffolding needs a persisted course to name in
+                    the job payload. Mounted only once this tab is first
+                    visited (rework round 1, must-fix 1) — its own polling
+                    used to be silently killed by switching away mid-job. */}
+                <section
+                  aria-label="Discord channels"
+                  className="flex flex-col gap-2"
+                >
+                  <h2 className="text-section-title font-semibold text-neutral-900">
+                    Discord channels
+                  </h2>
+                  <p className="text-sm text-neutral-600">
+                    Create this course&apos;s declared categories and channels
+                    in the Discord server bound to this organization.
+                  </p>
+                  <ScaffoldButton
+                    organizationId={organizationId}
+                    courseId={courseId}
+                  />
+                </section>
+              </>
+            )}
+          </div>
 
-              {categoriesFieldset}
+          <div
+            role="tabpanel"
+            id="course-tabpanel-roster"
+            aria-labelledby="course-tab-roster"
+            hidden={activeTab !== 'roster'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('roster') && (
+              <>
+                {filePrefixField}
 
-              {/* SRV-6: scaffolding needs a persisted course to name in the
-                  job payload. */}
-              <section
-                aria-label="Discord channels"
-                className="flex flex-col gap-2"
-              >
-                <h2 className="text-section-title font-semibold text-neutral-900">
-                  Discord channels
-                </h2>
-                <p className="text-sm text-neutral-600">
-                  Create this course&apos;s declared categories and channels in
-                  the Discord server bound to this organization.
-                </p>
-                <ScaffoldButton
-                  organizationId={organizationId}
-                  courseId={courseId}
-                />
-              </section>
-            </div>
-          )}
+                {/* WEB-21/ROST-9..12: a course's roster import. Mounted
+                    only once this tab is first visited (rework round 1,
+                    must-fix 1) — an in-flight job's own poll and its
+                    ROST-11/12 per-row report used to be killed outright by
+                    switching away from this tab mid-import. */}
+                <section
+                  aria-label="Roster import"
+                  className="flex flex-col gap-2"
+                >
+                  <h2 className="text-section-title font-semibold text-neutral-900">
+                    Roster
+                  </h2>
+                  <p className="text-sm text-neutral-600">
+                    Import a class roster to enrol every student and create
+                    their private Discord channel.
+                  </p>
+                  <RosterImport
+                    organizationId={organizationId}
+                    courseId={courseId}
+                  />
+                </section>
+              </>
+            )}
+          </div>
 
-          {activeTab === 'roster' && (
-            <div
-              role="tabpanel"
-              id="course-tabpanel-roster"
-              aria-labelledby="course-tab-roster"
-              className="flex flex-col gap-6"
-            >
-              <div className="grid gap-4 sm:grid-cols-2">{filePrefixField}</div>
-
-              {/* WEB-21/ROST-9..12: a course's roster import. */}
-              <section
-                aria-label="Roster import"
-                className="flex flex-col gap-2"
-              >
-                <h2 className="text-section-title font-semibold text-neutral-900">
-                  Roster
-                </h2>
-                <p className="text-sm text-neutral-600">
-                  Import a class roster to enrol every student and create their
-                  private Discord channel.
-                </p>
-                <RosterImport
-                  organizationId={organizationId}
-                  courseId={courseId}
-                />
-              </section>
-            </div>
-          )}
-
-          {activeTab === 'people' && (
-            <div
-              role="tabpanel"
-              id="course-tabpanel-people"
-              aria-labelledby="course-tab-people"
-              className="flex flex-col gap-6"
-            >
-              {/* WEB-22/ENRL-9: a course's people — everyone it has ever
-                  enrolled, active and ended alike, with ending and
-                  reinstating both offered. */}
+          <div
+            role="tabpanel"
+            id="course-tabpanel-people"
+            aria-labelledby="course-tab-people"
+            hidden={activeTab !== 'people'}
+            className="flex flex-col gap-6"
+          >
+            {visitedTabs.has('people') && (
               <section aria-label="People" className="flex flex-col gap-2">
                 <h2 className="text-section-title font-semibold text-neutral-900">
                   People
@@ -1401,8 +1575,8 @@ export function CourseEditor({
                   courseId={courseId}
                 />
               </section>
-            </div>
-          )}
+            )}
+          </div>
         </>
       )}
 

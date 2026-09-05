@@ -8812,13 +8812,36 @@ server-refused `courses.save` read the first named issue and switch tabs if it i
 showing, so `fieldErrorProp`'s own inline message is actually visible next to the field it concerns (WEB-16),
 not stranded on a tab nobody is looking at with only the top `ErrorMessage` to show for it.
 
-**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2439
-vitest passing — up from 2439/2436 as other slices landed in parallel — plus the one pre-existing,
-unrelated `scripts/board/derive.test.mjs` failure this slice did not cause: `config.mjs` has no milestone for
-phase 22 yet); `npx playwright test` 37/37 (35 pre-existing, updated where a field this slice moved behind a
-tab needed a tab click first — `e2e/routing.spec.ts`, `e2e/chat.spec.ts`, `e2e/chat-scroll.spec.ts`,
-`e2e/course-knowledge-files.spec.ts`, `e2e/course-people-panel.spec.ts`, `e2e/course-web-sources.spec.ts`,
-`e2e/projects-row-menus.spec.ts`, `e2e/roster-import-panel.spec.ts`, `e2e/usage-panel.spec.ts` — plus one new
-case in `e2e/course-configuration.spec.ts` covering a bare course address landing on General, a tab click
-changing the address bar, a reload holding the tab, an edit surviving a switch between tabs, and a save from
-a tab other than General still saving it); `npm run board:derive` leaves the manifest unchanged.
+**Rework round 1 (two reviewers, seven must-fixes).** Conditionally rendering only the active tab's panel —
+this decision's own first draft — unmounted whatever was not showing, which cost `CourseInstructions` and
+`JoinLinks` their own local state (an in-progress edit, a shown-once plaintext secret) and killed
+`RosterImport`/`CourseAttachments`/`ScaffoldButton`'s in-flight polling outright. Fixed by keeping every tab's
+panel mounted from the first time it is opened onward — hidden with the `hidden` attribute, never
+conditionally rendered — while a never-visited tab still does not mount (`visitedTabs`, `pages/CourseEditor.tsx`),
+so a course editor still does not fetch attachments, people or websites until asked; this also means
+"switching tabs can never strand an edit" is now true of the whole screen, not merely `form`/`baseline`, and
+the module comment says so. Four smaller, related findings: (1) a Back/Forward that only moves the tab used to
+consult the unsaved-changes guard like any other `popstate`, producing a modal that lied about what either
+answer would do — fixed with `route.ts#isSameCourseEditorScreen`, which `routing/useRoute.ts`'s own `popstate`
+handler now checks first, bypassing the guard entirely for a pop that never actually leaves the screen; (2)
+`switchToTabForField` compared a refusal's target tab against `activeTab` captured in a closure from before
+`handleSave`'s own `await`, so a tab switched mid-save read stale — fixed by comparing against a ref kept in
+lockstep instead; (3) `/o/:org/projects/:p/courses/new/:tab` read `new` as a literal course id rather than
+`new-course`'s own reserved segment, reaching `getCourse(org, 'new')` — fixed by repeating the same exclusion
+the four-segment rule already states; (4) only the refusal's first issue ever steered the tab, and `model` had
+no `fieldErrorProp` at all, so a refusal naming it switched tabs and pushed history for a message that then
+rendered nowhere — fixed by reading the first *mapped* issue and giving Model the same inline-error treatment
+every other field in `FIELD_TABS` already has. The tab bar also gained the WAI-ARIA tabs keyboard interaction
+it claimed but did not implement — roving `tabIndex`, Left/Right/Home/End moving and activating selection, and
+focus following a save-refusal's own auto-switch so it is never silent.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all clean (2448
+vitest passing, 90 node — the `scripts/board/derive.test.mjs` failure D-80's own first draft called out is
+gone now that `scripts/board/config.mjs` carries phase 22's milestone); `npx playwright test` 37/37 unchanged
+from the first draft. New unit coverage for round 1: `tests/routing.test.ts` (`isSameCourseEditorScreen`, the
+`courses/new/:tab` refusal, the bare-URL-to-General and per-tab parse assertions made exact rather than
+`.kind !== 'not-found'`), `tests/use-route.test.tsx` (a same-screen tab pop bypasses the guard, asked never),
+`tests/course-editor.test.tsx` (an Instructions edit survives an actual tab switch rather than only a `form`
+field, a changed `tab` prop alone moving the active tab, and the client-side `maxRequestsPerDay` refusal
+switching tabs from somewhere other than AI) — each confirmed red against the pre-rework code before the fix
+landed.

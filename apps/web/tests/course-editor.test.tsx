@@ -292,6 +292,55 @@ describe('CourseEditor (WEB-8)', () => {
     expect(saveCourse).not.toHaveBeenCalled()
   })
 
+  // Rework round 1, must-fix 7: `switchToTabForField` had no coverage at
+  // all for the client-side `maxRequestsPerDay` refusal — every existing
+  // case already started on the AI tab, so a version that only switched
+  // tabs for a *server*-refused save would have passed this suite
+  // unnoticed.
+  it('a client-side "Max requests per day" refusal switches to the AI tab when it is not already showing', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Model')
+
+    // Fat-finger the cap while on the AI tab...
+    fireEvent.change(screen.getByLabelText('Max requests per day'), {
+      target: { value: '5O' },
+    })
+    // ...then leave, without saving, to a tab with nothing wrong on it.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    // Fails without the fix: the client-side refusal fires before
+    // `courses.save` is ever called, entirely inside `handleSave` itself —
+    // a version of `switchToTabForField` only wired into the server-refused
+    // catch would leave the reader on General, looking at a top-level
+    // `ErrorMessage` with no field-level message anywhere in view.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    const field = screen.getByLabelText('Max requests per day')
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(saveCourse).not.toHaveBeenCalled()
+  })
+
   it('a failed load renders only the failure, never an editable blank form over a real course (finding 3)', async () => {
     getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
 
@@ -455,6 +504,106 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'General' }))
     expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+  })
+
+  // Rework round 1, must-fix 1/7: this is the case that actually broke —
+  // `CourseInstructions` keeps its own text in its own `useState`, entirely
+  // outside `form`/`baseline`, so a fix that only kept `form` intact across
+  // a tab switch (the test above) would leave this one red: mounting only
+  // the active tab's panel unmounted `CourseInstructions` the moment its
+  // own tab stopped being the one showing, destroying whatever was typed
+  // and never saved.
+  it('an edit typed into Instructions on the AI tab survives switching away and back, unsaved', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onCancel = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={onCancel}
+      />
+    )
+    await screen.findByLabelText('Model')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+
+    // Away, to a tab with no relation to Instructions at all, and back.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    // Fails without the fix: `CourseInstructions` unmounted on the way to
+    // Discord, so its own `text` state — never saved — was gone; remounting
+    // it on the way back re-fetched the empty revision list this file's own
+    // `beforeEach` stubs, rendering blank rather than what was typed.
+    expect(screen.getByLabelText('Instructions')).toHaveValue(
+      'Cite the syllabus.'
+    )
+
+    // `instructionsDirty` is still consistent with that surviving edit —
+    // Cancel still prompts, exactly as it would have without ever
+    // switching tabs at all (this file's own WEB-19 dirty-bridge tests,
+    // below, cover the no-tab-switch case).
+    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
+    await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+  })
+
+  // Rework round 1, must-fix 7: the Back/Forward re-seeding path — nothing
+  // in the suite above ever re-rendered `CourseEditor` with a changed `tab`
+  // prop alone, the one path a browser Back/Forward between tabs actually
+  // takes (`routing/useRoute.ts`'s own `popstate` handler lets the new
+  // `tab` prop through directly for a same-screen pop, `pages/CourseEditor.tsx`'s
+  // own module comment).
+  it('a changed tab prop alone (a browser Back/Forward between tabs) moves the active tab', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    const { rerender } = renderWithModal(
+      <CourseEditor
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Model')
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+
+    // No click on any tab control — only the prop itself changes, the same
+    // as `pages/ProjectsPanel.tsx` re-rendering this component once
+    // `routing/useRoute.ts` moves `route.tab` in response to a pop.
+    rerender(
+      withModal(
+        <CourseEditor
+          organizationId="org-1"
+          project={PROJECT}
+          courseId="course-1"
+          tab="roster"
+          onSaved={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      )
+    )
+
+    expect(screen.getByRole('tab', { name: 'Roster' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
   })
 
   it('a refused save naming a field on another tab switches to that tab so the inline message is visible', async () => {

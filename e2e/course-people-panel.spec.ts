@@ -30,6 +30,7 @@ import { expect, test } from '@playwright/test'
 import {
   accounts,
   closeDatabase,
+  conversations,
   courses,
   enrolments,
   memberships,
@@ -262,4 +263,158 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   } finally {
     closeDatabase(dbAfter)
   }
+})
+
+/**
+ * WEB-36, end to end: a person's own name in the People panel is a real
+ * link straight to their transcript for this course, already read — for
+ * both an enrolled person and one whose enrolment has since ended (ending
+ * never deletes the transcript, ENRL-6).
+ *
+ * **What is real, and what is a harness stand-in** (this file's own module
+ * comment above holds the same discipline):
+ *
+ *  - Real: the browser (`components/CoursePeople.tsx`, `pages/Transcripts.tsx`),
+ *    a real `apps/api`, a real throwaway SQLite database, and the whole
+ *    round trip a click on the link takes: an in-app navigation to
+ *    `/o/:organizationId/transcripts/:courseId/:personId`, resolving the
+ *    course's own project (`courses.get`), and `transcripts.read` itself.
+ *  - Not real: both students' own enrolments and messages — seeded directly
+ *    through `@bloombot/db` (`enrolments.enrolViaRoster`/`.endEnrolment`,
+ *    `conversations.getOrCreateConversation`/`appendMessage`), the same
+ *    device `transcript-access-log.spec.ts`'s own module comment already
+ *    uses: nothing here needs a live join-link redemption or a real chat
+ *    round trip to prove the link itself lands correctly.
+ */
+test('clicking a person’s name in the People panel opens their transcript, already read (WEB-36)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const ownerEmail = `owner-${suffix}@example.edu`
+  const projectName = `Fall 2026 — ${suffix}`
+  const courseTitle = `Web Design — ${suffix}`
+  const activeStudentName = `Alice ${suffix}`
+  const endedStudentName = `Bob ${suffix}`
+
+  // 1. Sign in and define an enabled course.
+  await page.goto('/')
+  await page.getByLabel('Email').fill(ownerEmail)
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
+  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
+  const ownerToken = await readSignInToken(ownerEmail)
+  await page.goto(`/sign-in/${ownerToken}`)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await navigateTo(page, 'Projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(courseTitle)
+  await page.getByLabel('File prefix').fill(`wd-${suffix}`)
+  await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
+  await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
+  await page.getByLabel('Enabled').check()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+
+  // 2. Seed two real enrolments, each with one real message: an active one
+  //    and one whose enrolment has since ended — this file's own module
+  //    comment on why seeded directly rather than through a live join link.
+  let organizationId: string
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const ownerAccount = accounts.getAccountByEmail(ownerEmail, db)
+    if (!ownerAccount) throw new Error('setup failed: owner account not found')
+    const [ownerMembership] = memberships.listMembershipsForAccount(
+      ownerAccount.id,
+      db
+    )
+    if (!ownerMembership) throw new Error('setup failed: membership not found')
+    organizationId = ownerMembership.organizationId
+
+    const project = projects
+      .listProjects(organizationId, db)
+      .find((candidate) => candidate.name === projectName)
+    if (!project) throw new Error('setup failed: project not found')
+    const course = courses
+      .listCourses(organizationId, db, { projectId: project.id })
+      .find((candidate) => candidate.title === courseTitle)
+    if (!course) throw new Error('setup failed: course not found')
+
+    const seedStudent = (displayName: string, content: string) => {
+      const person = people.createPerson(
+        organizationId,
+        { displayName, email: `${displayName.toLowerCase()}@example.edu` },
+        db
+      )
+      const conversation = conversations.getOrCreateConversation(
+        organizationId,
+        { courseId: course.id, personId: person.id, surface: 'web' },
+        db
+      )
+      if (!conversation) throw new Error('setup failed: conversation')
+      conversations.appendMessage(
+        organizationId,
+        conversation.id,
+        { direction: 'from_person', content },
+        db
+      )
+      const enrolment = enrolments.enrolViaRoster(
+        organizationId,
+        { courseId: course.id, personId: person.id },
+        db
+      )
+      if (!enrolment) throw new Error('setup failed: enrolment')
+      return enrolment
+    }
+
+    seedStudent(activeStudentName, 'When is the deadline?')
+    const endedEnrolment = seedStudent(
+      endedStudentName,
+      'Can I still submit late work?'
+    )
+    enrolments.endEnrolment(organizationId, endedEnrolment.id, db)
+  } finally {
+    closeDatabase(db)
+  }
+
+  // 3. WEB-35: People is its own tab.
+  await page.getByRole('tab', { name: 'People' }).click()
+  await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
+  await expect(page.getByText('Enrolled (1)')).toBeVisible()
+  await expect(page.getByText('Enrolment ended (1)')).toBeVisible()
+
+  // 4. The active student's own name is a real link — clicking it lands on
+  //    their transcript, with the course, the person and the message
+  //    already showing, no picker left empty.
+  const activeLink = page.getByRole('link', { name: activeStudentName })
+  await expect(activeLink).toHaveAttribute('href', /\/transcripts\/.+\/.+$/)
+  await activeLink.click()
+  await expect(page.getByRole('heading', { name: 'Transcripts' })).toBeVisible()
+  // `exact: true` — `ModalProvider` keeps the "New project" dialog this
+  // spec used above mounted (closed, not removed —
+  // `transcript-access-log.spec.ts`'s own module comment on this exact
+  // collision), and its own "Project name" field label otherwise collides,
+  // as a case-insensitive substring, with this screen's own "Project"
+  // label.
+  await expect(page.getByLabel('Project', { exact: true })).toHaveValue(/.+/)
+  await expect(page.getByLabel('Course')).toHaveValue(/.+/)
+  await expect(page.getByLabel('Student')).toHaveValue(/.+/)
+  await expect(page.getByText('When is the deadline?')).toBeVisible()
+
+  // 5. Back returns to the People tab (a push, not a replace) — and the
+  // ended student's own name links identically (ENRL-6: ending never
+  // deletes the transcript).
+  await page.goBack()
+  await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
+  const endedLink = page.getByRole('link', { name: endedStudentName })
+  await expect(endedLink).toHaveAttribute('href', /\/transcripts\/.+\/.+$/)
+  await endedLink.click()
+  await expect(page.getByRole('heading', { name: 'Transcripts' })).toBeVisible()
+  await expect(page.getByLabel('Student')).toHaveValue(/.+/)
+  await expect(page.getByText('Can I still submit late work?')).toBeVisible()
 })

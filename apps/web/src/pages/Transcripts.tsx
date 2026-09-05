@@ -22,6 +22,51 @@
  * themselves to — `transcripts.listAccessLog`'s own `execute` is what
  * actually enforces the restriction (`actions/transcripts.ts`'s own module
  * comment on why an owner, not any membership).
+ *
+ * WEB-36: a person's own transcript link (`components/CoursePeople.tsx`)
+ * opens this screen with that course, and that person, already chosen and
+ * read — `routeCourseId`/`routePersonId` below are the route's own reading
+ * of `routing/route.ts#TranscriptsRoute`, applied once through
+ * `pendingCourseIdRef`/`pendingPersonIdRef` and `seedingRef`, rather than as
+ * ordinary seeds to `useState`: `projectId`/`courseId`/`personId` are
+ * genuinely derived state here (the `[organizationId, projectId]` effect
+ * clears `courseId`, the `[organizationId, courseId]` effect clears
+ * `personId`, both unchanged from before this slice), and a naive seed
+ * would be clobbered by exactly those clears the moment `projectId` is set
+ * to the seeded course's own project. Each ref hands its effect the one
+ * value to apply *instead of* clearing, consumed the instant that effect
+ * reads it, so a later, ordinary project or course change clears
+ * `courseId`/`personId` exactly as it always has (the ref is empty by
+ * then). `seedingRef` additionally suppresses the ordinary
+ * apply-on-courseId-change read (below) for the one render where seeding
+ * itself is still in flight, and the seeded read is issued explicitly, with
+ * the seeded `personId` rather than whatever is in state at that instant —
+ * see the effect chain below for why relying on the ordinary effect there
+ * would silently read one render too early, missing the seeded person.
+ *
+ * This screen has no project id of its own in the address (only a course
+ * does — `routing/route.ts#TranscriptsRoute`'s own comment on why) — a
+ * seeded course's project is resolved via `getCourse`, the same read
+ * `pages/CourseEditor.tsx` already makes for the course editor itself. A
+ * course this account cannot read (deleted, or another organization's)
+ * surfaces through the same `ApiError` this screen already renders for
+ * every other refusal, rather than an empty screen. A *disabled* course
+ * still resolves (a person does not stop having a transcript because their
+ * course was disabled afterward) even though the course picker below is
+ * otherwise limited to enabled courses only (ADMIN-1's own choice,
+ * unchanged) — folded into `courses` as the one exception, found through
+ * the same `getCourse` call, never through relaxing that filter generally.
+ *
+ * WEB-36/D-8x (`docs/DECISIONS.md`): choosing a different course or person
+ * *within* this screen also rewrites the address (`navigate`, below) —
+ * project does not, since it has none in the address to write to; changing
+ * it while a course is chosen instead navigates back to the bare
+ * `/transcripts` landing address, since the course it named no longer makes
+ * sense under a different project. `routing/useRoute.ts`'s own `navigate`
+ * already no-ops a call that would push the address already on screen, so
+ * this never fights the seeding effect above (which only ever seeds when
+ * the route names a course this screen has not already loaded) or stacks a
+ * redundant history entry.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -29,6 +74,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   exportTranscript,
+  getCourse,
   listCourses,
   listProjects,
   listTranscriptAccessLog,
@@ -39,6 +85,7 @@ import {
   type TranscriptFilters,
 } from '../api/client.js'
 import type {
+  Course,
   CourseSummary,
   Project,
   TranscriptAccessLogEntry,
@@ -46,6 +93,7 @@ import type {
   TranscriptExport,
   TranscriptStudent,
 } from '../api/types.js'
+import type { Route } from '../routing/route.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
@@ -61,6 +109,12 @@ export interface TranscriptsScreenProps {
   organizationId: string
   /** Whether the caller's own membership in this organization is `'owner'` — see this file's own module comment for why the Access log section is withheld rather than merely disabled for anyone else. */
   isOwner: boolean
+  /** WEB-36 — the route's own course, from a transcript link elsewhere in the app (`components/CoursePeople.tsx`) or a bookmarked/copied address; `undefined` for this screen's ordinary landing address. */
+  courseId?: string
+  /** WEB-36 — the route's own person within `courseId`; only ever present alongside one (`routing/route.ts#TranscriptsRoute`'s own comment on why the two cannot be split). */
+  personId?: string
+  /** WEB-32/WEB-34's own `navigate`, threaded down from `pages/Shell.tsx` — this screen's own module comment on when it is called. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 /** A `<input type="date">` value's own start-of-day/end-of-day boundary, in epoch milliseconds — `undefined` for an empty picker, so an unset filter is genuinely omitted rather than sent as `NaN`. */
@@ -118,6 +172,9 @@ function accessLogVerb(kind: TranscriptAccessLogEntry['kind']): string {
 export function Transcripts({
   organizationId,
   isOwner,
+  courseId: routeCourseId,
+  personId: routePersonId,
+  navigate,
 }: TranscriptsScreenProps) {
   const [projects, setProjects] = useState<Project[] | undefined>(undefined)
   const [projectId, setProjectId] = useState('')
@@ -142,6 +199,19 @@ export function Transcripts({
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
 
+  // WEB-36 — this file's own module comment has the fuller reasoning: each
+  // ref hands the effect about to clear `courseId`/`personId` the one value
+  // to seed instead, consumed the instant that effect reads it.
+  // `seededCourseRef` also carries the whole `Course` the seed resolved, so
+  // the course-list effect below can show it selected even when it is
+  // disabled (that effect's own comment on why). `seedingRef` marks the
+  // window during which the ordinary apply-on-courseId-change read (below)
+  // must stand aside for the seeded read.
+  const pendingCourseIdRef = useRef<string | undefined>(undefined)
+  const pendingPersonIdRef = useRef<string | undefined>(undefined)
+  const seededCourseRef = useRef<Course | undefined>(undefined)
+  const seedingRef = useRef(false)
+
   useEffect(() => {
     setProjects(undefined)
     listProjects(organizationId).then(
@@ -153,12 +223,70 @@ export function Transcripts({
     )
   }, [organizationId])
 
+  // WEB-36 — resolves a route-named course into the project it belongs to
+  // (this screen's own module comment on why: no project id in the
+  // address). Guarded by `routeCourseId !== courseId` rather than firing on
+  // mount alone: this screen's own onChange handlers below already carry
+  // `courseId` (state) to the same value a resulting `navigate` call feeds
+  // back down as `routeCourseId`, so a user's own pick — which pushes the
+  // very address this effect would otherwise read — never re-triggers it.
+  useEffect(() => {
+    if (routeCourseId === undefined || routeCourseId === courseId) return
+    let stale = false
+    seedingRef.current = true
+    getCourse(organizationId, routeCourseId).then(
+      (course) => {
+        if (stale) return
+        seededCourseRef.current = course
+        pendingCourseIdRef.current = routeCourseId
+        pendingPersonIdRef.current = routePersonId
+        setProjectId(course.projectId)
+      },
+      (caught: unknown) => {
+        if (stale) return
+        seedingRef.current = false
+        // A course this account cannot read (deleted, or another
+        // organization's) surfaces through the same `ErrorMessage` every
+        // other refusal on this screen already renders — never a silently
+        // empty screen (this file's own module comment on why).
+        if (caught instanceof ApiError) setError(caught)
+        else throw caught
+      }
+    )
+    return () => {
+      stale = true
+    }
+  }, [organizationId, routeCourseId, courseId])
+
   useEffect(() => {
     setCourses(undefined)
-    setCourseId('')
+    // WEB-36 — a pending seed from the effect above takes the place of the
+    // ordinary clear-to-blank below; consumed by the students-loading
+    // effect further down, not here, since this effect does not yet know
+    // whether the seeded course actually exists in this project's list.
+    const seededCourseId = pendingCourseIdRef.current
+    setCourseId(seededCourseId ?? '')
     if (!projectId) return
     listCourses(organizationId, projectId).then(
-      (result) => setCourses(result.filter((course) => course.enabled)),
+      (result) => {
+        const enabled = result.filter((course) => course.enabled)
+        // WEB-36 — a person linked from a disabled course must still open
+        // with that course selected (this file's own module comment on
+        // why); the one exception to "enabled courses only" (ADMIN-1's own
+        // long-standing choice for this picker, unchanged otherwise),
+        // added only for the seeded course itself, found by the same
+        // `getCourse` the seed already made — never by relaxing the filter
+        // in general.
+        if (
+          seededCourseId &&
+          seededCourseRef.current?.id === seededCourseId &&
+          !enabled.some((candidate) => candidate.id === seededCourseId)
+        ) {
+          setCourses([...enabled, seededCourseRef.current])
+        } else {
+          setCourses(enabled)
+        }
+      },
       (caught: unknown) => {
         if (caught instanceof ApiError) setError(caught)
         else throw caught
@@ -169,10 +297,51 @@ export function Transcripts({
   useEffect(() => {
     setEntries(undefined)
     setStudents([])
-    setPersonId('')
+    // WEB-36 — the seed's own last leg: `pendingPersonIdRef` (paired with
+    // the `courseId` the effect above just applied) takes the place of the
+    // ordinary clear-to-blank, and both refs are cleared immediately so a
+    // later, ordinary course change — the seed is only ever consumed once —
+    // clears `personId` exactly as it always has.
+    const seededPersonId = pendingPersonIdRef.current
+    pendingCourseIdRef.current = undefined
+    pendingPersonIdRef.current = undefined
+    setPersonId(seededPersonId ?? '')
     if (!courseId) return
     listTranscriptStudents(organizationId, courseId).then(
-      (result) => setStudents(result),
+      (result) => {
+        setStudents(result)
+        if (seedingRef.current) {
+          // WEB-36 — the explicit "already read" this file's own module
+          // comment calls for. The ordinary apply-on-courseId-change effect
+          // below fires off this very same `courseId` change too, but its
+          // closure over `personId` would still read the value from
+          // *before* `setPersonId` above lands (both effects fire in the
+          // same render) — left to run, it would read the whole course
+          // first and only correct itself, one further audited read later,
+          // once state caught up. `seedingRef` suppresses that one; this
+          // reads directly, with the seeded person this effect already
+          // knows, rather than trusting state to have caught up in time.
+          seedingRef.current = false
+          setError(undefined)
+          setLoading(true)
+          readTranscript(
+            organizationId,
+            courseId,
+            seededPersonId ? { personId: seededPersonId } : {}
+          ).then(
+            (searchResult) => {
+              setEntries(searchResult.entries)
+              refreshAccessLog()
+              setLoading(false)
+            },
+            (caught: unknown) => {
+              setLoading(false)
+              if (caught instanceof ApiError) setError(caught)
+              else throw caught
+            }
+          )
+        }
+      },
       (caught: unknown) => {
         if (caught instanceof ApiError) setError(caught)
         else throw caught
@@ -244,8 +413,18 @@ export function Transcripts({
   // change applies when the instructor presses "Apply filters" below, not
   // on every keystroke — ADMIN-2 audits every read, so this screen must
   // not fire one per character typed into a date field.
+  //
+  // WEB-36 — stands aside entirely while `seedingRef.current` is set: this
+  // fires off the exact same `courseId` change the seeding effect above
+  // does, in the same render, but `runSearch`'s own closure over `personId`
+  // would still read the value from before that effect's own `setPersonId`
+  // lands — left running, a route naming both a course and a person would
+  // read the whole course's transcript first and only correct itself,
+  // one further audited read later. The seeded read itself is issued
+  // explicitly, with the right person already known, once the seed
+  // actually finishes (the students-loading effect above).
   useEffect(() => {
-    if (courseId) void runSearch()
+    if (courseId && !seedingRef.current) void runSearch()
   }, [organizationId, courseId])
 
   // ADMIN-3's own "collect the file when it is ready" — polled while any
@@ -312,7 +491,16 @@ export function Transcripts({
           <select
             aria-label="Project"
             value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
+            onChange={(event) => {
+              setProjectId(event.target.value)
+              // WEB-36 — this screen's own module comment: there is no
+              // project id in the address, so changing the project itself
+              // never navigates — but it does clear `courseId` (the effect
+              // above, unchanged), which the address does name, so that
+              // address is corrected back to the bare landing screen rather
+              // than going on naming a course this screen no longer shows.
+              if (courseId) navigate({ kind: 'transcripts', organizationId })
+            }}
             className={textInputClasses}
           >
             <option value="">Choose a project…</option>
@@ -327,7 +515,18 @@ export function Transcripts({
           <select
             aria-label="Course"
             value={courseId}
-            onChange={(event) => setCourseId(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value
+              setCourseId(next)
+              // WEB-36 — the address names the screen (WEB-32/WEB-34):
+              // picking a course here is as real a navigation as clicking
+              // a transcript link from `components/CoursePeople.tsx`.
+              navigate(
+                next
+                  ? { kind: 'transcripts', organizationId, courseId: next }
+                  : { kind: 'transcripts', organizationId }
+              )
+            }}
             disabled={!projectId || courses === undefined}
             className={textInputClasses}
           >
@@ -350,7 +549,23 @@ export function Transcripts({
               <select
                 aria-label="Student"
                 value={personId}
-                onChange={(event) => setPersonId(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value
+                  setPersonId(next)
+                  // WEB-36 — same "the address names the screen" choice as
+                  // the course select above; `courseId` is always present
+                  // here (this select only renders once one is chosen).
+                  navigate(
+                    next
+                      ? {
+                          kind: 'transcripts',
+                          organizationId,
+                          courseId,
+                          personId: next,
+                        }
+                      : { kind: 'transcripts', organizationId, courseId }
+                  )
+                }}
                 className={textInputClasses}
               >
                 <option value="">Every student</option>

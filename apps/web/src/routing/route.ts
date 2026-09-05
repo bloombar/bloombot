@@ -70,11 +70,31 @@ export type ProjectsRoute =
       tab: CourseEditorTab
     }
 
+/**
+ * WEB-36 — a transcript link from `components/CoursePeople.tsx` names both
+ * the course and the person it points at, so the transcripts screen can
+ * open with the right one already read rather than three empty pickers.
+ * `personId` without a `courseId` is not a meaningful address (there is
+ * nothing for it to filter) — deliberately unrepresentable, not merely
+ * refused at parse time: the second variant is the only one that carries a
+ * `personId` at all, and it requires `courseId` alongside it, so a caller
+ * cannot construct the invalid pairing in the first place. The bare first
+ * variant is this screen's own long-standing landing address, unchanged.
+ */
+export type TranscriptsRoute =
+  | { kind: 'transcripts'; organizationId: string }
+  | {
+      kind: 'transcripts'
+      organizationId: string
+      courseId: string
+      personId?: string
+    }
+
 /** WEB-32 — every other organization-scoped drawer destination `pages/Shell.tsx` renders directly, plus Chat, whose `courseId` is optional (no course chosen yet — `pages/Chat.tsx`'s own module comment on what that renders). */
 export type OrganizationRoute =
   | ProjectsRoute
   | { kind: 'chat'; organizationId: string; courseId?: string }
-  | { kind: 'transcripts'; organizationId: string }
+  | TranscriptsRoute
   | { kind: 'discord'; organizationId: string }
   | { kind: 'team'; organizationId: string }
   | { kind: 'usage'; organizationId: string }
@@ -279,6 +299,21 @@ export function parseRoute(pathname: string): Route {
     if (rest.length === 1 && rest[0] === 'transcripts') {
       return { kind: 'transcripts', organizationId }
     }
+    // WEB-36 — a course, and optionally the one person within it, named
+    // directly in the address (`TranscriptsRoute`'s own comment on why a
+    // `personId` never appears without a `courseId`, here or anywhere else
+    // in this scheme).
+    if (rest.length === 2 && rest[0] === 'transcripts' && rest[1]) {
+      return { kind: 'transcripts', organizationId, courseId: rest[1] }
+    }
+    if (rest.length === 3 && rest[0] === 'transcripts' && rest[1] && rest[2]) {
+      return {
+        kind: 'transcripts',
+        organizationId,
+        courseId: rest[1],
+        personId: rest[2],
+      }
+    }
     if (rest.length === 1 && rest[0] === 'discord') {
       return { kind: 'discord', organizationId }
     }
@@ -349,7 +384,17 @@ export function buildPath(route: Route): string {
         ? `/o/${route.organizationId}/chat`
         : `/o/${route.organizationId}/chat/${route.courseId}`
     case 'transcripts':
-      return `/o/${route.organizationId}/transcripts`
+      // WEB-36 — both `TranscriptsRoute` variants share `kind: 'transcripts'`
+      // (`TranscriptsRoute`'s own comment on why `personId` alone is
+      // unrepresentable), so a `switch` on `route.kind` alone does not
+      // narrow between them — `'courseId' in route` does, the same way
+      // `route.tab`'s absence is checked elsewhere in this file by testing
+      // for the property rather than the (identical) `kind`.
+      return 'courseId' in route
+        ? route.personId === undefined
+          ? `/o/${route.organizationId}/transcripts/${route.courseId}`
+          : `/o/${route.organizationId}/transcripts/${route.courseId}/${route.personId}`
+        : `/o/${route.organizationId}/transcripts`
     case 'discord':
       return `/o/${route.organizationId}/discord`
     case 'team':
@@ -466,5 +511,12 @@ export function tabForRoute(route: ShellRoute): Tab {
  */
 export function routeForTab(tab: Tab, organizationId: string): ShellRoute {
   if (tab === 'account') return { kind: 'account' }
+  // WEB-36 — `'transcripts'` is spelled out on its own, same as
+  // `'account'` above: `TranscriptsRoute`'s own two variants no longer
+  // share one shape (the second carries a required `courseId`), so the
+  // generic `{ kind: tab, organizationId }` below no longer has a single
+  // type it can be for every `Tab` — this is always the bare landing
+  // address, never one naming a course.
+  if (tab === 'transcripts') return { kind: 'transcripts', organizationId }
   return { kind: tab, organizationId }
 }

@@ -56,7 +56,13 @@ describe('CoursePeople (WEB-22)', () => {
   it('shows the empty state for both lists when a course has no enrolments', async () => {
     listCourseEnrolments.mockResolvedValue([])
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
 
     expect(
       await screen.findByText('Nobody is enrolled yet.')
@@ -71,7 +77,13 @@ describe('CoursePeople (WEB-22)', () => {
       entry({ id: 'e1', source: 'discord_role' }),
     ])
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
 
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText(/Discord role/)).toBeInTheDocument()
@@ -90,7 +102,13 @@ describe('CoursePeople (WEB-22)', () => {
       entry({ id: 'e1', source: 'join_link', endedAt: Date.now() }),
     ])
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
 
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText(/Join link/)).toBeInTheDocument()
@@ -113,7 +131,13 @@ describe('CoursePeople (WEB-22)', () => {
       entry({ id: 'e1', personId: 'person-42', displayName: null }),
     ])
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
 
     expect(await screen.findByText('person-42')).toBeInTheDocument()
   })
@@ -121,7 +145,13 @@ describe('CoursePeople (WEB-22)', () => {
   it('ending confirms first, stating both halves of ENRL-6 — cancelling calls nothing', async () => {
     listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
     await screen.findByText('Ada Lovelace')
 
     fireEvent.click(
@@ -144,7 +174,13 @@ describe('CoursePeople (WEB-22)', () => {
       .mockResolvedValueOnce([entry({ id: 'e1', endedAt: Date.now() })])
     endCourseEnrolment.mockResolvedValue({ ended: true })
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
     await screen.findByText('Ada Lovelace')
 
     fireEvent.click(
@@ -185,7 +221,13 @@ describe('CoursePeople (WEB-22)', () => {
       .mockResolvedValueOnce([entry({ id: 'e1', endedAt: null })])
     reinstateCourseEnrolment.mockResolvedValue({ reinstated: true })
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
     await screen.findByText('Ada Lovelace')
 
     fireEvent.click(
@@ -214,7 +256,13 @@ describe('CoursePeople (WEB-22)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    renderWithModal(<CoursePeople organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
     await screen.findByText('Ada Lovelace')
 
     fireEvent.click(
@@ -230,5 +278,87 @@ describe('CoursePeople (WEB-22)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
     )
+  })
+
+  // WEB-36: every row's own name is a real link to that person's transcript
+  // for this course, in both lists — ending an enrolment never deleted the
+  // transcript (ENRL-6), and reading it afterwards is the point.
+  it('links an enrolled person’s name to their transcript, with a real href, and navigates in-app on click', async () => {
+    listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={navigate}
+      />
+    )
+
+    const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+    expect(link).toHaveAttribute(
+      'href',
+      '/o/org-1/transcripts/course-1/person-1'
+    )
+
+    fireEvent.click(link)
+
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'transcripts',
+      organizationId: 'org-1',
+      courseId: 'course-1',
+      personId: 'person-1',
+    })
+  })
+
+  it('links an ended enrolment’s name to their transcript exactly the same way', async () => {
+    listCourseEnrolments.mockResolvedValue([
+      entry({ id: 'e1', endedAt: Date.now() }),
+    ])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={navigate}
+      />
+    )
+
+    const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+    expect(link).toHaveAttribute(
+      'href',
+      '/o/org-1/transcripts/course-1/person-1'
+    )
+
+    fireEvent.click(link)
+
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'transcripts',
+      organizationId: 'org-1',
+      courseId: 'course-1',
+      personId: 'person-1',
+    })
+  })
+
+  // A modified click (here, a held Ctrl — the same as Cmd on macOS) is left
+  // entirely to the browser's own "open in a new tab" handling — this file's
+  // own `handleNameClick` comment on why intercepting it would be wrong.
+  it('does not intercept a modified click — the browser handles it, not navigate', async () => {
+    listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={navigate}
+      />
+    )
+
+    const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+    fireEvent.click(link, { ctrlKey: true })
+
+    expect(navigate).not.toHaveBeenCalled()
   })
 })

@@ -171,6 +171,10 @@ export function ProjectsPanel({
     <CourseEditor
       organizationId={organizationId}
       project={project}
+      // WEB-36 — `CoursePeople`'s own transcript link, threaded straight
+      // through (`CourseEditor`'s own module comment on why it takes this
+      // at all).
+      navigate={navigate}
       courseId={route.kind === 'course-editor' ? route.courseId : undefined}
       // WEB-35 — omitted entirely on `'new-course'`, rather than passed as
       // `undefined`: a course that does not exist yet has no tab address

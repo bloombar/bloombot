@@ -123,6 +123,7 @@ import type {
 import {
   COURSE_EDITOR_TABS as COURSE_EDITOR_TAB_IDS,
   type CourseEditorTab,
+  type Route,
 } from '../routing/route.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
@@ -162,6 +163,8 @@ export interface CourseEditorProps {
   tab?: CourseEditorTab
   /** WEB-35 — called when a tab control is clicked, so the caller (`pages/ProjectsPanel.tsx`) can push the new address; this component's own `activeTab` state updates immediately regardless, so a caller that ignores this (a unit test with no `navigate`) still sees the tab switch render. */
   onNavigateTab?: (tab: CourseEditorTab) => void
+  /** WEB-36 — threaded straight through to `components/CoursePeople.tsx`'s own People tab, so a click on a person's name there can push that person's transcript address; see that file's own module comment for the click itself. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
   onSaved: (course: Course) => void
   onCancel: () => void
 }
@@ -336,6 +339,7 @@ export function CourseEditor({
   courseId,
   tab,
   onNavigateTab,
+  navigate,
   onSaved,
   onCancel,
 }: CourseEditorProps) {
@@ -1573,6 +1577,7 @@ export function CourseEditor({
                 <CoursePeople
                   organizationId={organizationId}
                   courseId={courseId}
+                  navigate={navigate}
                 />
               </section>
             )}

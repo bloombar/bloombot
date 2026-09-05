@@ -31,9 +31,20 @@
  * is already told apart from another by a distinct id, and these are real
  * students' addresses, shown only where a screen genuinely cannot tell two
  * people apart without one, which is not the case here.
+ *
+ * WEB-36: every row's own name is also a real link to that person's
+ * transcript for this course (`routing/route.ts#TranscriptsRoute`) — a
+ * genuine `<a href>` (`buildPath`'s own output), so it can be copied,
+ * opened in a new tab, or read by assistive technology as a link, but its
+ * `onClick` navigates in-app (`onNavigateToTranscript`, a push, threaded
+ * down from `pages/CourseEditor.tsx`/`pages/ProjectsPanel.tsx`) rather than
+ * letting the browser reload the whole page for an address this app can
+ * already render without one. Both lists link identically — ending an
+ * enrolment never deleted the transcript (ENRL-6), and reading it
+ * afterwards is the point.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 
 import {
   ApiError,
@@ -42,6 +53,7 @@ import {
   reinstateCourseEnrolment,
 } from '../api/client.js'
 import type { CourseEnrolment } from '../api/types.js'
+import { buildPath, type Route } from '../routing/route.js'
 import { DisableIcon, RestoreIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
@@ -50,6 +62,8 @@ import { useModal } from './modal/ModalProvider.js'
 export interface CoursePeopleProps {
   organizationId: string
   courseId: string
+  /** WEB-36 — called with the address a row's own name links to, on an ordinary click (no modifier key, not a right-click — see `handleNameClick` below for why those are left to the browser's own new-tab/context-menu handling); pushes so Back returns to this People tab. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 const SOURCE_LABELS: Record<CourseEnrolment['source'], string> = {
@@ -63,7 +77,11 @@ function label(entry: CourseEnrolment): string {
   return entry.displayName ?? entry.personId
 }
 
-export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
+export function CoursePeople({
+  organizationId,
+  courseId,
+  navigate,
+}: CoursePeopleProps) {
   const [entries, setEntries] = useState<CourseEnrolment[] | undefined>(
     undefined
   )
@@ -155,6 +173,34 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
     }
   }
 
+  // WEB-36 — a genuine click (no modifier key held, and the primary button)
+  // navigates in-app; anything else (middle-click, Ctrl/Cmd-click,
+  // Shift-click, a right-click's context menu) is left entirely to the
+  // browser, which is exactly what a real `<a href>` already does for
+  // "open in a new tab" and friends — intercepting those would silently
+  // break behaviour a reader of a link reasonably expects.
+  const handleNameClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    entry: CourseEnrolment
+  ) => {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return
+    }
+    event.preventDefault()
+    navigate({
+      kind: 'transcripts',
+      organizationId,
+      courseId,
+      personId: entry.personId,
+    })
+  }
+
   if (loadError) return <ErrorMessage error={loadError} />
   if (!entries) return null
 
@@ -182,9 +228,21 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
                 className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
               >
                 <div>
-                  <p className="text-sm font-medium text-neutral-900">
+                  {/* WEB-36 — a real link (this file's own module comment
+                      on why the click still navigates in-app): the visible
+                      text is exactly `label(entry)`, unchanged. */}
+                  <a
+                    href={buildPath({
+                      kind: 'transcripts',
+                      organizationId,
+                      courseId,
+                      personId: entry.personId,
+                    })}
+                    onClick={(event) => handleNameClick(event, entry)}
+                    className="block text-sm font-medium text-neutral-900 underline-offset-2 hover:underline"
+                  >
                     {label(entry)}
-                  </p>
+                  </a>
                   <p className="text-sm text-neutral-500">
                     {SOURCE_LABELS[entry.source]} — admitted{' '}
                     {new Date(entry.createdAt).toLocaleString()}
@@ -223,9 +281,21 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
                 className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-3"
               >
                 <div>
-                  <p className="text-sm font-medium text-neutral-900">
+                  {/* WEB-36 — an ended enrolment links identically (this
+                      file's own module comment on why: ending never
+                      deletes the transcript, ENRL-6). */}
+                  <a
+                    href={buildPath({
+                      kind: 'transcripts',
+                      organizationId,
+                      courseId,
+                      personId: entry.personId,
+                    })}
+                    onClick={(event) => handleNameClick(event, entry)}
+                    className="block text-sm font-medium text-neutral-900 underline-offset-2 hover:underline"
+                  >
                     {label(entry)}
-                  </p>
+                  </a>
                   <p className="text-sm text-neutral-500">
                     {SOURCE_LABELS[entry.source]} — ended{' '}
                     {entry.endedAt !== null

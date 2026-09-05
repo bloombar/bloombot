@@ -4,14 +4,16 @@
  * and collected once ready.
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '../src/api/client.js'
 import { Transcripts } from '../src/pages/Transcripts.js'
 
 const {
   listProjects,
   listCourses,
+  getCourse,
   listTranscriptStudents,
   readTranscript,
   listTranscriptExports,
@@ -20,6 +22,7 @@ const {
 } = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listCourses: vi.fn(),
+  getCourse: vi.fn(),
   listTranscriptStudents: vi.fn(),
   readTranscript: vi.fn(),
   listTranscriptExports: vi.fn(),
@@ -35,6 +38,7 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     listProjects,
     listCourses,
+    getCourse,
     listTranscriptStudents,
     readTranscript,
     listTranscriptExports,
@@ -100,7 +104,9 @@ async function selectProjectAndCourse(
     ],
   })
 
-  render(<Transcripts organizationId="org-1" isOwner={isOwner} />)
+  render(
+    <Transcripts organizationId="org-1" isOwner={isOwner} navigate={vi.fn()} />
+  )
 
   const projectSelect = await screen.findByLabelText('Project')
   const { fireEvent } = await import('@testing-library/react')
@@ -201,7 +207,9 @@ describe('Transcripts (ADMIN-1)', () => {
       entries: [],
     })
 
-    render(<Transcripts organizationId="org-1" isOwner={false} />)
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={vi.fn()} />
+    )
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -265,7 +273,9 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" isOwner={false} />)
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={vi.fn()} />
+    )
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -308,7 +318,9 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" isOwner={false} />)
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={vi.fn()} />
+    )
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -347,7 +359,9 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" isOwner={false} />)
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={vi.fn()} />
+    )
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -391,7 +405,9 @@ describe('Transcripts (ADMIN-1)', () => {
       },
     ])
 
-    render(<Transcripts organizationId="org-1" isOwner={false} />)
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={vi.fn()} />
+    )
     const { fireEvent } = await import('@testing-library/react')
     fireEvent.change(await screen.findByLabelText('Project'), {
       target: { value: PROJECT.id },
@@ -456,5 +472,247 @@ describe('Transcripts — Access log (ADMIN-2)', () => {
       screen.queryByRole('heading', { name: 'Access log' })
     ).not.toBeInTheDocument()
     expect(listTranscriptAccessLog).not.toHaveBeenCalled()
+  })
+})
+
+// WEB-36: a transcript link (`components/CoursePeople.tsx`) opens this
+// screen with a course, and a person, already chosen and read — this
+// screen has no project id of its own in the address, so it is resolved
+// from the course via `getCourse`.
+describe('Transcripts — opened from a route-named course/person (WEB-36)', () => {
+  it('resolves the project from the route’s own course, selects both, and reads the transcript once — filtered to the named person', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    getCourse.mockResolvedValue({ ...COURSE, categories: [] })
+    listTranscriptStudents.mockResolvedValue([
+      { personId: 'person-1', personDisplayName: 'Alice' },
+    ])
+    listTranscriptExports.mockResolvedValue([])
+    listTranscriptAccessLog.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [
+        {
+          personId: 'person-1',
+          personDisplayName: 'Alice',
+          direction: 'from_person',
+          content: 'What is the deadline?',
+          createdAt: Date.now(),
+        },
+      ],
+    })
+
+    render(
+      <Transcripts
+        organizationId="org-1"
+        isOwner={false}
+        courseId={COURSE.id}
+        personId="person-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Project')).toHaveValue(PROJECT.id)
+    )
+    await waitFor(() =>
+      expect(screen.getByLabelText('Course')).toHaveValue(COURSE.id)
+    )
+    await waitFor(() =>
+      expect(screen.getByLabelText('Student')).toHaveValue('person-1')
+    )
+    expect(await screen.findByText('What is the deadline?')).toBeInTheDocument()
+    // Exactly one read — never an unfiltered whole-course read followed by
+    // a filtered one once state caught up (this screen's own module
+    // comment on why the ordinary apply-on-courseId-change effect stands
+    // aside here).
+    expect(readTranscript).toHaveBeenCalledTimes(1)
+    expect(readTranscript).toHaveBeenCalledWith('org-1', COURSE.id, {
+      personId: 'person-1',
+    })
+  })
+
+  it('resolves and reads a route-named course with no person named at all', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    getCourse.mockResolvedValue({ ...COURSE, categories: [] })
+    listTranscriptStudents.mockResolvedValue([])
+    listTranscriptExports.mockResolvedValue([])
+    listTranscriptAccessLog.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts
+        organizationId="org-1"
+        isOwner={false}
+        courseId={COURSE.id}
+        navigate={vi.fn()}
+      />
+    )
+
+    await waitFor(() =>
+      expect(readTranscript).toHaveBeenCalledWith('org-1', COURSE.id, {})
+    )
+    expect(readTranscript).toHaveBeenCalledTimes(1)
+  })
+
+  // A person linked from a disabled course must still resolve — this
+  // screen's course picker is otherwise limited to enabled courses only
+  // (ADMIN-1's own choice), so the seeded course is the one exception,
+  // added to the list rather than the picker landing empty.
+  it('a route-named disabled course still resolves and shows selected, despite the enabled-only course picker', async () => {
+    const disabledCourse = { ...COURSE, enabled: false }
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([disabledCourse])
+    getCourse.mockResolvedValue({ ...disabledCourse, categories: [] })
+    listTranscriptStudents.mockResolvedValue([])
+    listTranscriptExports.mockResolvedValue([])
+    listTranscriptAccessLog.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts
+        organizationId="org-1"
+        isOwner={false}
+        courseId={COURSE.id}
+        navigate={vi.fn()}
+      />
+    )
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Course')).toHaveValue(COURSE.id)
+    )
+    expect(
+      screen.getByRole('option', { name: COURSE.title })
+    ).toBeInTheDocument()
+  })
+
+  // Handled honestly (this screen's own module comment): a course id in
+  // the address this account cannot read renders the same `ErrorMessage`
+  // every other refusal on this screen already does, not a silently empty
+  // screen.
+  it('a route-named course this account cannot read renders the same ErrorMessage as any other refusal', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
+
+    render(
+      <Transcripts
+        organizationId="org-1"
+        isOwner={false}
+        courseId="course-missing"
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not found, or you do not have access to it.'
+    )
+  })
+
+  it('picking a different course pushes the address that names it', async () => {
+    const navigate = vi.fn()
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    listTranscriptExports.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={navigate} />
+    )
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'transcripts',
+      organizationId: 'org-1',
+      courseId: COURSE.id,
+    })
+  })
+
+  it('picking a student pushes the address naming that student', async () => {
+    const navigate = vi.fn()
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([
+      { personId: 'person-1', personDisplayName: 'Alice' },
+    ])
+    listTranscriptExports.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={navigate} />
+    )
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+    navigate.mockClear()
+    fireEvent.change(await screen.findByLabelText('Student'), {
+      target: { value: 'person-1' },
+    })
+
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'transcripts',
+      organizationId: 'org-1',
+      courseId: COURSE.id,
+      personId: 'person-1',
+    })
+  })
+
+  it('changing the project while a course is selected navigates back to the bare landing address', async () => {
+    const navigate = vi.fn()
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE])
+    listTranscriptStudents.mockResolvedValue([])
+    listTranscriptExports.mockResolvedValue([])
+    readTranscript.mockResolvedValue({
+      courseId: COURSE.id,
+      courseTitle: COURSE.title,
+      entries: [],
+    })
+
+    render(
+      <Transcripts organizationId="org-1" isOwner={false} navigate={navigate} />
+    )
+    fireEvent.change(await screen.findByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+    fireEvent.change(await screen.findByLabelText('Course'), {
+      target: { value: COURSE.id },
+    })
+    navigate.mockClear()
+
+    fireEvent.change(screen.getByLabelText('Project'), {
+      target: { value: PROJECT.id },
+    })
+
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'transcripts',
+      organizationId: 'org-1',
+    })
   })
 })

@@ -8845,3 +8845,74 @@ from the first draft. New unit coverage for round 1: `tests/routing.test.ts` (`i
 field, a changed `tab` prop alone moving the active tab, and the client-side `maxRequestsPerDay` refusal
 switching tabs from somewhere other than AI) — each confirmed red against the pre-rework code before the fix
 landed.
+
+## D-81 — `apps/web`: WEB-36 — a person in a course links to their transcript
+
+A person's own row in `components/CoursePeople.tsx` — both "Enrolled" and "Enrolment ended" — is now a real
+`<a href>` to their transcript for the course being looked at
+(`/o/:organizationId/transcripts/:courseId/:personId`, `routing/route.ts#TranscriptsRoute`), landing on
+`pages/Transcripts.tsx` with the course and person already chosen and the conversation already read, rather
+than three empty pickers a reader would have to reconstruct by hand. The click still navigates in-app (a
+push, so Back returns to the People tab) — the real `href` is what makes the link copyable, openable in a new
+tab, and readable as a link by assistive technology, exactly the brief's own three requirements; a plain click
+(no modifier key, primary button) intercepts and pushes, anything else (a modified click, a right-click) is
+left to the browser, the same restraint a hand-rolled link handler owes a native `<a>`'s own behaviour.
+
+**`personId` without `courseId` is unrepresentable, not merely refused.** `TranscriptsRoute` is two variants —
+the bare landing address, and one that requires `courseId` before `personId` can even appear — rather than
+three independently optional fields on one variant: a `personId` names nothing without a course to filter, so
+there is no shape in this type a caller could construct that means that. The cost is real: `route.kind ===
+'transcripts'` alone no longer discriminates `buildPath`'s `switch` (both variants share it), so the two call
+sites that need to tell them apart (`buildPath` itself, and `pages/Shell.tsx`'s own prop-spreading into
+`<Transcripts>`) use `'courseId' in route` instead of narrowing on `kind`, and `routeForTab` gained an explicit
+`'transcripts'` case next to its existing `'account'` one, since the generic `{ kind: tab, organizationId }`
+construction no longer type-checks for a tab whose route is no longer one uniform shape. Weighed against
+parsing a `personId`-without-`courseId` URL to `'not-found'` at runtime (cheaper here, but leaves the invalid
+pairing constructible everywhere else in the app, caught only if someone remembers to call `parseRoute` on it)
+— the type-level bar was worth the three call sites it costs, on this codebase's own "make the invalid state
+unrepresentable where it's cheap enough" discipline (`CourseEditorTab`'s own runtime guard is the parse-time
+version of the same instinct, used where a compile-time bar was not available).
+
+**Seeding a route into three effects that already exist to clear each other.** `pages/Transcripts.tsx` derives
+`courseId` from `projectId` and `personId` from `courseId` through two pre-existing effects whose whole job is
+clearing the one downstream of a change — a route-seeded value set directly into `useState` would be clobbered
+by exactly the effect its own `setProjectId` call was about to trigger. Fixed with two refs
+(`pendingCourseIdRef`/`pendingPersonIdRef`) that each clearing effect consults instead of unconditionally
+blanking: "seed this instead of clearing" rather than a seed racing a clear. A third ref (`seedingRef`) marks
+the window while a seed is still resolving, so the screen's own ordinary "read on courseId change" effect
+stands aside for that one change — its closure over `personId` would still read the pre-seed value in the same
+render the seeding effect's own `setPersonId` call lands in, which would have opened a route naming both a
+course and a person on the whole course's own unfiltered transcript for one audited read before correcting
+itself. The seeded read is issued explicitly instead, with the seeded `personId` rather than state. A course
+this account cannot read renders through the same `ErrorMessage` this screen already has for every other
+refusal (ADMIN-1's own `courses.get` policy is what actually enforces the refusal); a *disabled* course still
+resolves — the course picker's "enabled courses only" filter (unchanged) gets its one exception folded in for
+the seeded course alone, found through the same `getCourse` the seed already made, never by relaxing the
+filter for everyone.
+
+**Picking a course or person inside the screen also rewrites the address (push).** Consistent with WEB-32/
+WEB-34's "the address names the screen": a course or student chosen from this screen's own `<select>` is as
+real a navigation as a click on a `CoursePeople` link, so it pushes `routing/useRoute.ts`'s own `navigate`
+exactly as every other picker in this panel already does (`pages/Chat.tsx`'s own `onSelectCourse`, unchanged,
+is the direct precedent). The project picker is the one exception — there is no project id in the address at
+all (only a course names one, resolved via `getCourse`) — so changing it never navigates on its own, but it
+does still clear `courseId` (the pre-existing effect), and that clear is followed by a `navigate` back to the
+bare landing address, so the address never goes on naming a course this screen no longer shows underneath it.
+None of this fights the seeding effect above: `routing/useRoute.ts`'s own `navigate` already no-ops a call
+that would push the address already on screen, and the seeding effect only ever fires when the route names a
+course this screen has not already loaded internally — by the time a user's own pick pushes, `courseId`
+(state) and the route's own `courseId` already agree.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all clean (2461
+vitest passing, 90 node); `npx playwright test` 38/38 (one new case: `e2e/course-people-panel.spec.ts`'s own
+WEB-36 test, seeding two real enrolments and messages directly through `@bloombot/db`, then clicking through
+from the People panel to each one's transcript, active and ended alike). New unit coverage:
+`tests/routing.test.ts` (the two- and three-segment `transcripts` addresses round-trip, a `personId`-with-no-
+`courseId` four-segment path lands on `not-found`), `tests/course-people.test.tsx` (a row's own name links
+with the right `href` and navigates on a plain click, a modified click is left to the browser), and
+`tests/transcripts.test.tsx` (a route-seeded course and person opens read exactly once — not an unfiltered
+read followed by a filtered one — a route-seeded course alone reads the whole course, a disabled route-named
+course still resolves and shows selected, a course this account cannot read renders the same `ErrorMessage`,
+and picking a course, a student, or a different project each navigate the way this decision describes) — each
+confirmed red (or, for the routing round-trip, compile-failing) against the pre-slice code before the fix
+landed.

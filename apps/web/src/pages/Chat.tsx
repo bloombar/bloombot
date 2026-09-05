@@ -30,6 +30,7 @@ import { Button } from '../components/Button.js'
 import { ChatMessage } from '../components/ChatMessage.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { SendIcon, SuccessIcon } from '../icons.js'
+import { NotFound } from './NotFound.js'
 
 export interface ChatProps {
   organizationId: string
@@ -37,6 +38,8 @@ export interface ChatProps {
   courseId?: string
   /** WEB-32 — called when the reader picks a different course (the `<select>`, below); the caller navigates, which is what actually changes `courseId` above on the next render. Named for what it does, not what it sets — this component does not own the selection any more than a controlled `<input>` owns its own value. */
   onSelectCourse: (courseId: string) => void
+  /** WEB-32/WEB-34 — where `pages/NotFound.tsx` sends a reader whose address names a course this account cannot chat in (this file's own check, below): the organization's own bare `/o/:id/chat`, since that is the nearest screen they *can* reach. */
+  onClearCourse: () => void
   /** WEB-25 — set only when `courseId` above already names the course a just-completed join-link redemption resolved for this account in this organization (`pages/Shell.tsx`'s own condition for passing this at all): names the outcome plainly (`joinConfirmationText`, below) rather than leaving a redeemer to infer it from which course happens to be selected. `alreadyEnrolled` distinguishes "you're already enrolled" from a fresh join — ENRL-8's own "redeeming twice is a confirmation, not an error." */
   joinConfirmation?: { alreadyEnrolled: boolean }
 }
@@ -95,6 +98,7 @@ export function Chat({
   organizationId,
   courseId,
   onSelectCourse,
+  onClearCourse,
   joinConfirmation,
 }: ChatProps) {
   const [courses, setCourses] = useState<ChatCourse[] | undefined>(undefined)
@@ -113,6 +117,17 @@ export function Chat({
   // that has not (yet) picked one — the same "prop wins, state is only a
   // fallback" shape a controlled `<input>` already holds itself to.
   const selectedCourseId = courseId ?? autoSelectedCourseId
+  // WEB-32/WEB-34 — true once the course list is known and the address
+  // names a course that is not in it (a link to somebody else's course, or
+  // one this account's enrolment has since ended). Read by `loadMessages`
+  // below as well as by the render, so an address like that never issues a
+  // single request against the id it names — the server would refuse them
+  // anyway (`apps/api`'s own `routes/chat.ts` authorizes on an active
+  // enrolment), but there is nothing to ask for and nothing to show.
+  const routedCourseIsUnknown =
+    courseId !== undefined &&
+    courses !== undefined &&
+    !courses.some((candidate) => candidate.id === courseId)
   const [messages, setMessages] = useState<ChatMessageEntry[] | undefined>(
     undefined
   )
@@ -176,7 +191,14 @@ export function Chat({
   }, [organizationId])
 
   const loadMessages = useCallback(() => {
-    if (!selectedCourseId) return
+    // Waits for the course list as well as for a selection: until it has
+    // arrived there is no way to tell an address naming a real enrolment
+    // from one naming somebody else's course, and fetching on the optimistic
+    // reading is exactly what let a bad address issue reads against the id
+    // it named. Nothing is lost by waiting — `autoSelectedCourseId` (the
+    // only other source of a selection) is itself set from that same list.
+    if (!selectedCourseId || courses === undefined || routedCourseIsUnknown)
+      return
     setMessages(undefined)
     setMessagesError(undefined)
     // WEB-24: a freshly selected course's thread opens at its newest
@@ -193,7 +215,7 @@ export function Chat({
         else throw caught
       }
     )
-  }, [organizationId, selectedCourseId])
+  }, [organizationId, selectedCourseId, courses, routedCourseIsUnknown])
 
   useEffect(() => {
     loadMessages()
@@ -350,6 +372,19 @@ export function Chat({
         you.
       </p>
     )
+  }
+
+  // WEB-32/WEB-34 — an address may name any course id at all, and until
+  // this check nothing compared it against the list this account can
+  // actually chat in: a link naming a course they are not enrolled in
+  // rendered a *different* course's title (or an empty `<select>`) while
+  // every message went out against the id in the address. Deliberately the
+  // same treatment `pages/ProjectsPanel.tsx` already gives an unknown
+  // `projectId` — the server refuses the reads regardless
+  // (`apps/api`'s own `routes/chat.ts` authorizes on an active enrolment),
+  // so this is about telling the reader plainly rather than about access.
+  if (routedCourseIsUnknown) {
+    return <NotFound onHome={onClearCourse} />
   }
 
   // WEB-25/WEB-32 — named by title, not merely "this course": `courses`

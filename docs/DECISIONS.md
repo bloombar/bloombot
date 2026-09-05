@@ -8703,23 +8703,29 @@ can actually reach it. Not observed to matter in practice — TEN-1 gives every 
 first sign-in, so a real account always has at least one membership — but the router has to produce *some*
 address, and a real one is more honest than a malformed one.
 
-**LINK-10's forced-Chat treatment stays a render-time substitution, not a redirect.** A connected-but-not-a-member
-account reaching an organization-scoped address it may not see (say, `/o/:id/discord`) renders `Chat`'s content
-under that same URL — the address is not rewritten to `/o/:id/chat`. The brief's own words ("gets the same
-treatment it gets today") describe the pre-existing behaviour, which never changed the address either (it was
-component state, not a URL, so there was no address to change); keeping that exact shape avoids a second class
-of navigation (a same-render substitution that also rewrites history) this slice's brief did not ask for, at the
-cost of an address bar that can name a screen slightly different from what is rendered for this one relationship.
-`isMember`'s own server-side enforcement (`docs/DECISIONS.md` D-50) is what actually makes this safe either way.
+**LINK-10's forced-Chat treatment substitutes the screen *and* corrects the address.** A
+connected-but-not-a-member account reaching an organization-scoped address it may not see (say,
+`/o/:id/discord`) renders `Chat`, and `Shell` then replaces the address with `/o/:id/chat`. The first revision
+of this slice left the address alone — the pre-existing behaviour never changed an address either, because
+there was no address to change — but a review found the consequence that reasoning missed: with real URLs, a
+mismatch is no longer momentary. It is bookmarkable, shareable, and reproduced on every reload, so the reader
+is left with an address that names a screen they will never be shown. Replacing (never pushing) costs no
+history entry and keeps the two in agreement. `isMember`'s own server-side enforcement (`docs/DECISIONS.md`
+D-50) is what actually makes this safe either way; this is about honesty, not access.
 
-**A not-found address, and browser back into a dirty form, are both out of scope for `guardedNavigate` (WEB-16).**
-Every navigation this app *initiates* (a drawer item, the home control, an organization switch, a course row's
-Chat button) still goes through `guardedNavigate`, unchanged. Browser back/forward cannot be intercepted the same
-way — by the time `popstate` fires, the address has already changed — so a dirty `CourseEditor` form does not get
-a chance to confirm before the browser's own Back button navigates away from it. This is a real gap the brief
-did not ask this slice to close (it describes `guardedNavigate` as continuing to wrap "every navigation," which
-this reads as every navigation the app itself starts, not the browser's own history controls), left here as a
-known limit rather than silently discovered later.
+**Browser back into a dirty form is guarded, like every other navigation (WEB-16).** The first revision of
+this slice recorded the opposite — that `popstate` cannot be intercepted, since the address has already
+changed by the time it fires, and that the resulting gap was pre-existing. A review established it was
+neither. It was not pre-existing: before the panel had addresses it pushed no history entries at all, so Back
+left the *document*, and the `beforeunload` handler `hooks/useUnsavedChangesGuard.ts` registers while dirty
+produced the browser's own native "leave site?" prompt. Making Back an in-app navigation removed that prompt
+and put nothing in its place, silently discarding edits — a regression this slice introduced. And it is
+interceptable: `routing/useRoute.ts` re-`pushState`s the address it was on, runs the registered guard, and
+only honours the move once the guard resolves `true`. Confirming costs one history entry (the destination is
+pushed rather than popped to, since calling `history.back()` after the guard resolves would fire `popstate`
+again and ask a second time); refusing leaves the reader exactly where they were, screen and address both.
+`hooks/navigation-guard.tsx` grew a module-level mirror of the registered guard for this, because
+`useRoute` is called by `App.tsx`, which renders the provider *below* itself and so cannot read the context.
 
 **Existing e2e specs assuming "a reload always lands back on Projects" were the regression they claimed to be
 guarding against.** Three specs (`course-people-panel.spec.ts`, `join-links-panel.spec.ts` twice) reloaded mid-way
@@ -8734,6 +8740,18 @@ since "reload holds place" is this slice's own explicit requirement.
 **Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2401 vitest,
 90 node); `npm run e2e` 34/34 (31 pre-existing plus 3 new `tests/routing.test.ts` unit cases folded into vitest's
 own count, and 2 new `e2e/routing.spec.ts` cases); `npm run board:derive` leaves the manifest unchanged.
+
+**Four smaller corrections from the same review.** `navigate` treats a navigation to the address already on
+screen as a no-op — drawer items stay clickable while active, and pushing there stacked one identical entry
+per click, leaving Back apparently inert. `CourseEditor`'s `onSaved` replaces rather than pushes: it fires on
+every save, not only the first, so pushing stacked an entry per save and, after a create, left Back on the
+blank creation form for a course that already existed. `pages/Chat.tsx` validates the address's own `courseId`
+against the enrolled list and shows `NotFound` when it is not there, the same treatment `ProjectsPanel`
+already gave an unknown `projectId` — without it a link to somebody else's course rendered a *different*
+course's title while every read went out against the id in the address. And a deep link followed while signed
+out now rides along on the issued sign-in token (`SignIn`'s own `destination` prop, AUTH-6's same-origin check
+applied here too), so redeeming the emailed link lands on the bookmarked screen rather than on whatever home
+resolution would have picked.
 
 ## D-79 — `apps/web`: WEB-33 — the admin console's own screens, each its own address
 

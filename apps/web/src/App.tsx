@@ -483,5 +483,23 @@ export function App() {
     )
   }
 
-  return <SignIn onSignedIn={refreshSession} />
+  // WEB-34/AUTH-6 — a signed-out visitor who followed a bookmark or a
+  // shared link is asked to sign in, and the address they came for rides
+  // along on the issued token (`SignIn`'s own `destination` prop, exactly
+  // as `Connect`/`JoinLink`/`Invitation` already use it), so redeeming the
+  // emailed link lands them on that screen rather than on whatever
+  // `resolveHomeRoute` would have picked. Re-checked against
+  // `isSameOriginPath` here even though this value comes from this app's
+  // own address bar and `apps/api` checks it again at request time: the
+  // same "this app's own last checkpoint before it navigates" rule the
+  // sign-in redemption path above already follows.
+  const signedOutDestination = `${window.location.pathname}${window.location.search}`
+  return (
+    <SignIn
+      onSignedIn={refreshSession}
+      {...(route.kind !== 'home' && isSameOriginPath(signedOutDestination)
+        ? { destination: signedOutDestination }
+        : {})}
+    />
+  )
 }

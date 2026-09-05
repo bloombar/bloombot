@@ -318,6 +318,23 @@ function ShellInner({
   // the way any of the other tabs would be.
   const effectiveTab = isMember || activeTab === 'account' ? activeTab : 'chat'
 
+  // WEB-32/WEB-34 — and once that substitution has happened, correct the
+  // *address* to match the screen (review finding). Rendering Chat under a
+  // `/o/:id/discord` address left the two disagreeing, and a reload or a
+  // copied link reproduced the mismatch every time; replacing (never
+  // pushing) puts the reader on the address that names what they are
+  // actually looking at without adding a history entry they never asked
+  // for. Nothing here decides *access* — `navGroups` still withholds the
+  // organization group, and the server refuses these reads for a
+  // non-member regardless.
+  useEffect(() => {
+    if (effectiveTab === activeTab) return
+    navigate(
+      { kind: 'chat', organizationId: activeOrganizationId },
+      { replace: true }
+    )
+  }, [effectiveTab, activeTab, activeOrganizationId, navigate])
+
   // TEN-8: read the organization's actual Discord binding on mount and on
   // every organization switch — `isMember` guards it the same way it guards
   // `navItems` below, since a caller with no membership would only have
@@ -711,6 +728,11 @@ function ShellInner({
               courseId,
             })
           }
+          // WEB-32/WEB-34 — where `Chat`'s own not-found screen sends a
+          // reader whose address names a course they cannot chat in.
+          onClearCourse={() =>
+            navigate({ kind: 'chat', organizationId: activeOrganizationId })
+          }
           {...(joinedCourse &&
           joinedCourse.organizationId === activeOrganizationId &&
           route.kind === 'chat' &&
@@ -773,8 +795,10 @@ function ShellInner({
         // on why `effectiveTab` permits it for a non-member too), so unlike
         // every tab above it takes no `key={activeOrganizationId}`: an
         // organization switch made *from* this screen
-        // (`onSwitchOrganization`, below) must not remount it out from under
-        // itself mid-switch.
+        // (`onSwitchOrganization`, below) navigates away from `/account`
+        // altogether now (WEB-32 — `changeActiveOrganization` moves to the
+        // new organization's own screen), so there is no mid-switch remount
+        // for a key to protect against in the first place.
         <Account
           account={account}
           activeOrganizationId={activeOrganizationId}

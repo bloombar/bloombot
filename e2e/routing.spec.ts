@@ -182,3 +182,54 @@ test('an address naming nothing this panel recognises renders the not-found scre
   await page.goto('/o/00000000-0000-0000-0000-000000000000/projects')
   await expect(page.getByTestId('not-found-page')).toBeVisible()
 })
+
+test("the browser's own Back button asks before leaving a dirty course form, and honours the answer (WEB-34, WEB-16)", async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web34-guard-${suffix}@example.edu`
+
+  await signInFreshAccount(page, email)
+  const organizationId = findPersonalOrganizationId(email)
+  const { projectId, courseId, courseTitle } = seedProjectAndCourse(
+    organizationId,
+    suffix
+  )
+  const projectName = `Fall 2026 — ${suffix}`
+
+  // Open the course from its project, so there is a real previous entry for
+  // Back to return to, and make the form dirty.
+  await page.goto(`/o/${organizationId}/projects/${projectId}`)
+  await page.getByRole('button', { name: courseTitle, exact: true }).click()
+  await expect(page).toHaveURL(
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+  )
+  await page.getByLabel('Title').fill(`${courseTitle} (edited)`)
+
+  // Back, refused: the confirmation appears, "Keep editing" leaves the
+  // editor exactly where it was — the edit still in the field, the address
+  // still the course's own.
+  await page.goBack()
+  await expect(
+    page.getByRole('heading', { name: 'Discard unsaved changes?' })
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Keep editing' }).click()
+  await expect(page).toHaveURL(
+    `/o/${organizationId}/projects/${projectId}/courses/${courseId}`
+  )
+  await expect(page.getByLabel('Title')).toHaveValue(`${courseTitle} (edited)`)
+
+  // Back again, confirmed this time: now it leaves, and lands on the screen
+  // Back actually named. Without the guard in `routing/useRoute.ts` the
+  // first Back above would have done this silently, discarding the edit
+  // with nothing asked.
+  await page.goBack()
+  await expect(
+    page.getByRole('heading', { name: 'Discard unsaved changes?' })
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Discard changes' }).click()
+  await expect(page).toHaveURL(`/o/${organizationId}/projects/${projectId}`)
+  await expect(
+    page.getByRole('heading', { name: projectName, level: 1 })
+  ).toBeVisible()
+})

@@ -64,7 +64,16 @@ export function ProjectsPanel({
   // plain `'projects'`, which names no project to resolve and renders
   // `Projects` directly, below, without paying for this fetch at all.
   useEffect(() => {
-    if (route.kind === 'projects') return
+    // Cleared, not merely skipped, on the way back to `'projects'` (review
+    // finding): returning early while a previous project's `'ready'`
+    // resolution is still in state meant the *next* project opened rendered
+    // `<Courses project={previous}>` for one commit — the old project's
+    // heading flashed, and its `courses.list` was issued — before this
+    // effect's own `setResolution({ status: 'loading' })` below took hold.
+    if (route.kind === 'projects') {
+      setResolution({ status: 'loading' })
+      return
+    }
     let stale = false
     setResolution({ status: 'loading' })
     listProjects(organizationId, true).then(
@@ -166,13 +175,25 @@ export function ProjectsPanel({
           projectId: project.id,
         })
       }
+      // WEB-34 — `replace`, never a push: `CourseEditor` calls `onSaved` on
+      // *every* save, not only the first, so pushing would stack one
+      // identical entry per save and leave Back apparently dead for as many
+      // presses as the instructor made saves. Worse after a *create*: the
+      // entry underneath is the blank `new-course` form, so one Back landed
+      // on an empty creation screen for a course that already exists, where
+      // saving again would create a duplicate. Replacing keeps the address
+      // honest (the saved course's own) while leaving the entry behind it
+      // the screen the instructor actually came from.
       onSaved={(course: Course) =>
-        navigate({
-          kind: 'course-editor',
-          organizationId,
-          projectId: project.id,
-          courseId: course.id,
-        })
+        navigate(
+          {
+            kind: 'course-editor',
+            organizationId,
+            projectId: project.id,
+            courseId: course.id,
+          },
+          { replace: true }
+        )
       }
     />
   )

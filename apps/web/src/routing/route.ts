@@ -223,6 +223,14 @@ export function parseRoute(pathname: string): Route {
  * WEB-32 — the builder half, `parseRoute`'s exact inverse: nothing in this
  * app hand-concatenates a path, it builds a `Route` value and calls this.
  */
+// The ids interpolated below are never escaped, deliberately: every one of
+// them is a server-generated UUID (`crypto.randomUUID()`, `@bloombot/db`'s
+// own repos), so there is no URL-significant character for
+// `encodeURIComponent` to escape, and escaping would only make the address
+// bar harder to read for the ids this app actually builds. An id from
+// anywhere else does not reach this function — an address a *visitor*
+// typed goes through `parseRoute`, which never hands its segments back to
+// `buildPath` without a matching route first.
 export function buildPath(route: Route): string {
   switch (route.kind) {
     case 'home':

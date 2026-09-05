@@ -218,17 +218,79 @@ afterEach(() => {
 })
 
 describe('Shell (WEB-3, WEB-4)', () => {
-  // WEB-32/WEB-34 rework — "which organization a *fresh mount* opens on"
-  // (an install that just completed for a different organization than the
-  // first membership, a defensively-ignored `justInstalled`/`joinedCourse`
-  // naming an organization this account cannot reach, a redeemed join link
-  // opening directly on Chat) is `App.tsx`'s own `resolveHomeRoute` now, not
-  // anything `Shell` decides — those cases moved to `tests/app.test.tsx`'s
-  // own "App — / home resolution" describe block, which drives the real
-  // round trip (a Discord callback, a redeemed join link) rather than a
-  // prop this component no longer reads for that purpose. `justInstalled`
-  // remains a real `Shell` prop (the Discord tab's own *immediate* install
-  // signal, TEN-8 below) — only the organization-selection use of it moved.
+  // WEB-25/WEB-32, moved here from `tests/chat.test.tsx` (review finding):
+  // the invariant is "the join-confirmation banner names the *joined*
+  // course, never whichever one is merely selected", and since WEB-32 it is
+  // enforced by `Shell` — it passes `joinConfirmation` to `Chat` only while
+  // `route.courseId` still names the course the redemption resolved. The
+  // test that used to guard it reproduced that same condition inside its own
+  // wrapper component, so it held by construction and stayed green with the
+  // real gate deleted. Driven through `Shell` here instead: deleting the
+  // `route.courseId === joinedCourse.courseId` clause from `Shell.tsx` makes
+  // this fail, which is the whole point of it.
+  it('the join-confirmation banner is dropped once the reader selects a different course, rather than following them and naming the wrong one (WEB-25)', async () => {
+    listChatCourses.mockResolvedValue([
+      { id: 'course-1', title: 'Intro to Testing' },
+      { id: 'course-2', title: 'Advanced Testing' },
+    ])
+
+    renderShell({
+      account: CONNECTED_NON_MEMBER_ACCOUNT,
+      onSignedOut: vi.fn(),
+      joinedCourse: {
+        organizationId: 'institution-org',
+        courseId: 'course-2',
+        alreadyEnrolled: false,
+      },
+      route: {
+        kind: 'chat',
+        organizationId: 'institution-org',
+        courseId: 'course-2',
+      },
+    })
+
+    const banner = await screen.findByTestId('join-confirmation')
+    expect(banner).toHaveTextContent("You're enrolled in Advanced Testing.")
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Course' }), {
+      target: { value: 'course-1' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: 'Course' })).toHaveValue(
+        'course-1'
+      )
+    })
+    expect(screen.queryByTestId('join-confirmation')).not.toBeInTheDocument()
+  })
+
+  // WEB-32/WEB-34 (review finding) — a connected-only account is forced to
+  // Chat for an organization-scoped screen it cannot see, and the *address*
+  // is corrected to match rather than left naming a screen that is not on
+  // display. Rendered directly rather than through `renderShell`, so the
+  // `navigate` this asserts on is a spy: the harness's own `navigate` only
+  // moves its state, and the correction is precisely a call `Shell` makes
+  // rather than a screen it renders.
+  it('an address naming a screen a connected-only account cannot see is replaced with the chat address it actually renders', async () => {
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <Shell
+        account={CONNECTED_NON_MEMBER_ACCOUNT}
+        onSignedOut={vi.fn()}
+        route={{ kind: 'discord', organizationId: 'institution-org' }}
+        navigate={navigate}
+      />
+    )
+
+    expect(await screen.findByTestId('chat-screen')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(navigate).toHaveBeenCalledWith(
+        { kind: 'chat', organizationId: 'institution-org' },
+        { replace: true }
+      )
+    })
+  })
 
   it('carries the actively selected organization into every request, not the one Shell mounted with (WEB-3)', async () => {
     beginDiscordInstall.mockResolvedValue({

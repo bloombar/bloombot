@@ -74,6 +74,15 @@ const ROUTES: Route[] = [
   { kind: 'chat', organizationId: 'org-1' },
   { kind: 'chat', organizationId: 'org-1', courseId: 'course-1' },
   { kind: 'transcripts', organizationId: 'org-1' },
+  // WEB-36 — a transcript link names a course, and optionally the one
+  // person within it, directly in the address.
+  { kind: 'transcripts', organizationId: 'org-1', courseId: 'course-1' },
+  {
+    kind: 'transcripts',
+    organizationId: 'org-1',
+    courseId: 'course-1',
+    personId: 'person-1',
+  },
   { kind: 'discord', organizationId: 'org-1' },
   { kind: 'team', organizationId: 'org-1' },
   { kind: 'usage', organizationId: 'org-1' },
@@ -165,6 +174,11 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     // reaching `getCourse(org, 'new')`.
     '/o/org-1/projects/proj-1/courses/new/general',
     '/o/org-1/nope',
+    // WEB-36 — a `personId` without a `courseId` names nothing meaningful
+    // (`TranscriptsRoute`'s own comment on why); this scheme's segment
+    // count never has a slot for one without the other, so this is really
+    // just an unrecognised four-segment path, same as any other.
+    '/o/org-1/transcripts/course-1/person-1/extra',
     '/sign-in',
     '/sign-in/',
     '/connect',

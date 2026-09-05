@@ -752,10 +752,20 @@ function ShellInner({
         // own module comment) is the same shape Usage/Team already take,
         // one level below — this screen decides whether to fetch or render
         // the Access log section at all.
+        // WEB-36 — `route.courseId`/`route.personId` seed this screen from
+        // a transcript link elsewhere in the app (or a bookmarked
+        // address); `route.kind !== 'transcripts'` only when `effectiveTab`
+        // forced this tab for a non-member (LINK-10, above), which names no
+        // course either. `navigate` is the same one this whole shell
+        // already threads everywhere else.
         <Transcripts
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
           isOwner={isOwner}
+          {...(route.kind === 'transcripts' && 'courseId' in route
+            ? { courseId: route.courseId, personId: route.personId }
+            : {})}
+          navigate={navigate}
         />
       ) : effectiveTab === 'usage' ? (
         // COST-3/COST-4 — the same `key={activeOrganizationId}` reasoning

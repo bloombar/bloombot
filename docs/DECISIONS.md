@@ -9023,4 +9023,17 @@ checkout, and Node's own upward `node_modules` search otherwise resolves `@bloom
 copy instead of this branch's, which briefly produced misleading `filePrefix`-required errors that had
 nothing to do with this change). `runMigrations` applied to a throwaway database under `tmp/` (never
 `data/data.db`) confirmed `courses` has no `file_prefix` column afterward and that `createCourse` still saves
-and round-trips a course with no prefix anywhere in the result.
+and round-trips a course with no prefix anywhere in the result. `tests/migrate.test.ts` gained a fourth
+migration-replay test in the same "seed what a real deployment already has, apply the real migration on top"
+shape as its 0002/0013/0016 tests — seeded through 0022 with a `courses` row carrying `file_prefix` and every
+sibling column filled in, run to head, asserting the column is gone and every other column on that row
+survived unchanged; confirmed red (`not.toContain('file_prefix')` failing) with the migration file and its
+journal entry pulled out, green again with them restored.
+
+**A pre-deploy browser tab that still posts `filePrefix` on Save gets a hard, visible refusal, not silence.**
+`saveInputSchema` is `z.strictObject` (D-53/D-54's own reasoning, extended to this schema), so an old tab's
+`courses.save` call carrying the now-unrecognized key raises Zod's `unrecognized_keys` with an empty `path` —
+`FIELD_TABS` has nothing to map that empty path to, so no tab switch happens, but the top-level `ErrorMessage`
+this panel already renders for every refusal (WEB-5) still shows it. Transient by nature — the tab only posts
+the stale shape until it reloads once — and no worse than any other field this same schema already refuses
+outright rather than silently drops, so this is left as encountered rather than treated as a gap to close.

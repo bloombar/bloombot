@@ -212,9 +212,9 @@ export const courses = sqliteTable(
       .notNull()
       .references(() => projects.id),
     title: text('title').notNull(),
-    // CFG-1 — the prefix used to locate this course's roster and
-    // questionnaire CSV files.
-    filePrefix: text('file_prefix').notNull(),
+    // ROST-13 — no `file_prefix` column: the platform now owns a course's
+    // uploads and imports directly, so nothing reads a CSV-file prefix any
+    // more. Dropped by migration `0023_cute_scarecrow.sql`.
     // A disabled course routes nothing — the database equivalent of
     // commenting a course out of `bot_config.yml` (CFG-1) — and is excluded
     // from the PROJ-3 name-collision check below, the same way a course in an

@@ -78,7 +78,6 @@ function seedRosterAdmittedCourse(
     {
       projectId: project.id,
       title: courseTitle,
-      filePrefix: 'testing',
       enabled: true,
       adminsRole: `Staff-${unique}`,
       studentsRole: `Students-${unique}`,

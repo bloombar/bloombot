@@ -523,7 +523,6 @@ describe('MCP-4 — a destructive tool asks first', () => {
             id: courseId,
             projectId,
             title: 'Intro to Testing',
-            filePrefix: 'tc',
             enabled: true,
             adminsRole: 'admins',
             studentsRole: 'students',

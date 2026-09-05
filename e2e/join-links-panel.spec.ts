@@ -88,7 +88,6 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`wd-${suffix}`)
   await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
@@ -286,7 +285,6 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`w23-${suffix}`)
   await page.getByLabel('Admins role').fill(`admins-w23-${suffix}`)
   await page.getByLabel('Students role').fill(`students-w23-${suffix}`)
   await page.getByLabel('Enabled').check()
@@ -391,7 +389,6 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`e12-${suffix}`)
   await page.getByLabel('Admins role').fill(`admins-e12-${suffix}`)
   await page.getByLabel('Students role').fill(`students-e12-${suffix}`)
   await page.getByLabel('Enabled').check()

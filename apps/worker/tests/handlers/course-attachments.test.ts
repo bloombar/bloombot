@@ -146,7 +146,6 @@ describe('courseAttachments.attach handler', () => {
           testDb.db
         )!.projectId,
         title: 'Test Course',
-        filePrefix: 'tc',
         enabled: true,
         adminsRole: seeded.adminsRole,
         studentsRole: seeded.studentsRole,
@@ -335,7 +334,6 @@ describe('courseAttachments.attach handler', () => {
           testDb.db
         )!.projectId,
         title: 'Test Course',
-        filePrefix: 'tc',
         enabled: true,
         adminsRole: seeded.adminsRole,
         studentsRole: seeded.studentsRole,
@@ -598,7 +596,6 @@ describe('courseAttachments.detach handler', () => {
           testDb.db
         )!.projectId,
         title: 'Test Course',
-        filePrefix: 'tc',
         enabled: true,
         adminsRole: seeded.adminsRole,
         studentsRole: seeded.studentsRole,
@@ -688,7 +685,6 @@ describe('courseAttachments.detach handler', () => {
           testDb.db
         )!.projectId,
         title: 'Test Course',
-        filePrefix: 'tc',
         enabled: true,
         adminsRole: seeded.adminsRole,
         studentsRole: seeded.studentsRole,

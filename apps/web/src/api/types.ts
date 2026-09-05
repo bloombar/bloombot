@@ -214,7 +214,6 @@ export interface CourseSummary {
   organizationId: string
   projectId: string
   title: string
-  filePrefix: string
   enabled: boolean
   adminsRole: string
   studentsRole: string

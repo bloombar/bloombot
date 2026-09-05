@@ -885,7 +885,6 @@ describe('discordServers.scaffold handler', () => {
       {
         projectId: otherProject.id,
         title: 'Course B',
-        filePrefix: 'cb',
         enabled: true,
         adminsRole: 'course-b-admins',
         studentsRole: 'course-b-students',
@@ -1195,7 +1194,6 @@ describe('discordServers.scaffold handler', () => {
         {
           projectId: course.projectId,
           title: course.title,
-          filePrefix: course.filePrefix,
           enabled: course.enabled,
           adminsRole: course.adminsRole,
           studentsRole: course.studentsRole,

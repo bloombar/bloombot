@@ -81,7 +81,6 @@ function seedProjectAndCourse(
       {
         projectId: project.id,
         title: courseTitle,
-        filePrefix: `t-${suffix}`,
         enabled: true,
         adminsRole: `admins-${suffix}`,
         studentsRole: `students-${suffix}`,

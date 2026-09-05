@@ -125,7 +125,6 @@ describe('importConfig (MIG-2)', () => {
       {
         projectId: first.projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',

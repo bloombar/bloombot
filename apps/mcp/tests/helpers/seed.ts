@@ -81,7 +81,6 @@ export function seedCourse(
     {
       projectId: project.id,
       title: options.title ?? 'Test Course',
-      filePrefix: 'tc',
       enabled: true,
       adminsRole: `admins-${randomUUID()}`,
       studentsRole: `students-${randomUUID()}`,

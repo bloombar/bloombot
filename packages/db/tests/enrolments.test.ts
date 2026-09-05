@@ -42,7 +42,6 @@ function seedOrganizationWithCourse(
     {
       projectId: project.id,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: 'admins-wd-fa26',
       studentsRole: 'students-wd-fa26',
@@ -73,7 +72,6 @@ describe('enrolments repo (ENRL-1..6)', () => {
         {
           projectId: project.id,
           title: 'Data Structures',
-          filePrefix: 'ds',
           enabled: true,
           adminsRole: 'admins-ds-fa26',
           studentsRole: 'students-ds-fa26',

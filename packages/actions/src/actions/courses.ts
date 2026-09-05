@@ -93,7 +93,6 @@ const saveInputSchema = z.strictObject({
   id: z.string().min(1).optional(),
   projectId: z.string().min(1),
   title: z.string().min(1),
-  filePrefix: z.string().min(1),
   enabled: z.boolean(),
   adminsRole: z.string().min(1),
   studentsRole: z.string().min(1),
@@ -198,7 +197,6 @@ export const saveCourseAction: Action<
       // off `NewCourse` at all; `createCourse` generates its own.
       projectId: entity.project.id,
       title: input.title,
-      filePrefix: input.filePrefix,
       enabled: input.enabled,
       adminsRole: input.adminsRole,
       studentsRole: input.studentsRole,

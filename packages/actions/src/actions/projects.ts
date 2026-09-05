@@ -386,7 +386,7 @@ export const duplicateProjectAction: Action<
           {
             projectId: newProject.id,
             title: source.title,
-            filePrefix: source.filePrefix,
+            // ROST-13 — no `filePrefix` to copy: the column is gone.
             enabled: false, // PROJ-3 decision, above.
             adminsRole: source.adminsRole,
             studentsRole: source.studentsRole,

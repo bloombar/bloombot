@@ -56,7 +56,6 @@ function seedCourse(organizationId: string, db: Database): string {
     {
       projectId: project.id,
       title: 'Test Course',
-      filePrefix: 'tc',
       enabled: true,
       adminsRole: 'admins-tc',
       studentsRole: 'students-tc',

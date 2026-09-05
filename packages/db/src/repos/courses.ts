@@ -85,7 +85,6 @@ export interface NewCourse {
   id?: string
   projectId: string
   title: string
-  filePrefix: string
   enabled: boolean
   adminsRole: string
   studentsRole: string
@@ -585,7 +584,6 @@ export function createCourse(
         organizationId,
         projectId: input.projectId,
         title: input.title,
-        filePrefix: input.filePrefix,
         enabled: input.enabled,
         adminsRole: input.adminsRole,
         studentsRole: input.studentsRole,
@@ -845,7 +843,6 @@ export function updateCourse(
       .set({
         projectId: input.projectId,
         title: input.title,
-        filePrefix: input.filePrefix,
         enabled: input.enabled,
         adminsRole: input.adminsRole,
         studentsRole: input.studentsRole,

@@ -76,7 +76,6 @@ function seedEnrolledCourse(
     {
       projectId: project.id,
       title: 'Intro to Testing',
-      filePrefix: 'testing',
       enabled: true,
       adminsRole: `Staff-${unique}`,
       studentsRole: `Students-${unique}`,

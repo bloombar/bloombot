@@ -122,7 +122,6 @@ test('an instructor reads their course’s transcript in the panel, and it is wr
         {
           projectId: project.id,
           title: courseTitle,
-          filePrefix: `oh-${suffix}`,
           enabled: true,
           adminsRole: `admins-${suffix}`,
           studentsRole: `students-${suffix}`,
@@ -246,7 +245,6 @@ test('a platform administrator deletes a tenant’s data, confirmed by typing it
         {
           projectId: project.id,
           title: 'A Course',
-          filePrefix: `ac-${suffix}`,
           enabled: true,
           adminsRole: `admins-${suffix}`,
           studentsRole: `students-${suffix}`,

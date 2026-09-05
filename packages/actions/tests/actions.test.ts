@@ -56,7 +56,6 @@ function courseSaveInput(
   overrides: Partial<{
     id: string
     title: string
-    filePrefix: string
     enabled: boolean
     adminsRole: string
     studentsRole: string
@@ -76,7 +75,6 @@ function courseSaveInput(
   return {
     projectId,
     title: overrides.title ?? 'Web Design',
-    filePrefix: overrides.filePrefix ?? 'wd',
     enabled: overrides.enabled ?? true,
     adminsRole: overrides.adminsRole ?? 'admins-wd-fa26',
     studentsRole: overrides.studentsRole ?? 'students-wd-fa26',
@@ -349,7 +347,6 @@ describe('projects.archive / projects.unarchive', () => {
       organizationId,
       courseSaveInput(projectB.id, {
         title: 'Course B',
-        filePrefix: 'b',
         adminsRole: 'admins-shared',
         studentsRole: 'students-b',
         categories: [{ name: 'B-cat', channels: [] }],
@@ -512,7 +509,6 @@ describe('courses.save', () => {
       saveCourseAction,
       courseSaveInput(projectId, {
         title: 'Data Science',
-        filePrefix: 'ds',
         adminsRole: 'admins-ds-fa26',
         // Colliding with Web Design's admins role — PROJ-3's shared pool of
         // role names, not a self-conflict (its own admin role is distinct).
@@ -821,7 +817,6 @@ describe('courses.enable / courses.disable', () => {
       organizationId,
       courseSaveInput(projectId, {
         title: 'Course B',
-        filePrefix: 'b',
         adminsRole: 'admins-shared',
         studentsRole: 'students-b',
         categories: [{ name: 'B-cat', channels: [] }],

@@ -55,7 +55,6 @@ function seedTwoOrganizations(testDatabase: TestDatabase) {
     {
       projectId: projectA.id,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: 'admins-wd',
       studentsRole: 'students-wd',
@@ -68,7 +67,6 @@ function seedTwoOrganizations(testDatabase: TestDatabase) {
     {
       projectId: projectB.id,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: 'admins-wd',
       studentsRole: 'students-wd',
@@ -270,7 +268,6 @@ describe('conversations repo', () => {
       {
         projectId: project.id,
         title: 'Data Structures',
-        filePrefix: 'ds',
         enabled: true,
         adminsRole: 'admins-ds',
         studentsRole: 'students-ds',

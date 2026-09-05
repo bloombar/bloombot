@@ -71,7 +71,11 @@ function toNewCourse(
   return {
     projectId,
     title: course.title,
-    filePrefix: course.file_prefix,
+    // ROST-13 — `course.file_prefix` is still a required key on the legacy
+    // YAML shape (`legacy-yaml.ts` has not changed, since that describes a
+    // file format that already exists on disk), but `NewCourse` has no
+    // column left to carry it into, so it is never referenced here at all —
+    // present in the source config, never forwarded.
     enabled: true,
     adminsRole: course.roles.admins,
     studentsRole: course.roles.students,

@@ -95,7 +95,6 @@ function createExtraCourse(
     {
       projectId: project.id,
       title: 'Extra Course',
-      filePrefix: `ec-${randomUUID().slice(0, 8)}`,
       enabled: true,
       adminsRole: `admins-${randomUUID()}`,
       studentsRole: `students-${randomUUID()}`,
@@ -1117,7 +1116,6 @@ describe('handleMention — TEN-9: routing never crosses a Discord server bounda
       {
         projectId: firstCourse.projectId,
         title: firstCourse.title,
-        filePrefix: firstCourse.filePrefix,
         enabled: firstCourse.enabled,
         adminsRole: firstCourse.adminsRole,
         studentsRole: firstCourse.studentsRole,
@@ -1149,7 +1147,6 @@ describe('handleMention — TEN-9: routing never crosses a Discord server bounda
       {
         projectId: otherProject.id,
         title: 'Other Server Course',
-        filePrefix: `osc-${randomUUID().slice(0, 8)}`,
         enabled: true,
         adminsRole: `admins-${randomUUID()}`,
         studentsRole: `students-${randomUUID()}`,

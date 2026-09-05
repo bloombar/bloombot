@@ -103,7 +103,6 @@ test('a project and course defined entirely in the panel route and answer a matc
   //    (CFG-4) — the two names that decide routing (WEB-9) — and enable it.
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`wd-${suffix}`)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByRole('button', { name: 'Add category' }).click()
@@ -299,7 +298,6 @@ test("a course's settings tabs are real addresses — switching, reloading and s
       {
         projectId: project.id,
         title: `Web Design — ${suffix}`,
-        filePrefix: `wd-${suffix}`,
         enabled: true,
         adminsRole: `admins-${suffix}`,
         studentsRole: `students-${suffix}`,

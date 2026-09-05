@@ -152,7 +152,6 @@ describe('projects repo', () => {
         {
           projectId: project.id,
           title: 'Web Design',
-          filePrefix: 'wd',
           enabled: true,
           adminsRole: 'admins-wd-fa26',
           studentsRole: 'students-wd-fa26',
@@ -294,7 +293,6 @@ describe('projects repo', () => {
         {
           projectId: original.id,
           title: 'Web Design',
-          filePrefix: 'wd',
           enabled: true,
           adminsRole: 'admins-wd-fa26',
           studentsRole: 'students-wd-fa26',
@@ -316,7 +314,6 @@ describe('projects repo', () => {
         {
           projectId: other.id,
           title: 'Data Science',
-          filePrefix: 'ds',
           enabled: true,
           adminsRole: 'admins-wd-fa26',
           studentsRole: 'students-ds-fa26',
@@ -351,7 +348,6 @@ describe('projects repo', () => {
         {
           projectId: original.id,
           title: 'Web Design',
-          filePrefix: 'wd',
           enabled: true,
           adminsRole: 'admins-wd-fa26',
           studentsRole: 'students-wd-fa26',

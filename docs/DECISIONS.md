@@ -8783,3 +8783,42 @@ not-found case); `npx playwright test` 35/35 (34 pre-existing plus one new `e2e/
 covering a cold deep link to an organization's own address, panel navigation moving the address bar, browser
 back returning to the organizations list, and an unmatched organization id rendering not-found); `npm run
 board:derive` leaves the manifest unchanged.
+
+## D-80 — `apps/web`: WEB-35 — the course editor's five settings tabs, each its own address
+
+`pages/CourseEditor.tsx` renders an existing course under five named tabs (General/AI/Discord/Roster/People)
+instead of one long scrolling form; the selected tab is part of the course's own canonical address
+(`routing/route.ts#CourseEditorTab`, `/o/:organizationId/projects/:projectId/courses/:courseId/:tab`). A bare
+`/courses/:courseId` (no tab segment — every pre-WEB-35 bookmark or link into this address) parses to the
+General tab; `buildPath` never emits that shorter form itself, always the explicit segment, so every address
+this app builds is the exact one that would parse back to it. `form`/`baseline` stay one object regardless of
+which tab is showing — `activeTab` is local UI state, seeded from the route and re-seeded on prop change (a
+browser Back/Forward between tabs), so switching tabs can never strand an edit, and a click calls
+`onNavigateTab` (an ordinary push, not routed through the unsaved-changes guard, which only ever intercepts a
+`popstate` — `routing/useRoute.ts`'s own `navigate` is not guarded at all) rather than only flipping local
+state, matching the rest of the panel's own "navigate, don't just re-render" convention.
+
+**The brief's own "What this course routes on" bordered box is dropped for the Discord tab, kept for a new
+course.** A new course (`courseId === undefined`) has no tab address to invent — none of the sections this
+slice moved into tabs exist for it yet (join links, roster import, people, attachments, instructions,
+websites are all already gated on `courseId !== undefined`, unchanged) — so it keeps its original single-form
+layout untouched, bordered box and all. The Discord tab is already its own visually distinct region once tabs
+exist, so the same box around the same roles/server fields read as a redundant border around a border; its
+intro paragraph is kept, the box itself is not, on the Discord tab only.
+
+**A refused save switches to the tab the refused field lives on.** `FIELD_TABS` maps a `SaveCourseInput`
+field name to the tab its own `FormField` renders on; both the client-side `maxRequestsPerDay` refusal and a
+server-refused `courses.save` read the first named issue and switch tabs if it is not already the one
+showing, so `fieldErrorProp`'s own inline message is actually visible next to the field it concerns (WEB-16),
+not stranded on a tab nobody is looking at with only the top `ErrorMessage` to show for it.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2439
+vitest passing — up from 2439/2436 as other slices landed in parallel — plus the one pre-existing,
+unrelated `scripts/board/derive.test.mjs` failure this slice did not cause: `config.mjs` has no milestone for
+phase 22 yet); `npx playwright test` 37/37 (35 pre-existing, updated where a field this slice moved behind a
+tab needed a tab click first — `e2e/routing.spec.ts`, `e2e/chat.spec.ts`, `e2e/chat-scroll.spec.ts`,
+`e2e/course-knowledge-files.spec.ts`, `e2e/course-people-panel.spec.ts`, `e2e/course-web-sources.spec.ts`,
+`e2e/projects-row-menus.spec.ts`, `e2e/roster-import-panel.spec.ts`, `e2e/usage-panel.spec.ts` — plus one new
+case in `e2e/course-configuration.spec.ts` covering a bare course address landing on General, a tab click
+changing the address bar, a reload holding the tab, an edit surviving a switch between tabs, and a save from
+a tab other than General still saving it); `npm run board:derive` leaves the manifest unchanged.

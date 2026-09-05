@@ -67,6 +67,24 @@
  * and ended alike, with ending (ENRL-6) and reinstating (ENRL-9) both
  * offered — are `components/CoursePeople.tsx`'s own screen, embedded below
  * on the same "existing record only" gate as everything else in this list.
+ *
+ * WEB-35: an existing course renders these sections under five named tabs
+ * (General/AI/Discord/Roster/People) rather than one long scroll — the tab
+ * is part of the course's own canonical address
+ * (`routing/route.ts#CourseEditorTab`), so `activeTab`, below, is seeded
+ * from the `tab` prop `pages/ProjectsPanel.tsx` reads off the route, and a
+ * click on a tab calls `onNavigateTab` so that address changes too, the
+ * same "a tab is a real address" discipline WEB-32/WEB-34 already hold this
+ * whole panel to. `activeTab` only ever decides *what is rendered* — the
+ * form's own `form`/`baseline` state below is unchanged by this slice, one
+ * object regardless of which tab is showing, so switching tabs can never
+ * strand an edit made on another one (this file's own `isDirty` still
+ * compares the same two objects it always has). A brand-new course
+ * (`courseId === undefined`) has none of this — it cannot have join links,
+ * a roster import, people, attachments, instructions or websites (they are
+ * all already gated on `courseId !== undefined`, unchanged by this slice),
+ * so there is nothing worth splitting into tabs; it keeps the single-form
+ * layout it always had, and `tab`/`onNavigateTab` are simply not read.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -84,6 +102,7 @@ import type {
   DiscordServerBindingSummary,
   Project,
 } from '../api/types.js'
+import type { CourseEditorTab } from '../routing/route.js'
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
@@ -111,8 +130,50 @@ export interface CourseEditorProps {
   project: Project
   /** `undefined` — define a new course. A string — edit the course with that id. */
   courseId: string | undefined
+  /**
+   * WEB-35 — which of the five tabs is on screen, for an existing course.
+   * `undefined` for a new course (this file's own module comment on why),
+   * and optional here besides — every call site that does not care which
+   * tab is showing (most of `tests/course-editor.test.tsx`) can leave it
+   * out and get `'general'`, the same default `routing/route.ts` gives a
+   * bare `/courses/:courseId` URL.
+   */
+  tab?: CourseEditorTab
+  /** WEB-35 — called when a tab control is clicked, so the caller (`pages/ProjectsPanel.tsx`) can push the new address; this component's own `activeTab` state updates immediately regardless, so a caller that ignores this (a unit test with no `navigate`) still sees the tab switch render. */
+  onNavigateTab?: (tab: CourseEditorTab) => void
   onSaved: (course: Course) => void
   onCancel: () => void
+}
+
+/** WEB-35 — the five tabs, in the order `pages/CourseEditor.tsx` renders them and the brief itself lists them. */
+const COURSE_EDITOR_TABS: { id: CourseEditorTab; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'ai', label: 'AI' },
+  { id: 'discord', label: 'Discord' },
+  { id: 'roster', label: 'Roster' },
+  { id: 'people', label: 'People' },
+]
+
+/**
+ * WEB-35/WEB-16: which tab a given `SaveCourseInput` field's name lives
+ * under — a refused save's `error.body.issues` names a field
+ * (`fieldErrorMessage`, above), and a field on a tab other than the one
+ * showing would otherwise refuse silently, with `fieldErrorProp`'s own
+ * inline message rendered on a tab nobody is looking at. `categories` maps
+ * here too even though no single `FormField` reads it through
+ * `fieldErrorProp` — the fieldset itself lives on the Discord tab, so a
+ * collision naming it still lands somewhere the category/channel rows are
+ * visible.
+ */
+const FIELD_TABS: Record<string, CourseEditorTab> = {
+  title: 'general',
+  filePrefix: 'roster',
+  adminsRole: 'discord',
+  studentsRole: 'discord',
+  discordServerId: 'discord',
+  categories: 'discord',
+  model: 'ai',
+  maxRequestsPerDay: 'ai',
 }
 
 /** Form-local shape for one category being edited — a generated `key` for React's list identity, never sent to the server (`SaveCourseCategoryInput` carries no id at all — `courses.save` always replaces a course's whole category/channel list). */
@@ -245,9 +306,32 @@ export function CourseEditor({
   organizationId,
   project,
   courseId,
+  tab,
+  onNavigateTab,
   onSaved,
   onCancel,
 }: CourseEditorProps) {
+  // WEB-35 — local UI state, not part of `form`/`baseline`: which tab is
+  // rendered is not part of the record being edited. Seeded from the `tab`
+  // prop (the route's own reading, or `'general'` for either a bare URL or
+  // a call site that does not pass one), and re-seeded whenever the prop
+  // itself changes — the one path a click on a tab control does *not* take
+  // (that path sets this directly, below, so the tab switches on the same
+  // render as the click rather than waiting on the parent to feed the new
+  // `tab` back down) but a browser Back/Forward between tabs does, since
+  // that changes `tab` without going through this component's own click
+  // handler at all (WEB-34).
+  const [activeTab, setActiveTab] = useState<CourseEditorTab>(tab ?? 'general')
+  useEffect(() => {
+    setActiveTab(tab ?? 'general')
+  }, [tab])
+  const goToTab = useCallback(
+    (next: CourseEditorTab) => {
+      setActiveTab(next)
+      onNavigateTab?.(next)
+    },
+    [onNavigateTab]
+  )
   const [form, setForm] = useState<FormState>(blankForm())
   // WEB-16: the form's own last agreed-with-the-server state — set
   // alongside `form` in the same three places `form` is ever set *from* a
@@ -395,6 +479,23 @@ export function CourseEditor({
     }
   }, [organizationId, courseId])
 
+  // WEB-35/WEB-16: switches to the tab a refused field lives on, if it is
+  // not already the one showing — shared by `handleSave`'s own
+  // client-side `maxRequestsPerDay` refusal and its server-refused catch,
+  // below, so both refusal paths land the instructor on a tab where
+  // `fieldErrorProp`'s inline message is actually visible, not only the
+  // top-level `ErrorMessage`.
+  const switchToTabForField = useCallback(
+    (fieldName: string | number | undefined) => {
+      const targetTab =
+        typeof fieldName === 'string' ? FIELD_TABS[fieldName] : undefined
+      // Idempotent: a field already on the tab showing must not push a
+      // redundant, identical history entry.
+      if (targetTab && targetTab !== activeTab) goToTab(targetTab)
+    },
+    [goToTab, activeTab]
+  )
+
   const handleSave = async () => {
     setError(undefined)
     const maxRequestsPerDay = parseMaxRequestsPerDay(form.maxRequestsPerDay)
@@ -416,6 +517,7 @@ export function CourseEditor({
           ],
         })
       )
+      switchToTabForField('maxRequestsPerDay')
       return
     }
     setSaving(true)
@@ -474,8 +576,16 @@ export function CourseEditor({
       setConfirmedEnabled(saved.enabled)
       onSaved(saved)
     } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
+      if (caught instanceof ApiError) {
+        setError(caught)
+        // WEB-35/WEB-16: a refused save whose first issue names a field on
+        // a tab other than the one showing switches there, so
+        // `fieldErrorProp`'s own inline message (rendered next to the
+        // field it concerns) is actually on screen — otherwise the top
+        // `ErrorMessage` would be the only sign anything was refused at
+        // all, on a tab with nothing else wrong with it.
+        switchToTabForField(caught.body.issues?.[0]?.path[0])
+      } else throw caught
     } finally {
       setSaving(false)
     }
@@ -641,6 +751,363 @@ export function CourseEditor({
     setInstructionsDirty(dirty)
   }, [])
 
+  // WEB-35 — the fields the brief's own "What this course routes on" box
+  // held, split out of that box so the Discord tab (below) can reuse the
+  // controls under its own intro copy instead of a second, redundant
+  // bordered box; the new-course path (this component's own "no tab
+  // address to invent" case, this file's module comment) keeps the
+  // original box around this same pair of controls, unchanged.
+  const rolesAndServerFields = (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField label="Admins role" {...fieldErrorProp(error, 'adminsRole')}>
+          <input
+            aria-label="Admins role"
+            value={form.adminsRole}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                adminsRole: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+        <FormField
+          label="Students role"
+          {...fieldErrorProp(error, 'studentsRole')}
+        >
+          <input
+            aria-label="Students role"
+            value={form.studentsRole}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                studentsRole: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+      </div>
+
+      {/* TEN-9 — offered once there is an actual choice to make (2+
+          active bindings — "one binding is not a choice worth making
+          anybody make", this slice's own brief) *or* the course already
+          names a server explicitly, even one that is no longer active
+          (must-fix 3, coordinator round 1 rework) — otherwise a course
+          pinned to a since-removed binding has no way in the product to
+          be re-pointed or cleared, only a refusal that names the problem
+          with no control to fix it. An organization with zero or one
+          active binding and a course that has never named one never sees
+          this at all — it still resolves correctly through
+          `resolveCourseDiscordServer`'s own single-binding fallback,
+          unedited. */}
+      {offersServerSelector && (
+        <FormField
+          label="Discord server"
+          {...fieldErrorProp(error, 'discordServerId')}
+        >
+          <select
+            aria-label="Discord server"
+            value={form.discordServerId ?? ''}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                discordServerId:
+                  event.target.value === '' ? null : event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          >
+            <option value="">Choose a server…</option>
+            {/* The stale option itself, shown so a course pinned to a
+                removed binding reads as exactly that in the control,
+                rather than looking identical to "cleared" while the form
+                still carries the old id — selectable only in the sense
+                that leaving it selected is what a re-save would already
+                do; `disabled` steers toward picking an active server or
+                clearing to `null` instead. */}
+            {staleServerId && (
+              <option value={staleServerId} disabled>
+                {staleServerId} (no longer active)
+              </option>
+            )}
+            {activeBindings.map((binding) => (
+              <option key={binding.serverId} value={binding.serverId}>
+                {binding.serverId}
+              </option>
+            ))}
+          </select>
+        </FormField>
+      )}
+    </>
+  )
+
+  const titleField = (
+    <FormField label="Title" {...fieldErrorProp(error, 'title')}>
+      <input
+        aria-label="Title"
+        value={form.title}
+        onChange={(event) =>
+          setForm((current) => ({ ...current, title: event.target.value }))
+        }
+        className={textInputClasses}
+      />
+    </FormField>
+  )
+
+  const filePrefixField = (
+    <FormField label="File prefix" {...fieldErrorProp(error, 'filePrefix')}>
+      <input
+        aria-label="File prefix"
+        value={form.filePrefix}
+        onChange={(event) =>
+          setForm((current) => ({
+            ...current,
+            filePrefix: event.target.value,
+          }))
+        }
+        className={textInputClasses}
+      />
+    </FormField>
+  )
+
+  const enabledControl = (
+    <div className="flex items-center gap-3">
+      <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+        <input
+          type="checkbox"
+          aria-label="Enabled"
+          checked={form.enabled}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              enabled: event.target.checked,
+            }))
+          }
+          className={checkboxClasses}
+        />
+        Enabled
+      </label>
+      {courseId !== undefined && (
+        <Button
+          variant={confirmedEnabled ? 'destructive' : 'secondary'}
+          icon={
+            confirmedEnabled ? (
+              <DisableIcon aria-hidden="true" className="size-4" />
+            ) : (
+              <EnableIcon aria-hidden="true" className="size-4" />
+            )
+          }
+          onClick={() => void handleToggleEnabled()}
+          disabled={togglingEnabled}
+        >
+          {/* Reads `confirmedEnabled`, not `form.enabled` — see this
+              component's own comment on that state (finding 4). */}
+          {confirmedEnabled ? 'Disable' : 'Enable'}
+        </Button>
+      )}
+    </div>
+  )
+
+  const categoriesFieldset = (
+    <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
+      <legend className="px-1 text-section-title font-semibold text-neutral-900">
+        Categories
+      </legend>
+      {form.categories.map((category) => (
+        <fieldset
+          key={category.key}
+          className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
+        >
+          <legend className="sr-only">Category</legend>
+          <div className="flex items-center gap-2">
+            <input
+              aria-label="Category name"
+              value={category.name}
+              onChange={(event) =>
+                updateCategory(category.key, event.target.value)
+              }
+              className={textInputClasses}
+            />
+            <Button
+              variant="ghost"
+              aria-label={`Remove category ${category.name || ''}`.trim()}
+              icon={
+                <RemoveFromListIcon aria-hidden="true" className="size-4" />
+              }
+              onClick={() => void removeCategory(category.key, category.name)}
+            >
+              Remove category
+            </Button>
+          </div>
+          {category.channels.map((channel) => (
+            <div
+              key={channel.key}
+              className="flex flex-wrap items-center gap-2 pl-4"
+            >
+              <input
+                aria-label="Channel name"
+                value={channel.name}
+                onChange={(event) =>
+                  updateChannel(category.key, channel.key, {
+                    name: event.target.value,
+                  })
+                }
+                className={textInputClasses}
+              />
+              <label className="flex items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  aria-label="Admins only"
+                  checked={channel.adminsOnly}
+                  onChange={(event) =>
+                    updateChannel(category.key, channel.key, {
+                      adminsOnly: event.target.checked,
+                    })
+                  }
+                  className={checkboxClasses}
+                />
+                Admins only
+              </label>
+              <Button
+                variant="ghost"
+                aria-label={`Remove channel ${channel.name || ''}`.trim()}
+                icon={
+                  <RemoveFromListIcon aria-hidden="true" className="size-4" />
+                }
+                onClick={() =>
+                  void removeChannel(category.key, channel.key, channel.name)
+                }
+              >
+                Remove channel
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="secondary"
+            icon={<AddIcon aria-hidden="true" className="size-4" />}
+            onClick={() => addChannel(category.key)}
+          >
+            Add channel
+          </Button>
+        </fieldset>
+      ))}
+      <Button
+        variant="secondary"
+        icon={<AddIcon aria-hidden="true" className="size-4" />}
+        onClick={addCategory}
+      >
+        Add category
+      </Button>
+    </fieldset>
+  )
+
+  // WEB-35 — Model, the read-only Prompt id field and its MDL-8 warning
+  // banner, then Max requests per day: the AI tab's own order, per the
+  // brief. Reused unchanged by the new-course path below, where
+  // `form.promptId` is always empty (this file's own module comment on
+  // why no new course can acquire one) so the banner and the read-only
+  // field both simply do not render there.
+  const aiFields = (
+    <>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          label="Model"
+          help="Leave blank to use the platform default."
+        >
+          <input
+            aria-label="Model"
+            value={form.model}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, model: event.target.value }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+
+        {/* Read-only, and only ever rendered for a course that already has
+            one — MDL-8's "keep reading it... no new course can acquire
+            one." Shown so an instructor can still see (and copy) the id
+            behind the banner below, never so it can be typed into or
+            cleared here. */}
+        {form.promptId && (
+          <FormField
+            label="Prompt id"
+            help="Inherited from before this panel existed. Deprecated — see the notice below."
+          >
+            <input
+              aria-label="Prompt id"
+              value={form.promptId}
+              readOnly
+              className={textInputClasses}
+            />
+          </FormField>
+        )}
+      </div>
+
+      {/* MDL-8: a course with a stored prompt id (D-3's Python-era escape
+          hatch) is answered through it — `buildResponsesRequestBody`
+          (`packages/openai/src/responses.ts`) sends `prompt` instead of
+          `instructions` whenever one is set, so the `CourseInstructions`
+          section below is inert on exactly these courses. This is the
+          visibility half of MDL-8: an instructor editing instructions there
+          must know that, not discover it by an answer never changing. Never
+          shown for a new course — `form.promptId` only ever comes from a
+          loaded course (`blankForm` carries no way to set one) — and this
+          banner itself is read-only, matching the read-only "Prompt id"
+          field above; see `packages/actions/src/actions/courses.ts`'s own
+          `promptId` comment for the write-side half of the same refusal. */}
+      {form.promptId && (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-warning-600 bg-warning-50 px-3 py-2 text-sm text-warning-600"
+        >
+          <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
+          This course is answered through a stored OpenAI prompt (configured
+          outside this panel, before it existed). The instructions below are not
+          being used.
+        </p>
+      )}
+
+      {/*
+        WEB-18: an instructor never sees a vector store id. The store is the
+        platform's own bookkeeping — `courseAttachments.attach` creates one
+        on the first upload and adopts a hand-typed one if the course already
+        has it — and offering a text box for it is the vendor-dashboard
+        workflow FILE-1 exists to replace. Leaving it beside a knowledge-files
+        list would give an instructor two contradictory ways to say what a
+        course is grounded in.
+
+        Deprecated on the same terms as the prompt id: a course that already
+        has a value keeps working and keeps being answered through it, the
+        value is never cleared behind anybody's back, and no new course can
+        acquire one because the field it was typed into is gone.
+      */}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          label="Max requests per day"
+          help="A whole number greater than zero, or leave blank to use the platform default."
+          {...fieldErrorProp(error, 'maxRequestsPerDay')}
+        >
+          <input
+            aria-label="Max requests per day"
+            value={form.maxRequestsPerDay}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                maxRequestsPerDay: event.target.value,
+              }))
+            }
+            className={textInputClasses}
+          />
+        </FormField>
+      </div>
+    </>
+  )
+
   if (loading) {
     return (
       <p role="status" className="text-sm text-neutral-500">
@@ -667,6 +1134,11 @@ export function CourseEditor({
     )
   }
 
+  // WEB-35 — the Discord tab's join-links/roster/people/attachments/website
+  // sections are all still gated on `courseId !== undefined`, unchanged;
+  // inside the `courseId !== undefined` branch below that gate is always
+  // true, so it is dropped from each of these — the branch itself is the
+  // gate.
   return (
     <section
       aria-label="Course"
@@ -680,468 +1152,265 @@ export function CourseEditor({
         {courseId === undefined ? 'New course' : form.title || 'Course'}
       </h1>
 
-      {/* WEB-9: what decides routing, shown together and up front. */}
-      <section
-        aria-label="What this course routes on"
-        className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-4"
-      >
-        <p className="text-sm text-neutral-600">
-          A message reaches this course by the Discord category it arrived in,
-          or by the author&apos;s role — these names have to match your Discord
-          server exactly.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FormField
-            label="Admins role"
-            {...fieldErrorProp(error, 'adminsRole')}
+      {courseId === undefined ? (
+        // WEB-35 — a new course cannot have join links, a roster import,
+        // people, attachments, instructions or websites (all already gated
+        // on `courseId !== undefined`, unchanged by this slice), so there is
+        // nothing worth splitting into tabs, and no tab address for a course
+        // that does not exist yet to be part of. This keeps the single-form
+        // layout the whole screen always had, field for field.
+        <>
+          {/* WEB-9: what decides routing, shown together and up front. */}
+          <section
+            aria-label="What this course routes on"
+            className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-4"
           >
-            <input
-              aria-label="Admins role"
-              value={form.adminsRole}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  adminsRole: event.target.value,
-                }))
-              }
-              className={textInputClasses}
-            />
-          </FormField>
-          <FormField
-            label="Students role"
-            {...fieldErrorProp(error, 'studentsRole')}
+            <p className="text-sm text-neutral-600">
+              A message reaches this course by the Discord category it arrived
+              in, or by the author&apos;s role — these names have to match your
+              Discord server exactly.
+            </p>
+            {rolesAndServerFields}
+          </section>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {titleField}
+            {filePrefixField}
+          </div>
+
+          {enabledControl}
+
+          {categoriesFieldset}
+
+          {aiFields}
+        </>
+      ) : (
+        <>
+          {/* WEB-35: a real tab pattern — `role="tablist"` of `role="tab"`
+              controls, each `aria-selected` against `activeTab`, each
+              controlling the one `role="tabpanel"` actually rendered below.
+              A tab is an address (this file's own module comment), so a
+              click calls `goToTab`, which pushes the new route through
+              `onNavigateTab` rather than only flipping local state — the
+              same "navigate, don't just re-render" convention
+              `pages/ProjectsPanel.tsx` and `pages/Shell.tsx` already hold
+              every other screen in this panel to. */}
+          <div
+            role="tablist"
+            aria-label="Course settings"
+            className="flex gap-1 border-b border-neutral-200"
           >
-            <input
-              aria-label="Students role"
-              value={form.studentsRole}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  studentsRole: event.target.value,
-                }))
-              }
-              className={textInputClasses}
-            />
-          </FormField>
-        </div>
-
-        {/* TEN-9 — offered once there is an actual choice to make (2+
-            active bindings — "one binding is not a choice worth making
-            anybody make", this slice's own brief) *or* the course already
-            names a server explicitly, even one that is no longer active
-            (must-fix 3, coordinator round 1 rework) — otherwise a course
-            pinned to a since-removed binding has no way in the product to
-            be re-pointed or cleared, only a refusal that names the problem
-            with no control to fix it. An organization with zero or one
-            active binding and a course that has never named one never sees
-            this at all — it still resolves correctly through
-            `resolveCourseDiscordServer`'s own single-binding fallback,
-            unedited. */}
-        {offersServerSelector && (
-          <FormField
-            label="Discord server"
-            {...fieldErrorProp(error, 'discordServerId')}
-          >
-            <select
-              aria-label="Discord server"
-              value={form.discordServerId ?? ''}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  discordServerId:
-                    event.target.value === '' ? null : event.target.value,
-                }))
-              }
-              className={textInputClasses}
-            >
-              <option value="">Choose a server…</option>
-              {/* The stale option itself, shown so a course pinned to a
-                  removed binding reads as exactly that in the control,
-                  rather than looking identical to "cleared" while the form
-                  still carries the old id — selectable only in the sense
-                  that leaving it selected is what a re-save would already
-                  do; `disabled` steers toward picking an active server or
-                  clearing to `null` instead. */}
-              {staleServerId && (
-                <option value={staleServerId} disabled>
-                  {staleServerId} (no longer active)
-                </option>
-              )}
-              {activeBindings.map((binding) => (
-                <option key={binding.serverId} value={binding.serverId}>
-                  {binding.serverId}
-                </option>
-              ))}
-            </select>
-          </FormField>
-        )}
-      </section>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Title" {...fieldErrorProp(error, 'title')}>
-          <input
-            aria-label="Title"
-            value={form.title}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, title: event.target.value }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
-
-        <FormField label="File prefix" {...fieldErrorProp(error, 'filePrefix')}>
-          <input
-            aria-label="File prefix"
-            value={form.filePrefix}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                filePrefix: event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
-          <input
-            type="checkbox"
-            aria-label="Enabled"
-            checked={form.enabled}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                enabled: event.target.checked,
-              }))
-            }
-            className={checkboxClasses}
-          />
-          Enabled
-        </label>
-        {courseId !== undefined && (
-          <Button
-            variant={confirmedEnabled ? 'destructive' : 'secondary'}
-            icon={
-              confirmedEnabled ? (
-                <DisableIcon aria-hidden="true" className="size-4" />
-              ) : (
-                <EnableIcon aria-hidden="true" className="size-4" />
-              )
-            }
-            onClick={() => void handleToggleEnabled()}
-            disabled={togglingEnabled}
-          >
-            {/* Reads `confirmedEnabled`, not `form.enabled` — see this
-                component's own comment on that state (finding 4). */}
-            {confirmedEnabled ? 'Disable' : 'Enable'}
-          </Button>
-        )}
-      </div>
-
-      {/* SRV-6: scaffolding needs a persisted course to name in the job
-          payload — offered only once this course actually has a `courseId`,
-          the same "existing record only" gate the enable/disable toggle
-          above already applies. */}
-      {courseId !== undefined && (
-        <section aria-label="Discord channels" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            Discord channels
-          </h2>
-          <p className="text-sm text-neutral-600">
-            Create this course&apos;s declared categories and channels in the
-            Discord server bound to this organization.
-          </p>
-          <ScaffoldButton organizationId={organizationId} courseId={courseId} />
-        </section>
-      )}
-
-      {/* WEB-20: a course's join links — same "existing record only" gate
-          as Discord channels above, a link belongs to an existing course. */}
-      {courseId !== undefined && (
-        <section aria-label="Join links" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            Join links
-          </h2>
-          <p className="text-sm text-neutral-600">
-            Share a link that lets a student enrol themselves, without a Discord
-            role — each link&apos;s secret is shown only once, right after you
-            create it.
-          </p>
-          <JoinLinks organizationId={organizationId} courseId={courseId} />
-        </section>
-      )}
-
-      {/* WEB-21/ROST-9..12: a course's roster import — same gate as above. */}
-      {courseId !== undefined && (
-        <section aria-label="Roster import" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            Roster
-          </h2>
-          <p className="text-sm text-neutral-600">
-            Import a class roster to enrol every student and create their
-            private Discord channel.
-          </p>
-          <RosterImport organizationId={organizationId} courseId={courseId} />
-        </section>
-      )}
-
-      {/* WEB-22/ENRL-9: a course's people — everyone it has ever enrolled,
-          active and ended alike, with ending and reinstating both offered.
-          Same "existing record only" gate as the sections above: an
-          enrolment belongs to an existing course. */}
-      {courseId !== undefined && (
-        <section aria-label="People" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            People
-          </h2>
-          <p className="text-sm text-neutral-600">
-            Everyone this course has ever enrolled, however they were admitted.
-            Ending stops someone asking this course without deleting their
-            transcript; reinstating undoes an end.
-          </p>
-          <CoursePeople organizationId={organizationId} courseId={courseId} />
-        </section>
-      )}
-
-      {/* WEB-18/FILE-1: a course's knowledge files — same gate as Discord
-          channels above, an attachment belongs to an existing course. */}
-      {courseId !== undefined && (
-        <section aria-label="Knowledge files" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            Knowledge files
-          </h2>
-          <p className="text-sm text-neutral-600">
-            The notes, syllabus and schedule this course is grounded in.
-            Detaching one stops it grounding answers immediately, and reaches
-            the provider — it cannot be undone.
-          </p>
-          <CourseAttachments
-            organizationId={organizationId}
-            courseId={courseId}
-          />
-        </section>
-      )}
-
-      {/* FILE-6/MDL-9: a course's websites — same gate as Knowledge files
-          above, a website belongs to an existing course. */}
-      {courseId !== undefined && (
-        <section aria-label="Websites" className="flex flex-col gap-2">
-          <h2 className="text-section-title font-semibold text-neutral-900">
-            Websites
-          </h2>
-          <p className="text-sm text-neutral-600">
-            Sites this course is grounded in, alongside its knowledge files.
-            Bloombot searches only the domains named here — never the open web.
-            Removing one takes effect immediately.
-          </p>
-          <CourseWebSources
-            organizationId={organizationId}
-            courseId={courseId}
-          />
-        </section>
-      )}
-
-      <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
-        <legend className="px-1 text-section-title font-semibold text-neutral-900">
-          Categories
-        </legend>
-        {form.categories.map((category) => (
-          <fieldset
-            key={category.key}
-            className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
-          >
-            <legend className="sr-only">Category</legend>
-            <div className="flex items-center gap-2">
-              <input
-                aria-label="Category name"
-                value={category.name}
-                onChange={(event) =>
-                  updateCategory(category.key, event.target.value)
+            {COURSE_EDITOR_TABS.map((courseTab) => (
+              <button
+                key={courseTab.id}
+                type="button"
+                role="tab"
+                id={`course-tab-${courseTab.id}`}
+                aria-selected={activeTab === courseTab.id}
+                aria-controls={`course-tabpanel-${courseTab.id}`}
+                onClick={() => goToTab(courseTab.id)}
+                className={
+                  activeTab === courseTab.id
+                    ? 'border-b-2 border-neutral-900 px-3 py-2 text-sm font-semibold text-neutral-900'
+                    : 'border-b-2 border-transparent px-3 py-2 text-sm font-medium text-neutral-500 hover:text-neutral-800'
                 }
-                className={textInputClasses}
-              />
-              <Button
-                variant="ghost"
-                aria-label={`Remove category ${category.name || ''}`.trim()}
-                icon={
-                  <RemoveFromListIcon aria-hidden="true" className="size-4" />
-                }
-                onClick={() => void removeCategory(category.key, category.name)}
               >
-                Remove category
-              </Button>
-            </div>
-            {category.channels.map((channel) => (
-              <div
-                key={channel.key}
-                className="flex flex-wrap items-center gap-2 pl-4"
-              >
-                <input
-                  aria-label="Channel name"
-                  value={channel.name}
-                  onChange={(event) =>
-                    updateChannel(category.key, channel.key, {
-                      name: event.target.value,
-                    })
-                  }
-                  className={textInputClasses}
-                />
-                <label className="flex items-center gap-2 text-sm text-neutral-700">
-                  <input
-                    type="checkbox"
-                    aria-label="Admins only"
-                    checked={channel.adminsOnly}
-                    onChange={(event) =>
-                      updateChannel(category.key, channel.key, {
-                        adminsOnly: event.target.checked,
-                      })
-                    }
-                    className={checkboxClasses}
-                  />
-                  Admins only
-                </label>
-                <Button
-                  variant="ghost"
-                  aria-label={`Remove channel ${channel.name || ''}`.trim()}
-                  icon={
-                    <RemoveFromListIcon aria-hidden="true" className="size-4" />
-                  }
-                  onClick={() =>
-                    void removeChannel(category.key, channel.key, channel.name)
-                  }
-                >
-                  Remove channel
-                </Button>
-              </div>
+                {courseTab.label}
+              </button>
             ))}
-            <Button
-              variant="secondary"
-              icon={<AddIcon aria-hidden="true" className="size-4" />}
-              onClick={() => addChannel(category.key)}
+          </div>
+
+          {activeTab === 'general' && (
+            <div
+              role="tabpanel"
+              id="course-tabpanel-general"
+              aria-labelledby="course-tab-general"
+              className="flex flex-col gap-6"
             >
-              Add channel
-            </Button>
-          </fieldset>
-        ))}
-        <Button
-          variant="secondary"
-          icon={<AddIcon aria-hidden="true" className="size-4" />}
-          onClick={addCategory}
-        >
-          Add category
-        </Button>
-      </fieldset>
+              <div className="grid gap-4 sm:grid-cols-2">{titleField}</div>
+              {enabledControl}
 
-      {/* MDL-8: a course with a stored prompt id (D-3's Python-era escape
-          hatch) is answered through it — `buildResponsesRequestBody`
-          (`packages/openai/src/responses.ts`) sends `prompt` instead of
-          `instructions` whenever one is set, so the `CourseInstructions`
-          section below is inert on exactly these courses. This is the
-          visibility half of MDL-8: an instructor editing instructions there
-          must know that, not discover it by an answer never changing. Never
-          shown for a new course — `form.promptId` only ever comes from a
-          loaded course (`blankForm` carries no way to set one) — and this
-          banner itself is read-only, matching the read-only "Prompt id"
-          field below; see `packages/actions/src/actions/courses.ts`'s own
-          `promptId` comment for the write-side half of the same refusal. */}
-      {form.promptId && (
-        <p
-          role="status"
-          className="flex items-center gap-2 rounded-md border border-warning-600 bg-warning-50 px-3 py-2 text-sm text-warning-600"
-        >
-          <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
-          This course is answered through a stored OpenAI prompt (configured
-          outside this panel, before it existed). The instructions below are not
-          being used.
-        </p>
+              {/* WEB-20: a course's join links — belongs to an existing
+                  course. */}
+              <section aria-label="Join links" className="flex flex-col gap-2">
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  Join links
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  Share a link that lets a student enrol themselves, without a
+                  Discord role — each link&apos;s secret is shown only once,
+                  right after you create it.
+                </p>
+                <JoinLinks
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'ai' && (
+            <div
+              role="tabpanel"
+              id="course-tabpanel-ai"
+              aria-labelledby="course-tab-ai"
+              className="flex flex-col gap-6"
+            >
+              {aiFields}
+
+              {/* WEB-19/FILE-4: see this file's own module comment for why
+                  this section owns its own save and reports its own
+                  dirtiness up. */}
+              <CourseInstructions
+                organizationId={organizationId}
+                courseId={courseId}
+                onDirtyChange={handleInstructionsDirtyChange}
+              />
+
+              {/* WEB-18/FILE-1: a course's knowledge files. */}
+              <section
+                aria-label="Knowledge files"
+                className="flex flex-col gap-2"
+              >
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  Knowledge files
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  The notes, syllabus and schedule this course is grounded in.
+                  Detaching one stops it grounding answers immediately, and
+                  reaches the provider — it cannot be undone.
+                </p>
+                <CourseAttachments
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+
+              {/* FILE-6/MDL-9: a course's websites, alongside its knowledge
+                  files. */}
+              <section aria-label="Websites" className="flex flex-col gap-2">
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  Websites
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  Sites this course is grounded in, alongside its knowledge
+                  files. Bloombot searches only the domains named here — never
+                  the open web. Removing one takes effect immediately.
+                </p>
+                <CourseWebSources
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'discord' && (
+            <div
+              role="tabpanel"
+              id="course-tabpanel-discord"
+              aria-labelledby="course-tab-discord"
+              className="flex flex-col gap-6"
+            >
+              {/* WEB-35 — the intro copy from the former "What this course
+                  routes on" box, kept, with the bordered box itself dropped:
+                  the Discord tab is already its own visually distinct
+                  region, so a second border around the same fields read as
+                  redundant. See `docs/DECISIONS.md` if this needs
+                  reconsidering. */}
+              <p className="text-sm text-neutral-600">
+                A message reaches this course by the Discord category it arrived
+                in, or by the author&apos;s role — these names have to match
+                your Discord server exactly.
+              </p>
+              {rolesAndServerFields}
+
+              {categoriesFieldset}
+
+              {/* SRV-6: scaffolding needs a persisted course to name in the
+                  job payload. */}
+              <section
+                aria-label="Discord channels"
+                className="flex flex-col gap-2"
+              >
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  Discord channels
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  Create this course&apos;s declared categories and channels in
+                  the Discord server bound to this organization.
+                </p>
+                <ScaffoldButton
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'roster' && (
+            <div
+              role="tabpanel"
+              id="course-tabpanel-roster"
+              aria-labelledby="course-tab-roster"
+              className="flex flex-col gap-6"
+            >
+              <div className="grid gap-4 sm:grid-cols-2">{filePrefixField}</div>
+
+              {/* WEB-21/ROST-9..12: a course's roster import. */}
+              <section
+                aria-label="Roster import"
+                className="flex flex-col gap-2"
+              >
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  Roster
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  Import a class roster to enrol every student and create their
+                  private Discord channel.
+                </p>
+                <RosterImport
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'people' && (
+            <div
+              role="tabpanel"
+              id="course-tabpanel-people"
+              aria-labelledby="course-tab-people"
+              className="flex flex-col gap-6"
+            >
+              {/* WEB-22/ENRL-9: a course's people — everyone it has ever
+                  enrolled, active and ended alike, with ending and
+                  reinstating both offered. */}
+              <section aria-label="People" className="flex flex-col gap-2">
+                <h2 className="text-section-title font-semibold text-neutral-900">
+                  People
+                </h2>
+                <p className="text-sm text-neutral-600">
+                  Everyone this course has ever enrolled, however they were
+                  admitted. Ending stops someone asking this course without
+                  deleting their transcript; reinstating undoes an end.
+                </p>
+                <CoursePeople
+                  organizationId={organizationId}
+                  courseId={courseId}
+                />
+              </section>
+            </div>
+          )}
+        </>
       )}
-
-      {/* WEB-19/FILE-4: gated the same "existing record only" way as
-          Knowledge files and Discord channels below — a course that does
-          not exist yet has nothing for a revision's `courseId` to point
-          at. See this file's own module comment for why this section owns
-          its own save and reports its own dirtiness up. */}
-      {courseId !== undefined && (
-        <CourseInstructions
-          organizationId={organizationId}
-          courseId={courseId}
-          onDirtyChange={handleInstructionsDirtyChange}
-        />
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormField
-          label="Model"
-          help="Leave blank to use the platform default."
-        >
-          <input
-            aria-label="Model"
-            value={form.model}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, model: event.target.value }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
-
-        {/* Read-only, and only ever rendered for a course that already has
-            one — MDL-8's "keep reading it... no new course can acquire
-            one." Shown so an instructor can still see (and copy) the id
-            behind the banner above, never so it can be typed into or
-            cleared here. */}
-        {form.promptId && (
-          <FormField
-            label="Prompt id"
-            help="Inherited from before this panel existed. Deprecated — see the notice above."
-          >
-            <input
-              aria-label="Prompt id"
-              value={form.promptId}
-              readOnly
-              className={textInputClasses}
-            />
-          </FormField>
-        )}
-
-        {/*
-          WEB-18: an instructor never sees a vector store id. The store is the
-          platform's own bookkeeping — `courseAttachments.attach` creates one
-          on the first upload and adopts a hand-typed one if the course already
-          has it — and offering a text box for it is the vendor-dashboard
-          workflow FILE-1 exists to replace. Leaving it beside a knowledge-files
-          list would give an instructor two contradictory ways to say what a
-          course is grounded in.
-
-          Deprecated on the same terms as the prompt id: a course that already
-          has a value keeps working and keeps being answered through it, the
-          value is never cleared behind anybody's back, and no new course can
-          acquire one because the field it was typed into is gone.
-        */}
-
-        <FormField
-          label="Max requests per day"
-          help="A whole number greater than zero, or leave blank to use the platform default."
-          {...fieldErrorProp(error, 'maxRequestsPerDay')}
-        >
-          <input
-            aria-label="Max requests per day"
-            value={form.maxRequestsPerDay}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                maxRequestsPerDay: event.target.value,
-              }))
-            }
-            className={textInputClasses}
-          />
-        </FormField>
-      </div>
 
       {error && <ErrorMessage error={error} />}
 
-      {/* WEB-15: the one primary action this form offers. */}
+      {/* WEB-15/WEB-35: the one primary action this form offers, always
+          visible regardless of which tab is showing — an edit made on one
+          tab is never stranded when someone is looking at another. */}
       <div>
         <Button
           variant="primary"

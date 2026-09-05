@@ -28,11 +28,43 @@ const ROUTES: Route[] = [
   { kind: 'projects', organizationId: 'org-1' },
   { kind: 'project-courses', organizationId: 'org-1', projectId: 'proj-1' },
   { kind: 'new-course', organizationId: 'org-1', projectId: 'proj-1' },
+  // WEB-35 — one example per course-editor tab, so the round-trip property
+  // holds for each of the five, not just whichever one happened to be
+  // written down before tabs existed.
   {
     kind: 'course-editor',
     organizationId: 'org-1',
     projectId: 'proj-1',
     courseId: 'course-1',
+    tab: 'general',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'ai',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'discord',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'roster',
+  },
+  {
+    kind: 'course-editor',
+    organizationId: 'org-1',
+    projectId: 'proj-1',
+    courseId: 'course-1',
+    tab: 'people',
   },
   { kind: 'chat', organizationId: 'org-1' },
   { kind: 'chat', organizationId: 'org-1', courseId: 'course-1' },
@@ -60,7 +92,15 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/projects/',
     '/o/org-1/projects/proj-1',
     '/o/org-1/projects/proj-1/courses/new',
+    // WEB-35 — the bare form (no tab segment) and the explicit form both
+    // parse to a real screen; see `route.ts`'s own comment on why the bare
+    // one lands on the General tab rather than `'not-found'`.
     '/o/org-1/projects/proj-1/courses/course-1',
+    '/o/org-1/projects/proj-1/courses/course-1/general',
+    '/o/org-1/projects/proj-1/courses/course-1/ai',
+    '/o/org-1/projects/proj-1/courses/course-1/discord',
+    '/o/org-1/projects/proj-1/courses/course-1/roster',
+    '/o/org-1/projects/proj-1/courses/course-1/people',
     '/o/org-1/chat',
     '/o/org-1/chat/course-1',
     '/account',
@@ -81,6 +121,10 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o//projects',
     '/o/org-1/projects/proj-1/courses',
     '/o/org-1/projects/proj-1/courses/',
+    // WEB-35 — an unrecognised tab name is not a tab this scheme has, the
+    // same "falls through to not-found rather than guessing" rule every
+    // other unknown segment already gets.
+    '/o/org-1/projects/proj-1/courses/course-1/nonsense',
     '/o/org-1/nope',
     '/sign-in',
     '/sign-in/',

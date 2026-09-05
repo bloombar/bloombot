@@ -31,9 +31,37 @@
  * is already told apart from another by a distinct id, and these are real
  * students' addresses, shown only where a screen genuinely cannot tell two
  * people apart without one, which is not the case here.
+ *
+ * WEB-36: every row's own name is also a real link to that person's
+ * transcript for this course (`routing/route.ts#TranscriptsRoute`) — a
+ * genuine `<a href>` (`buildPath`'s own output), so it can be copied,
+ * opened in a new tab, or read by assistive technology as a link, but its
+ * `onClick` navigates in-app (the `navigate` prop, a push, threaded down
+ * from `pages/CourseEditor.tsx`/`pages/ProjectsPanel.tsx`) rather than
+ * letting the browser reload the whole page for an address this app can
+ * already render without one. `TranscriptLink`, below, is the one place
+ * that click lives — both lists render the same component rather than each
+ * repeating the plain-click predicate and the `href`/`onClick` pair by
+ * hand, which used to drift apart by definition alone (rework round 1,
+ * cheap fix).
+ *
+ * **Rework round 1: the link bypassed WEB-16's own unsaved-changes guard.**
+ * A raw call to `navigate` unmounts `pages/CourseEditor.tsx` immediately —
+ * `routing/useRoute.ts`'s own `navigate` only ever consults the registered
+ * guard on a `popstate`, not on a call like this one — so a title edited on
+ * the General tab and never saved was silently gone the moment a click
+ * here landed on the People tab. Every other in-app navigation this shell
+ * starts already goes through `useNavigationGuard()`'s own `guardedNavigate`
+ * (`pages/Shell.tsx`'s own module comment) precisely so a dirty form gets
+ * its say first; this component reads that same context directly (a plain
+ * descendant of the one `NavigationGuardProvider` `pages/Shell.tsx` mounts
+ * — no new prop needed to reach it) and wraps the `navigate` prop's own
+ * call in it, rather than calling `navigate` bare. Both lists link
+ * identically — ending an enrolment never deleted the transcript (ENRL-6),
+ * and reading it afterwards is the point.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 
 import {
   ApiError,
@@ -42,6 +70,8 @@ import {
   reinstateCourseEnrolment,
 } from '../api/client.js'
 import type { CourseEnrolment } from '../api/types.js'
+import { buildPath, type Route } from '../routing/route.js'
+import { useNavigationGuard } from '../hooks/navigation-guard.js'
 import { DisableIcon, RestoreIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
@@ -50,6 +80,8 @@ import { useModal } from './modal/ModalProvider.js'
 export interface CoursePeopleProps {
   organizationId: string
   courseId: string
+  /** WEB-36 — called with the address a row's own name links to, on an ordinary click (no modifier key, not a right-click — `TranscriptLink`'s own comment on why those are left to the browser's own new-tab/context-menu handling); pushes so Back returns to this People tab. Routed through `useNavigationGuard()`'s own `guardedNavigate` inside this component (this file's own module comment on why), so the caller never has to. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 const SOURCE_LABELS: Record<CourseEnrolment['source'], string> = {
@@ -63,7 +95,60 @@ function label(entry: CourseEnrolment): string {
   return entry.displayName ?? entry.personId
 }
 
-export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
+/**
+ * WEB-36 (rework round 1, cheap fix): the one link both lists render — a
+ * real `<a href>`, so it survives being copied, opened in a new tab, or
+ * read by assistive technology, with an `onClick` that intercepts only a
+ * genuine plain click and lets everything else (a modified click, a
+ * right-click) fall through to the browser's own handling. `event.button`
+ * is not checked here — React's synthetic `onClick` is derived from the
+ * DOM `click` event, which the browser never fires for the middle button
+ * at all (that is `auxclick`'s own event, unhandled here), so a `button`
+ * check on this event is always `0` and was dead code (rework round 1,
+ * cheap fix).
+ */
+function TranscriptLink({
+  organizationId,
+  courseId,
+  personId,
+  onNavigate,
+  children,
+}: {
+  organizationId: string
+  courseId: string
+  personId: string
+  onNavigate: (route: Route) => void
+  children: string
+}) {
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return
+    }
+    event.preventDefault()
+    onNavigate({ kind: 'transcripts', organizationId, courseId, personId })
+  }
+
+  return (
+    <a
+      href={buildPath({
+        kind: 'transcripts',
+        organizationId,
+        courseId,
+        personId,
+      })}
+      onClick={handleClick}
+      className="block text-sm font-medium text-neutral-900 underline-offset-2 hover:underline"
+    >
+      {children}
+    </a>
+  )
+}
+
+export function CoursePeople({
+  organizationId,
+  courseId,
+  navigate,
+}: CoursePeopleProps) {
   const [entries, setEntries] = useState<CourseEnrolment[] | undefined>(
     undefined
   )
@@ -88,6 +173,9 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
     undefined
   )
   const { confirm } = useModal()
+  // WEB-16/WEB-36 — this file's own module comment on why the transcript
+  // link routes through this rather than calling `navigate` bare.
+  const { guardedNavigate } = useNavigationGuard()
 
   const refresh = useCallback(
     () =>
@@ -155,6 +243,15 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
     }
   }
 
+  // WEB-16/WEB-36 — every navigation this file starts (a click on
+  // `TranscriptLink`, below) goes through the same registered guard the
+  // rest of the shell already consults, so a dirty course form gets its
+  // say before it loses anything (this file's own module comment).
+  const handleNavigate = useCallback(
+    (route: Route) => guardedNavigate(() => navigate(route)),
+    [guardedNavigate, navigate]
+  )
+
   if (loadError) return <ErrorMessage error={loadError} />
   if (!entries) return null
 
@@ -182,9 +279,14 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
                 className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
               >
                 <div>
-                  <p className="text-sm font-medium text-neutral-900">
+                  <TranscriptLink
+                    organizationId={organizationId}
+                    courseId={courseId}
+                    personId={entry.personId}
+                    onNavigate={handleNavigate}
+                  >
                     {label(entry)}
-                  </p>
+                  </TranscriptLink>
                   <p className="text-sm text-neutral-500">
                     {SOURCE_LABELS[entry.source]} — admitted{' '}
                     {new Date(entry.createdAt).toLocaleString()}
@@ -223,9 +325,17 @@ export function CoursePeople({ organizationId, courseId }: CoursePeopleProps) {
                 className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 bg-neutral-50 p-3"
               >
                 <div>
-                  <p className="text-sm font-medium text-neutral-900">
+                  {/* WEB-36 — an ended enrolment links identically (this
+                      file's own module comment on why: ending never
+                      deletes the transcript, ENRL-6). */}
+                  <TranscriptLink
+                    organizationId={organizationId}
+                    courseId={courseId}
+                    personId={entry.personId}
+                    onNavigate={handleNavigate}
+                  >
                     {label(entry)}
-                  </p>
+                  </TranscriptLink>
                   <p className="text-sm text-neutral-500">
                     {SOURCE_LABELS[entry.source]} — ended{' '}
                     {entry.endedAt !== null

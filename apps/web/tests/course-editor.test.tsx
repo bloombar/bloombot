@@ -131,6 +131,7 @@ describe('CourseEditor (WEB-8)', () => {
   it("a new course shows the routing-relevant fields prominently, and starts disabled (D-23's own default)", () => {
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -157,6 +158,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -180,6 +182,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -238,6 +241,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -261,6 +265,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -302,6 +307,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -346,6 +352,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -379,6 +386,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -411,6 +419,7 @@ describe('CourseEditor (WEB-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -441,6 +450,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     const { rerender } = renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -458,6 +468,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     rerender(
       withModal(
         <CourseEditor
+          navigate={vi.fn()}
           organizationId="org-1"
           project={PROJECT}
           courseId={undefined}
@@ -477,6 +488,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -519,6 +531,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -566,6 +579,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     const { rerender } = renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -586,6 +600,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     rerender(
       withModal(
         <CourseEditor
+          navigate={vi.fn()}
           organizationId="org-1"
           project={PROJECT}
           courseId="course-1"
@@ -622,6 +637,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -679,6 +695,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -700,6 +717,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -730,6 +748,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -761,6 +780,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -797,6 +817,7 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -839,6 +860,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -868,6 +890,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -899,6 +922,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -922,6 +946,7 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -954,6 +979,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
   it('removing a category confirms first; cancelling keeps it', async () => {
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -982,6 +1008,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
   it('removing a category, confirmed, actually removes it — and every channel inside it', async () => {
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1014,6 +1041,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
   it('removing a channel confirms first; cancelling keeps it', async () => {
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1040,6 +1068,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
   it('removing a channel, confirmed, actually removes only that channel', async () => {
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1086,6 +1115,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     const onCancel = vi.fn()
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1102,6 +1132,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     const onCancel = vi.fn()
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1129,6 +1160,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     const onCancel = vi.fn()
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId={undefined}
@@ -1152,6 +1184,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     getCourse.mockResolvedValue(COURSE)
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -1181,6 +1214,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -1216,6 +1250,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"
@@ -1265,6 +1300,7 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
 
     renderWithModal(
       <CourseEditor
+        navigate={vi.fn()}
         organizationId="org-1"
         project={PROJECT}
         courseId="course-1"

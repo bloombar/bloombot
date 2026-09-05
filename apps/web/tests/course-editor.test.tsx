@@ -304,7 +304,7 @@ describe('CourseEditor (WEB-8)', () => {
   it('a client-side "Max requests per day" refusal switches to the AI tab when it is not already showing', async () => {
     getCourse.mockResolvedValue(COURSE)
 
-    renderWithModal(
+    const { rerender } = renderWithModal(
       <CourseEditor
         navigate={vi.fn()}
         organizationId="org-1"
@@ -322,7 +322,24 @@ describe('CourseEditor (WEB-8)', () => {
       target: { value: '5O' },
     })
     // ...then leave, without saving, to a tab with nothing wrong on it.
-    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    // Through the `tab` prop, i.e. a browser Back — the one route to
+    // another tab that deliberately does *not* go through the
+    // unsaved-changes prompt (`routing/useRoute.ts`'s own `popstate`
+    // handler bypasses the guard for a same-screen pop, WEB-34), and so
+    // the one route that can still strand a bad value on a hidden tab.
+    rerender(
+      withModal(
+        <CourseEditor
+          navigate={vi.fn()}
+          organizationId="org-1"
+          project={PROJECT}
+          courseId="course-1"
+          tab="general"
+          onSaved={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      )
+    )
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
       'aria-selected',
       'true'
@@ -371,17 +388,14 @@ describe('CourseEditor (WEB-8)', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('a save refused after ticking Enabled leaves the live toggle reading "Enable", not "Disable" (finding 4)', async () => {
-    getCourse.mockResolvedValue({ ...COURSE, enabled: false })
-    saveCourse.mockRejectedValue(
-      new ApiError(409, {
-        error: 'action_conflict',
-        conflict: {
-          message:
-            'Category name "GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
-        },
-      })
-    )
+  // The immediate Enable/Disable button that used to sit beside this
+  // checkbox is gone (`pages/CourseEditor.tsx`'s own `enabledControl`): one
+  // flag, one control, saved with the rest of the form. The immediate
+  // control lives on the project page's own per-course kebab menu
+  // (`pages/Courses.tsx`, `tests/courses.test.tsx`).
+  it('offers no immediate enable/disable control — the checkbox is the only one, and it saves with the form', async () => {
+    getCourse.mockResolvedValue({ ...COURSE, enabled: true })
+    saveCourse.mockResolvedValue({ ...COURSE, enabled: false })
 
     renderWithModal(
       <CourseEditor
@@ -394,46 +408,28 @@ describe('CourseEditor (WEB-8)', () => {
       />
     )
     await screen.findByDisplayValue('Web Design')
-    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument()
 
-    // Tick the checkbox (a pending edit) and hit a refused save.
-    fireEvent.click(screen.getByLabelText(/^Enabled$/))
-    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
-    await screen.findByRole('alert')
-
-    // The checkbox reflects the pending edit, but the live toggle still
-    // reads the server-confirmed state — never enabled, so still "Enable,"
-    // not "Disable" for a course that was never actually enabled.
-    expect(screen.getByLabelText(/^Enabled$/)).toBeChecked()
-    expect(screen.getByRole('button', { name: 'Enable' })).toBeInTheDocument()
+    // Fails before the change: both buttons were rendered here, reading
+    // the server-confirmed state.
     expect(
       screen.queryByRole('button', { name: 'Disable' })
     ).not.toBeInTheDocument()
-  })
+    expect(
+      screen.queryByRole('button', { name: 'Enable' })
+    ).not.toBeInTheDocument()
 
-  it('enable and disable dispatch the dedicated actions, not a resave', async () => {
-    getCourse.mockResolvedValue({ ...COURSE, enabled: false })
-    disableCourse.mockResolvedValue({ disabled: true })
-    enableCourse.mockResolvedValue({ enabled: true })
-
-    renderWithModal(
-      <CourseEditor
-        navigate={vi.fn()}
-        organizationId="org-1"
-        project={PROJECT}
-        courseId="course-1"
-        onSaved={vi.fn()}
-        onCancel={vi.fn()}
-      />
-    )
-    await screen.findByDisplayValue('Web Design')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    // Unticking and saving is what disables the course now.
+    expect(screen.getByLabelText(/^Enabled$/)).toBeChecked()
+    fireEvent.click(screen.getByLabelText(/^Enabled$/))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
 
     await waitFor(() =>
-      expect(enableCourse).toHaveBeenCalledWith('org-1', 'course-1')
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ id: 'course-1', enabled: false })
+      )
     )
-    expect(saveCourse).not.toHaveBeenCalled()
+    expect(disableCourse).not.toHaveBeenCalled()
   })
 })
 
@@ -481,7 +477,7 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
   })
 
-  it('switching tabs calls onNavigateTab, and an edit made on one tab survives switching to another', async () => {
+  it('switching tabs with nothing unsaved calls onNavigateTab and asks nothing', async () => {
     getCourse.mockResolvedValue(COURSE)
     const onNavigateTab = vi.fn()
 
@@ -499,34 +495,25 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
-    // Edit Title on General, then switch away and back — Fails without the
-    // fix: `form`/`baseline` would have to live per-tab for this edit to be
-    // lost, which this slice's brief explicitly rules out.
-    fireEvent.change(screen.getByLabelText('Title'), {
-      target: { value: 'Web Design II' },
-    })
-
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
     expect(onNavigateTab).toHaveBeenCalledWith('ai')
     expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
-
-    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
-    expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+    // A clean form is never asked about — the same "a clean form leaves
+    // with no prompt" rule WEB-16 already holds the whole-screen guard to.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  // Rework round 1, must-fix 1/7: this is the case that actually broke —
-  // `CourseInstructions` keeps its own text in its own `useState`, entirely
-  // outside `form`/`baseline`, so a fix that only kept `form` intact across
-  // a tab switch (the test above) would leave this one red: mounting only
-  // the active tab's panel unmounted `CourseInstructions` the moment its
-  // own tab stopped being the one showing, destroying whatever was typed
-  // and never saved.
-  it('an edit typed into Instructions on the AI tab survives switching away and back, unsaved', async () => {
+  // Rework round 1, must-fix 1/7: `CourseInstructions` keeps its own text in
+  // its own `useState`, entirely outside `form`/`baseline`, and mounting
+  // only the active tab's panel used to unmount it the moment its own tab
+  // stopped being the one showing. A remount would re-fetch; staying
+  // mounted does not, which is what this asserts.
+  it('a panel already opened stays mounted across a tab switch, rather than re-fetching', async () => {
     getCourse.mockResolvedValue(COURSE)
-    const onCancel = vi.fn()
 
     renderWithModal(
       <CourseEditor
@@ -536,35 +523,20 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         courseId="course-1"
         tab="ai"
         onSaved={vi.fn()}
-        onCancel={onCancel}
+        onCancel={vi.fn()}
       />
     )
-    await screen.findByLabelText('Model')
-
-    fireEvent.change(screen.getByLabelText('Instructions'), {
-      target: { value: 'Cite the syllabus.' },
-    })
+    await screen.findByLabelText('Instructions')
+    await waitFor(() =>
+      expect(listCourseInstructionRevisions).toHaveBeenCalledTimes(1)
+    )
 
     // Away, to a tab with no relation to Instructions at all, and back.
     fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
 
-    // Fails without the fix: `CourseInstructions` unmounted on the way to
-    // Discord, so its own `text` state — never saved — was gone; remounting
-    // it on the way back re-fetched the empty revision list this file's own
-    // `beforeEach` stubs, rendering blank rather than what was typed.
-    expect(screen.getByLabelText('Instructions')).toHaveValue(
-      'Cite the syllabus.'
-    )
-
-    // `instructionsDirty` is still consistent with that surviving edit —
-    // Cancel still prompts, exactly as it would have without ever
-    // switching tabs at all (this file's own WEB-19 dirty-bridge tests,
-    // below, cover the no-tab-switch case).
-    fireEvent.click(screen.getByRole('button', { name: /Fall 2026/ }))
-    await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })
-    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
-    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1))
+    expect(screen.getByLabelText('Instructions')).toBeInTheDocument()
+    expect(listCourseInstructionRevisions).toHaveBeenCalledTimes(1)
   })
 
   // Rework round 1, must-fix 7: the Back/Forward re-seeding path — nothing
@@ -663,6 +635,225 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     )
     expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
       'This role no longer exists on the bound Discord server.'
+    )
+  })
+})
+
+/**
+ * Leaving a tab with unsaved settings asks first, with three answers —
+ * save them, discard them, or stay put (`pages/CourseEditor.tsx`'s own
+ * `goToTabGuarded`). Every test here fails before that change: a tab click
+ * switched immediately, unsaved edits and all.
+ */
+describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
+  const renderEditor = (onNavigateTab = vi.fn()) => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="general"
+        onNavigateTab={onNavigateTab}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    return onNavigateTab
+  }
+
+  it('Cancel keeps both the tab and the edit', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    // Neither the tab nor the address moved, and the edit is untouched.
+    expect(onNavigateTab).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+    expect(saveCourse).not.toHaveBeenCalled()
+  })
+
+  it('Discard changes throws the edit away and switches', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    expect(onNavigateTab).toHaveBeenCalledWith('ai')
+    expect(saveCourse).not.toHaveBeenCalled()
+    // Back on General, the form reads what the server last agreed to.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Title')).toHaveValue('Web Design')
+    )
+  })
+
+  it('Save changes saves the form, then switches', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, title: 'Web Design II' })
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({ id: 'course-1', title: 'Web Design II' })
+      )
+    )
+    await waitFor(() => expect(onNavigateTab).toHaveBeenCalledWith('ai'))
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('a refused save keeps the person on the tab, with the refusal on screen', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          message:
+            'Category name "GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByRole('alert')
+    // Going anyway would have left the refusal behind on a tab nobody is
+    // looking at.
+    expect(onNavigateTab).not.toHaveBeenCalled()
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+  })
+
+  // WEB-19: an unsaved *Instructions* edit is unsaved settings too, even
+  // though that section keeps its own text and its own save — the prompt's
+  // Save answer reaches it through the handles it registers
+  // (`components/CourseInstructions.tsx`'s own `CourseInstructionsActions`).
+  it('an unsaved Instructions edit is asked about too, and its own save is what Save changes runs', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourseInstructions.mockResolvedValue({ saved: true })
+    const onNavigateTab = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onNavigateTab={onNavigateTab}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() =>
+      expect(saveCourseInstructions).toHaveBeenCalledWith(
+        'org-1',
+        'course-1',
+        'Cite the syllabus.'
+      )
+    )
+    // The course form itself was clean, so it is not re-sent.
+    expect(saveCourse).not.toHaveBeenCalled()
+    await waitFor(() => expect(onNavigateTab).toHaveBeenCalledWith('discord'))
+  })
+
+  it('Discard changes throws an unsaved Instructions edit away too', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    expect(saveCourseInstructions).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+    // The section is still mounted, so this is the discard itself, not a
+    // remount fetching a blank list.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Instructions')).toHaveValue('')
     )
   })
 })

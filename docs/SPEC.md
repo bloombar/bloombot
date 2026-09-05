@@ -2224,3 +2224,49 @@ with, and from the stored record, and duplicating a project no longer copies one
 still accepts a legacy config that names a prefix — those files exist and must keep importing — it
 simply no longer carries the value forward. The Python scripts of the pre-platform workflow keep
 reading their own config as they always have; they are not what this requirement is about.
+#### WEB-37 One control per flag: the course editor's Enabled checkbox
+
+The course editor's General tab offered two controls for one flag. An `Enabled` checkbox, which was
+a pending edit that only took effect on the next save, sat beside an `Enable`/`Disable` button that
+dispatched `courses.enable`/`courses.disable` the moment it was clicked. The two disagreed whenever
+the checkbox held an unsaved edit, and keeping the button honest about that took a whole second
+piece of state tracking what the server had last confirmed — a course that had never been enabled
+could otherwise show a ticked checkbox beside a button offering to disable it.
+
+The editor keeps the checkbox and loses the button. Whether a course is enabled becomes an ordinary
+field of the form, saved by the one Save button along with the title, the roles and everything else:
+untick it, save, and the course stops answering. The place to switch a course on or off without
+opening the editor is each course's own kebab menu on the project page, which is already where
+somebody shutting a misbehaving course off is looking.
+
+Disabling from the editor is deliberately unconfirmed, while the kebab menu keeps the warning
+WEB-15 gives it — "students stop being answered here until it is enabled again." That is not a
+contradiction: the checkbox is a pending edit a person reviews and then commits with an explicit
+save, so the save *is* the confirmation, and a tick made by accident is undone by unticking it rather
+than by an undo. The kebab menu acts immediately on a live course, with no review step between the
+click and the students, which is exactly the case a confirmation exists for.
+
+#### WEB-38 Leaving a settings tab with unsaved changes asks first
+
+The five settings tabs (WEB-35) share one form and one Save button, so an edit made on one tab is
+never lost by looking at another. It is still how an edit gets abandoned: change something on
+General, wander off to People to check a name, and the change is left behind unsaved with nothing
+on screen saying so.
+
+Leaving a tab with unsaved settings asks first, and offers three answers rather than the usual two:
+save the changes and carry on to the tab that was clicked, discard them and carry on, or stay on
+this tab with the edit intact. Cancel and `Escape` both mean stay. A save the server refuses keeps
+the person on the tab they were on with the refusal on screen, rather than switching away and
+leaving the message somewhere nobody is looking. An unsaved edit to a course's instructions counts
+as unsaved settings too, even though that section keeps its own text and its own save.
+
+Two moves deliberately pass straight through without asking. A refused save that switches tabs by
+itself, to show a field-level error on the tab that field lives on (WEB-16), must not stop to ask
+about the very edit it is reporting on. A browser Back or Forward between tabs is a navigation the
+panel already handles on its own terms (WEB-34), and nothing is lost by it, since every tab stays
+mounted.
+
+This asks the modal layer for something a two-button confirm cannot express: "discard" and "stay
+here" are different answers, and folding them together loses the edit for the people who meant the
+other one. The shared modal grows a three-way choice, one more mode of the single dialog component
+this panel already uses rather than a second dialog implementation.

@@ -9037,3 +9037,55 @@ journal entry pulled out, green again with them restored.
 this panel already renders for every refusal (WEB-5) still shows it. Transient by nature — the tab only posts
 the stale shape until it reloads once — and no worse than any other field this same schema already refuses
 outright rather than silently drops, so this is left as encountered rather than treated as a gap to close.
+
+## D-83 — `apps/web`: WEB-37/WEB-38 — one control per flag, and a tab switch that asks before abandoning an edit
+
+**One control per flag (WEB-37).** `pages/CourseEditor.tsx`'s General tab no longer renders an immediate
+`Enable`/`Disable` button beside the `Enabled` checkbox. The two controls drove the same flag on two
+different clocks — the checkbox a pending edit applied by the next `courses.save`, the button a
+`courses.enable`/`courses.disable` dispatched on click — and reconciling them needed `confirmedEnabled`, a
+second piece of state whose whole job was keeping the button from reading an edit that had not been saved
+(the WEB-7 rework's own finding 4). Deleting the button deletes that state and the disagreement it existed
+to paper over: `form.enabled` is now an ordinary form field, saved with the rest. `courses.enable` and
+`courses.disable` are untouched and still dispatched from each course's kebab menu on the project page
+(`pages/Courses.tsx`), which keeps WEB-15's own confirmation — the editor's checkbox is reviewed and then
+committed by an explicit save, so the save is the confirmation, while the kebab menu acts on a live course
+with no review step in between.
+
+**A tab switch asks before abandoning an edit (WEB-38).** `goToTabGuarded` wraps the tab controls' own
+`goToTab`: with anything unsaved it asks, with three answers — save and go, discard and go, or stay
+(Cancel and `Escape`). A refused save returns without navigating, so the refusal stays on the tab it
+belongs to; this is the same failure `switchToTabForField` exists to prevent, from the other direction.
+Two paths deliberately keep calling `goToTab` directly and never ask: `switchToTabForField`'s own
+auto-switch (asking about the edit it is reporting an error on would be circular), and the `tab`-prop
+re-seed a browser Back/Forward takes (`routing/useRoute.ts` bypasses the unsaved-changes guard for a
+same-screen pop — D-78 / WEB-34 — and nothing is lost, since every tab stays mounted).
+
+Dirtiness is split rather than pooled. `formDirty` (the `form`/`baseline` comparison) and
+`instructionsDirty` stay separate because the prompt's Save has to act on each half through its own
+action — `courses.save` for the form, `courseInstructions.save` for the instructions — and either half
+may be clean while the other is not; `isDirty`, the union, is still what the whole-screen navigation
+guard reads. Reaching an unsaved instructions edit at all needed `components/CourseInstructions.tsx` to
+hand out `{ save, discard }` through a new optional `onRegisterActions` prop: that section owns its own
+text and its own save (D-54), so a dialog belonging to the page has no other way in, and `onDirtyChange`
+alone would let the page ask a question it could not act on either answer to.
+
+**The modal grew a third button rather than a second dialog.** `components/modal/Modal.tsx` gains a
+`choice` kind and `ModalProvider.tsx` a `choose()` resolving `'confirm' | 'alt' | 'cancel'`. A two-button
+confirm cannot distinguish "discard" from "stay here", and collapsing them is wrong for whichever half of
+the users meant the other. Added as one more mode of the single dialog component every confirmation in
+this panel already shares (D-38's own "a second `<dialog>` is the duplication this file exists to
+prevent"), not as a new component: the change is additive apart from one line, `handleCancel`'s `settle`,
+which now treats a `choice` the way it already treated a `confirm` (a meaningful `false`, rather than
+`undefined`).
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck` clean; `npm test` green
+(2468 vitest, 90 node). Nine new cases, each confirmed red against the pre-change code in a throwaway
+worktree: `tests/course-editor.test.tsx` (neither enable/disable button renders and unticking + Save sends
+`enabled: false` through `courses.save`; Cancel keeps both the tab and the edit; Discard resets the form
+and switches; Save saves then switches; a refused save stays put with the error visible; an unsaved
+instructions edit is asked about and saved through its own action; Discard reaches it too) and
+`tests/modal.test.tsx` (each of the three answers resolves as itself, and `Escape` means stay).
+`e2e/course-configuration.spec.ts` drives all three answers against a real browser; the other e2e specs
+that used the removed `Disable` button as their "the save landed" signal now wait on the settings tabs,
+which render on the same condition (`courseId` set).

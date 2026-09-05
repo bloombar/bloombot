@@ -129,10 +129,10 @@ test('an organization with two active Discord bindings lists both, and a course 
   await serverSelect.selectOption(guildB)
 
   await page.getByRole('button', { name: 'Save course' }).click()
-  // The save succeeded once the dedicated enable/disable control appears —
-  // it only renders once `courseId` is set, i.e. once `courses.save`
-  // actually returned a saved course rather than a refusal.
-  await expect(page.getByRole('button', { name: 'Enable' })).toBeVisible()
+  // The save succeeded once the settings tabs appear — they only render
+  // once `courseId` is set, i.e. once `courses.save` actually returned a
+  // saved course rather than a refusal.
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 5. Read back directly: the saved course names `guildB`, not `guildA` —
   //    the identity of which binding it was assigned to, not merely that

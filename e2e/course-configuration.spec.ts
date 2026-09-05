@@ -110,10 +110,10 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
 
-  // The save succeeded once the dedicated enable/disable control appears —
-  // it only renders once `courseId` is set, i.e. once `courses.save`
-  // actually returned a saved course rather than a refusal.
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  // The save succeeded once the settings tabs appear — they only render
+  // once `courseId` is set, i.e. once `courses.save` actually returned a
+  // saved course rather than a refusal.
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // WEB-19/FILE-4: instructions (CFG-2: D-3's escape hatch — a course with
   // neither `instructions` nor `promptId` set answers nothing at all,
@@ -346,24 +346,54 @@ test("a course's settings tabs are real addresses — switching, reloading and s
     'true'
   )
 
-  // Edit Title on General, then switch away and back — the edit survives:
-  // `form`/`baseline` is one object CourseEditor owns regardless of which
-  // tab is showing, not split apart per tab.
+  // Edit Title on General, then try to leave the tab: with something
+  // unsaved, a tab switch asks first — save it, discard it, or stay put.
   const editedTitle = `Web Design — ${suffix} (edited)`
   await page.getByRole('tab', { name: 'General' }).click()
   await page.getByLabel('Title').fill(editedTitle)
   await page.getByRole('tab', { name: 'Roster' }).click()
-  await page.getByRole('tab', { name: 'General' }).click()
+
+  // "Cancel" keeps both the tab and the edit — nothing moved, nothing was
+  // sent.
+  await expect(
+    page.getByRole('dialog', { name: 'Save your changes?' })
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('tab', { name: 'General' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
   await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
 
-  // Saving from a tab other than General still saves that edit — the one
-  // "Save course" button is not tab-scoped, so an edit made on General is
-  // never stranded while looking at another tab.
+  // "Save changes" writes it through `courses.save` and then goes where
+  // the click was headed — the saved title is what the heading reads.
   await page.getByRole('tab', { name: 'Roster' }).click()
-  await page.getByRole('button', { name: 'Save course' }).click()
+  await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(
     page.getByRole('heading', { name: editedTitle, level: 1 })
   ).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Roster' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+
+  // The form is clean again, so moving between tabs asks nothing at all,
+  // and the saved edit is still on General.
+  await page.getByRole('tab', { name: 'General' }).click()
+  await expect(
+    page.getByRole('dialog', { name: 'Save your changes?' })
+  ).toBeHidden()
+  await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
+
+  // "Discard changes" throws the edit away and goes anyway — the field is
+  // back to what was last saved.
+  await page.getByLabel('Title').fill(`${editedTitle} (abandoned)`)
+  await page.getByRole('tab', { name: 'Roster' }).click()
+  await page.getByRole('button', { name: 'Discard changes' }).click()
+  await expect(page.getByRole('tab', { name: 'Roster' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
   await page.getByRole('tab', { name: 'General' }).click()
   await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
 })

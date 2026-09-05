@@ -297,4 +297,4 @@ knowledge files, websites, categories, roster, people — as one form scrolled t
 gave every screen an address; this phase gives the biggest screen an internal structure worth
 addressing, and closes the gap between seeing a person’s name and reading what they asked.
 
-**In scope:** WEB-35, WEB-36, ROST-13
+**In scope:** WEB-35, WEB-36, ROST-13, WEB-37, WEB-38

@@ -1,6 +1,6 @@
 /**
  * WEB-15/WEB-16/WEB-17: the imperative side of `Modal.tsx` — a caller
- * writes `await confirm({...})` rather than wiring `open`/`onConfirm`/
+ * writes `await confirm({...})`/`await choose({...})` rather than wiring `open`/`onConfirm`/
  * `onCancel` state into every screen that needs a destructive confirmation
  * or an unsaved-changes prompt. One `<Modal>` is mounted here, once, for
  * the whole app (`App.tsx` wraps everything in `ModalProvider`); every
@@ -43,6 +43,30 @@ export interface ConfirmOptions {
   destructive?: boolean
 }
 
+/**
+ * A three-way question: do the thing, do the *other* thing, or back out —
+ * `pages/CourseEditor.tsx`'s own "Save, Discard or Cancel?" when a tab
+ * switch would leave unsaved settings behind. A plain `confirm` cannot
+ * express it: "discard" and "stay here" are two different answers, and
+ * collapsing them loses the edit or traps the person on the tab.
+ */
+export interface ChooseOptions {
+  title: string
+  description?: string
+  /** The primary answer — e.g. "Save changes". */
+  confirmLabel: string
+  /** The second answer — e.g. "Discard changes". */
+  altLabel: string
+  /** The back-out answer, also what `Escape` resolves to. Defaults to "Cancel". */
+  cancelLabel?: string
+}
+
+/** What `choose()` resolves to: the confirm button, the alternate button, or backing out (Cancel/`Escape`). */
+export type ChoiceResult = 'confirm' | 'alt' | 'cancel'
+
+/** The value `settle()` carries for a `choice` dialog's alternate button — a `choice` only ever settles with `true` (confirm), this (alt) or `false` (cancel), so it never collides with a prompt's own string value. */
+const ALT_RESULT = 'alt'
+
 export interface PromptOptions {
   title: string
   description?: string
@@ -64,6 +88,8 @@ interface ModalContextValue {
   confirm(options: ConfirmOptions): Promise<boolean>
   /** Resolves the typed value on confirm, `undefined` on cancel or `Escape`. */
   prompt(options: PromptOptions): Promise<string | undefined>
+  /** Resolves which of the three buttons was activated — `'cancel'` for `Escape` too. Never rejects, for the same reason `confirm` does not. */
+  choose(options: ChooseOptions): Promise<ChoiceResult>
 }
 
 const ModalContext = createContext<ModalContextValue | undefined>(undefined)
@@ -76,6 +102,7 @@ interface Request {
   confirmLabel: string
   cancelLabel?: string
   destructive?: boolean
+  altLabel?: string
   promptLabel?: string
   promptValue?: string
   promptPlaceholder?: string
@@ -170,6 +197,20 @@ export function ModalProvider({ children }: { children: ReactNode }) {
         cancelLabel: options.cancelLabel ?? 'Cancel',
         destructive: options.destructive ?? false,
       }).then((result) => result === true),
+    choose: (options) =>
+      show({
+        kind: 'choice',
+        title: options.title,
+        ...(options.description !== undefined
+          ? { description: options.description }
+          : {}),
+        confirmLabel: options.confirmLabel,
+        altLabel: options.altLabel,
+        cancelLabel: options.cancelLabel ?? 'Cancel',
+      }).then((result) => {
+        if (result === true) return 'confirm'
+        return result === ALT_RESULT ? 'alt' : 'cancel'
+      }),
     prompt: (options) =>
       show({
         kind: 'prompt',
@@ -205,7 +246,19 @@ export function ModalProvider({ children }: { children: ReactNode }) {
   }
 
   const handleCancel = () => {
-    settle(current?.kind === 'confirm' ? false : undefined)
+    // A confirm and a choice both have a meaningful "no" (`false`); an
+    // alert and a prompt do not (`undefined` — nothing to cancel back to,
+    // and no typed value respectively).
+    settle(
+      current?.kind === 'confirm' || current?.kind === 'choice'
+        ? false
+        : undefined
+    )
+  }
+
+  /** The `choice` dialog's third button — see `ChooseOptions`. */
+  const handleAlt = () => {
+    settle(ALT_RESULT)
   }
 
   return (
@@ -229,6 +282,10 @@ export function ModalProvider({ children }: { children: ReactNode }) {
             ? { cancelLabel: renderedRequest.cancelLabel }
             : {})}
           destructive={renderedRequest.destructive ?? false}
+          {...(renderedRequest.altLabel !== undefined
+            ? { altLabel: renderedRequest.altLabel }
+            : {})}
+          onAlt={handleAlt}
           {...(renderedRequest.promptLabel !== undefined
             ? { promptLabel: renderedRequest.promptLabel }
             : {})}

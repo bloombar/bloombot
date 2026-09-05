@@ -3339,3 +3339,37 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-37
+  title: "One control per flag: the course editor's Enabled checkbox"
+  full: The course editor's General tab offered two controls for one flag. An
+    Enabled checkbox, which was a pending edit that only took effect on the next
+    save, sat beside an Enable/Disable button that dispatched
+    courses.enable/courses.disable the moment it was clicked. The two disagreed
+    whenever the checkbox held an unsaved edit, and keeping the button honest
+    about that took a whole second piece of state tracking what the server had
+    last confirmed — a course that had never been enabled could otherwise show a
+    ticked checkbox beside a button offering to disable it. The editor keeps the
+    checkbox and loses the button. Whether a course is enabled becomes an
+    ordinary field of the form, saved by the one…
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
+- id: WEB-38
+  title: Leaving a settings tab with unsaved changes asks first
+  full: "The five settings tabs (WEB-35) share one form and one Save button, so an
+    edit made on one tab is never lost by looking at another. It is still how an
+    edit gets abandoned: change something on General, wander off to People to
+    check a name, and the change is left behind unsaved with nothing on screen
+    saying so. Leaving a tab with unsaved settings asks first, and offers three
+    answers rather than the usual two: save the changes and carry on to the tab
+    that was clicked, discard them and carry on, or stay on this tab with the
+    edit intact. Cancel and Escape both mean stay. A save the server refuses
+    keeps the person on the tab they were on with the refusal on screen, rather
+    than switching away and…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false

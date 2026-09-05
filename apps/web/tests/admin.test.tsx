@@ -164,7 +164,39 @@ describe('Admin (ADMIN-4)', () => {
     expect(
       await screen.findByText(/platform-administrator access/i)
     ).toBeInTheDocument()
+    // Review finding: the split into three screens dropped the `!error &&`
+    // guard around the placeholder, so the refusal was shown *and* a
+    // permanent "Loading…" underneath it — a screen claiming to still be
+    // fetching something it has already been refused.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
+
+  // The same finding on each of the two screens the split created — a
+  // failed read must not leave either of them spinning forever.
+  it.each([
+    [
+      'admin-organization',
+      { kind: 'admin-organization', organizationId: 'org-1' },
+    ],
+    ['admin-deletions', { kind: 'admin-deletions' }],
+  ] as const)(
+    'the %s screen shows the refusal rather than a permanent "Loading…"',
+    async (_name, route) => {
+      fetchAdminOrganizations.mockRejectedValue(
+        new ApiError(403, { error: 'not_platform_administrator' })
+      )
+      fetchTenantDeletions.mockRejectedValue(
+        new ApiError(403, { error: 'not_platform_administrator' })
+      )
+
+      renderAdmin({ route })
+
+      expect(
+        await screen.findByText(/platform-administrator access/i)
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    }
+  )
 })
 
 describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
@@ -259,6 +291,32 @@ describe('Admin — WEB-33’s own screens', () => {
       ],
       platformHealth: PLATFORM_HEALTH,
     })
+  })
+
+  // Review finding — a delete started from the organization's *own*
+  // address left the operator on that address, which the refreshed read no
+  // longer matches: a successful deletion rendered "Not found".
+  it('a deletion started from an organization’s own screen returns to the list, not a not-found page', async () => {
+    fetchDeletionPreview.mockResolvedValue(PREVIEW)
+    deleteTenant.mockResolvedValue(undefined)
+    fetchTenantDeletions.mockResolvedValue([])
+
+    renderAdmin({
+      route: { kind: 'admin-organization', organizationId: 'org-1' },
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Organization name'), {
+      target: { value: 'A Real Tenant' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(deleteTenant).toHaveBeenCalledWith('org-1', 'A Real Tenant')
+    })
+    expect(await screen.findByTestId('admin-organizations')).toBeInTheDocument()
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
   })
 
   // `'platform-admin'` itself is never rendered past its own effect —

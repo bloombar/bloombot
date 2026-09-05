@@ -69,6 +69,7 @@ import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
 import {
+  buildPath,
   isAdminRoute,
   isShellRoute,
   parseRoute,
@@ -488,16 +489,27 @@ export function App() {
   // along on the issued token (`SignIn`'s own `destination` prop, exactly
   // as `Connect`/`JoinLink`/`Invitation` already use it), so redeeming the
   // emailed link lands them on that screen rather than on whatever
-  // `resolveHomeRoute` would have picked. Re-checked against
-  // `isSameOriginPath` here even though this value comes from this app's
-  // own address bar and `apps/api` checks it again at request time: the
-  // same "this app's own last checkpoint before it navigates" rule the
-  // sign-in redemption path above already follows.
-  const signedOutDestination = `${window.location.pathname}${window.location.search}`
+  // `resolveHomeRoute` would have picked.
+  //
+  // Built from the *parsed* route rather than from `window.location`
+  // (review finding): `returnToShell` runs whatever it is handed back
+  // through `parseRoute`, which does not strip a query string, so a link
+  // carrying a `?utm_...` tail would have signed the visitor in onto
+  // `/not-found` — worse than not carrying a destination at all. Building
+  // it with `buildPath` guarantees the value is one this app can parse
+  // back, and an unrecognised address carries nothing at all rather than a
+  // destination that is certain to fail. Re-checked against
+  // `isSameOriginPath` regardless, the same "this app's own last checkpoint
+  // before it navigates" rule the sign-in redemption path above follows.
+  const signedOutDestination =
+    route.kind === 'home' || route.kind === 'not-found'
+      ? undefined
+      : buildPath(route)
   return (
     <SignIn
       onSignedIn={refreshSession}
-      {...(route.kind !== 'home' && isSameOriginPath(signedOutDestination)
+      {...(signedOutDestination !== undefined &&
+      isSameOriginPath(signedOutDestination)
         ? { destination: signedOutDestination }
         : {})}
     />

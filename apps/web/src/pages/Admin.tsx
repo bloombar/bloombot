@@ -190,6 +190,13 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
       await deleteTenant(organizationId, typed)
       refresh()
       refreshDeletions()
+      // WEB-33 — a delete started from the organization's *own* address
+      // leaves that address naming something that no longer exists, which
+      // would render `NotFound` the moment the refreshed read lands. Go back
+      // to the list, where the operator can see the deletion took effect.
+      if (route.kind === 'admin-organization') {
+        navigate({ kind: 'admin-organizations' }, { replace: true })
+      }
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
@@ -232,6 +239,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
         <OrganizationDetail
           organizationId={route.organizationId}
           data={data}
+          failed={error !== undefined}
           deletingId={deletingId}
           onDelete={handleDelete}
           onBack={() => navigate({ kind: 'admin-organizations' })}
@@ -239,11 +247,13 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
       ) : route.kind === 'admin-deletions' ? (
         <DeletionsView
           deletions={deletions}
+          failed={error !== undefined}
           onBack={() => navigate({ kind: 'admin-organizations' })}
         />
       ) : (
         <OrganizationsList
           data={data}
+          failed={error !== undefined}
           deletingId={deletingId}
           onOpen={(organizationId) =>
             navigate({ kind: 'admin-organization', organizationId })
@@ -259,12 +269,15 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
 /** WEB-33's `'admin-organizations'` screen — unchanged from what `Admin` rendered directly before this slice, aside from the organization's own name now being a link into `'admin-organization'` and the deletion history moving to its own address (below `OrganizationsList`'s own link to it). */
 function OrganizationsList({
   data,
+  failed,
   deletingId,
   onOpen,
   onDelete,
   onViewDeletions,
 }: {
   data: AdminOrganizationsResponse | undefined
+  /** True once the read this screen renders from has failed — the refusal itself is already on screen above (`Admin`'s own `ErrorMessage`), so this screen must not also claim to still be loading. Restores the `!error &&` guard the split into three screens dropped: a non-administrator reaching `/platform-admin` saw the 403 *and* a permanent "Loading…" underneath it. */
+  failed: boolean
   deletingId: string | undefined
   onOpen: (organizationId: string) => void
   onDelete: (organizationId: string, name: string) => void
@@ -273,9 +286,11 @@ function OrganizationsList({
   return (
     <>
       {data === undefined ? (
-        <p role="status" className="text-sm text-neutral-500">
-          Loading…
-        </p>
+        failed ? null : (
+          <p role="status" className="text-sm text-neutral-500">
+            Loading…
+          </p>
+        )
       ) : data.organizations.length === 0 ? (
         <p className="text-sm text-neutral-500">No organizations yet.</p>
       ) : (
@@ -334,17 +349,21 @@ function OrganizationsList({
 function OrganizationDetail({
   organizationId,
   data,
+  failed,
   deletingId,
   onDelete,
   onBack,
 }: {
   organizationId: string
   data: AdminOrganizationsResponse | undefined
+  /** See `OrganizationsList`'s own `failed` — same reason, same treatment. */
+  failed: boolean
   deletingId: string | undefined
   onDelete: (organizationId: string, name: string) => void
   onBack: () => void
 }) {
   if (data === undefined) {
+    if (failed) return null
     return (
       <p role="status" className="text-sm text-neutral-500">
         Loading…
@@ -401,9 +420,12 @@ function OrganizationDetail({
 /** WEB-33's `'admin-deletions'` screen — ADMIN-5's own audit trail, unchanged in content from what `Admin` rendered inline before this slice, now at its own address. */
 function DeletionsView({
   deletions,
+  failed,
   onBack,
 }: {
   deletions: TenantDeletion[] | undefined
+  /** See `OrganizationsList`'s own `failed` — same reason, same treatment. */
+  failed: boolean
   onBack: () => void
 }) {
   return (
@@ -415,9 +437,11 @@ function DeletionsView({
         Deletion history
       </h2>
       {deletions === undefined ? (
-        <p role="status" className="text-sm text-neutral-500">
-          Loading…
-        </p>
+        failed ? null : (
+          <p role="status" className="text-sm text-neutral-500">
+            Loading…
+          </p>
+        )
       ) : deletions.length === 0 ? (
         <p className="text-sm text-neutral-500">No deletions yet.</p>
       ) : (

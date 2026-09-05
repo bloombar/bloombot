@@ -9,8 +9,8 @@
  * and neither was `fetchMe()` rejecting outright (finding 3).
  */
 
-import { screen, fireEvent } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
@@ -40,6 +40,7 @@ const {
   redeemMembershipInvitation,
   listChatCourses,
   getChatMessages,
+  requestSignInLink,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
@@ -57,6 +58,9 @@ const {
   // the same reason `listProjects`/`listDiscordServers` above are mocked.
   listChatCourses: vi.fn(),
   getChatMessages: vi.fn(),
+  // WEB-34 — what a signed-out deep link actually carries: the destination
+  // is handed to `requestSignInLink`, so this is where it can be observed.
+  requestSignInLink: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -77,6 +81,7 @@ vi.mock('../src/api/client.js', async () => {
     redeemMembershipInvitation,
     listChatCourses,
     getChatMessages,
+    requestSignInLink,
   }
 })
 
@@ -683,5 +688,77 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
       expect(redeemMembershipInvitation).toHaveBeenCalledWith('secret-abc')
     )
     expect(window.location.pathname).toBe('/invitations/secret-abc')
+  })
+})
+
+// WEB-34 (review finding) — a bookmark or a shared link followed while
+// signed out asks for a sign-in, and the address must ride along on the
+// issued token, so redeeming the emailed link lands on the screen the
+// visitor actually clicked rather than on home resolution's default.
+describe('App — a deep link followed while signed out keeps its address', () => {
+  beforeEach(() => {
+    fetchMe.mockResolvedValue({ account: null })
+    requestSignInLink.mockResolvedValue(undefined)
+  })
+
+  it('carries the address on the sign-in request', async () => {
+    window.history.replaceState(null, '', '/o/org-1/projects/project-1')
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        '/o/org-1/projects/project-1'
+      )
+    })
+  })
+
+  it('carries a parseable address even when the link arrived with a query string, rather than one that would sign the visitor in onto not-found', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/o/org-1/projects/project-1?utm_source=email'
+    )
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        '/o/org-1/projects/project-1'
+      )
+    })
+  })
+
+  it('carries nothing at all for an address this app cannot parse back', async () => {
+    window.history.replaceState(null, '', '/nothing-here')
+
+    renderWithModal(<App />)
+    fireEvent.change(await screen.findByLabelText('Email'), {
+      target: { value: 'reader@example.edu' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Email me a sign-in link' })
+    )
+
+    await waitFor(() => {
+      expect(requestSignInLink).toHaveBeenCalledWith(
+        'reader@example.edu',
+        undefined
+      )
+    })
   })
 })

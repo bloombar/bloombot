@@ -1,6 +1,19 @@
 /**
+ * WEB-32/WEB-34: this shell no longer owns `activeTab`/`activeOrganizationId`
+ * as local state — both are derived from the `route` prop `App.tsx` threads
+ * in, the parsed address the browser bar (and back/forward) actually shows.
+ * `tabForRoute` (`routing/route.ts`) maps the current `route` to a `Tab`;
+ * `activeOrganizationId`, below, reads `route.organizationId` where the
+ * route carries one and falls back to `rememberedOrganizationId` only for
+ * `'account'` (WEB-30), which deliberately names no organization at all —
+ * see that state's own comment for why the header still needs one to show.
+ * Every navigation this shell starts — a drawer item, the home control, an
+ * organization switch — calls the `navigate` prop rather than a setter; the
+ * rest of this module comment (below) describes what each tab shows and
+ * why, unchanged by this slice.
+ *
  * The signed-in shell: which organization the panel is acting in (WEB-3),
- * the Discord install button (WEB-4), and — this slice — the projects and
+ * the Discord install button (WEB-4), and the projects and
  * courses screens (WEB-7, WEB-8, WEB-9). The two live behind a tab rather
  * than both rendering at once — `ProjectsPanel` fetches on mount
  * (`projects.list`), and there is no reason to pay that request, or show
@@ -114,18 +127,30 @@ import {
   useNavigationGuard,
 } from '../hooks/navigation-guard.js'
 import { ProfileIcon, SignOutIcon } from '../icons.js'
+import {
+  isProjectsRoute,
+  routeForTab,
+  tabForRoute,
+  type Route,
+  type ShellRoute,
+} from '../routing/route.js'
 import { Account } from './Account.js'
 import { Chat } from './Chat.js'
 import { Jobs } from './Jobs.js'
+import { NotFound } from './NotFound.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
 import { Usage } from './Usage.js'
 
 export interface ShellProps {
   account: AccountSummary
+  /** WEB-32 — the address this shell is currently rendering; `pages/Shell.tsx` is the one place a `ShellRoute` is ever rendered, the same way it was the one place `activeTab`/`activeOrganizationId` local state used to live before this slice. */
+  route: ShellRoute
+  /** WEB-32/WEB-34 — `routing/useRoute.ts`'s own `navigate`, threaded down from `App.tsx`; every navigation this shell starts (a drawer item, the home control, an organization switch) calls this rather than setting local state. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
   /** Set by `App.tsx` once `pages/DiscordCallback.tsx` reports a bound server — carries across the round trip through Discord's own consent screen (see that page's module comment). `undefined` until an install completes in this browser session — this is only the *immediate* signal; `discordBindingState` (this file's own module comment, TEN-8) is what the panel actually trusts once it has fetched, via `api/client.ts#listDiscordServers`, so a reload or a second device shows the truth too. */
   justInstalled?: { organizationId: string; serverId: string }
-  /** WEB-25 — set by `App.tsx` once `pages/JoinLink.tsx` reports a redeemed course join link (fresh or already-enrolled), the same "carried across this one remount" shape `justInstalled` (above) already uses for the Discord install round trip. Prefers this organization for the initial active one and opens straight to the Chat tab with this course already selected (`activeOrganizationId`/`activeTab`'s own initializers, and the `Chat` render, below) — a redeemer's whole point in following the link was to ask this exact course something, not to land on Projects and have to find it themselves. */
+  /** WEB-25 — set by `App.tsx` once `pages/JoinLink.tsx` reports a redeemed course join link (fresh or already-enrolled). `App.tsx`'s own `resolveHomeRoute` (WEB-34) is what actually picks this organization and opens straight to the Chat tab with this course already selected, by navigating there directly — this prop is only what this file reads to decide whether the join confirmation banner belongs on the `Chat` it renders (the `Chat` render, below). */
   joinedCourse?: {
     organizationId: string
     courseId: string
@@ -171,55 +196,39 @@ export function Shell(props: ShellProps) {
 
 function ShellInner({
   account,
+  route,
+  navigate,
   justInstalled,
   joinedCourse,
   onSignedOut,
 }: ShellProps) {
   const { guardedNavigate } = useNavigationGuard()
-  // WEB-3/WEB-4 — an install navigates the whole browser away to Discord and
-  // back (`components/InstallButton.tsx`'s own module comment), so the
-  // callback lands on a fresh mount of this component: `justInstalled` is a
-  // prop, not state this component already had. Defaulting to
-  // `memberships[0]` unconditionally left a successful install into any
-  // *other* organization stranded — the switcher showed the first
-  // membership while the API had bound the server to whichever organization
-  // the install actually ran for. Preferring `justInstalled.organizationId`
-  // (when the account really is a member of it — defensive against a value
-  // this app did not itself just hand back) makes the panel open on the
-  // organization the install belonged to, so `installedServerId` below
-  // actually matches on the first render rather than only after a manual
-  // switch.
-  //
-  // WEB-25 — `joinedCourse` is checked first: a course join link admits a
-  // redeemer as a *connected person*, not necessarily a member (LINK-10), so
-  // this also checks `connectedOrganizations`, unlike `justInstalled`'s own
-  // membership-only check (an install can only ever target an organization
-  // this account already administers).
-  const [activeOrganizationId, setActiveOrganizationId] = useState(() => {
-    if (
-      joinedCourse &&
-      (account.memberships.some(
-        (membership) =>
-          membership.organizationId === joinedCourse.organizationId
-      ) ||
-        account.connectedOrganizations.some(
-          (connection) =>
-            connection.organizationId === joinedCourse.organizationId
-        ))
-    ) {
-      return joinedCourse.organizationId
-    }
-    if (
-      justInstalled &&
-      account.memberships.some(
-        (membership) =>
-          membership.organizationId === justInstalled.organizationId
-      )
-    ) {
-      return justInstalled.organizationId
-    }
-    return account.memberships[0]?.organizationId ?? ''
-  })
+  // WEB-32/WEB-34 — `route.organizationId` is the source of truth for every
+  // route above except `'account'`, which deliberately names no
+  // organization at all (WEB-30's own carve-out). The header
+  // (`OrganizationSwitcher`, below) still needs *some* organization to show
+  // as active while `/account` is open — remembered here, updated whenever
+  // the route itself carries a real one, so switching to `/account` and
+  // back leaves the header showing whichever organization was active
+  // beforehand, not blank. `App.tsx`'s own `resolveHomeRoute` (WEB-34) is
+  // what picks the very first organization this shell ever mounts on
+  // (preferring `joinedCourse`'s or `justInstalled`'s, the same preference
+  // this state's own initializer used to hold directly) — by the time this
+  // component exists, `route` already names it.
+  const [rememberedOrganizationId, setRememberedOrganizationId] = useState(
+    () =>
+      route.kind === 'account'
+        ? (account.memberships[0]?.organizationId ??
+          account.connectedOrganizations[0]?.organizationId ??
+          '')
+        : route.organizationId
+  )
+  useEffect(() => {
+    if (route.kind !== 'account')
+      setRememberedOrganizationId(route.organizationId)
+  }, [route])
+  const activeOrganizationId =
+    route.kind === 'account' ? rememberedOrganizationId : route.organizationId
   // TEN-8: the server-truth read this file's own module comment describes —
   // starts `'loading'` on every mount, never defaults to "no binding," so a
   // render before the first `listDiscordServers` response cannot be
@@ -260,57 +269,16 @@ function ShellInner({
   )
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [signingOut, setSigningOut] = useState(false)
-  // Defaults to 'projects' — the module comment above has the product
-  // reasoning; `docs/DECISIONS.md` D-25 has the accounting of what that
-  // default costs `tests/shell.test.tsx` (a handful of `listProjects`
-  // mocks, added there rather than left implicit by defaulting elsewhere).
-  // WEB-14: also this shell's own "home" — the header's home control
-  // (`AppShell.tsx`) returns here.
-  //
-  // WEB-25 — `joinedCourse` overrides that default to `'chat'`: a redeemer
-  // followed this link to ask a course something, not to see Projects.
-  const [activeTab, setActiveTab] = useState<
-    | 'discord'
-    | 'projects'
-    | 'chat'
-    | 'transcripts'
-    | 'usage'
-    | 'team'
-    | 'jobs'
-    | 'account'
-  >(() => (joinedCourse ? 'chat' : 'projects'))
-
-  // WEB-28: which course a course row's own "Chat" button most recently
-  // asked to open — `Chat` (`pages/Chat.tsx`) only reads its own
-  // `initialCourseId` prop once, at mount (the same "seed once, never
-  // override a value already chosen" shape it already holds for the
-  // `<select>`). Held here, in shell state, rather than read continuously
-  // inside `Chat` itself: the more surgical alternative would touch
-  // WEB-25's own `initialCourseId` contract there for a case this slice
-  // does not need to solve. No `key` extension is needed to make a second
-  // request reach a fresh `Chat` mount, either — `Chat` already sits in a
-  // ternary chain with every other tab (below), so reaching it a second
-  // time by way of `pages/Courses.tsx` (nested inside `ProjectsPanel`, a
-  // *different* branch of that same chain) always unmounts and remounts it
-  // regardless of `key`; a round 1 review measured this directly by
-  // reverting an earlier revision's `key={`${activeOrganizationId}:${chatCourseId ?? ''}`}`
-  // back to `key={activeOrganizationId}` alone and finding the second-click
-  // test below still green (`docs/DECISIONS.md` D-75 has the corrected
-  // record).
-  //
-  // Round 1 rework (must-fix 1): this value used to survive an
-  // organization switch untouched — nothing cleared it — so a course
-  // requested in one organization could be read as `initialCourseId` after
-  // switching to a different one whose own course list never contained it.
-  // `changeActiveOrganization`, below, is the one place `activeOrganizationId`
-  // is ever set (`OrganizationSwitcher`'s `onChange`, `Account`'s own
-  // `onSwitchOrganization`) — clearing `chatCourseId` there, every time,
-  // keeps the invariant this state depends on: whenever it is not
-  // `undefined`, it always names a course in the *currently* active
-  // organization.
-  const [chatCourseId, setChatCourseId] = useState<string | undefined>(
-    undefined
-  )
+  // WEB-32/WEB-34 — derived from `route`, not this shell's own state
+  // (`tabForRoute`'s own comment, `routing/route.ts`, has why every
+  // `ProjectsRoute` variant collapses to `'projects'`). `App.tsx`'s own
+  // `resolveHomeRoute` is what a fresh mount actually lands on — Projects
+  // for a member, Chat (with `joinedCourse`'s own course already in the
+  // address) for a redeemer or a connected-only account — the same product
+  // reasoning `docs/DECISIONS.md` D-25 already recorded for the tab
+  // default, now expressed as an address rather than a `useState` initial
+  // value.
+  const activeTab = tabForRoute(route)
 
   // LINK-10: a membership (TEN-1's administrative relationship) is not the
   // same thing as a connected person (LINK-3's proof) — a student who has
@@ -486,34 +454,51 @@ function ShellInner({
   // and why the difference is what `e2e/keyboard.spec.ts`'s own focus-
   // restoration assertion depends on.
   const appShellRef = useRef<AppShellHandle>(null)
-  // Every drawer item's own `onClick` — set the tab, then close the drawer
-  // — wrapped in `guardedNavigate` (WEB-16) so a dirty form elsewhere in
-  // the tree gets its chance to confirm before either happens.
-  const navigateToTab = (tab: typeof activeTab) =>
+  // Every drawer item's own `onClick` — navigate to that tab's own landing
+  // address, then close the drawer — wrapped in `guardedNavigate` (WEB-16)
+  // so a dirty form elsewhere in the tree gets its chance to confirm before
+  // either happens. `routeForTab` (`routing/route.ts`) is the inverse of
+  // `tabForRoute` above: every tab besides Projects is exactly one address,
+  // so this always lands on that tab's plain landing screen, not wherever a
+  // deep link inside it (a course, a project) last pointed.
+  const navigateToTab = (tab: ReturnType<typeof tabForRoute>) =>
     guardedNavigate(() => {
-      setActiveTab(tab)
+      navigate(routeForTab(tab, activeOrganizationId))
       appShellRef.current?.closeDrawer()
     })
 
-  // WEB-28: `pages/Courses.tsx`'s own Chat button — routed through
-  // `guardedNavigate` (WEB-16) like every other navigation this shell
-  // starts, the same as `navigateToTab` above.
+  // WEB-28: `pages/Courses.tsx`'s own Chat button — navigates straight to
+  // this course's own Chat address, routed through `guardedNavigate`
+  // (WEB-16) like every other navigation this shell starts, the same as
+  // `navigateToTab` above.
   const openChatForCourse = (courseId: string) =>
     guardedNavigate(() => {
-      setChatCourseId(courseId)
-      setActiveTab('chat')
+      navigate({ kind: 'chat', organizationId: activeOrganizationId, courseId })
     })
 
-  // Round 1 rework (must-fix 1): the one place `activeOrganizationId`
-  // itself is ever set — `OrganizationSwitcher`'s own `onChange` and
-  // `Account`'s own `onSwitchOrganization`, below, both call this rather
-  // than `setActiveOrganizationId` directly, so a course a previous Chat
-  // click asked for cannot outlive the organization it belongs to
-  // (`chatCourseId`'s own comment above has the invariant this keeps).
+  // WEB-32/WEB-34's own "switching organizations navigates to the same
+  // screen kind under the new organization id, or to that organization's
+  // landing screen where the current screen has no counterpart" rule.
+  // `routeForTab(activeTab, ...)` already drops every id a `ProjectsRoute`/
+  // `'chat'` route might carry (a project, a course) — those never belong
+  // to more than one organization (TEN-2), so they have no counterpart to
+  // carry across regardless of which tab they are under. `'account'` has no
+  // organization-scoped counterpart at all — switching from there always
+  // lands on the target organization's own landing screen, the same
+  // membership-or-not choice `App.tsx`'s own `resolveHomeRoute` makes for a
+  // fresh sign-in.
   const changeActiveOrganization = (organizationId: string) =>
     guardedNavigate(() => {
-      setActiveOrganizationId(organizationId)
-      setChatCourseId(undefined)
+      if (activeTab === 'account') {
+        const targetIsMember = account.memberships.some(
+          (membership) => membership.organizationId === organizationId
+        )
+        navigate(
+          routeForTab(targetIsMember ? 'projects' : 'chat', organizationId)
+        )
+        return
+      }
+      navigate(routeForTab(activeTab, organizationId))
     })
 
   // WEB-29: the "everyday" group — Projects, Chat, Transcripts — every
@@ -591,7 +576,11 @@ function ShellInner({
     <AppShell
       ref={appShellRef}
       onHome={() =>
-        guardedNavigate(() => setActiveTab(isMember ? 'projects' : 'chat'))
+        guardedNavigate(() =>
+          navigate(
+            routeForTab(isMember ? 'projects' : 'chat', activeOrganizationId)
+          )
+        )
       }
       navGroups={
         isMember ? [everydayGroup, organizationGroup] : [everydayGroup]
@@ -618,7 +607,7 @@ function ShellInner({
           variant="ghost"
           aria-label="Account settings"
           icon={<ProfileIcon aria-hidden="true" className="size-5" />}
-          onClick={() => guardedNavigate(() => setActiveTab('account'))}
+          onClick={() => guardedNavigate(() => navigate({ kind: 'account' }))}
         />
       }
       drawerFooter={
@@ -689,39 +678,49 @@ function ShellInner({
         // `key={activeOrganizationId}` reasoning `ProjectsPanel` below
         // already holds itself to — a course selected in the previous
         // organization must not linger once a different one is active.
-        // WEB-28's own second-Chat-click case needs no extra key: `Chat`
-        // sits in this same ternary chain, so navigating away from it —
-        // through `pages/Courses.tsx`, nested inside `ProjectsPanel`, a
-        // different branch entirely — already unmounts it; the next click
-        // reaches a fresh mount regardless (`chatCourseId`'s own comment,
-        // above, has the round 1 finding this corrected).
         //
-        // WEB-25 — `joinedCourse` is only ever passed through when it names
-        // *this* active organization *and* no course row's own Chat button
-        // has since asked for a different one (`chatCourseId === joinedCourse.courseId`)
-        // — a redeemer who has since switched to a different one, then
-        // back, sees the same confirmation again on return (this component
-        // holds no separate "already shown" flag), which is accurate, if
-        // not the tersest possible UI — see this slice's own report for why
-        // that tradeoff was left as is. `chatCourseId`, when set, always
-        // names a course in *this* organization (`changeActiveOrganization`
-        // clears it on every switch), so this guard needs no separate
-        // `activeOrganizationId` check of its own.
+        // WEB-32/WEB-34 — the selected course is `route.courseId` itself,
+        // not shell state: `route.kind !== 'chat'` here exactly when
+        // `effectiveTab` forced Chat for a connected-but-not-a-member
+        // account reaching a different organization-scoped address
+        // (LINK-10, this file's own module comment) — there is no course id
+        // to read in that case either, so `Chat` opens with none chosen,
+        // the same as a bare `/o/:id/chat` visit. Selecting one in the
+        // `<select>` navigates (`onSelectCourse`, below) rather than
+        // setting local state, so the address bar and the "seed once"
+        // WEB-25 behaviour both fall out of the same prop.
+        //
+        // WEB-25 — `joinConfirmation` is only ever passed through when the
+        // route's own course *is* the one this redemption just joined — a
+        // redeemer who has since picked a different course (which
+        // navigates, updating `route.courseId`) stops seeing it, and
+        // returning to the joined course's own address (by picking it
+        // again, or by pressing back) shows it again — this component holds
+        // no separate "already shown" flag, the identical tradeoff this
+        // file's own report already recorded before this slice.
         <Chat
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          {...(route.kind === 'chat' && route.courseId !== undefined
+            ? { courseId: route.courseId }
+            : {})}
+          onSelectCourse={(courseId) =>
+            navigate({
+              kind: 'chat',
+              organizationId: activeOrganizationId,
+              courseId,
+            })
+          }
           {...(joinedCourse &&
           joinedCourse.organizationId === activeOrganizationId &&
-          (chatCourseId === undefined || chatCourseId === joinedCourse.courseId)
+          route.kind === 'chat' &&
+          route.courseId === joinedCourse.courseId
             ? {
-                initialCourseId: joinedCourse.courseId,
                 joinConfirmation: {
                   alreadyEnrolled: joinedCourse.alreadyEnrolled,
                 },
               }
-            : chatCourseId
-              ? { initialCourseId: chatCourseId }
-              : {})}
+            : {})}
         />
       ) : effectiveTab === 'transcripts' ? (
         // ADMIN-1..3 — the same `key={activeOrganizationId}` reasoning
@@ -783,7 +782,7 @@ function ShellInner({
             changeActiveOrganization(organizationId)
           }
         />
-      ) : (
+      ) : isProjectsRoute(route) ? (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a
         // fresh `ProjectsPanel` — and its own internal `view` state — on
         // every organization switch. Without it, a project (or course)
@@ -793,10 +792,33 @@ function ShellInner({
         // organization — a cross-tenant lookup TEN-2's own policy
         // correctly refuses, stranding the instructor on that refusal
         // with no way to clear it short of reloading the page.
+        //
+        // WEB-32 — `route` itself is now the source of which of the four
+        // project/course screens is showing (`pages/ProjectsPanel.tsx`'s
+        // own module comment); this branch is only reached when
+        // `effectiveTab === 'projects'`, which — since `isMember` must be
+        // true for that (LINK-10's own restriction, above) — only ever
+        // happens for a `route` this guard already accepts.
         <ProjectsPanel
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          route={route}
+          navigate={navigate}
           onOpenChat={(courseId) => openChatForCourse(courseId)}
+        />
+      ) : (
+        // Defensive, not expected (this codebase's own "defended, not
+        // assumed" discipline — `pages/Chat.tsx`'s own `describeDeclineNotice`
+        // holds itself to the same standard): `tabForRoute` maps every
+        // `ShellRoute` to a tab, and every branch above already covers every
+        // tab but `'projects'`, which `isProjectsRoute` covers immediately
+        // above — nothing should ever reach this branch.
+        <NotFound
+          onHome={() =>
+            navigate(
+              routeForTab(isMember ? 'projects' : 'chat', activeOrganizationId)
+            )
+          }
         />
       )}
     </AppShell>

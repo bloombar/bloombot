@@ -33,9 +33,11 @@ import { SendIcon, SuccessIcon } from '../icons.js'
 
 export interface ChatProps {
   organizationId: string
-  /** WEB-25 — the course a join-link redemption most recently resolved for this account in this organization, preferred over `listChatCourses`' own first entry (`selectedCourseId`'s own initializer, below) so a redeemer already enrolled in more than one course here still lands on the one they just joined, not whichever the list happens to return first. */
-  initialCourseId?: string
-  /** WEB-25 — set only right alongside `initialCourseId`, by a just-completed join-link redemption: names the outcome plainly (`joinConfirmationText`, below) rather than leaving a redeemer to infer it from which course happens to be selected. `alreadyEnrolled` distinguishes "you're already enrolled" from a fresh join — ENRL-8's own "redeeming twice is a confirmation, not an error." */
+  /** WEB-32 — the selected course, read from the address (`routing/route.ts`'s own `'chat'` route) rather than component state: `undefined` means "none chosen yet," in which case this component picks `listChatCourses`' own first entry itself (`autoSelectedCourseId`, below) without navigating there — a bare `/o/:id/chat` visit always shows *a* course once one is loaded, but the address only ever names one once the reader (or WEB-25's own join-link redemption, which navigates straight to it) actually picks one. */
+  courseId?: string
+  /** WEB-32 — called when the reader picks a different course (the `<select>`, below); the caller navigates, which is what actually changes `courseId` above on the next render. Named for what it does, not what it sets — this component does not own the selection any more than a controlled `<input>` owns its own value. */
+  onSelectCourse: (courseId: string) => void
+  /** WEB-25 — set only when `courseId` above already names the course a just-completed join-link redemption resolved for this account in this organization (`pages/Shell.tsx`'s own condition for passing this at all): names the outcome plainly (`joinConfirmationText`, below) rather than leaving a redeemer to infer it from which course happens to be selected. `alreadyEnrolled` distinguishes "you're already enrolled" from a fresh join — ENRL-8's own "redeeming twice is a confirmation, not an error." */
   joinConfirmation?: { alreadyEnrolled: boolean }
 }
 
@@ -91,20 +93,26 @@ function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
 
 export function Chat({
   organizationId,
-  initialCourseId,
+  courseId,
+  onSelectCourse,
   joinConfirmation,
 }: ChatProps) {
   const [courses, setCourses] = useState<ChatCourse[] | undefined>(undefined)
   const [coursesError, setCoursesError] = useState<ApiError | undefined>(
     undefined
   )
-  // WEB-25: seeded from `initialCourseId` when supplied — `listChatCourses`'
-  // own callback below (`current ?? result[0]?.id`) then leaves it alone,
-  // the same "do not override a value already chosen" guard it already
-  // holds for a course this component's own `<select>` picked.
-  const [selectedCourseId, setSelectedCourseId] = useState<string | undefined>(
-    initialCourseId
-  )
+  // WEB-32 — only ever consulted when the `courseId` prop itself is
+  // `undefined` (`selectedCourseId`, below); a course this reader picks, or
+  // a join-link redemption resolved (WEB-25), always arrives on `courseId`
+  // instead, since both navigate rather than setting state directly here.
+  const [autoSelectedCourseId, setAutoSelectedCourseId] = useState<
+    string | undefined
+  >(undefined)
+  // WEB-32 — the address is the source of truth once it names a course;
+  // `autoSelectedCourseId` only stands in for a bare `/o/:id/chat` visit
+  // that has not (yet) picked one — the same "prop wins, state is only a
+  // fallback" shape a controlled `<input>` already holds itself to.
+  const selectedCourseId = courseId ?? autoSelectedCourseId
   const [messages, setMessages] = useState<ChatMessageEntry[] | undefined>(
     undefined
   )
@@ -153,7 +161,12 @@ export function Chat({
     listChatCourses(organizationId).then(
       (result) => {
         setCourses(result)
-        setSelectedCourseId((current) => current ?? result[0]?.id)
+        // WEB-32 — only fills the fallback, never the routed `courseId`
+        // prop itself (`selectedCourseId`'s own comment above): a bare
+        // `/o/:id/chat` visit picks the list's own first course; an address
+        // that already names one (a reader's own pick, or WEB-25's
+        // redemption) is left alone.
+        setAutoSelectedCourseId((current) => current ?? result[0]?.id)
       },
       (caught: unknown) => {
         if (caught instanceof ApiError) setCoursesError(caught)
@@ -339,22 +352,20 @@ export function Chat({
     )
   }
 
-  // WEB-25 — named by title, not merely "this course": `courses` (just
-  // confirmed defined, above) is this account's own enrolled list, read
-  // moments after the redemption that set `joinConfirmation` in the first
-  // place, so the just-joined course's own title is always in it.
-  //
-  // Rework finding (must-fix): this used to look the title up by
-  // `selectedCourseId`, which `courses.length > 1`'s own `<select onChange>`
-  // (below) rewrites on every switch — the banner has no dismissal and
-  // persists for the mount's whole life, so it kept asserting a fact about
-  // whichever course the student most recently *looked at*, not the one the
-  // link actually joined. `initialCourseId` is the one value this component
-  // never changes after mount (there is no setter for it, unlike
-  // `selectedCourseId`), so it is the only correct key for a banner that is
-  // itself about a one-time event, not the current selection.
+  // WEB-25/WEB-32 — named by title, not merely "this course": `courses`
+  // (just confirmed defined, above) is this account's own enrolled list,
+  // read moments after the redemption that set `joinConfirmation` in the
+  // first place, so the just-joined course's own title is always in it.
+  // `pages/Shell.tsx` only ever passes `joinConfirmation` through while the
+  // `courseId` prop *is* the course this redemption resolved (its own
+  // comment has the condition) — so looking the title up by `courseId`
+  // itself, rather than a value this component pins separately, is now
+  // exactly the "the banner names the redeemed course specifically, not
+  // whichever one is merely selected" invariant the rework finding this
+  // comment used to describe already required; the address is what stays
+  // pinned to the redeemed course this time, not a local seed-once value.
   const joinedCourseTitle = joinConfirmation
-    ? courses.find((course) => course.id === initialCourseId)?.title
+    ? courses.find((course) => course.id === courseId)?.title
     : undefined
 
   return (
@@ -418,7 +429,7 @@ export function Chat({
           <select
             aria-label="Course"
             value={selectedCourseId}
-            onChange={(event) => setSelectedCourseId(event.target.value)}
+            onChange={(event) => onSelectCourse(event.target.value)}
             className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm text-neutral-900 focus:border-brand-500"
           >
             {courses.map((course) => (

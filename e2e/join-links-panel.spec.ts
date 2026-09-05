@@ -155,16 +155,13 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
     await studentContext.close()
   }
 
-  // 4. Back in the owner's own panel: a real reload, then back to this same
-  //    course the ordinary way (this app routes most screens through
-  //    client-side state, not a URL, so a reload always lands back on
-  //    Projects — `App.tsx`'s own module comment on which few paths are
-  //    real routes). The list still shows the link, live; the secret itself
-  //    is never shown again — this screen has nothing left to show it from
+  // 4. Back in the owner's own panel: a real reload — WEB-32/WEB-34's own
+  //    "a reload holds the panel's place" lands this directly back on this
+  //    exact course's own address, no re-navigation through Projects
+  //    needed. The list still shows the link, live; the secret itself is
+  //    never shown again — this screen has nothing left to show it from
   //    (`repos/course-join-links.ts`'s own module comment).
   await page.reload()
-  await page.getByRole('button', { name: projectName, exact: true }).click()
-  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
   await expect(page.getByText('No expiry')).toBeVisible()
   await expect(page.getByTestId('created-join-link-url')).not.toBeVisible()
@@ -410,13 +407,12 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   await expect(page.getByTestId('created-join-link-url')).toBeVisible()
 
   // 2. Close — a real reload, the same stand-in the WEB-20 test above uses
-  //    for "closed the tab, came back later": this app routes most screens
-  //    through client-side state, not a URL, so a reload always lands back
-  //    on Projects (`App.tsx`'s own module comment). The once-shown secret
-  //    is genuinely gone from this page now, not merely hidden.
+  //    for "closed the tab, came back later": WEB-32/WEB-34's own "a reload
+  //    holds the panel's place" lands this directly back on this exact
+  //    course's own address, no re-navigation through Projects needed. The
+  //    once-shown secret is genuinely gone from this page now, not merely
+  //    hidden.
   await page.reload()
-  await page.getByRole('button', { name: projectName, exact: true }).click()
-  await page.getByRole('button', { name: courseTitle, exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
   await expect(page.getByTestId('created-join-link-url')).not.toBeVisible()
 

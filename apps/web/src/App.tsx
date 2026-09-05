@@ -1,38 +1,57 @@
 /**
- * The whole panel: several screens and no router library (the brief for
- * this slice is explicit that a shell this small does not need one) —
- * `App` reads `window.location.pathname` itself and switches on it.
+ * The whole panel, routed by `routing/route.ts` (WEB-32/WEB-34) — this file
+ * parses `window.location.pathname` into a `Route` exactly once, through
+ * `routing/useRoute.ts`'s own hook, and switches on `route.kind` throughout
+ * rather than the raw pathname string comparisons this file used to hold
+ * (the `routing/` module's own doc comments carry the "why no router
+ * library" reasoning this file's module comment used to state itself).
  *
- *  - `/sign-in/:token` — an emailed link lands here (`pages/RedeemLink.tsx`).
- *  - `/discord/callback` — Discord's own OAuth redirect lands here
- *    (`pages/DiscordCallback.tsx`), for either the install flow or LINK-7's
- *    connect flow (that page's own module comment on how it tells the two
- *    apart).
- *  - `/connect/:organizationId` — LINK-1/LINK-2's own invitation address
+ *  - `route.kind === 'sign-in'` — an emailed link lands here
+ *    (`pages/RedeemLink.tsx`).
+ *  - `route.kind === 'discord-callback'` — Discord's own OAuth redirect
+ *    lands here (`pages/DiscordCallback.tsx`), for either the install flow
+ *    or LINK-7's connect flow (that page's own module comment on how it
+ *    tells the two apart).
+ *  - `route.kind === 'connect'` — LINK-1/LINK-2's own invitation address
  *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
- *    every other path below, since a Discord invitation cannot know which
+ *    every other route below, since a Discord invitation cannot know which
  *    it will be.
- *  - `/join/:secret` — ENRL-8's own course join link (`pages/JoinLink.tsx`);
- *    reachable signed in or signed out, for the identical reason
- *    `/connect/:organizationId` is above — a course join link is shared
+ *  - `route.kind === 'join-link'` — ENRL-8's own course join link
+ *    (`pages/JoinLink.tsx`); reachable signed in or signed out, for the
+ *    identical reason `'connect'` is above — a course join link is shared
  *    with a whole class, most of whom have never signed in before.
- *  - `/invitations/:secret` — ENRL-10's own membership invitation
+ *  - `route.kind === 'invitation'` — ENRL-10's own membership invitation
  *    (`pages/Invitation.tsx`); reachable signed in or signed out, the same
- *    reason `/join/:secret` is above — the account an invitation is
- *    addressed to may never have signed in before.
- *  - `/platform-admin` — ADMIN-4's console (`pages/Admin.tsx`); reachable
- *    by any signed-in account (deliberately *not* `/admin`, `apps/api`'s
- *    own mount for this screen's reads and writes — see this file's own
- *    comment on that path, below), with `routes/admin.ts` the one place
- *    AUTH-4 is actually enforced.
- *  - anything else — the signed-in shell (`pages/Shell.tsx`) or the
- *    sign-in screen (`pages/SignIn.tsx`), decided by `GET /auth/me`
- *    (WEB-2: the session itself, never anything this app stored).
+ *    reason `'join-link'` is above — the account an invitation is addressed
+ *    to may never have signed in before.
+ *  - `route.kind === 'platform-admin'` — ADMIN-4's console (`pages/Admin.tsx`);
+ *    reachable by any signed-in account (deliberately *not* `/admin`,
+ *    `apps/api`'s own mount for this screen's reads and writes — see
+ *    `vite.config.ts`'s own comment on that path), with `routes/admin.ts`
+ *    the one place AUTH-4 is actually enforced. WEB-33 (its own
+ *    sub-addresses) is a later slice — this route stays a single flat page
+ *    for now, as it already was.
+ *  - a `ShellRoute` (`routing/route.ts`) naming an organization or the
+ *    account screen — the signed-in shell (`pages/Shell.tsx`), once this
+ *    account's own accessibility to it is checked (below).
+ *  - `route.kind === 'home'` — resolved, once the session is known, to the
+ *    account's own canonical landing address and replaced (WEB-34) rather
+ *    than rendered directly.
+ *  - anything else, including a `ShellRoute` naming an organization this
+ *    account cannot see — `pages/NotFound.tsx`, never an empty shell.
+ *  - none of the above, while the session itself is still being decided —
+ *    the loading/unreachable screens, unchanged by this slice, decided by
+ *    `GET /auth/me` (WEB-2: the session itself, never anything this app
+ *    stored).
  *
- * Every transition between them replaces the URL with `history.replaceState`
- * rather than pushing a new entry — none of these are places a visitor
- * should be able to navigate back into (a redeemed, single-use sign-in
- * link; a completed OAuth callback).
+ * WEB-34: every entry point above `ShellRoute`/`'home'` still replaces the
+ * current history entry rather than pushing a new one — none of them are
+ * places a visitor should be able to navigate back into (a redeemed,
+ * single-use sign-in link; a completed OAuth callback; the one-time
+ * resolution of `/` itself). Every navigation `pages/Shell.tsx` and the
+ * screens beneath it make is an ordinary push, reachable by the browser's
+ * own back and forward buttons — `routing/useRoute.ts`'s own `navigate`
+ * pushes by default and only replaces when told to.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -45,9 +64,12 @@ import { Connect } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
+import { NotFound } from './pages/NotFound.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
+import { isShellRoute, parseRoute, type Route } from './routing/route.js'
+import { useRoute } from './routing/useRoute.js'
 
 // AUTH-6: the same-origin check every destination this app is ever handed —
 // whether from a redeemed sign-in token (`returnToShell`, below) or, in
@@ -80,13 +102,79 @@ type SessionState =
   // `loading` forever, an unhandled rejection and a permanent spinner).
   | { kind: 'unreachable' }
 
-function goToRoot(): void {
-  window.history.replaceState(null, '', '/')
+/**
+ * WEB-34's own home resolution: `/` replaced, once the session is known,
+ * with the account's canonical landing address — `/o/<active org>/projects`
+ * for a member, `/o/<active org>/chat` for a connected-only person
+ * (LINK-10's carve-out), mirroring `pages/Shell.tsx`'s own former
+ * `effectiveTab` restriction one level up, at the address itself rather
+ * than only at what renders under it.
+ *
+ * `joinedCourse`/`justInstalled` are consulted first, exactly as
+ * `pages/Shell.tsx`'s own `activeOrganizationId` initializer did before
+ * this slice — a just-redeemed join link picks its own organization *and*
+ * course directly (WEB-25); a just-completed Discord install picks its own
+ * organization (TEN-8), though never its own tab — an install still lands
+ * on Projects, the ordinary default, exactly as it did before this slice.
+ *
+ * Falling back to `account.connectedOrganizations[0]` when there is no
+ * membership at all is new in this slice, not carried over: the code this
+ * replaces defaulted straight to `account.memberships[0]?.organizationId ?? ''`,
+ * which named no real organization at all for a connected-only account with
+ * no membership anywhere — survivable there only because `activeTab` was
+ * component state nothing depended on being a real address. A canonical URL
+ * cannot name `''`, so this slice's own judgement call (recorded in
+ * `docs/DECISIONS.md`) is to fall back one step further for that one case.
+ */
+function resolveHomeRoute(
+  account: AccountSummary,
+  joinedCourse: { organizationId: string; courseId: string } | undefined,
+  justInstalled: { organizationId: string } | undefined
+): Route {
+  const isMemberOf = (organizationId: string) =>
+    account.memberships.some(
+      (membership) => membership.organizationId === organizationId
+    )
+  const isConnectedTo = (organizationId: string) =>
+    account.connectedOrganizations.some(
+      (connection) => connection.organizationId === organizationId
+    )
+
+  if (
+    joinedCourse &&
+    (isMemberOf(joinedCourse.organizationId) ||
+      isConnectedTo(joinedCourse.organizationId))
+  ) {
+    return {
+      kind: 'chat',
+      organizationId: joinedCourse.organizationId,
+      courseId: joinedCourse.courseId,
+    }
+  }
+
+  const organizationId =
+    justInstalled && isMemberOf(justInstalled.organizationId)
+      ? justInstalled.organizationId
+      : (account.memberships[0]?.organizationId ??
+        account.connectedOrganizations[0]?.organizationId ??
+        '')
+
+  // No membership and no connected organization at all — should not happen
+  // (TEN-1 gives every account its own personal organization on first sign
+  // in), but this app is written to defend against, not assume, that
+  // (`pages/Chat.tsx`'s own `describeDeclineNotice` is the same discipline).
+  // `/account` names no organization at all, so it is the one address this
+  // account can always reach regardless.
+  if (organizationId === '') return { kind: 'account' }
+
+  return isMemberOf(organizationId)
+    ? { kind: 'projects', organizationId }
+    : { kind: 'chat', organizationId }
 }
 
 export function App() {
   const [session, setSession] = useState<SessionState>({ kind: 'loading' })
-  const [path, setPath] = useState(window.location.pathname)
+  const { route, navigate } = useRoute()
   const [justInstalled, setJustInstalled] = useState<
     { organizationId: string; serverId: string } | undefined
   >(undefined)
@@ -135,6 +223,17 @@ export function App() {
     refreshSession()
   }, [refreshSession])
 
+  // WEB-34: `/` itself is never rendered — once the session resolves, this
+  // replaces it with the account's own canonical landing address
+  // (`resolveHomeRoute`, above). Guarded on `route.kind === 'home'` so this
+  // never fires again once the address has moved on to something else.
+  useEffect(() => {
+    if (session.kind !== 'signed-in' || route.kind !== 'home') return
+    navigate(resolveHomeRoute(session.account, joinedCourse, justInstalled), {
+      replace: true,
+    })
+  }, [session, route.kind, joinedCourse, justInstalled, navigate])
+
   // AUTH-6: a sign-in redemption (an emailed link, `RedeemLink`'s own
   // `onRedeemed`) used to always return to the shell unless a visitor who
   // arrived signed out at `/connect/:organizationId`, `/join/:secret` or
@@ -146,47 +245,35 @@ export function App() {
   // All three pages now carry their own destination on the sign-in token
   // itself instead (`pages/SignIn.tsx`'s own `destination` prop), so
   // `RedeemLink`'s `onRedeemed` hands it to this function directly — the
-  // token's own answer, valid in whichever tab actually redeems it. No
-  // `sessionStorage` fallback is read here any more: every path that once
-  // needed one now carries its own destination on the token (rework, found
-  // in review — `Invitation.tsx`'s own `PENDING_INVITATION_KEY` was the one
-  // of the three this app's own AUTH-6 slice left behind; `docs/DECISIONS.md`
-  // has the fuller account). Re-validated here regardless of the server's
-  // own check: `apps/api` already refuses a non-same-origin `destination` at
-  // request time (`routes/auth.ts`), but "before anything navigates" is this
-  // app's own last checkpoint before it does (`docs/DECISIONS.md` has this
-  // slice's own record of the choice).
+  // token's own answer, valid in whichever tab actually redeems it.
+  // Re-validated here regardless of the server's own check: `apps/api`
+  // already refuses a non-same-origin `destination` at request time
+  // (`routes/auth.ts`), but "before anything navigates" is this app's own
+  // last checkpoint before it does (`docs/DECISIONS.md` has this slice's
+  // own record of the choice).
   //
-  // `PENDING_CONNECT_ORG_KEY` (`Connect.tsx`) keeps its one remaining job —
-  // the Discord OAuth round trip, a same-tab redirect this app itself
-  // initiates (`window.location.assign`), never an emailed link a mail
-  // client might open elsewhere — and is not read here at all: `onConnected`
-  // (below) navigates on the argument `DiscordCallback` already hands it,
-  // the same "stop reading state that might be gone by the time this fires"
-  // fix that callback's own history already needed once (see this file's own
-  // comment on it, below).
+  // WEB-32/WEB-34 rework: `destination` is a raw path string, exactly as it
+  // always was (`pages/Connect.tsx`/`pages/JoinLink.tsx`/`pages/Invitation.tsx`
+  // still hand-write their own `/connect/:id`/`/join/:secret`/
+  // `/invitations/:secret` — the brief for this slice leaves those three
+  // unchanged) — `parseRoute` is what turns it into a `Route` this app's own
+  // router can navigate to, rather than a second, parallel `window.history`
+  // call living here.
   const returnToShell = useCallback(
     (destination?: string) => {
       if (destination && isSameOriginPath(destination)) {
-        window.history.replaceState(null, '', destination)
-        setPath(destination)
+        navigate(parseRoute(destination), { replace: true })
         refreshSession()
         return
       }
-
-      goToRoot()
-      setPath('/')
+      navigate({ kind: 'home' }, { replace: true })
       refreshSession()
     },
-    [refreshSession]
+    [navigate, refreshSession]
   )
 
-  const signInTokenMatch = /^\/sign-in\/([^/]+)$/.exec(path)
-  if (signInTokenMatch) {
-    const token = signInTokenMatch[1]
-    if (token) {
-      return <RedeemLink token={token} onRedeemed={returnToShell} />
-    }
+  if (route.kind === 'sign-in') {
+    return <RedeemLink token={route.token} onRedeemed={returnToShell} />
   }
 
   // LINK-6/7 rework, finding 8 — `onConnected` used to be `returnToShell`
@@ -200,7 +287,7 @@ export function App() {
   // actually landed. Fixed by navigating on the argument this callback
   // already receives, not a sessionStorage key that is gone by the time it
   // fires.
-  if (path === '/discord/callback') {
+  if (route.kind === 'discord-callback') {
     return (
       <DiscordCallback
         search={window.location.search}
@@ -210,9 +297,7 @@ export function App() {
           returnToShell()
         }}
         onConnected={(organizationId) => {
-          const target = `/connect/${organizationId}`
-          window.history.replaceState(null, '', target)
-          setPath(target)
+          navigate({ kind: 'connect', organizationId }, { replace: true })
           refreshSession()
         }}
         onDone={returnToShell}
@@ -244,19 +329,15 @@ export function App() {
   // LINK-1/LINK-2 — the invitation address, reachable whether or not this
   // browser already has a session: `Connect.tsx` itself renders `SignIn`
   // when `account` is `null`, so this app does not have to decide that here
-  // the way it does for every other path below.
-  const connectMatch = /^\/connect\/([^/]+)$/.exec(path)
-  if (connectMatch) {
-    const organizationId = connectMatch[1]
-    if (organizationId) {
-      return (
-        <Connect
-          organizationId={organizationId}
-          account={session.kind === 'signed-in' ? session.account : null}
-          onSignedIn={refreshSession}
-        />
-      )
-    }
+  // the way it does for every other route below.
+  if (route.kind === 'connect') {
+    return (
+      <Connect
+        organizationId={route.organizationId}
+        account={session.kind === 'signed-in' ? session.account : null}
+        onSignedIn={refreshSession}
+      />
+    )
   }
 
   // ENRL-8 — a course join link, reachable whether or not this browser
@@ -274,59 +355,46 @@ export function App() {
   // if this page were somehow revisited).
   //
   // `refreshSession()` runs — and is awaited — *before* the navigation to
-  // `/`, not after: `pages/Shell.tsx`'s own `activeOrganizationId` is a
-  // `useState` lazy initializer, which runs exactly once, on `ShellInner`'s
-  // first mount, reading whatever `account.connectedOrganizations` this
-  // render already has. The join-link redemption that just produced
-  // `joinedCourse` is the very thing that adds this organization to that
-  // list — reachable only once a *fresh* `/auth/me` read reflects it. Firing
-  // both at once (this function's own former shape) let `path` reach `/`,
-  // and `Shell` mount, off the *stale* `session` still on hand from before
-  // redemption — no institution in `connectedOrganizations` yet — so the
-  // panel opened on the account's own personal organization regardless of
-  // what `joinedCourse` said, and never got a second chance: a later,
-  // resolved `session` update does not retroactively re-run an initializer
-  // that already ran. Reproduced end to end (`e2e/join-link.spec.ts`) before
-  // this fix, not merely reasoned about — the switcher showed the joined
-  // institution as an option but never selected it.
-  const joinLinkMatch = /^\/join\/([^/]+)$/.exec(path)
-  if (joinLinkMatch) {
-    const secret = joinLinkMatch[1]
-    if (secret) {
-      return (
-        <JoinLink
-          secret={secret}
-          account={session.kind === 'signed-in' ? session.account : null}
-          onSignedIn={refreshSession}
-          onRedeemed={(result) => {
-            setJoinedCourse(result)
-            refreshSession().then(() => {
-              goToRoot()
-              setPath('/')
-            })
-          }}
-        />
-      )
-    }
+  // `/`, not after: `resolveHomeRoute` (above) reads whatever
+  // `account.connectedOrganizations` this render already has. The join-link
+  // redemption that just produced `joinedCourse` is the very thing that adds
+  // this organization to that list — reachable only once a *fresh*
+  // `/auth/me` read reflects it. Firing both at once (this function's own
+  // former shape) let a stale `session` resolve `/` before a fresh one
+  // arrived, opening the panel on the account's own personal organization
+  // regardless of what `joinedCourse` said. Reproduced end to end
+  // (`e2e/join-link.spec.ts`) before this fix, not merely reasoned about —
+  // the switcher showed the joined institution as an option but never
+  // selected it.
+  if (route.kind === 'join-link') {
+    return (
+      <JoinLink
+        secret={route.secret}
+        account={session.kind === 'signed-in' ? session.account : null}
+        onSignedIn={refreshSession}
+        onRedeemed={(result) => {
+          setJoinedCourse(result)
+          refreshSession().then(() => {
+            navigate({ kind: 'home' }, { replace: true })
+          })
+        }}
+      />
+    )
   }
 
   // ENRL-10 — a membership invitation, reachable whether or not this
-  // browser already has a session, the identical reason `/join/:secret` is
+  // browser already has a session, the identical reason `'join-link'` is
   // above: `Invitation.tsx` itself renders `SignIn` when `account` is
   // `null`.
-  const invitationMatch = /^\/invitations\/([^/]+)$/.exec(path)
-  if (invitationMatch) {
-    const secret = invitationMatch[1]
-    if (secret) {
-      return (
-        <Invitation
-          secret={secret}
-          account={session.kind === 'signed-in' ? session.account : null}
-          onSignedIn={refreshSession}
-          onRedeemed={returnToShell}
-        />
-      )
-    }
+  if (route.kind === 'invitation') {
+    return (
+      <Invitation
+        secret={route.secret}
+        account={session.kind === 'signed-in' ? session.account : null}
+        onSignedIn={refreshSession}
+        onRedeemed={returnToShell}
+      />
+    )
   }
 
   if (session.kind === 'signed-in') {
@@ -343,20 +411,65 @@ export function App() {
     // `not_platform_administrator` refusal `ErrorMessage` already knows
     // how to say in words, not a client-side guess at who is allowed to
     // even try.
-    if (path === '/platform-admin') {
+    if (route.kind === 'platform-admin') {
       return <Admin onBack={returnToShell} />
     }
+
+    // WEB-34: `/` resolves and replaces before this ever renders anything
+    // (the effect above) — this is only the one render in between.
+    if (route.kind === 'home') {
+      return (
+        <p className="p-6 text-sm text-neutral-500" role="status">
+          Loading…
+        </p>
+      )
+    }
+
+    if (isShellRoute(route)) {
+      // WEB-32 — an address naming an organization this account has no
+      // relationship to at all (neither a membership nor a connected
+      // identity) is exactly the "anything else... names something this
+      // account cannot see" case the brief calls out: a not-found screen,
+      // never a leak of whether the organization even exists.
+      // `'account'` names no organization to check.
+      if (
+        route.kind !== 'account' &&
+        !session.account.memberships.some(
+          (membership) => membership.organizationId === route.organizationId
+        ) &&
+        !session.account.connectedOrganizations.some(
+          (connection) => connection.organizationId === route.organizationId
+        )
+      ) {
+        return (
+          <NotFound
+            onHome={() => navigate({ kind: 'home' }, { replace: true })}
+          />
+        )
+      }
+      return (
+        <Shell
+          account={session.account}
+          route={route}
+          navigate={navigate}
+          {...(justInstalled ? { justInstalled } : {})}
+          {...(joinedCourse ? { joinedCourse } : {})}
+          onSignedOut={() => {
+            setJustInstalled(undefined)
+            setJoinedCourse(undefined)
+            refreshSession()
+          }}
+        />
+      )
+    }
+
+    // A truly unrecognised address (`routing/route.ts#parseRoute`'s own
+    // `'not-found'`), or one of the signed-out-only kinds above reached
+    // while signed in with no matching branch left to take (defended, not
+    // assumed — `pages/Chat.tsx`'s own `describeDeclineNotice` holds
+    // itself to the same discipline).
     return (
-      <Shell
-        account={session.account}
-        {...(justInstalled ? { justInstalled } : {})}
-        {...(joinedCourse ? { joinedCourse } : {})}
-        onSignedOut={() => {
-          setJustInstalled(undefined)
-          setJoinedCourse(undefined)
-          refreshSession()
-        }}
-      />
+      <NotFound onHome={() => navigate({ kind: 'home' }, { replace: true })} />
     )
   }
 

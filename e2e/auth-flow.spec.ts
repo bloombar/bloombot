@@ -39,15 +39,21 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   const organizationSwitcher = page.getByTestId('organization-switcher')
   await expect(organizationSwitcher).toBeVisible()
   await expect(organizationSwitcher).toContainText('owner')
+
+  // The URL is replaced, not left on the single-use link — a reload must
+  // not attempt to redeem the same token again. WEB-34: `/` itself is never
+  // the address that lands here — it resolves, once signed in, to this
+  // account's own canonical landing address (Projects, for the owner TEN-1
+  // creates on first sign-in — `routing/route.ts`'s own `'projects'` route).
+  await expect(page).toHaveURL(/\/o\/[^/]+\/projects$/)
+
   // The Discord tab is not the default one anymore (finding 10 of the
   // WEB-7 rework — `pages/Shell.tsx`'s own module comment) — this opens it
   // explicitly, the way an instructor reaching for the install button would.
+  // WEB-32: navigating there is a real address change too.
   await navigateTo(page, 'Discord')
   await expect(page.getByTestId('install-button')).toBeVisible()
-
-  // The URL is replaced, not left on the single-use link — a reload must
-  // not attempt to redeem the same token again.
-  await expect(page).toHaveURL(/\/$/)
+  await expect(page).toHaveURL(/\/o\/[^/]+\/discord$/)
 
   // 4. Sign out, and confirm the session actually ended server-side: a
   //    fresh navigation must land back on the sign-in screen, not merely

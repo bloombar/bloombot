@@ -7,10 +7,46 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 
 import { ApiError } from '../src/api/client.js'
 import type { ChatAnswerResult } from '../src/api/types.js'
 import { Chat } from '../src/pages/Chat.js'
+
+// WEB-32 — `Chat`'s own `courseId` is a controlled prop now (the module
+// comment on `ChatProps#courseId` has why); most of this file renders it
+// with a fixed value it never expects to change under it, but the one test
+// below that actually picks a different course in the `<select>` needs
+// something to play the part of the address `onSelectCourse` would
+// otherwise navigate to — a tiny stateful wrapper, the same "stand in for
+// the real caller" shape `tests/shell.test.tsx`'s own `renderShell` uses
+// for `Shell`'s identical `route`/`navigate` props. Only passes
+// `joinConfirmation` through while `courseId` still names the joined
+// course, mirroring exactly the condition `pages/Shell.tsx` itself gates
+// that prop on (its own module comment on the `Chat` render) — this is what
+// actually keeps the banner from following the reader to a course it never
+// confirmed.
+function ControlledChat({
+  initialCourseId,
+  joinedCourseId,
+  joinConfirmation,
+}: {
+  initialCourseId?: string
+  joinedCourseId?: string
+  joinConfirmation?: { alreadyEnrolled: boolean }
+}) {
+  const [courseId, setCourseId] = useState<string | undefined>(initialCourseId)
+  return (
+    <Chat
+      organizationId="org-1"
+      {...(courseId !== undefined ? { courseId } : {})}
+      onSelectCourse={setCourseId}
+      {...(joinConfirmation && courseId === joinedCourseId
+        ? { joinConfirmation }
+        : {})}
+    />
+  )
+}
 
 // WEB-24's own tests (below) additionally mock `getChatMessages` and
 // `postChatMessage` — the pre-existing tests above only ever mocked
@@ -60,7 +96,7 @@ describe('Chat (WEB-10)', () => {
       new ApiError(404, { error: 'chat_not_connected' })
     )
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
 
     expect(
       await screen.findByText(/not connected to a course here yet/)
@@ -80,7 +116,7 @@ describe('Chat (WEB-10)', () => {
       writable: true,
     })
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
     fireEvent.click(
       await screen.findByRole('button', { name: 'Connect your account' })
     )
@@ -91,7 +127,7 @@ describe('Chat (WEB-10)', () => {
   it('a connected account with no enrolments sees the distinct "not enrolled" message, not the connect invitation', async () => {
     listChatCourses.mockResolvedValue([])
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
 
     expect(
       await screen.findByText(/not enrolled in a course here yet/)
@@ -103,7 +139,7 @@ describe('Chat (WEB-10)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
 
     await waitFor(() =>
       expect(screen.getByText('Intro to Testing')).toBeInTheDocument()
@@ -115,7 +151,7 @@ describe('Chat (WEB-10)', () => {
       new ApiError(500, { error: 'internal_error' })
     )
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
   })
@@ -136,7 +172,8 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     render(
       <Chat
         organizationId="org-1"
-        initialCourseId="course-2"
+        onSelectCourse={vi.fn()}
+        courseId="course-2"
         joinConfirmation={{ alreadyEnrolled: false }}
       />
     )
@@ -152,24 +189,33 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     expect(status).toHaveTextContent("You're enrolled in Advanced Testing.")
   })
 
-  // Rework finding (must-fix) — reproduced exactly as reported: a student
-  // already enrolled in a second course redeems a link for the one named
-  // here, then switches the picker to check the other course. The banner,
-  // which has no dismissal, must keep naming the *joined* course, not
-  // whichever one the switch just selected — fails without the fix, since
-  // the banner used to derive its title from `selectedCourseId` (the same
-  // state the picker's own `onChange` rewrites), asserting a fresh-join
-  // claim about a course the student has actually been in for weeks.
-  it('switching the course picker away from the joined course does not change who the banner names', async () => {
+  // Rework finding (must-fix), WEB-32 update — reproduced exactly as
+  // reported: a student already enrolled in a second course redeems a link
+  // for the one named here, then switches the picker to check the other
+  // course. Originally fixed by pinning the banner's own title to a
+  // seed-once `initialCourseId` Chat held itself, so it kept naming the
+  // *joined* course regardless of what the picker later selected; WEB-32's
+  // "the address is the source of truth" rework moves the pinning up a
+  // level instead — `pages/Shell.tsx` only ever hands `Chat` a
+  // `joinConfirmation` while its own `route.courseId` still names the
+  // joined course (its own module comment on the `Chat` render), so once
+  // the reader picks a different one, the banner does not follow them
+  // there naming the wrong course (the original bug) — it disappears
+  // instead, which this test's own `ControlledChat` reproduces by clearing
+  // `joinConfirmation` the identical way. Fails without the fix, the same
+  // way it always has: an unconditional `joinConfirmation` prop would leave
+  // the banner visible, still naming "Advanced Testing," after switching to
+  // "Intro to Testing."
+  it('switching the course picker away from the joined course removes the banner, rather than misnaming it', async () => {
     listChatCourses.mockResolvedValue([
       { id: 'course-1', title: 'Intro to Testing' },
       { id: 'course-2', title: 'Advanced Testing' },
     ])
 
     render(
-      <Chat
-        organizationId="org-1"
+      <ControlledChat
         initialCourseId="course-2"
+        joinedCourseId="course-2"
         joinConfirmation={{ alreadyEnrolled: false }}
       />
     )
@@ -182,9 +228,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     expect(screen.getByRole('combobox', { name: 'Course' })).toHaveValue(
       'course-1'
     )
-    expect(screen.getByTestId('join-confirmation')).toHaveTextContent(
-      "You're enrolled in Advanced Testing."
-    )
+    expect(screen.queryByTestId('join-confirmation')).not.toBeInTheDocument()
   })
 
   // ENRL-8/WEB-25: redeeming twice is a confirmation, not an error — this is
@@ -198,7 +242,8 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     render(
       <Chat
         organizationId="org-1"
-        initialCourseId="course-1"
+        onSelectCourse={vi.fn()}
+        courseId="course-1"
         joinConfirmation={{ alreadyEnrolled: true }}
       />
     )
@@ -220,7 +265,8 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
     render(
       <Chat
         organizationId="org-1"
-        initialCourseId="course-1"
+        onSelectCourse={vi.fn()}
+        courseId="course-1"
         joinConfirmation={{ alreadyEnrolled: false }}
       />
     )
@@ -234,7 +280,7 @@ describe('Chat — join-link confirmation (WEB-25)', () => {
       { id: 'course-1', title: 'Intro to Testing' },
     ])
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
 
     await screen.findByText('Intro to Testing')
     expect(screen.queryByTestId('join-confirmation')).not.toBeInTheDocument()
@@ -267,7 +313,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
   it('sending a message scrolls the thread to its newest message — fails without the fix (no maximum height meant nothing needed scrolling)', async () => {
     getChatMessages.mockResolvedValue([])
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
     const thread = await screen.findByTestId('chat-thread')
     // Simulated overflow — see this file's own module comment above on why
     // jsdom needs this before `scrollTop`/`scrollHeight` mean anything.
@@ -302,7 +348,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
         })
     )
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
     const thread = await screen.findByTestId('chat-thread')
     Object.defineProperty(thread, 'scrollHeight', {
       value: 100,
@@ -345,7 +391,7 @@ describe('Chat — thread scroll behaviour (WEB-24)', () => {
         })
     )
 
-    render(<Chat organizationId="org-1" />)
+    render(<Chat organizationId="org-1" onSelectCourse={vi.fn()} />)
     const thread = await screen.findByTestId('chat-thread')
     Object.defineProperty(thread, 'scrollHeight', {
       value: 100,

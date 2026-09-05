@@ -8674,3 +8674,63 @@ here as a known limit, not silently left for someone to rediscover.
 
 **Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean; `npm run e2e`
 31/31, unchanged from D-76 (no e2e spec touched by this rework); `npm run test:coverage` floors held.
+
+## D-78 — `apps/web`: WEB-32/WEB-34 — a hand-rolled router, and canonical URLs for every signed-in screen
+
+A small, dependency-free routing module (`apps/web/src/routing/route.ts`, `useRoute.ts`) replaces `App.tsx`'s own
+per-path regex checks and `pages/Shell.tsx`/`pages/ProjectsPanel.tsx`/`pages/Chat.tsx`'s own component-local
+`view`/`activeTab`/`selectedCourseId` state with one parsed `Route` value, threaded down as a prop, and one
+`navigate` function every screen calls instead of a setter. Several judgment calls fell out of that move that the
+brief left to this slice:
+
+**Home resolution moved from `pages/Shell.tsx` to `App.tsx`.** Before this slice, which organization (and,
+for a join-link redemption, which course) a fresh mount opened on was a `useState` lazy initializer inside
+`ShellInner`, reading `justInstalled`/`joinedCourse` props. A `useState` initializer can decide what a component
+*renders*, but it cannot produce a real, bookmarkable address — `/` has to resolve to something concrete before
+`Shell` ever mounts, so that decision (`resolveHomeRoute`) moved up to `App.tsx`, which owns the router. The
+tests that used to prove it (an install landing on the right organization, a redeemed join link landing on Chat
+with the course selected, both defensive "ignored, falls back to the first membership" cases) moved with it,
+from `tests/shell.test.tsx` to `tests/app.test.tsx`'s own new "App — / home resolution" describe block, driving
+the real round trip (a Discord callback, a redeemed join link) rather than a prop `Shell` no longer reads for
+that purpose.
+
+**A connected-only account's fallback organization, when it has no membership at all, changed from `''` to its
+first connected organization.** The code this replaces defaulted straight to `account.memberships[0]?.organizationId
+?? ''` — survivable only because `activeOrganizationId` was component state nothing outside the component
+depended on being a real id. A canonical URL cannot name `/o//chat`, so `resolveHomeRoute` falls back one step
+further, to `account.connectedOrganizations[0]?.organizationId`, for the one case (no membership anywhere) that
+can actually reach it. Not observed to matter in practice — TEN-1 gives every account a personal organization on
+first sign-in, so a real account always has at least one membership — but the router has to produce *some*
+address, and a real one is more honest than a malformed one.
+
+**LINK-10's forced-Chat treatment stays a render-time substitution, not a redirect.** A connected-but-not-a-member
+account reaching an organization-scoped address it may not see (say, `/o/:id/discord`) renders `Chat`'s content
+under that same URL — the address is not rewritten to `/o/:id/chat`. The brief's own words ("gets the same
+treatment it gets today") describe the pre-existing behaviour, which never changed the address either (it was
+component state, not a URL, so there was no address to change); keeping that exact shape avoids a second class
+of navigation (a same-render substitution that also rewrites history) this slice's brief did not ask for, at the
+cost of an address bar that can name a screen slightly different from what is rendered for this one relationship.
+`isMember`'s own server-side enforcement (`docs/DECISIONS.md` D-50) is what actually makes this safe either way.
+
+**A not-found address, and browser back into a dirty form, are both out of scope for `guardedNavigate` (WEB-16).**
+Every navigation this app *initiates* (a drawer item, the home control, an organization switch, a course row's
+Chat button) still goes through `guardedNavigate`, unchanged. Browser back/forward cannot be intercepted the same
+way — by the time `popstate` fires, the address has already changed — so a dirty `CourseEditor` form does not get
+a chance to confirm before the browser's own Back button navigates away from it. This is a real gap the brief
+did not ask this slice to close (it describes `guardedNavigate` as continuing to wrap "every navigation," which
+this reads as every navigation the app itself starts, not the browser's own history controls), left here as a
+known limit rather than silently discovered later.
+
+**Existing e2e specs assuming "a reload always lands back on Projects" were the regression they claimed to be
+guarding against.** Three specs (`course-people-panel.spec.ts`, `join-links-panel.spec.ts` twice) reloaded mid-way
+through a course-scoped screen and then re-navigated through Projects by hand, with a module comment stating
+plainly that a reload always lands back on Projects because this app "routes most screens through client-side
+state, not a URL." That comment was true before this slice and is now exactly the defect WEB-32/WEB-34 exist to
+fix — a reload holds the panel's place instead, so the extra re-navigation clicks started timing out (the row
+they clicked was never rendered, because the reload had already landed past it). Fixed by deleting the
+re-navigation and asserting directly on the screen the reload now lands on — the correct fix, not a workaround,
+since "reload holds place" is this slice's own explicit requirement.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test` all clean (2401 vitest,
+90 node); `npm run e2e` 34/34 (31 pre-existing plus 3 new `tests/routing.test.ts` unit cases folded into vitest's
+own count, and 2 new `e2e/routing.spec.ts` cases); `npm run board:derive` leaves the manifest unchanged.

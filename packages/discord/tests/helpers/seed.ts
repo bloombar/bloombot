@@ -88,7 +88,6 @@ export function seedBoundServerWithCourse(
     {
       projectId: project.id,
       title: 'Test Course',
-      filePrefix: 'tc',
       enabled: options.enabled ?? true,
       adminsRole: options.adminsRole ?? 'admins-tc',
       studentsRole: options.studentsRole ?? 'students-tc',

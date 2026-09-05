@@ -42,7 +42,6 @@ describe('projects.duplicate', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd-fa26',
         studentsRole: 'students-wd-fa26',
@@ -94,7 +93,6 @@ describe('projects.duplicate', () => {
     )
     expect(copied).toMatchObject({
       title: 'Web Design',
-      filePrefix: 'wd',
       adminsRole: 'admins-wd-fa26',
       studentsRole: 'students-wd-fa26',
       promptId: 'prompt-1',
@@ -130,7 +128,6 @@ describe('projects.duplicate', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',
@@ -176,7 +173,6 @@ describe('projects.duplicate', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',
@@ -289,7 +285,6 @@ describe('projects.duplicate', () => {
         {
           projectId,
           title: `Course ${suffix}`,
-          filePrefix: suffix.toLowerCase(),
           enabled: false,
           adminsRole: `admins-${suffix.toLowerCase()}`,
           studentsRole: `students-${suffix.toLowerCase()}`,
@@ -360,7 +355,6 @@ describe('projects.duplicate', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: false,
         adminsRole: 'admins-wd',
         studentsRole: 'students-wd',
@@ -418,7 +412,6 @@ describe('projects.duplicate', () => {
       {
         projectId: project.id,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd-fa26',
         studentsRole: 'students-wd-fa26',
@@ -458,7 +451,6 @@ describe('projects.duplicate', () => {
       {
         projectId,
         title: 'Web Design',
-        filePrefix: 'wd',
         enabled: true,
         adminsRole: 'admins-wd-fa26',
         studentsRole: 'students-wd-fa26',

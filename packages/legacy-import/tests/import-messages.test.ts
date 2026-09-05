@@ -48,7 +48,6 @@ function seed(testDatabase: TestPlatformDatabase) {
     {
       projectId: project.id,
       title: 'Web Design',
-      filePrefix: 'wd',
       enabled: true,
       adminsRole: 'admins-wd',
       studentsRole: 'students-wd',
@@ -249,7 +248,6 @@ describe('importMessages (MIG-3)', () => {
       {
         projectId: existingCourse.projectId,
         title: existingCourse.title,
-        filePrefix: existingCourse.filePrefix,
         enabled: existingCourse.enabled,
         adminsRole: existingCourse.adminsRole,
         studentsRole: existingCourse.studentsRole,
@@ -315,7 +313,6 @@ describe('buildCategoryIndex (finding 9, through importMessages)', () => {
       {
         projectId: project.id,
         title: 'First',
-        filePrefix: 'first',
         enabled: true,
         adminsRole: 'admins-first',
         studentsRole: 'students-first',
@@ -340,7 +337,6 @@ describe('buildCategoryIndex (finding 9, through importMessages)', () => {
       {
         projectId: archivedProject.id,
         title: 'Second',
-        filePrefix: 'second',
         enabled: true,
         adminsRole: 'admins-second',
         studentsRole: 'students-second',

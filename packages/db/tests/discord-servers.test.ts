@@ -379,7 +379,6 @@ describe('discord-servers repo', () => {
         {
           projectId: project.id,
           title: 'Existing Course',
-          filePrefix: `ec-${randomUUID().slice(0, 8)}`,
           enabled: options.enabled ?? true,
           adminsRole: `admins-${randomUUID()}`,
           studentsRole: `students-${randomUUID()}`,
@@ -432,7 +431,6 @@ describe('discord-servers repo', () => {
         {
           projectId: course.projectId,
           title: course.title,
-          filePrefix: course.filePrefix,
           enabled: course.enabled,
           adminsRole: course.adminsRole,
           studentsRole: course.studentsRole,

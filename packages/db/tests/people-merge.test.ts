@@ -44,7 +44,6 @@ function seedOrgWithCourse(db: Database) {
     {
       projectId: project.id,
       title: 'Course',
-      filePrefix: 'c',
       enabled: true,
       adminsRole: 'admins-c',
       studentsRole: 'students-c',
@@ -70,7 +69,6 @@ function seedSecondCourse(db: Database, organizationId: string) {
     {
       projectId: project.id,
       title: 'Second Course',
-      filePrefix: `c2-${randomUUID().slice(0, 8)}`,
       enabled: true,
       adminsRole: `admins-c2-${randomUUID()}`,
       studentsRole: `students-c2-${randomUUID()}`,

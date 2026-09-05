@@ -198,7 +198,6 @@ const COURSE_EDITOR_TABS: { id: CourseEditorTab; label: string }[] =
  */
 const FIELD_TABS: Record<string, CourseEditorTab> = {
   title: 'general',
-  filePrefix: 'roster',
   adminsRole: 'discord',
   studentsRole: 'discord',
   discordServerId: 'discord',
@@ -289,7 +288,6 @@ function fieldErrorProp(
 function blankForm() {
   return {
     title: '',
-    filePrefix: '',
     enabled: false,
     adminsRole: '',
     studentsRole: '',
@@ -309,7 +307,6 @@ function blankForm() {
 function formFromCourse(course: Course) {
   return {
     title: course.title,
-    filePrefix: course.filePrefix,
     enabled: course.enabled,
     adminsRole: course.adminsRole,
     studentsRole: course.studentsRole,
@@ -658,7 +655,6 @@ export function CourseEditor({
         ...(courseId !== undefined ? { id: courseId } : {}),
         projectId: project.id,
         title: form.title,
-        filePrefix: form.filePrefix,
         enabled: form.enabled,
         adminsRole: form.adminsRole,
         studentsRole: form.studentsRole,
@@ -987,22 +983,6 @@ export function CourseEditor({
     </FormField>
   )
 
-  const filePrefixField = (
-    <FormField label="File prefix" {...fieldErrorProp(error, 'filePrefix')}>
-      <input
-        aria-label="File prefix"
-        value={form.filePrefix}
-        onChange={(event) =>
-          setForm((current) => ({
-            ...current,
-            filePrefix: event.target.value,
-          }))
-        }
-        className={textInputClasses}
-      />
-    </FormField>
-  )
-
   const enabledControl = (
     <div className="flex items-center gap-3">
       <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
@@ -1304,10 +1284,7 @@ export function CourseEditor({
             {rolesAndServerFields}
           </section>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            {titleField}
-            {filePrefixField}
-          </div>
+          {titleField}
 
           {enabledControl}
 
@@ -1530,8 +1507,6 @@ export function CourseEditor({
           >
             {visitedTabs.has('roster') && (
               <>
-                {filePrefixField}
-
                 {/* WEB-21/ROST-9..12: a course's roster import. Mounted
                     only once this tab is first visited (rework round 1,
                     must-fix 1) — an in-flight job's own poll and its

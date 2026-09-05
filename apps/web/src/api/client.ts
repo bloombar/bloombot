@@ -416,7 +416,6 @@ export interface SaveCourseInput {
   id?: string
   projectId: string
   title: string
-  filePrefix: string
   enabled: boolean
   adminsRole: string
   studentsRole: string

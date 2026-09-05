@@ -169,7 +169,6 @@ describe('runMigrations', () => {
       'created_at',
       'discord_server_id',
       'enabled',
-      'file_prefix',
       'id',
       'instructions',
       'max_requests_per_day',
@@ -767,6 +766,118 @@ describe('runMigrations', () => {
         now
       )
     ).toThrow(/CHECK constraint failed/)
+  })
+
+  // ROST-13 — 0023 drops `file_prefix`, a plain column removal with no
+  // conditional logic of its own to pin (unlike 0016's `WHERE` or 0013's
+  // backfill), so this proves the one thing a plain `ALTER TABLE ... DROP
+  // COLUMN` can get wrong: losing a row, or a sibling column's value on it,
+  // along with the one being dropped. Same "seed what a real deployment
+  // already has, then apply the real migration on top" shape as 0002/0013
+  // above — seeded through 0022, the last migration before this one, with
+  // every column `file_prefix` sat alongside filled in, not just the
+  // required ones, so a value carried on the wrong column would show up as
+  // a mismatch here rather than passing by accident on a null default.
+  it('applies 0023 to a database that already has a course with a file_prefix, dropping only that column', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0022 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 22
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0022) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0022,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, file_prefix, enabled, admins_role,
+           students_role, conversation_scope, prompt_id, instructions, model,
+           vector_store_id, max_requests_per_day, discord_server_id, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        'wd',
+        1,
+        'admins-wd',
+        'students-wd',
+        'course',
+        'prompt-1',
+        'Be helpful.',
+        'gpt-4o',
+        'vs-1',
+        50,
+        null,
+        now
+      )
+
+    // The migration under test: 0023, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const columns = db.$client.prepare('pragma table_info(courses)').all() as {
+      name: string
+    }[]
+    expect(columns.map((c) => c.name)).not.toContain('file_prefix')
+
+    // Every sibling column on that same row survived the drop unchanged —
+    // not merely present, but still carrying the value it went in with.
+    const course = db.$client
+      .prepare('select * from courses where id = ?')
+      .get(courseId)
+    expect(course).not.toHaveProperty('file_prefix')
+    expect(course).toMatchObject({
+      id: courseId,
+      organization_id: organizationId,
+      project_id: projectId,
+      title: 'Web Design',
+      enabled: 1,
+      admins_role: 'admins-wd',
+      students_role: 'students-wd',
+      conversation_scope: 'course',
+      prompt_id: 'prompt-1',
+      instructions: 'Be helpful.',
+      model: 'gpt-4o',
+      vector_store_id: 'vs-1',
+      max_requests_per_day: 50,
+      discord_server_id: null,
+    })
   })
 })
 

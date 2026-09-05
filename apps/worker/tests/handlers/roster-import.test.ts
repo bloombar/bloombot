@@ -1065,7 +1065,6 @@ describe('roster.import handler', () => {
         {
           projectId: course.projectId,
           title: course.title,
-          filePrefix: course.filePrefix,
           enabled: course.enabled,
           adminsRole: course.adminsRole,
           studentsRole: course.studentsRole,

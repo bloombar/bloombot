@@ -71,7 +71,6 @@ function seedCourseWithTranscript(db: Database) {
     {
       projectId: project.id,
       title: 'Test Course',
-      filePrefix: 'tc',
       enabled: true,
       adminsRole: 'course-admins',
       studentsRole: 'course-students',

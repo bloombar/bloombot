@@ -151,7 +151,6 @@ test('an instructor imports a roster through the panel; an unparseable row is re
 
     await page.getByRole('button', { name: 'New course' }).click()
     await page.getByLabel('Title').fill(courseTitle)
-    await page.getByLabel('File prefix').fill(`wd-${suffix}`)
     await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
     await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
     await page.getByRole('button', { name: 'Add category' }).click()

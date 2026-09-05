@@ -94,7 +94,6 @@ test("an instructor sees their course's spend and a student approaching its dail
 
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(courseTitle)
-  await page.getByLabel('File prefix').fill(`t-${suffix}`)
   await page.getByLabel('Admins role').fill(adminsRole)
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Max requests per day').fill('1')

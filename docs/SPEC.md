@@ -2188,13 +2188,13 @@ bottom of the whole thing, far from most of what it saves.
 The screen is divided into named tabs, each holding the settings that belong together: **General**
 (title, enable/disable, join links), **AI** (model, prompt id, requests-per-day cap, instructions,
 knowledge files, websites), **Discord** (admins and students roles, the server it is bound to, the
-categories and channels to create, and the control that creates them), **Roster** (the file prefix
-that names a course's roster files, the roster import, and the channels it creates) and **People**
-(everyone the course has ever enrolled). A tab is part of the course's own address (WEB-32), so a
-tab can be linked to and survives a reload; a course that does not exist yet offers only the tabs
-whose contents it can have. Editing on one tab and switching to another does not lose the edit, the
-unsaved-changes guard (WEB-16) still runs on leaving the screen, and a save refused for a field on
-another tab shows that tab rather than leaving the refusal pointing at something nobody can see.
+categories and channels to create, and the control that creates them), **Roster** (the roster
+import, and the channels it creates) and **People** (everyone the course has ever enrolled). A tab
+is part of the course's own address (WEB-32), so a tab can be linked to and survives a reload; a
+course that does not exist yet offers only the tabs whose contents it can have. Editing on one tab
+and switching to another does not lose the edit, the unsaved-changes guard (WEB-16) still runs on
+leaving the screen, and a save refused for a field on another tab shows that tab rather than
+leaving the refusal pointing at something nobody can see.
 
 #### WEB-36 A person in a course links to their transcript
 

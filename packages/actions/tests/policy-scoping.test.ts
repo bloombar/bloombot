@@ -28,7 +28,6 @@ function seedCourse(
   db: Database,
   overrides: Partial<{
     title: string
-    filePrefix: string
     enabled: boolean
     adminsRole: string
     studentsRole: string
@@ -39,7 +38,6 @@ function seedCourse(
     {
       projectId,
       title: overrides.title ?? 'Seeded Course',
-      filePrefix: overrides.filePrefix ?? 'sc',
       enabled: overrides.enabled ?? true,
       adminsRole: overrides.adminsRole ?? 'admins-seeded',
       studentsRole: overrides.studentsRole ?? 'students-seeded',
@@ -180,7 +178,6 @@ describe('ACT-2 — courses.save, courses.enable, courses.disable scope by organ
           id: courseB.id,
           projectId: projectAId,
           title: 'Hijacked',
-          filePrefix: 'hj',
           enabled: true,
           adminsRole: 'admins-hijack',
           studentsRole: 'students-hijack',

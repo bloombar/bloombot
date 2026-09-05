@@ -265,7 +265,10 @@ export function Projects({
         </Button>
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-neutral-700">
+      {/* Right-aligned: a filter over the list below, sat at the end of its
+          own row so it reads as a control on that list rather than as the
+          first item in it. */}
+      <label className="flex items-center gap-2 self-end text-sm text-neutral-700">
         <input
           type="checkbox"
           checked={includeArchived}

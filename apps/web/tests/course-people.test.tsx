@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../src/api/client.js'
 import type { CourseEnrolment } from '../src/api/types.js'
 import { CoursePeople } from '../src/components/CoursePeople.js'
+import { useNavigationGuard } from '../src/hooks/navigation-guard.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
 const { listCourseEnrolments, endCourseEnrolment, reinstateCourseEnrolment } =
@@ -342,8 +343,9 @@ describe('CoursePeople (WEB-22)', () => {
   })
 
   // A modified click (here, a held Ctrl — the same as Cmd on macOS) is left
-  // entirely to the browser's own "open in a new tab" handling — this file's
-  // own `handleNameClick` comment on why intercepting it would be wrong.
+  // entirely to the browser's own "open in a new tab" handling —
+  // `TranscriptLink`'s own comment (`components/CoursePeople.tsx`) on why
+  // intercepting it would be wrong.
   it('does not intercept a modified click — the browser handles it, not navigate', async () => {
     listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
     const navigate = vi.fn()
@@ -360,5 +362,150 @@ describe('CoursePeople (WEB-22)', () => {
     fireEvent.click(link, { ctrlKey: true })
 
     expect(navigate).not.toHaveBeenCalled()
+  })
+
+  // Notes, rework round 1 — nothing asserted `preventDefault` itself either
+  // way; a plain click has to call it (otherwise the browser's own default
+  // navigation fires alongside the in-app one — jsdom's own "Not
+  // implemented: navigation to another Document" warning is exactly that),
+  // and a modified click must not (or the browser could never open the new
+  // tab a Ctrl/Cmd-click promises).
+  it('calls preventDefault on a plain click, and not on a modified one', async () => {
+    listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+
+    const plainEvent = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })
+    const plainPreventDefault = vi.spyOn(plainEvent, 'preventDefault')
+    fireEvent(link, plainEvent)
+    expect(plainPreventDefault).toHaveBeenCalled()
+
+    const modifiedEvent = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+    })
+    const modifiedPreventDefault = vi.spyOn(modifiedEvent, 'preventDefault')
+    fireEvent(link, modifiedEvent)
+    expect(modifiedPreventDefault).not.toHaveBeenCalled()
+  })
+
+  // WEB-16 (rework round 1) — the real defect this rework found: a raw
+  // `navigate` call unmounts `pages/CourseEditor.tsx` immediately, so an
+  // edit on its General tab, never saved, was silently gone the moment a
+  // click here landed on the People tab. Every navigation this component
+  // starts must go through the same registered guard the rest of the shell
+  // already consults (`hooks/navigation-guard.tsx`) before it ever calls
+  // the `navigate` prop.
+  describe('routes the transcript link through the unsaved-changes guard (WEB-16)', () => {
+    // Registers a guard in the same `NavigationGuardProvider` tree
+    // `renderWithModal` already wraps `CoursePeople` in — a sibling, not a
+    // prop, the same way `pages/CourseEditor.tsx` itself registers one via
+    // `useUnsavedChangesGuard`.
+    function GuardHarness({ guardResult }: { guardResult: boolean }) {
+      const { registerGuard } = useNavigationGuard()
+      return (
+        <button
+          type="button"
+          onClick={() => registerGuard(() => Promise.resolve(guardResult))}
+        >
+          register dirty guard
+        </button>
+      )
+    }
+
+    it('a registered guard that resolves false blocks the navigation', async () => {
+      listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+      const navigate = vi.fn()
+
+      renderWithModal(
+        <>
+          <GuardHarness guardResult={false} />
+          <CoursePeople
+            organizationId="org-1"
+            courseId="course-1"
+            navigate={navigate}
+          />
+        </>
+      )
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'register dirty guard' })
+      )
+      const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+      fireEvent.click(link)
+
+      // The guard's own promise gets a tick to resolve — it never should
+      // result in a call either way, but this proves the assertion is not
+      // just racing an unresolved promise (the same discipline
+      // `tests/navigation-guard.test.tsx` already holds itself to).
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('a registered guard that resolves true allows the navigation', async () => {
+      listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+      const navigate = vi.fn()
+
+      renderWithModal(
+        <>
+          <GuardHarness guardResult={true} />
+          <CoursePeople
+            organizationId="org-1"
+            courseId="course-1"
+            navigate={navigate}
+          />
+        </>
+      )
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'register dirty guard' })
+      )
+      const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+      fireEvent.click(link)
+
+      await waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith({
+          kind: 'transcripts',
+          organizationId: 'org-1',
+          courseId: 'course-1',
+          personId: 'person-1',
+        })
+      )
+    })
+
+    it('with no guard registered, the navigation runs immediately, exactly as before', async () => {
+      listCourseEnrolments.mockResolvedValue([entry({ id: 'e1' })])
+      const navigate = vi.fn()
+
+      renderWithModal(
+        <CoursePeople
+          organizationId="org-1"
+          courseId="course-1"
+          navigate={navigate}
+        />
+      )
+
+      const link = await screen.findByRole('link', { name: 'Ada Lovelace' })
+      fireEvent.click(link)
+
+      expect(navigate).toHaveBeenCalledWith({
+        kind: 'transcripts',
+        organizationId: 'org-1',
+        courseId: 'course-1',
+        personId: 'person-1',
+      })
+    })
   })
 })

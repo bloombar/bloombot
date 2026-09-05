@@ -2141,3 +2141,38 @@ a site, and a per-entry removal behind a confirmation, since removing one change
 answers from. A site typed with a scheme or a trailing path is accepted and reduced to its domain
 rather than refused, because pasting a URL from a browser's address bar is what an instructor will
 actually do. A duplicate is reported as already present, not added twice.
+
+#### WEB-32 Every screen in the panel has a canonical URL
+
+The panel is a single page whose address never changes: every screen — a project, a course, a chat
+with a course, account settings — is component state, so the address bar says `/` no matter where
+somebody is. Nothing in the panel can be linked to, bookmarked, or reopened; a reload always lands
+back on Projects, and "send me that course" is not a thing an instructor can do.
+
+Every screen gets one canonical address, organization-scoped where the screen itself is:
+`/o/<organizationId>/projects`, `/o/<organizationId>/projects/<projectId>`,
+`/o/<organizationId>/projects/<projectId>/courses/<courseId>`, `/o/<organizationId>/chat` and
+`/o/<organizationId>/chat/<courseId>`, and the same shape for transcripts, Discord, team, usage and
+jobs. The account's own screens are not organization-scoped and do not pretend to be: `/account`.
+Opening one of these addresses directly renders that screen, on that organization, without a detour
+through Projects — and the organization in the address is what the panel acts in, so switching
+organizations changes the address rather than silently re-pointing the screen the address names.
+
+#### WEB-33 The admin console's screens are addressable too
+
+ADMIN-4's console is reached at one address and everything inside it is state, exactly as the rest
+of the panel was. Each of its screens gets its own address under the console's own prefix, so an
+operator can link a colleague to the organization they are looking at rather than describing how to
+click to it. The console keeps a prefix distinct from `apps/api`'s own `/admin` mount, as it already
+does.
+
+#### WEB-34 Back, forward, reload and a pasted link all agree
+
+Navigation inside the panel pushes history entries, so the browser's own back and forward buttons
+move between screens the way they do on any other site, and the screen they land on is the one the
+address names. Reloading holds the current screen rather than resetting to Projects, and an address
+pasted into a fresh tab opens the same screen it did for whoever copied it. One-time entry points —
+a redeemed sign-in link, a completed OAuth callback — keep replacing their history entry rather than
+pushing one, since they must not be reachable by pressing back. An address naming something this
+account cannot see, or nothing at all, says so on a screen of its own and offers the way home rather
+than rendering an empty panel. WEB-16's unsaved-changes guard still runs before any of it.

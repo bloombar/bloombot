@@ -1,7 +1,12 @@
 /**
  * ADMIN-1/ADMIN-2 and ADMIN-5, end to end: an instructor reads their
  * course's transcript in the panel, and a platform administrator deletes a
- * tenant's data through the confirmed, typed-name prompt.
+ * tenant's data through the confirmed, typed-name prompt. WEB-33's own
+ * addresses for the console's screens are covered by the last test in this
+ * file — a cold load of an organization's own deep link, panel navigation
+ * moving the address bar, and the browser's own Back button returning to
+ * the previous console screen, the identical three claims
+ * `e2e/routing.spec.ts` already proves for the rest of the panel.
  *
  * **What is real, and what is a harness stand-in — the same caveat
  * `course-configuration.spec.ts`'s own module comment gives, read before
@@ -303,4 +308,69 @@ test('a platform administrator deletes a tenant’s data, confirmed by typing it
   } finally {
     closeDatabase(verifyDb)
   }
+})
+
+test('the admin console’s own screens are addressable — a cold deep link, panel navigation and browser back all agree (WEB-33, WEB-34)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const tenantName = `A Linkable Tenant — ${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  let organizationId: string
+  try {
+    organizationId = randomUUID()
+    await withRetry(() =>
+      organizations.createOrganization(
+        organizationId,
+        { name: tenantName, isPersonal: false },
+        seedDb
+      )
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, E2E_ADMIN_EMAIL)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  // 1. A cold load of the console's own entry point resolves to the
+  //    organizations list — `'platform-admin'` itself is never rendered
+  //    past its own effect, mirroring `App.tsx`'s own `'/'` resolution.
+  await page.goto('/platform-admin')
+  await expect(page).toHaveURL('/platform-admin/organizations')
+  const row = page.getByTestId(`admin-org-${organizationId}`)
+  await expect(row).toBeVisible()
+
+  // 2. Navigating in the console — clicking the organization's own name —
+  //    moves the address bar to its own, shareable address.
+  await row.getByRole('button', { name: tenantName }).click()
+  await expect(page).toHaveURL(
+    `/platform-admin/organizations/${organizationId}`
+  )
+  await expect(
+    page.getByTestId(`admin-org-detail-${organizationId}`)
+  ).toBeVisible()
+
+  // 3. The browser's own Back button returns to the organizations list —
+  //    the previous console screen, not a dead end or the sign-in screen.
+  await page.goBack()
+  await expect(page).toHaveURL('/platform-admin/organizations')
+  await expect(row).toBeVisible()
+
+  // 4. A cold load of the detail address directly, in a fresh navigation
+  //    with no prior in-console navigation at all, renders the same
+  //    organization directly — proving the address is really shareable,
+  //    not merely a same-session artifact of the click in step 2.
+  await page.goto(`/platform-admin/organizations/${organizationId}`)
+  await expect(
+    page.getByTestId(`admin-org-detail-${organizationId}`)
+  ).toBeVisible()
+
+  // An address naming an organization nothing in this read matches gets
+  // the panel's own not-found screen, not an empty console.
+  await page.goto(
+    '/platform-admin/organizations/00000000-0000-0000-0000-000000000000'
+  )
+  await expect(page.getByTestId('not-found-page')).toBeVisible()
 })

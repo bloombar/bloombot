@@ -3240,3 +3240,51 @@
   phase: 20
   status: Done
   review: false
+- id: WEB-32
+  title: Every screen in the panel has a canonical URL
+  full: 'The panel is a single page whose address never changes: every screen — a
+    project, a course, a chat with a course, account settings — is component
+    state, so the address bar says / no matter where somebody is. Nothing in the
+    panel can be linked to, bookmarked, or reopened; a reload always lands back
+    on Projects, and "send me that course" is not a thing an instructor can do.
+    Every screen gets one canonical address, organization-scoped where the
+    screen itself is: /o/<organizationId/projects,
+    /o/<organizationId/projects/<projectId,
+    /o/<organizationId/projects/<projectId/courses/<courseId,
+    /o/<organizationId/chat and /o/<organizationId/chat/<courseId, and the same
+    shape for transcripts, Discord…'
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 21
+  status: In review
+  review: false
+- id: WEB-33
+  title: The admin console's screens are addressable too
+  full: ADMIN-4's console is reached at one address and everything inside it is
+    state, exactly as the rest of the panel was. Each of its screens gets its
+    own address under the console's own prefix, so an operator can link a
+    colleague to the organization they are looking at rather than describing how
+    to click to it. The console keeps a prefix distinct from apps/api's own
+    /admin mount, as it already does.
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 21
+  status: In review
+  review: false
+- id: WEB-34
+  title: Back, forward, reload and a pasted link all agree
+  full: Navigation inside the panel pushes history entries, so the browser's own
+    back and forward buttons move between screens the way they do on any other
+    site, and the screen they land on is the one the address names. Reloading
+    holds the current screen rather than resetting to Projects, and an address
+    pasted into a fresh tab opens the same screen it did for whoever copied it.
+    One-time entry points — a redeemed sign-in link, a completed OAuth callback
+    — keep replacing their history entry rather than pushing one, since they
+    must not be reachable by pressing back. An address naming something this
+    account cannot see, or nothing at all, says so on a screen of its own and
+    offers the way home rather…
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 21
+  status: In review
+  review: false

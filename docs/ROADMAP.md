@@ -273,3 +273,19 @@ files, the adapter turns that list into a domain-restricted `web_search` tool, a
 that names none is answered exactly as it is today — no tool, no unrestricted search.
 
 **In scope:** FILE-6, MDL-9, WEB-31
+
+## Phase 21 — Addressable screens
+
+The panel has never had URLs. `App.tsx` reads `window.location.pathname` once for the handful of
+entry points a browser can land on cold — a sign-in token, an OAuth callback, a join link — and
+every other screen is component state: which tab the shell is on, which view `ProjectsPanel` is
+showing, which course `Chat` has selected. The address bar says `/` throughout.
+
+That was a defensible call while the panel was two screens. It is not now: an instructor cannot
+bookmark a course, cannot send a colleague a link to the one they are asking about, and loses their
+place on every reload. Back and forward do nothing, or worse, leave the panel entirely.
+
+This phase gives every screen a canonical, organization-scoped address, drives the shell from the
+address rather than from component state, and makes history, reload and a pasted link all agree.
+
+**In scope:** WEB-32, WEB-33, WEB-34

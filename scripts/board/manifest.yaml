@@ -3288,6 +3288,23 @@
   phase: 21
   status: Done
   review: false
+- id: ROST-13
+  title: A course no longer carries a file prefix
+  full: "Every course carries a short file_prefix — wd, py — and the panel asks an
+    instructor to type one. It exists for the era this platform replaced:
+    rosters and questionnaires were CSV files a person dropped into results/ by
+    hand, and the prefix was the only thing that said which file belonged to
+    which course. A course now has its own upload area and its own imports, and
+    the platform tracks what belongs to it; nothing in the platform reads the
+    prefix for any purpose. It is a required field that asks an instructor to
+    solve a problem the product already solved. A course no longer has a file
+    prefix: the field goes from the panel, from what a course can be saved with,
+    and from the stored record, and…"
+  section: §34 Web Control Panel
+  family: ROST
+  phase: 22
+  status: In progress
+  review: false
 - id: WEB-35
   title: A course's settings are organised into tabs, not one long form
   full: "A course's settings screen is one continuous form that has grown to hold
@@ -3320,5 +3337,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: In progress
+  status: In review
   review: false

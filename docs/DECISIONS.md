@@ -9577,3 +9577,44 @@ label to the whole domain, so it was passing without exercising the clash-handli
 prove). Two "cheap" cleanups alongside: `rosterMemberIds` and the per-row `member` are now both read from
 one upfront pass of `resolveMember`, rather than computed twice; `findChannelNamed` is defined once per run
 instead of once per row.
+
+## D-86 — `packages/db`: SRV-11 — two courses cannot claim the same Discord role under different spellings
+
+SRV-10 (D-84) made a course's *own* two role names compare against each other under Discord's case- and
+whitespace-insensitive matching, so one course can no longer name `Staff` and `staff` and have both resolve
+to a single Discord role. The check that stops two *different* courses claiming the same role
+(`findCourseNameConflict`) was still exact — course A naming `Staff` as its admins role and course B naming
+`staff` as its students role were both accepted in one organization and one Discord server, and at scaffold
+time both resolved to the same role, granting every one of course B's students course A's admins-only
+channels. The same privilege escalation SRV-10 closed, split across two courses instead of hidden inside one.
+
+**Fix.** `findCourseNameConflict`'s role-name loop now compares `normalizeRoleName(candidate.adminsRole)`/
+`normalizeRoleName(candidate.studentsRole)` against `normalizeRoleName(roleName)` — the same
+`normalizeRoleName` SRV-10 added, not a second copy (it is a plain function declaration in the same file, so
+no export was needed to reuse it here). Gained the same `checkRoles` option `findSelfConflict` already has,
+default `true`: `updateCourse` passes `checkRoles: rolesChanged` (the same boolean it already computes for
+its own `findSelfConflict` call), so a pair of courses already grandfathered into a cross-course collision —
+saved before this check existed — can still be saved for an unrelated field, and only a save that actually
+changes one of the two role names is checked in full, including onto a *new* cross-course collision.
+`createCourse`'s call is unaffected (no prior state to grandfather; `checkRoles` defaults to `true`) and so
+are `enableCourse`'s and `findProjectUnarchiveConflict`'s own calls, both of which re-check an *unchanged*
+stored pair against other courses for a reason distinct from grandfathering — a course disabled while another
+course took its names (or archived while a sibling course did) must still be caught when it comes back, since
+that collision is newly real, not inherited from before the check existed.
+
+**Scope preserved, not widened.** `findCourseNameConflict` already scoped candidates to one organization
+*and* one Discord server (TEN-9, D-76) before this slice — this fix changes only how two role names already
+inside that scope are compared, not the scope itself. Two courses naming the same role in different servers,
+or different organizations, remain unrelated, exactly as before.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green: 2514
+vitest (4 new in `packages/db/tests/courses.test.ts` — differs-only-in-case refusal naming the other course,
+grandfathered-pair-saves-an-unrelated-field, changes-into-a-new-collision-still-refused, and
+different-organizations-unaffected), 90 node. Each new test's own behaviour confirmed red first: the
+differs-only-in-case and changes-into-a-new-collision tests both failed (`expected true to be false`) against
+`origin/feat/PLAT-1-multi-surface-platform` before the normalization fix — an exact-string comparison never
+caught them; the grandfathered-pair test, run again with `checkRoles: rolesChanged` temporarily reverted to
+always `true`, failed (`expected false to be true`), confirming it exercises the gating and not just the
+normalization; the different-organizations test passes with or without this slice's changes, as expected —
+included as a regression guard on the scope this slice deliberately left alone, not as a red/green proof of
+the fix itself.

@@ -240,6 +240,17 @@ function serverResolutionConflict(
  * "Limits" — this check has no SQL constraint backing it, so running it and
  * the write in the same transaction is the only thing this package can do to
  * narrow the race between two concurrent saves).
+ *
+ * SRV-11: role names are compared to every candidate's own role names
+ * normalized (`normalizeRoleName`, below) rather than by exact string — the
+ * same reasoning as `findSelfConflict`'s SRV-10 rework, just applied across
+ * courses instead of within one. `checkRoles` (default `true`) mirrors
+ * `findSelfConflict`'s own option, for the same reason: `updateCourse` skips
+ * this half of the check when the incoming role pair is byte-identical to
+ * what is already stored, so a save that leaves an already-colliding pair
+ * untouched (grandfathered from before this check existed) still goes
+ * through, and only a save that actually changes a role name is checked in
+ * full against every other course.
  */
 function findCourseNameConflict(
   organizationId: string,
@@ -251,9 +262,14 @@ function findCourseNameConflict(
   // TEN-9, for an organization that has not installed the bot anywhere yet.
   targetServerId: string | undefined,
   db: Executor,
-  options: { excludeCourseId?: string; includeProjectId?: string } = {}
+  options: {
+    excludeCourseId?: string
+    includeProjectId?: string
+    checkRoles?: boolean
+  } = {}
 ): CourseNameConflict | undefined {
   const { excludeCourseId, includeProjectId } = options
+  const checkRoles = options.checkRoles ?? true
   const allCandidates = db
     .select({
       id: courses.id,
@@ -306,16 +322,22 @@ function findCourseNameConflict(
 
   // Role names: `input`'s admin and student role must each be absent from
   // every candidate's admin *and* student role — a role name is one shared
-  // pool, not two separate ones.
-  for (const [field, roleName] of [
-    ['adminsRole', input.adminsRole],
-    ['studentsRole', input.studentsRole],
-  ] as const) {
-    const hit = candidates.find(
-      (candidate) =>
-        candidate.adminsRole === roleName || candidate.studentsRole === roleName
-    )
-    if (hit) return conflict(field, roleName, hit)
+  // pool, not two separate ones. Compared normalized (SRV-11), the same way
+  // Discord itself would resolve them, so "Staff" and "staff" collide across
+  // courses exactly as they already do within one (SRV-10).
+  if (checkRoles) {
+    for (const [field, roleName] of [
+      ['adminsRole', input.adminsRole],
+      ['studentsRole', input.studentsRole],
+    ] as const) {
+      const normalized = normalizeRoleName(roleName)
+      const hit = candidates.find(
+        (candidate) =>
+          normalizeRoleName(candidate.adminsRole) === normalized ||
+          normalizeRoleName(candidate.studentsRole) === normalized
+      )
+      if (hit) return conflict(field, roleName, hit)
+    }
   }
 
   if (candidates.length === 0) return undefined
@@ -892,12 +914,20 @@ export function updateCourse(
           ),
         }
       }
+      // SRV-11: the cross-course half of the role check is skipped the same
+      // way `findSelfConflict`'s is, just above — `rolesChanged` false means
+      // this save resubmits the role pair exactly as stored, so a course
+      // already grandfathered into a cross-course collision (from before
+      // this check existed) can still be saved for an unrelated field
+      // without being newly refused on a role name nothing about this save
+      // touched. A save that changes either name is checked in full,
+      // including against a collision the new name introduces.
       const conflictFound = findCourseNameConflict(
         organizationId,
         input,
         serverResolution.binding?.serverId,
         tx,
-        { excludeCourseId: courseId }
+        { excludeCourseId: courseId, checkRoles: rolesChanged }
       )
       if (conflictFound) return { ok: false, conflict: conflictFound }
     }

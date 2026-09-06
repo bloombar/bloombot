@@ -2314,7 +2314,8 @@ An import creates the student categories it needs. The panel offers this when im
 turned on by default, alongside the base name to use — defaulting to the course's own title followed
 by ` - STUDENTS`. With it on, the import works out how many categories the roster requires at fifty
 channels each, counts what already exists, and creates the rest, numbered in sequence from the base
-name (`Python - STUDENTS - 01`, `Python - STUDENTS - 02`). Existing categories are used before new
+name — `<base name> <n>`, so `Python - STUDENTS 01`, `Python - STUDENTS 02`, matching the naming
+convention ROST-11 already discovers categories by. Existing categories are used before new
 ones are made, and a category is never created to hold students who are already placed. With it off,
 the import behaves exactly as it does today, reporting what it could not place rather than creating
 anything.

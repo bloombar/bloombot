@@ -1173,6 +1173,237 @@ describe('courses repo', () => {
 
       expect(result.ok).toBe(true)
     })
+
+    // Round 2 must-fix: `rolesChanged` alone is not a sound gate for the
+    // cross-course check, unlike the self-conflict check it was copied
+    // from — `findCourseNameConflict`'s candidate set also depends on
+    // `discordServerId`, `enabled` and `projectId`, all reachable from
+    // `courses.save`. These three tests fail without the fix: each moves a
+    // course into a colliding candidate set without touching either role
+    // name, and the unconditional `rolesChanged` gate let all three through.
+    it('refuses a save that moves a course into a server where its role name (byte-identical) collides', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const installer = accounts.createAccount(
+        orgA,
+        {
+          email: 'installer@example.edu',
+          displayName: 'Installer',
+          role: 'owner',
+        },
+        testDb.db
+      )
+      const serverA = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '323232323232323232', installedByAccountId: installer.id },
+        testDb.db
+      )
+      const serverB = discordServers.claimDiscordServerBinding(
+        orgA,
+        { serverId: '333333333333333333', installedByAccountId: installer.id },
+        testDb.db
+      )
+      if (!serverA || !serverB) throw new Error('expected both to claim')
+
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Web Design',
+            adminsRole: 'staff',
+            discordServerId: serverA.serverId,
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      const dataScience = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-ds-fa26',
+            studentsRole: 'staff', // byte-identical to serverA's "staff", but currently in serverB
+            discordServerId: serverB.serverId,
+            categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      // Moves Data Science into serverA, where its `studentsRole` collides
+      // with Web Design's `adminsRole` — the role names never change.
+      const result = courses.updateCourse(
+        orgA,
+        dataScience.id,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'staff',
+          discordServerId: serverA.serverId,
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'studentsRole',
+        conflictingCourseTitle: 'Web Design',
+      })
+    })
+
+    it('refuses a save that enables a disabled course into a role collision (byte-identical) — the enable-via-update path', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Web Design',
+            adminsRole: 'staff',
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      const dataScience = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            enabled: false,
+            title: 'Data Science',
+            adminsRole: 'admins-ds-fa26',
+            studentsRole: 'staff', // byte-identical to Web Design's admins role
+            categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      // `courses.save` with `enabled: true` — a second, unguarded way to
+      // enable a course besides `courses.enable` (`enableCourse`, which
+      // does re-run this check).
+      const result = courses.updateCourse(
+        orgA,
+        dataScience.id,
+        courseInput(projectA.id, {
+          enabled: true,
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'staff',
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'studentsRole',
+        conflictingCourseTitle: 'Web Design',
+      })
+    })
+
+    it('refuses a save that moves a course out of an archived project into a role collision (byte-identical)', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Web Design',
+            adminsRole: 'staff',
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      // Archived *before* Data Science is created in it, so its colliding
+      // role name is never itself a candidate at creation time (PROJ-2) —
+      // this test is about the state a project's own courses can already be
+      // in when it comes back, not about `createCourse`'s own check.
+      const archivedProject = projects.createProject(
+        orgA,
+        { name: 'Archived Term' },
+        testDb.db
+      )
+      projects.archiveProject(orgA, archivedProject.id, testDb.db)
+      const dataScience = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(archivedProject.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-ds-fa26',
+            studentsRole: 'staff', // byte-identical to Web Design's admins role
+            categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      // Moves Data Science into the live project, where its `studentsRole`
+      // collides with Web Design's `adminsRole` — the role names never
+      // change, only `projectId` does.
+      const result = courses.updateCourse(
+        orgA,
+        dataScience.id,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'staff',
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'studentsRole',
+        conflictingCourseTitle: 'Web Design',
+      })
+    })
+
+    // The refusal quotes the candidate's *own* spelling, not just the
+    // caller's — otherwise an instructor naming "staff" is told it collides
+    // with a course that visibly uses "Staff", with no indication the two
+    // are the same role to Discord. This test fails without the fix: before
+    // it, the message read `Role name "staff" is already used by course
+    // "Web Design"...` with no mention of "Staff" anywhere.
+    it("names the candidate's own spelling and explains the insensitivity when the two spellings differ", () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Web Design',
+            adminsRole: 'Staff',
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'staff',
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.message).toContain('"staff"')
+      expect(result.conflict.message).toContain('"Staff"')
+      expect(result.conflict.message.toLowerCase()).toContain('case')
+    })
   })
 
   // TEN-9 — PROJ-3's own text always said "unique across every enabled

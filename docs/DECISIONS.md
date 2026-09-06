@@ -9592,10 +9592,8 @@ channels. The same privilege escalation SRV-10 closed, split across two courses 
 `normalizeRoleName(candidate.studentsRole)` against `normalizeRoleName(roleName)` — the same
 `normalizeRoleName` SRV-10 added, not a second copy (it is a plain function declaration in the same file, so
 no export was needed to reuse it here). Gained the same `checkRoles` option `findSelfConflict` already has,
-default `true`: `updateCourse` passes `checkRoles: rolesChanged` (the same boolean it already computes for
-its own `findSelfConflict` call), so a pair of courses already grandfathered into a cross-course collision —
-saved before this check existed — can still be saved for an unrelated field, and only a save that actually
-changes one of the two role names is checked in full, including onto a *new* cross-course collision.
+default `true`, so a pair of courses already grandfathered into a cross-course collision — saved before this
+check existed — can still be saved for an unrelated field (round 2, below, on what "unrelated" had to mean).
 `createCourse`'s call is unaffected (no prior state to grandfather; `checkRoles` defaults to `true`) and so
 are `enableCourse`'s and `findProjectUnarchiveConflict`'s own calls, both of which re-check an *unchanged*
 stored pair against other courses for a reason distinct from grandfathering — a course disabled while another
@@ -9607,9 +9605,9 @@ that collision is newly real, not inherited from before the check existed.
 inside that scope are compared, not the scope itself. Two courses naming the same role in different servers,
 or different organizations, remain unrelated, exactly as before.
 
-**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green: 2514
-vitest (4 new in `packages/db/tests/courses.test.ts` — differs-only-in-case refusal naming the other course,
-grandfathered-pair-saves-an-unrelated-field, changes-into-a-new-collision-still-refused, and
+**Verification (round 1).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all
+green: 2514 vitest (4 new in `packages/db/tests/courses.test.ts` — differs-only-in-case refusal naming the
+other course, grandfathered-pair-saves-an-unrelated-field, changes-into-a-new-collision-still-refused, and
 different-organizations-unaffected), 90 node. Each new test's own behaviour confirmed red first: the
 differs-only-in-case and changes-into-a-new-collision tests both failed (`expected true to be false`) against
 `origin/feat/PLAT-1-multi-surface-platform` before the normalization fix — an exact-string comparison never
@@ -9618,3 +9616,45 @@ always `true`, failed (`expected false to be true`), confirming it exercises the
 normalization; the different-organizations test passes with or without this slice's changes, as expected —
 included as a regression guard on the scope this slice deliberately left alone, not as a red/green proof of
 the fix itself.
+
+**Review round 2 (one blocker, one message defect, one cheap fix).** The normalization itself and the TEN-9
+scoping were confirmed correct; the grandfathering gate was not.
+
+1. **`checkRoles: rolesChanged` was the wrong condition for the cross-course check.** `rolesChanged` is sound
+   for `findSelfConflict`, which only ever reads `input` — "did either role name change" is the whole
+   question. It is not sound for `findCourseNameConflict`, whose candidate set also depends on
+   `input.enabled`, `input.discordServerId` and `input.projectId`, all on `courses.save`'s public schema and
+   reachable from the panel and MCP. A save moving a course into a different server, a different project, or
+   from disabled into routing — without touching either role name — left `rolesChanged` false and skipped the
+   role check entirely, even though the course's candidate set had just changed underneath it. Probed with
+   byte-identical role names on both courses: moving a course between two servers, enabling a disabled course
+   through `courses.save` (not `courses.enable`) rather than `enableCourse`, and moving a course out of an
+   archived project each let a live collision through — the third of these is the whole SRV-11 escalation
+   reachable in one fewer step than a fresh save, and there is no defense in depth behind it: the scaffold
+   only ever compares a single course against itself, and `resolveOrCreateRole` deliberately reuses an
+   existing role that resolves by normalized name. Fixed by naming the actual condition as its own boolean,
+   `couldIntroduceCrossCourseCollision` — `rolesChanged || input.enabled !== existing.enabled ||
+   (input.discordServerId ?? null) !== existing.discordServerId || input.projectId !== existing.projectId` —
+   rather than reusing `rolesChanged` for two checks with different dependencies, which is what let the gap
+   in unnoticed. The existing grandfathering test (renames the course only) still passes under the new
+   condition; three new tests, one per reachable path above, fail without it.
+2. **The refusal did not say why two different-looking strings collide.** `conflict.name` is the *caller's*
+   own spelling; the candidate's own spelling appeared nowhere, so an instructor naming `staff` was told it
+   collides with a course that visibly uses `Staff`, with no indication the two are the same role to Discord
+   at all — worse than the self-conflict message SRV-10 round 3 (D-84) already fixed for exactly this reason.
+   `conflict()` now takes an optional `candidateName` (the candidate's own spelling of whichever role
+   matched, resolved in the role loop by re-checking which of `hit.adminsRole`/`hit.studentsRole` normalizes
+   to the same value), and quotes both spellings plus a one-clause explanation when they differ only under
+   normalization. The category half of `conflict()` is unaffected — category names are never normalized, so
+   `candidateName` is left `undefined` there and the message is unchanged.
+3. **Cheap fix.** `if (candidates.length === 0) return undefined` moved above both the role and category
+   checks, not just the category one — with `checkRoles` false it used to sit between the two, reading as a
+   guard on the role loop it did nothing for (an empty `candidates` array already finds no `hit` there
+   regardless).
+
+**Verification (round 2).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all
+green: 2518 vitest (4 new in `packages/db/tests/courses.test.ts` on top of round 1's four — one per reachable
+path in must-fix 1, plus one for must-fix 2's message), 90 node. Each new test confirmed red first: the three
+`couldIntroduceCrossCourseCollision` tests all failed (`expected false to be true`) with the condition
+temporarily reverted to plain `rolesChanged`; the message test failed (`expected ... to contain '"Staff"'`)
+with `conflict()`'s call site reverted to omit `candidateName`.

@@ -165,17 +165,32 @@ interface CollisionCandidate {
 function conflict(
   field: CourseNameConflict['field'],
   name: string,
-  candidate: CollisionCandidate
+  candidate: CollisionCandidate,
+  // SRV-11 round 2: the candidate's own spelling of the colliding role
+  // name, set only when the loop below found a role collision — `name` is
+  // the *caller's* own spelling, and the two can differ under Discord's
+  // case/whitespace-insensitive matching, which is exactly the collision
+  // this check now catches. Without this, an instructor naming "staff" was
+  // told it collides with a course that visibly uses "Staff", with no hint
+  // the two spellings are the same role to Discord at all — the same defect
+  // SRV-10 round 3 fixed for `findSelfConflict`'s own message, reworked here
+  // for the cross-course one.
+  candidateName?: string
 ): CourseNameConflict {
   const kind = field === 'category' ? 'Category' : 'Role'
+  const sameSpelling = candidateName === undefined || candidateName === name
+  const message = sameSpelling
+    ? `${kind} name "${name}" is already used by course "${candidate.title}" ` +
+      `in project "${candidate.projectName}".`
+    : `Role name "${name}" is already used by course "${candidate.title}" ` +
+      `in project "${candidate.projectName}" as "${candidateName}"; Discord ` +
+      `treats the two as the same role, ignoring case and surrounding whitespace.`
   return {
     field,
     name,
     conflictingProjectName: candidate.projectName,
     conflictingCourseTitle: candidate.title,
-    message:
-      `${kind} name "${name}" is already used by course "${candidate.title}" ` +
-      `in project "${candidate.projectName}".`,
+    message,
   }
 }
 
@@ -320,6 +335,13 @@ function findCourseNameConflict(
       targetServerId
   )
 
+  // Cheap fix (SRV-11 round 2): hoisted above both the role and category
+  // checks, not just the category one — with `checkRoles` false this used
+  // to sit between the two, reading as if it guarded the role loop when it
+  // guards nothing there at all (an empty `candidates` array already finds
+  // no `hit`).
+  if (candidates.length === 0) return undefined
+
   // Role names: `input`'s admin and student role must each be absent from
   // every candidate's admin *and* student role — a role name is one shared
   // pool, not two separate ones. Compared normalized (SRV-11), the same way
@@ -336,11 +358,19 @@ function findCourseNameConflict(
           normalizeRoleName(candidate.adminsRole) === normalized ||
           normalizeRoleName(candidate.studentsRole) === normalized
       )
-      if (hit) return conflict(field, roleName, hit)
+      if (hit) {
+        // The candidate's *own* spelling of whichever role matched — not
+        // necessarily `hit.adminsRole` — so the message can quote both
+        // sides rather than telling an instructor their string collides
+        // with a course that visibly uses a different one.
+        const candidateName =
+          normalizeRoleName(hit.adminsRole) === normalized
+            ? hit.adminsRole
+            : hit.studentsRole
+        return conflict(field, roleName, hit, candidateName)
+      }
     }
   }
-
-  if (candidates.length === 0) return undefined
 
   // Category names: every candidate's own categories, looked up in one
   // query rather than one per candidate.
@@ -914,20 +944,33 @@ export function updateCourse(
           ),
         }
       }
-      // SRV-11: the cross-course half of the role check is skipped the same
-      // way `findSelfConflict`'s is, just above — `rolesChanged` false means
-      // this save resubmits the role pair exactly as stored, so a course
-      // already grandfathered into a cross-course collision (from before
-      // this check existed) can still be saved for an unrelated field
-      // without being newly refused on a role name nothing about this save
-      // touched. A save that changes either name is checked in full,
-      // including against a collision the new name introduces.
+      // SRV-11 round 2: `rolesChanged` alone is *not* a sound gate here, the
+      // way it is for `findSelfConflict` above. `findSelfConflict` only ever
+      // reads `input`, so "the role names did not change" is the whole
+      // question. `findCourseNameConflict`'s candidate set also depends on
+      // `input.enabled`, `input.discordServerId` and `input.projectId` — all
+      // three are on `courses.save`'s own schema, reachable from the panel
+      // and MCP — so a save can move this course into a *different*
+      // candidate set (a different server, a different project, or from
+      // disabled into routing) without touching either role name at all,
+      // and `rolesChanged` alone would then skip the role check entirely
+      // while a save changing nothing else still ran it. Named separately
+      // from `rolesChanged` on purpose: the two flags answer different
+      // questions, and folding them into one flag is what let this gap in.
+      const couldIntroduceCrossCourseCollision =
+        rolesChanged ||
+        input.enabled !== existing.enabled ||
+        (input.discordServerId ?? null) !== existing.discordServerId ||
+        input.projectId !== existing.projectId
       const conflictFound = findCourseNameConflict(
         organizationId,
         input,
         serverResolution.binding?.serverId,
         tx,
-        { excludeCourseId: courseId, checkRoles: rolesChanged }
+        {
+          excludeCourseId: courseId,
+          checkRoles: couldIntroduceCrossCourseCollision,
+        }
       )
       if (conflictFound) return { ok: false, conflict: conflictFound }
     }

@@ -9658,3 +9658,82 @@ path in must-fix 1, plus one for must-fix 2's message), 90 node. Each new test c
 `couldIntroduceCrossCourseCollision` tests all failed (`expected false to be true`) with the condition
 temporarily reverted to plain `rolesChanged`; the message test failed (`expected ... to contain '"Staff"'`)
 with `conflict()`'s call site reverted to omit `candidateName`.
+## D-87 — `apps/worker`/`packages/db`: ROST-17 — a channel is remembered by id, not re-derived by name
+
+**The gap this closes.** Every name-based lookup above (ROST-11's original match, ROST-14's disambiguation,
+ROST-16's ownership guard) only ever finds a student's channel by recomputing the name their address would
+produce *today* and searching for it in the guild. `channelBelongsToSomeoneElse`'s own doc comment already
+named the case it cannot see: "two different rosters (not two rows of the same one) coincidentally
+generating the same name for two different real students is exactly the gap ROST-17's durable
+person→channel record exists to close, not this function." A new table, `roster_channel_assignments`
+(`packages/db/src/schema.ts`, migration `0024_bouncy_gunslinger.sql`) and its repo
+(`repos/roster-channel-assignments.ts`), is that record: one row per `(courseId, personId)`, written the
+moment a channel is created or adopted, and consulted first, by id, ahead of any name-based matching at
+all.
+
+**Where it slots into the existing loop.** `roster-import.ts`'s per-row block now reads: look the person up
+in `roster_channel_assignments` first; if found and the channel it names still exists in the guild, use it
+directly (requirement 2) and skip every line of ROST-14/16's own name derivation and ownership guard for
+this row entirely — the record is authoritative, not one more candidate to weigh against a name match. If
+found but the channel no longer exists (deleted from the server), it is treated as gone, not trusted: this
+row falls straight through to the ordinary creation path further down, under whatever name
+`assignChannelNames` derives today, rather than either leaving the student channelless or risking a
+name-based lookup adopting an unrelated channel that happens to share today's name (requirement 4). Only a
+row with **no** remembered channel at all reaches `findChannelNamed`/`channelBelongsToSomeoneElse`
+unchanged from ROST-14/16's own shape.
+
+**Adoption folds into the existing escalation, rather than a second refusal path.** Requirement 3's own
+text ("only if it is not already remembered as another person's, and only if its permissions do not already
+grant a different individual student") reads as two separate gates, but they are implemented as one: a name
+match already remembered as a different person's is treated exactly like a `channelBelongsToSomeoneElse`
+hit, escalating through the same `ownAddressCandidates` ladder ROST-16 already built. This is a deliberate
+integration choice, not a literal transcription of the SPEC's two clauses into two `if`s — folding it in
+means a genuinely different student blocked from a stale channel gets ROST-14's own disambiguated channel
+of her own on the same run, rather than a bare refusal (`channelsNotCreated`) that this slice's earlier
+draft gave her before ROST-14/16 landed on this same base and this draft rebased onto it. Every candidate
+the escalation loop itself considers is checked against `roster_channel_assignments` the same way the
+initial match is, so the escalation cannot walk onto a *second* already-remembered channel either.
+
+**The one identity-model carve-out, not closed here.** `roster-import.ts`'s own module comment already
+documents a pre-existing gap: a row whose handle resolves to nobody gets a synthetic, handle-keyed person,
+and a *later* import where the same handle now resolves creates a second, genuinely different `people` row
+for the same real student — nothing in this file reconciles the two (that reconciliation exists only for a
+live Discord message, `handleMention`'s own doc comment). Without a carve-out, a remembered record written
+for the first, handle-keyed person reads as "somebody else's" the instant the second, snowflake-keyed
+person resolves on a later import, refusing that row its own channel outright — a real regression, caught by
+an existing rework-finding-5 test that predates this slice and asserts the opposite. The carve-out: a
+remembered owner whose stored `email` matches this row's own is treated as this same gap, not a stranger.
+Two *different* real students sharing one exact address is not a case this roster format can even express —
+ROST-14's own disambiguation exists precisely because two distinct *addresses*, not one shared address,
+produce the same channel name — so an exact address match here is this row's own history, not somebody
+else's. This is narrower than "trust any email match" (PPL-4's own doctrine that an address match never
+authorizes combining two people's histories still holds): nothing here merges people, moves an identity, or
+touches a conversation — the only effect is that a channel-adoption guard does not fire, which is a much
+lower-stakes decision than a merge, and the record itself (`recordChannelAssignment`, below) still moves
+correctly once this row's own identity resolves in full.
+
+**`recordChannelAssignment` is a three-way read-then-write, not a single `onConflictDoUpdate`.** Two unique
+constraints exist on `roster_channel_assignments` — `(courseId, personId)` and `discordChannelId` alone —
+and either can be the one a given call actually collides with: the ordinary "reconfirm or replace this
+person's channel" case collides on the former; the identity-model carve-out above (the *same* channel now
+resolving to a *different*, newly-real person) collides on the latter instead, since the row already
+exists, just under the stale handle-keyed person. A single `onConflictDoUpdate` can target only one
+constraint, so this function reads for a match by person first, then by channel, and only inserts when
+neither is found — inside one transaction, so a concurrent writer cannot land between the read and the
+write.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test && npx
+playwright test` all green: 2543 vitest (57 in `roster-import.test.ts`, 4 new for ROST-17 itself, plus 4 new
+in `roster-channel-assignments.test.ts`), 90 node, 38 Playwright e2e. Each new test confirmed red first,
+against this slice's own code with only `roster-import.ts`'s ROST-17 wiring reverted (the database table and
+repo left in place, since neither is used by anything before that wiring lands): a corrected address
+between two imports created a second channel instead of keeping the first; a remembered channel deleted
+from the server left the student reported as already having one that did not exist; a channel already
+remembered as another student's was silently adopted; and a legacy channel predating the record was
+re-created rather than adopted once. Two existing ROST-16 tests changed meaning rather than merely being
+patched to pass: `ChannelOrphanedEntry`'s own doc comment already said plainly that this slice would close
+the gap it worked around ("until ROST-17 remembers a channel by the person it belongs to rather than by its
+current name and closes this for good") — the two tests exercising that workaround were rewritten to assert
+the closed behavior (the remembered channel is kept, under its own name, rather than the student being
+moved to a freshly-derived one) instead of deleted, since the underlying scenario (a colliding row leaves
+the roster, freeing a bare name) is still worth a regression test, just with a better outcome.

@@ -1474,8 +1474,9 @@ export const rosterChannelAssignments = sqliteTable(
   },
   (table) => [
     // What `repos/roster-channel-assignments.ts#getChannelAssignmentForPerson`
-    // looks a student's own channel up by, and what `recordChannelAssignment`'s
-    // own `onConflictDoUpdate` targets to replace a deleted-and-recreated
+    // looks a student's own channel up by, and the first of the two reads
+    // `recordChannelAssignment`'s own read-then-write transaction runs (that
+    // function's own doc comment) to replace a deleted-and-recreated
     // channel's id on the same row rather than inserting a second one.
     uniqueIndex('roster_channel_assignments_course_person_unique').on(
       table.courseId,

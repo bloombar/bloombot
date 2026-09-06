@@ -83,6 +83,7 @@ describe('runMigrations', () => {
       'person_identities',
       'person_link_challenges',
       'projects',
+      'roster_channel_assignments',
       'sessions',
       'sign_in_tokens',
       'tenant_deletions',

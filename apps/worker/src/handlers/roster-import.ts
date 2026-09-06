@@ -1263,6 +1263,13 @@ export function createRosterImportHandler(
             )
             .find(({ channel }) => channel.id === remembered.discordChannelId)
         : findChannelNamed(channelName)
+      if (remembered && matched) {
+        // The reported name is this channel's own real, current name — not
+        // whatever `assignChannelNames` would derive for this row today,
+        // which is precisely what this row's channel is remembered instead
+        // of re-deriving from (this file's own module comment on ROST-17).
+        channelName = matched.channel.name
+      }
 
       // ROST-16: a name match is not proof of ownership. Names can
       // legitimately drift — a student leaves and frees a bare name, an
@@ -1291,12 +1298,23 @@ export function createRosterImportHandler(
       // same handle now resolves creates a second, genuinely different
       // `people` row for the same real student, since nothing in this file
       // reconciles the two (that reconciliation exists only for a live
-      // Discord message, `handleMention`'s own doc comment). A remembered
-      // owner whose stored email matches this row's own is treated as this
-      // same gap, not a stranger: two *different* real students sharing one
-      // exact address is not a case this roster format can even express
-      // (ROST-14's own disambiguation exists precisely because two
-      // addresses, not one, produce the same channel name).
+      // Discord message, `handleMention`'s own doc comment). Review finding
+      // (D-87): an earlier draft of this carve-out compared *stored email
+      // strings* instead, which excuses far more than the one gap above —
+      // any two genuinely different people who ever carried the same
+      // address (an address reissued after a student leaves; two stored
+      // spellings differing only by case) satisfied it too, so a name
+      // match onto a departed student's channel was silently reassigned to
+      // a stranger, reported as a routine access repair with no ownership
+      // conflict at all. The predicate now asks the one question that
+      // actually distinguishes the identity-gap case from a stranger: is
+      // the remembered owner *this row's own* synthetic, handle-keyed
+      // person — the exact identity `resolvePersonByIdentity` above would
+      // have created for this row had its handle never resolved? That is
+      // true only when this row's own earlier import left it unresolved
+      // and remembered under `handle:<this row's handle>`; it is never
+      // true for a different real person who merely happens to share this
+      // row's current address.
       let rememberedAsSomeoneElse = false
       if (!remembered && matched) {
         const rememberedElsewhere =
@@ -1312,10 +1330,18 @@ export function createRosterImportHandler(
               context.db
             )
           : undefined
-        rememberedAsSomeoneElse =
+        const syntheticOwner =
           rememberedOwner !== undefined &&
-          rememberedOwner.email?.trim().toLowerCase() !==
-            row.email.trim().toLowerCase()
+          people.resolveIdentity(
+            context.organizationId,
+            {
+              surface: 'discord' as const,
+              externalId: `handle:${normalizeHandle(row.discord)}`,
+            },
+            context.db
+          )?.id === rememberedOwner.id
+        rememberedAsSomeoneElse =
+          rememberedOwner !== undefined && !syntheticOwner
       }
 
       // A refused match resumes this row's *own* `ownAddressCandidates`

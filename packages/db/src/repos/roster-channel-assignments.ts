@@ -92,18 +92,25 @@ export function getChannelAssignmentByDiscordChannelId(
  *   when this person already has a remembered channel for this course —
  *   the ordinary "reconfirm" case, and requirement 4's "replace the
  *   deleted channel's id" case.
- * - The row is instead found by `discordChannelId` and its `personId`
- *   moved when this exact channel is already remembered, just under a
- *   *different* person — `apps/worker`'s own handler takes this path
- *   deliberately narrowly, only for the one case its own module comment
- *   documents as a pre-existing identity-model gap it does not close: a
- *   roster row whose handle resolves to nobody, then resolves to a real
- *   member on a later import, is two different `people` rows for the same
- *   real student. Without this branch, recording the channel for the
- *   newly-resolved person would collide on `discordChannelId` and throw,
- *   rather than simply moving the remembered ownership forward onto
- *   whichever person this row currently resolves to.
- * - Neither is found: a fresh row is inserted.
+ * - The row is instead found by `discordChannelId` *within the same
+ *   course* and its `personId` reassigned when this exact channel is
+ *   already remembered, just under a *different* person — `apps/worker`'s
+ *   own handler takes this path deliberately narrowly, only for the one
+ *   case its own module comment documents as a pre-existing identity-model
+ *   gap it does not close: a roster row whose handle resolves to nobody,
+ *   then resolves to a real member on a later import, is two different
+ *   `people` rows for the same real student. Without this branch, recording
+ *   the channel for the newly-resolved person would collide on
+ *   `discordChannelId` and throw, rather than simply reassigning the
+ *   remembered ownership onto whichever person this row currently resolves
+ *   to. Scoped to `courseId` as well as `discordChannelId` — never
+ *   reassigning a record across courses, even though `discordChannelId`
+ *   alone is already globally unique — so this branch's own effect stays
+ *   exactly what its name says: moving *who* a channel belongs to within
+ *   one course, never *which* course a record belongs to.
+ * - Neither is found (including a `discordChannelId` remembered under a
+ *   *different* course, which this function does not reassign): a fresh
+ *   row is inserted.
  */
 export function recordChannelAssignment(
   organizationId: string,
@@ -131,21 +138,22 @@ export function recordChannelAssignment(
         .get()
     }
 
-    const byChannel = tx
+    const byChannelInThisCourse = tx
       .select()
       .from(rosterChannelAssignments)
       .where(
         and(
           eq(rosterChannelAssignments.organizationId, organizationId),
+          eq(rosterChannelAssignments.courseId, input.courseId),
           eq(rosterChannelAssignments.discordChannelId, input.discordChannelId)
         )
       )
       .get()
-    if (byChannel) {
+    if (byChannelInThisCourse) {
       return tx
         .update(rosterChannelAssignments)
-        .set({ courseId: input.courseId, personId: input.personId })
-        .where(eq(rosterChannelAssignments.id, byChannel.id))
+        .set({ personId: input.personId })
+        .where(eq(rosterChannelAssignments.id, byChannelInThisCourse.id))
         .returning()
         .get()
     }

@@ -9658,6 +9658,170 @@ path in must-fix 1, plus one for must-fix 2's message), 90 node. Each new test c
 `couldIntroduceCrossCourseCollision` tests all failed (`expected false to be true`) with the condition
 temporarily reverted to plain `rolesChanged`; the message test failed (`expected ... to contain '"Staff"'`)
 with `conflict()`'s call site reverted to omit `candidateName`.
+## D-87 — `apps/worker`/`packages/actions`/`apps/web`/`packages/discord-rest`: ROST-15 — an import creates the student categories it needs
+
+Per-student channels only ever landed in the numbered `… - STUDENTS NN` categories a course's own
+`course.categories` declares *and* that already exist in the guild — a roster imported before those
+categories were scaffolded created no channels at all, and a roster bigger than the categories that
+happened to exist stranded every extra student under `channelsNotCreated`, one row at a time, because
+Discord allows only fifty channels per category. Neither case had a fix short of an instructor hand-editing
+the course's category count and re-running `discordServers.scaffold`.
+
+**Fix, in three layers.** `roster.import`'s payload gains two optional fields —
+`createStudentCategories` and `studentCategoryBaseName` — both defaulted in `packages/actions`' own
+action (`createStudentCategories` to `true`, `studentCategoryBaseName` to `${course.title} - STUDENTS`
+once the course is resolved), never in `apps/worker`'s handler itself: a payload omitting either field —
+every test of that handler predating this slice, unmodified — gets exactly today's behaviour, which is
+requirement 5's own "off means today's behaviour, exactly." `apps/web`'s `RosterImport.tsx` gained the
+panel half: a checkbox checked by default and a base-name field defaulting to the course's own title,
+both travelling with every dispatch rather than left for the action's silent default (a checked box that
+did not actually send `true` would be a lie the panel tells).
+
+**Discovery, broadened without widening scope.** `loadStudentCategoryStates` already discovered a
+course's *declared* numbered categories by matching them against the guild by name
+(`normalizeName`/`studentCategoryNumber`). A category this feature creates is never added to
+`course.categories` — this slice has no reach into course config, only the guild — so a second run had
+no way to recognise the first run's own work through that path alone. The function gained a third,
+optional `studentCategoryBaseName` argument: when given, it also folds in any guild category whose name
+is anchored to that exact base name (`categoryNumberForBaseName`, a new, narrower sibling of
+`studentCategoryNumber` — anchored to a specific base name rather than "ends in students NN" generically,
+so a *different* course's own numbered categories in the same guild, TEN-9's ordinary case, are never
+folded into this course's own count or numbering). Deduplicated by the guild's own category id, so a
+category matched both by declaration and by base name — the common case, an instructor's base name
+agreeing with what they already declared — lands in exactly one `CategoryState`, never two independent
+ones whose channel counts could desync as the run mutates them. Left `undefined` (today's declared-only
+behaviour) whenever the feature is off.
+
+**Sizing, creation and reuse.** With the feature on, the handler works out how many categories the
+roster needs at `categoryChannelCap` each and creates only the shortfall against what
+`loadStudentCategoryStates` already resolved — a course already scaffolded with room left creates
+nothing at all, not even the one Discord call (`getBotUserId`) this feature would otherwise need first.
+Numbering for anything created continues from the highest number already used under the base name
+anywhere in the guild, never restarting at 01. Each candidate name is checked against the guild before
+creating anything — defense in depth, since the sizing above already ensures no candidate number is
+ever generated for a category `loadStudentCategoryStates` already resolved, the same "kept anyway as a
+fail-closed guard against a case that should not reach it" `discord-scaffold.ts`'s own
+`dedupeOverwritesById` is kept for. A category actually created gets `denyEveryoneOverwrite`,
+`allowBotOverwrite` and the course's admins-role grant — the same shape `discord-scaffold.ts` builds for
+a category it creates, minus the students-role grant that file also adds: resolving or creating that
+role is SRV-10/SRV-11's own concern, explicitly out of this slice's scope, and every channel this handler
+places inside a student category already denies the students role individually (ROST-16) — a
+category-level grant of it would be redundant at best.
+
+**Failures follow SRV-10's own pattern.** Creating a category is one more Discord write like every
+other in this handler: a permanent refusal (`DiscordRequestError.permanent` — a 403 for a bot missing
+Manage Channels, say) is caught and reported under the report's `categoriesFailed`, and the run stops
+attempting further creates (round 2's fix below: it now *names* every remaining still-needed category
+too, not only the one that actually failed) but keeps importing the rest of the roster, the same as any
+other per-row failure in this file. Anything else — a 429, a raw transport error — is rethrown,
+uncaught, so JOB-2 retries rather than this run reporting `succeeded` having quietly skipped a category
+a rate limit happened to interrupt.
+
+**Round 1's own three judgment calls — one held, two did not survive review.** (1) A category created
+gets the admins-role grant but not the students-role grant `discord-scaffold.ts` gives its own
+categories, since every channel this handler places already denies the students role individually
+(ROST-16) — this one held. (2) and (3), below, did not.
+
+**Review round 2 (two blockers, one should-fix).** The permissions on a *created* category, the
+never-adopted-a-category-with-the-wrong-shape structural claims, and the failure handling in both
+directions were all confirmed sound. Three things were not.
+
+1. **Blocker — sizing compared against a category *count*, not the free seats actually left.**
+   `neededCategories = Math.ceil(rows.length / cap)` was compared against `categoryStates.length`, so any
+   occupancy in an existing category — a term's worth of alumni channels, never deleted (SRV-8) — was
+   treated as room that plainly was not there. Probed: a course whose one scaffolded category already
+   held fifty alumni channels created *zero* new categories importing a fresh fifty-student roster with
+   the box ticked, and stranded all fifty — the box did exactly nothing in the ordinary second-term case
+   this feature exists for. Round 1's own judgment call (3) claimed this "errs toward creating slightly
+   more room than strictly needed rather than less"; the direction was backwards — comparing against a
+   bare count errs toward *less*. Fixed by sizing against `freeSeats`, the sum of each existing category's
+   own `max(0, cap − channels.length)`, with `Math.ceil(max(0, rows.length − freeSeats) / cap)` deciding
+   the shortfall — `rows.length` itself is unchanged (still every parsed row, including one later refused
+   for a name collision or reported unparseable; still simpler than a narrower "rows that will actually
+   get a channel" count, and still erring toward slightly more room than strictly needed, which is what
+   round 1 meant to claim and now actually does).
+2. **Blocker — an adopted category with the wrong permissions was used silently and reported as
+   nothing.** Round 1's own judgment call (2) reasoned that repairing an adopted category's `@everyone`
+   denial or admins-role grant would need a verb `packages/discord-rest` did not have without risking an
+   SRV-8-style arbitrary edit, and scoped the repair to bot access only. Probed with a pre-existing
+   category that explicitly *allowed* `@everyone` view and granted no admins role: the run placed student
+   channels inside it, wrote nothing, and reported nothing — not a content leak (every child channel still
+   carries its own explicit `denyEveryone`/admins/member overwrite, ROST-16), but a SPEC-conformance
+   failure and a truthfulness one. Fixed two ways. First, `packages/discord-rest` gained
+   `putChannelPermissionOverwrite` — the identical single-target `PUT`
+   `grantBotChannelAccess`/`grantChannelMemberAccess` already make, generalized to an overwrite the caller
+   has already built rather than one the client constructs — and an adopted category's `@everyone` denial
+   and admins-role grant are now checked and repaired the same way its bot access already was. Second, a
+   category whose repair permanently fails is *never* silent again: a failed `@everyone`/admins-role
+   repair is named under the report's new `categoriesPermissionsNotRepaired` (the category stays usable —
+   the honesty gap is category-level, not a per-student leak); a failed *bot-access* repair — the one
+   thing a category cannot be written into at all without — now excludes the category from placement
+   outright (removed from `categoryStates` before sizing ever counts it as room) and is named under
+   `categoriesFailed`, rather than relying on the placement loop's own `createGuildChannel` call to
+   rediscover the identical 403 later, which never happens for a category that already has no room left —
+   the exact silent misattribution ("every category is full") this fix closes.
+3. **Should-fix — the separator-tolerant matching the doc comment and the SPEC both claimed did not
+   exist.** `categoryNumberForBaseName` compared by `normalizeName` (case/whitespace-trim only), while its
+   own doc comment (and `studentCategoryNumber`'s own regex) claimed a dash/whitespace tolerance it did
+   not implement for the *base* half of a name. Probed: an existing `Test Course  -  STUDENTS 01` (an
+   instructor's own double space) was not recognised as the base name's own category, and a second,
+   functionally identical one was created and left in the guild permanently. Fixed with
+   `collapseSeparators` (trim, lowercase, then every run of whitespace and/or `-` collapsed to one space),
+   used both by `categoryNumberForBaseName` and by the create loop's own defense-in-depth dedup check
+   (which used the same too-narrow `normalizeName` comparison for the identical reason).
+
+**Two smaller fixes from the same round.** A permanent failure creating a category used to `break` the
+loop having named only the one slot that failed — every further still-needed category (identically
+blocked by the same permanent refusal) went unmentioned; the loop now names every remaining slot too,
+with the same reason, without attempting further network calls for them. And clearing the base-name
+field in the panel while the checkbox stayed ticked used to dispatch `''`, which the action's own schema
+rejected outright as a bare, field-less `ActionInputError`; `RosterImport.tsx` now falls back to the same
+default the field itself displays before dispatching.
+
+**Verification (round 1).** `npm run lint && npx prettier --check . && npm run typecheck && npm test &&
+npx playwright test` all green: 2553 vitest (7 new in `apps/worker/tests/handlers/roster-import.test.ts`,
+1 new and 1 updated in `packages/actions/tests/roster.test.ts`, 5 new in
+`apps/web/tests/roster-import.test.tsx`), 90 node, 38 Playwright e2e specs. Every new test confirmed red
+first against the handler/action/component as `discordServers.scaffold`'s own SRV-10 rework (D-84) left
+them.
+
+**Verification (round 2).** `npm run lint && npx prettier --check . && npm run typecheck && npm test`
+all green: 2564 vitest (11 new — 7 in `apps/worker/tests/handlers/roster-import.test.ts`: sizing against
+free seats with a full category and with a partially-occupied one, a separator-variant reuse, a
+successful adopted-category permission repair, that repair's own permanent-failure half, a permanently
+refused bot-access repair excluding the category and rerouting to a fresh one, and every still-needed
+category named as failed rather than only the first; 2 in `packages/discord-rest/tests/client.test.ts`
+for `putChannelPermissionOverwrite`; 2 in `apps/web/tests/roster-import.test.tsx` for the new report
+section and the empty-base-name fallback), 90 node. Each confirmed red first against the round-1 state:
+all seven worker tests failed (four on `categoriesCreated`/`categoriesFailed` values a bare-count sizing
+or a silent repair-swallow could not produce, two on `categoriesPermissionsNotRepaired` being `undefined`
+— the field did not exist yet — and the "names every still-needed category" test short by two entries);
+both `discord-rest` tests failed with `client.putChannelPermissionOverwrite is not a function`; both
+web tests failed the same way `categoriesFailed`'s own web-layer test did in round 1 — a report section
+and a fallback that did not exist. `apps/api/tests/helpers/fake-discord-rest-client.ts` gained a matching
+stub for the new client method, required by `DiscordRestClient`'s own interface once
+`putChannelPermissionOverwrite` was added to it — an unrelated fake this port's own module comment already
+says "keeps satisfying `DiscordRestClient` as it grows," not a defect this round introduced.
+
+Playwright was re-run in full (`npx playwright test`, 38 specs) against the round-2 state and stayed
+green, including `roster-import-panel.spec.ts`'s own real end-to-end path — but no *new* Playwright spec
+was added for ROST-15 itself. One was written and then removed: this worktree's own `node_modules` is a
+wholesale symlink to the checkout it was cut from (this repo's own multi-agent workflow, not a defect in
+this slice), so a live, separately-spawned `apps/api`/`apps/worker` process resolves `@bloombot/actions`
+and `@bloombot/discord-rest` by bare specifier through that symlink — reaching whatever state the *other*
+checkout happens to be in, not this worktree's own source, regardless of what gets built locally. A new
+end-to-end spec exercising `createStudentCategories` would only be proving something about that other
+checkout's code, not this slice's, and would go red or green depending on a state this branch does not
+control — worse than not having the spec at all. `apps/worker`'s own unit suite (the real
+`createDiscordRestClient` against a loopback fake, exactly `roster-import.test.ts`'s own established
+device) and `apps/web`'s own component suite (the real `RosterImport.tsx` against a mocked API client
+boundary) are what this slice's own front-to-back proof rests on instead; `packages/actions/tests/roster.test.ts`
+covers the layer in between. Also noted, out of scope, while writing the spec: `e2e/support/fake-discord-guild-server.ts`
+has no `POST /guilds/{id}/roles` route at all — SRV-10's own auto-create-a-missing-role path (D-84) has
+no e2e coverage and would 404 against this fake if exercised; every existing e2e roster scenario
+sidesteps it by pre-seeding a matching role. Left alone — a pre-existing gap in a different requirement's
+own e2e fixture, not this slice's to fix.
+
 ## D-88 — `apps/worker`/`packages/db`: ROST-17 — a channel is remembered by id, not re-derived by name
 
 **The gap this closes.** Every name-based lookup above (ROST-11's original match, ROST-14's disambiguation,

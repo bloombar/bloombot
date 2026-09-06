@@ -25,6 +25,20 @@
  * hands the browser a pre-signed URL instead can still enqueue the same job
  * shape with `csvText` read from wherever it landed; nothing about this
  * action's own shape forecloses that.
+ *
+ * **ROST-15's two extra fields, defaulted here, not in the worker.** The
+ * panel's own checkbox is "checked by default" — that default lives in
+ * this action, not `apps/worker`'s own handler, which treats a payload
+ * omitting `createStudentCategories` as `false` (that file's own module
+ * comment explains why: it is what every test of that handler predating
+ * this slice still sends, and "off means today's behaviour, exactly" is
+ * this slice's own requirement 5). An MCP caller that never mentions
+ * either field still gets the same on-by-default behaviour an instructor
+ * clicking through the panel does. `studentCategoryBaseName` defaults to
+ * the course's own title plus `" - STUDENTS"` once `entity` (the resolved
+ * course) is in hand — a default this action can compute and the worker
+ * cannot, since `parsePayload` there runs before the course is even
+ * fetched.
  */
 
 import { courses, jobs } from '@bloombot/db'
@@ -57,6 +71,13 @@ const importInputSchema = z.object({
   // which no CSV — malformed or not — could ever produce a usable report
   // from.
   csvText: z.string().min(1),
+  // ROST-15 — both optional, and both defaulted below rather than by
+  // `.default()` here: `createStudentCategories`'s default is a plain
+  // constant, but `studentCategoryBaseName`'s needs `entity.title`, which
+  // only exists once the policy has resolved the course, after schema
+  // validation runs.
+  createStudentCategories: z.boolean().optional(),
+  studentCategoryBaseName: z.string().trim().min(1).optional(),
 })
 type ImportInput = z.infer<typeof importInputSchema>
 
@@ -87,11 +108,21 @@ export const importRosterAction: Action<
       courses.getCourse(context.organizationId, input.courseId, context.db),
   },
   execute: ({ organizationId, input, entity, db }) => {
+    // ROST-15: "checked by default" (requirement 1) lives here, not in the
+    // worker's own handler — see this file's own module comment.
+    const createStudentCategories = input.createStudentCategories ?? true
+    const studentCategoryBaseName =
+      input.studentCategoryBaseName ?? `${entity.title} - STUDENTS`
     const job = jobs.enqueueJob(
       organizationId,
       {
         kind: ROSTER_IMPORT_JOB_KIND,
-        payload: { courseId: entity.id, csvText: input.csvText },
+        payload: {
+          courseId: entity.id,
+          csvText: input.csvText,
+          createStudentCategories,
+          studentCategoryBaseName,
+        },
         maxAttempts: ROSTER_IMPORT_MAX_ATTEMPTS,
       },
       db

@@ -738,15 +738,27 @@ export function reinstateCourseEnrolment(
  * background job and returns immediately; the report itself is read back
  * through `getJobStatus`'s own `result`, the same "poll a job id" shape
  * `scaffoldCourseDiscord`/`attachCourseFile` already use.
+ *
+ * ROST-15: `createStudentCategories`/`studentCategoryBaseName` travel with
+ * every dispatch — `RosterImport.tsx`'s own checkbox and base-name field —
+ * rather than being left for `roster.import`'s own action-level default to
+ * fill in silently; a panel that shows a checkbox already checked and a
+ * field already populated with a default value is asserting something
+ * about what the request will do, and this call site is what keeps that
+ * assertion true.
  */
 export function importRoster(
   organizationId: string,
   courseId: string,
-  csvText: string
+  csvText: string,
+  createStudentCategories: boolean,
+  studentCategoryBaseName: string
 ): Promise<{ jobId: string }> {
   return dispatchAction(organizationId, 'roster.import', {
     courseId,
     csvText,
+    createStudentCategories,
+    studentCategoryBaseName,
   })
 }
 

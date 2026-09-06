@@ -31,6 +31,17 @@
  * out of their own channel. All three now render in the same "name the row
  * or value it concerns" style as `parseErrors`/`unresolvedHandles` above
  * them.
+ *
+ * **ROST-15's checkbox, checked by default.** A course with a roster larger
+ * than what it happens to have scaffolded used to strand every extra
+ * student under `channelsNotCreated`, one at a time — this screen now
+ * offers to create the student categories a roster needs, on by default
+ * (requirement 1), with a base-name field defaulting to `courseTitle`
+ * (this component's own new prop) plus `" - STUDENTS"`, editable for a
+ * course that names its categories differently. Both travel with every
+ * dispatch (`api/client.ts`'s own `importRoster`), never left for the
+ * action's own default to fill in silently — see that function's own doc
+ * comment.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -41,10 +52,13 @@ import { ImportIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FileDropZone } from './FileDropZone.js'
+import { FormField } from './FormField.js'
 
 export interface RosterImportProps {
   organizationId: string
   courseId: string
+  /** ROST-15: the course's own title — this component's own base-name field defaults to `${courseTitle} - STUDENTS`, CFG-4's own convention. */
+  courseTitle: string
   /** Test-only override of `DEFAULT_STILL_QUEUED_HINT_AFTER_MS`. */
   stillQueuedHintAfterMs?: number
   /** Test-only override of `DEFAULT_POLL_INTERVAL_MS`. */
@@ -96,6 +110,7 @@ function fileToText(file: File): Promise<string> {
 export function RosterImport({
   organizationId,
   courseId,
+  courseTitle,
   stillQueuedHintAfterMs = DEFAULT_STILL_QUEUED_HINT_AFTER_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: RosterImportProps) {
@@ -105,6 +120,15 @@ export function RosterImport({
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [stillQueued, setStillQueued] = useState(false)
   const pollingSinceRef = useRef<number | undefined>(undefined)
+  // ROST-15: requirement 1 — checked by default, and a base name defaulting
+  // to the course's own title plus `" - STUDENTS"` (CFG-4's own
+  // convention). `useState`'s lazy initializer reads `courseTitle` only
+  // once, on mount — an instructor who has already edited the base name
+  // field is not overwritten by a later title change elsewhere on the page.
+  const [createStudentCategories, setCreateStudentCategories] = useState(true)
+  const [studentCategoryBaseName, setStudentCategoryBaseName] = useState(
+    () => `${courseTitle} - STUDENTS`
+  )
 
   const settled = job?.status === 'succeeded' || job?.status === 'failed'
 
@@ -153,7 +177,29 @@ export function RosterImport({
     setStillQueued(false)
     try {
       const csvText = await fileToText(selectedFile)
-      const { jobId } = await importRoster(organizationId, courseId, csvText)
+      // Review round 2's "kinder" fix: a base name an instructor cleared
+      // (or never touched, if it started blank for some reason) falls back
+      // to the same default the field itself displays, rather than
+      // dispatching `''` — which `roster.import`'s own input schema
+      // rejects outright, as a bare `ActionInputError` with no field-level
+      // message the panel could show next to this control.
+      // Round 3: the guard is on the *value*, not on the checkbox. The
+      // field only renders while the box is ticked, but its state survives
+      // unticking — so tick, clear the field, untick, import, and this
+      // dispatched `''` anyway, which is exactly the refusal this fallback
+      // exists to prevent. The base name is sent on every import
+      // regardless of the checkbox, so an empty one is never sendable.
+      const effectiveBaseName =
+        studentCategoryBaseName.trim().length === 0
+          ? `${courseTitle} - STUDENTS`
+          : studentCategoryBaseName
+      const { jobId } = await importRoster(
+        organizationId,
+        courseId,
+        csvText,
+        createStudentCategories,
+        effectiveBaseName
+      )
       const status = await getJobStatus(organizationId, jobId)
       pollingSinceRef.current = Date.now()
       setJob(status)
@@ -208,6 +254,40 @@ export function RosterImport({
         disabled={importing || (job !== undefined && !settled)}
         onFileChosen={chooseFile}
       />
+
+      {/* ROST-15: requirement 1 — offered here, checked by default, with a
+          base name field an instructor can override for a course that does
+          not follow CFG-4's own `<title> - STUDENTS` convention. */}
+      <div className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3">
+        <label className="flex items-center gap-2 text-sm text-neutral-800">
+          <input
+            type="checkbox"
+            checked={createStudentCategories}
+            disabled={importing || (job !== undefined && !settled)}
+            onChange={(event) =>
+              setCreateStudentCategories(event.target.checked)
+            }
+          />
+          Create student categories if they don&apos;t exist
+        </label>
+        {createStudentCategories && (
+          <FormField
+            label="Base name for new categories"
+            help="Created as <base name> 01, <base name> 02, and so on."
+          >
+            <input
+              type="text"
+              value={studentCategoryBaseName}
+              disabled={importing || (job !== undefined && !settled)}
+              onChange={(event) =>
+                setStudentCategoryBaseName(event.target.value)
+              }
+              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </FormField>
+        )}
+      </div>
+
       <div>
         <Button
           variant="secondary"
@@ -428,6 +508,63 @@ export function RosterImport({
                 {report.unresolvedRoles.map((entry) => (
                   <li key={entry.role}>
                     {entry.role} — {entry.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ROST-15: a student category this run created because the
+              roster needed more room than already existed — named here the
+              same way a created role or channel is above. */}
+          {report.categoriesCreated.length > 0 && (
+            <div>
+              <p className="font-medium text-neutral-700">
+                Student categories created because the roster needed more room:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.categoriesCreated.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ROST-15: a category this run tried to create and the server
+              permanently refused — the students who would have landed in
+              it are reported under `channelsNotCreated`/`channelsFailed`
+              above, the same as any other full-up run. */}
+          {report.categoriesFailed.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Student categories this run tried to create and could not:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.categoriesFailed.map((entry) => (
+                  <li key={entry.name}>
+                    {entry.name} — {entry.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ROST-15, round 2: an adopted category (one this run did not
+              just create) whose own permissions did not match what the
+              course asks for, and could not be repaired — still used for
+              placement (ROST-16's per-channel overwrites hold regardless),
+              but named here rather than left silently "as whatever a
+              person set by hand." */}
+          {report.categoriesPermissionsNotRepaired.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Student categories already in the server whose permissions do
+                not match what this course asks for, and could not be repaired:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.categoriesPermissionsNotRepaired.map((entry) => (
+                  <li key={entry.name}>
+                    {entry.name} — {entry.reason}
                   </li>
                 ))}
               </ul>

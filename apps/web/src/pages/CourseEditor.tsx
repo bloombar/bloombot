@@ -1623,6 +1623,7 @@ export function CourseEditor({
                   <RosterImport
                     organizationId={organizationId}
                     courseId={courseId}
+                    courseTitle={form.title}
                   />
                 </section>
               </>

@@ -35,7 +35,10 @@ import {
   type RosterImportReport,
 } from '../../src/handlers/roster-import.js'
 import { createFakeLogger } from '../helpers/fake-logger.js'
-import { FakeDiscordGuildServer } from '../helpers/fake-discord-guild-server.js'
+import {
+  FAKE_BOT_USER_ID,
+  FakeDiscordGuildServer,
+} from '../helpers/fake-discord-guild-server.js'
 import { seedOrganizationWithBoundCourse } from '../helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
@@ -70,6 +73,13 @@ async function runImport(
   options?: {
     categoryChannelCap?: number
     discordRestClient?: DiscordRestClient
+    // ROST-15: both left `undefined` by default, the same as a payload
+    // predating this slice — `@bloombot/actions`' own `roster.import`
+    // action is what defaults `createStudentCategories`, never this
+    // handler (this file's own module comment), so a test that wants
+    // "on" has to say so explicitly.
+    createStudentCategories?: boolean
+    studentCategoryBaseName?: string
   }
 ): Promise<RosterImportReport> {
   const handler = createRosterImportHandler({
@@ -87,7 +97,16 @@ async function runImport(
       : {}),
   })
   return handler(
-    { courseId, csvText },
+    {
+      courseId,
+      csvText,
+      ...(options?.createStudentCategories !== undefined
+        ? { createStudentCategories: options.createStudentCategories }
+        : {}),
+      ...(options?.studentCategoryBaseName !== undefined
+        ? { studentCategoryBaseName: options.studentCategoryBaseName }
+        : {}),
+    },
     {
       organizationId,
       jobId: randomUUID(),
@@ -96,6 +115,15 @@ async function runImport(
       logger: createFakeLogger(),
     }
   ) as Promise<RosterImportReport>
+}
+
+/** A CSV with `count` distinct, parseable rows — `student0@example.edu`, `student1@example.edu`, … — for a ROST-15 test that cares about the roster's own size, not any one row's content. */
+function rosterCsv(count: number): string {
+  const rows = Array.from(
+    { length: count },
+    (_, i) => `Student,${i},student${i}@example.edu,student${i}discord,`
+  )
+  return [HEADER, ...rows].join('\n')
 }
 
 /** Seed a course with one already-scaffolded numbered student category (CFG-4's own `… - STUDENTS NN` convention) — the guild already holds the category (as an earlier `discordServers.scaffold` run would have left it), empty. */
@@ -2824,6 +2852,644 @@ describe('roster.import handler', () => {
       await expect(
         runImport(seeded.organizationId, seeded.courseId, csv)
       ).rejects.toThrow(/more than one active Discord server/)
+    })
+  })
+
+  describe('ROST-15 — an import creates the student categories it needs', () => {
+    it('creates the categories a large roster needs when none are scaffolded yet, and places every student', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, []) // Nothing scaffolded at all.
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(120),
+        { createStudentCategories: true }
+      )
+
+      // 120 students at Discord's real 50-per-category cap needs three —
+      // the default `categoryChannelCap` this handler otherwise uses.
+      expect(report.categoriesCreated).toEqual([
+        'Test Course - STUDENTS 01',
+        'Test Course - STUDENTS 02',
+        'Test Course - STUDENTS 03',
+      ])
+      expect(report.categoriesFailed).toEqual([])
+      expect(report.channelsCreated).toHaveLength(120)
+      expect(report.channelsNotCreated).toEqual([])
+
+      // Requirement 4's other half — a created category's own permissions:
+      // denies `@everyone`, grants the bot itself (without which every
+      // `createGuildChannel` call just made inside it would have 403'd),
+      // and grants the course's admins role (SRV-10 created it, since this
+      // guild had no roles at all).
+      const adminsRoleId = discordServer
+        .guildRolesFor(seeded.guildId)
+        .find(
+          (role) => (role as { name?: string }).name === seeded.adminsRole
+        ) as { id?: string } | undefined
+      const categoryCreates = discordServer.requests.filter(
+        (r) =>
+          r.method === 'POST' &&
+          r.path.endsWith('/channels') &&
+          r.body?.['type'] === 4
+      )
+      expect(categoryCreates).toHaveLength(3)
+      for (const request of categoryCreates) {
+        const overwrites = request.body?.['permission_overwrites'] as {
+          id: string
+        }[]
+        expect(overwrites.some((o) => o.id === seeded.guildId)).toBe(true) // @everyone deny
+        expect(overwrites.some((o) => o.id === FAKE_BOT_USER_ID)).toBe(true)
+        expect(overwrites.some((o) => o.id === adminsRoleId?.id)).toBe(true)
+      }
+    })
+
+    it('creates nothing when an already-scaffolded course already has room for the roster', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory([1, 2, 3]) // 150 seats — plenty for 120.
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(120),
+        { createStudentCategories: true }
+      )
+
+      expect(report.categoriesCreated).toEqual([])
+      expect(report.categoriesFailed).toEqual([])
+      expect(report.channelsNotCreated).toEqual([])
+      // No category-management call of any kind — not even the one this
+      // handler would need before it could create or repair a category
+      // (`getBotUserId`) — proving this run touched nothing beyond placing
+      // students into the room that already existed.
+      expect(discordServer.requests.some((r) => r.path === '/users/@me')).toBe(
+        false
+      )
+      expect(
+        discordServer.requests.some(
+          (r) =>
+            r.method === 'POST' &&
+            r.path.endsWith('/channels') &&
+            r.body?.['type'] === 4
+        )
+      ).toBe(false)
+    })
+
+    // Round 3's blocker: sizing counted students who already held a
+    // channel in the numerator while also subtracting the seat each of
+    // them occupies, so a steady-state re-import asked for categories it
+    // did not need and created them empty. SRV-8 never deletes, so the
+    // junk was permanent. Asserts the guild, not the report: the second
+    // run must add no category of its own.
+    it('creates no category on a re-import that places nobody new, even when the existing ones are full', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      // Exactly 4 seats at cap 2, and a roster of exactly 4 — the first
+      // run fills them completely, so every seat is occupied on the second.
+      const seeded = seedCourseWithStudentCategory([1, 2])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(4),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+      expect(first.categoriesCreated).toEqual([])
+      expect(first.channelsCreated).toHaveLength(4)
+
+      const categoriesAfterFirst = discordServer.requests.filter(
+        (r) =>
+          r.method === 'POST' &&
+          r.path.endsWith('/channels') &&
+          r.body?.['type'] === 4
+      ).length
+
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(4),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(second.categoriesCreated).toEqual([])
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toHaveLength(4)
+      expect(second.channelsNotCreated).toEqual([])
+      // The wire is the real assertion: no second-run category POST at all.
+      const categoriesAfterSecond = discordServer.requests.filter(
+        (r) =>
+          r.method === 'POST' &&
+          r.path.endsWith('/channels') &&
+          r.body?.['type'] === 4
+      ).length
+      expect(categoriesAfterSecond).toBe(categoriesAfterFirst)
+    })
+
+    it('continues numbering past the categories that already exist, rather than restarting', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory([1, 2]) // 4 seats at cap 2.
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(5), // Needs 3 categories at cap 2 — one more than exists.
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(report.categoriesCreated).toEqual(['Test Course - STUDENTS 03'])
+      expect(report.channelsNotCreated).toEqual([])
+    })
+
+    it('reuses an already-existing category under the target name rather than duplicating it, repairing the bot access it was missing', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      // One category the course itself declares, plus one that is not
+      // declared anywhere in `course.categories` at all — the shape a
+      // category an earlier ROST-15 run created, or an instructor made by
+      // hand, actually has. Missing the bot's own overwrite, the way a
+      // category created before this run existed would be.
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Test Course - STUDENTS 01', channels: [] },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'cat-2',
+          type: 4,
+          name: 'Test Course - STUDENTS 02',
+          parent_id: null,
+          permission_overwrites: [], // no bot access yet
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+        { id: 'role-students', name: seeded.studentsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(4), // Needs 2 categories at cap 2 — exactly what already exists.
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(report.categoriesCreated).toEqual([]) // reused, not duplicated
+      expect(
+        discordServer.requests.some(
+          (r) =>
+            r.method === 'POST' &&
+            r.path.endsWith('/channels') &&
+            r.body?.['type'] === 4
+        )
+      ).toBe(false)
+      expect(report.channelsCreated).toHaveLength(4)
+
+      // The undeclared category's own bot access was repaired.
+      const repaired = discordServer
+        .guildChannelsFor(seeded.guildId)
+        .find((channel) => (channel as { id?: string }).id === 'cat-2') as
+        { permission_overwrites?: { id: string }[] } | undefined
+      expect(
+        repaired?.permission_overwrites?.some((o) => o.id === FAKE_BOT_USER_ID)
+      ).toBe(true)
+    })
+
+    it("the checkbox off reproduces exactly today's reporting — nothing created", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: false }
+      )
+
+      expect(report.categoriesCreated).toEqual([])
+      expect(report.categoriesFailed).toEqual([])
+      expect(report.channelsCreated).toEqual([])
+      expect(report.channelsNotCreated).toEqual([
+        {
+          line: 2,
+          email: 'student0@example.edu',
+          reason: 'no student category has been scaffolded for this course yet',
+        },
+      ])
+      expect(discordServer.requests.some((r) => r.path === '/users/@me')).toBe(
+        false
+      )
+    })
+
+    // Requirement 6, the "rethrow" half — the SRV-10 admins-role test above
+    // proves the same contract for a role create; this is the identical
+    // proof for a category create. This test fails without the fix: before
+    // it, nothing distinguished a transient failure creating a category
+    // from a permanent one, so a rate limit would have been absorbed and
+    // reported under `categoriesFailed` instead of retried.
+    it('rethrows a transient (429) failure creating a category, rather than absorbing it', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.failNextChannelCreate(429, {
+        message: 'You are being rate limited',
+      })
+
+      await expect(
+        runImport(seeded.organizationId, seeded.courseId, rosterCsv(1), {
+          createStudentCategories: true,
+        })
+      ).rejects.toMatchObject({ status: 429 })
+
+      // The category create was attempted (and rejected) — this fake only
+      // appends to its own guild store on a 2xx, so nothing landed despite
+      // the request having been made.
+      expect(discordServer.guildChannelsFor(seeded.guildId)).toEqual([])
+    })
+
+    // Requirement 6, the "absorb" half — a permanent refusal (403) creating
+    // a category is reported under `categoriesFailed`, and the rest of the
+    // import still runs (the row that would have landed there is reported
+    // under `channelsNotCreated`, the same as any other full-up run).
+    it('reports a 403 creating a category under categoriesFailed, without aborting the rest of the import', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.failNextChannelCreate(403, {
+        message: 'Missing Permissions',
+      })
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: true }
+      )
+
+      expect(report.categoriesCreated).toEqual([])
+      expect(report.categoriesFailed).toEqual([
+        {
+          name: 'Test Course - STUDENTS 01',
+          reason: expect.stringContaining('403'),
+        },
+      ])
+      expect(report.channelsNotCreated).toEqual([
+        {
+          line: 2,
+          email: 'student0@example.edu',
+          reason: 'no student category has been scaffolded for this course yet',
+        },
+      ])
+    })
+
+    // Blocker 1 (review round 2): sizing used to compare the roster against
+    // a bare category *count*, not the free seats actually left — so an
+    // already-full category (SRV-8 never deletes a term's worth of alumni
+    // channels) was counted as room that plainly was not there, and the
+    // box being ticked created nothing at all while stranding every new
+    // student. This is the ordinary second-term case the feature exists
+    // for. Fails without the fix: `categoriesCreated` comes back `[]` and
+    // both new rows land in `channelsNotCreated`.
+    it('sizes against free seats, not a bare category count — a full category still gets a fresh one created alongside it', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Test Course - STUDENTS 01', channels: [] },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        // Two channels already occupy this category's only two seats —
+        // last term's alumni, never deleted (SRV-8).
+        { id: 'chan-alum-1', type: 0, name: 'alum1', parent_id: 'cat-1' },
+        { id: 'chan-alum-2', type: 0, name: 'alum2', parent_id: 'cat-1' },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+        { id: 'role-students', name: seeded.studentsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(2),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(report.categoriesCreated).toEqual(['Test Course - STUDENTS 02'])
+      expect(report.channelsCreated).toHaveLength(2)
+      expect(report.channelsNotCreated).toEqual([])
+    })
+
+    // The partial-occupancy half of the same fix — one free seat left, two
+    // new students: the new category only needs to cover the shortfall
+    // (one seat), not the whole roster.
+    it('creates only the shortfall against a partially-occupied category, not a fresh category per student', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Test Course - STUDENTS 01', channels: [] },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        { id: 'chan-alum-1', type: 0, name: 'alum1', parent_id: 'cat-1' },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+        { id: 'role-students', name: seeded.studentsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(2),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      // One free seat already existed; only one more category (2 more
+      // seats) is needed to cover the second new student.
+      expect(report.categoriesCreated).toEqual(['Test Course - STUDENTS 02'])
+      expect(report.channelsCreated).toHaveLength(2)
+      expect(report.channelsNotCreated).toEqual([])
+    })
+
+    // Should-fix (review round 2): `categoryNumberForBaseName` used to
+    // compare by `normalizeName` alone (case/whitespace only) — an
+    // instructor's own double space (`Test Course  -  STUDENTS 01`) was
+    // not recognised as the same category the base name describes, so this
+    // run tried to create a second, functionally identical one. Fails
+    // without the fix: `categoriesCreated` names a duplicate `... 01`.
+    it('recognises an existing category whose separators differ from the base name, rather than duplicating it', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          // Hyphens where the base name has spaces, and an unpadded
+          // single-digit number. Deliberately *not* the double-space
+          // variant: that one is caught by the create loop's own
+          // duplicate guard even with case-only matching, so it passes
+          // whether or not `categoryNumberForBaseName` is
+          // separator-tolerant, and pins nothing. This spelling is only
+          // recognised by the tolerant comparison itself.
+          name: 'Test Course-STUDENTS-1',
+          parent_id: null,
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(report.categoriesCreated).toEqual([])
+      expect(
+        discordServer.requests.some(
+          (r) =>
+            r.method === 'POST' &&
+            r.path.endsWith('/channels') &&
+            r.body?.['type'] === 4
+        )
+      ).toBe(false)
+      expect(report.channelsCreated).toHaveLength(1)
+    })
+
+    // Blocker 2 (review round 2): an adopted category's own permissions
+    // were never checked against what the course asks for — only its bot
+    // access. Fails without the fix: no `PUT` for `@everyone`/the admins
+    // role is ever sent, and the category stays exactly as a person set it
+    // by hand.
+    it('repairs an adopted category that explicitly allows @everyone and grants no admins role, and reports nothing wrong once it does', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+          permission_overwrites: [
+            // Explicitly *allows* @everyone — the opposite of what the
+            // course asks for.
+            { id: seeded.guildId, type: 0, allow: '1024', deny: '0' },
+            // Bot access already present, so that repair is skipped.
+            { id: FAKE_BOT_USER_ID, type: 1, allow: '3088', deny: '0' },
+          ],
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(2),
+        { createStudentCategories: true, categoryChannelCap: 50 }
+      )
+
+      expect(report.categoriesPermissionsNotRepaired).toEqual([])
+      expect(report.channelsCreated).toHaveLength(2)
+
+      const adminsRoleId = discordServer
+        .guildRolesFor(seeded.guildId)
+        .find(
+          (role) => (role as { name?: string }).name === seeded.adminsRole
+        ) as { id?: string } | undefined
+      const puts = discordServer.requests.filter(
+        (r) =>
+          r.method === 'PUT' &&
+          r.path.startsWith('/channels/cat-1/permissions/')
+      )
+      expect(
+        puts.some((r) => r.path.endsWith(`/permissions/${seeded.guildId}`))
+      ).toBe(true)
+      expect(
+        puts.some((r) => r.path.endsWith(`/permissions/${adminsRoleId?.id}`))
+      ).toBe(true)
+
+      const repaired = discordServer
+        .guildChannelsFor(seeded.guildId)
+        .find((channel) => (channel as { id?: string }).id === 'cat-1') as
+        | {
+            permission_overwrites?: {
+              id: string
+              allow: string
+              deny: string
+            }[]
+          }
+        | undefined
+      const everyoneEntry = repaired?.permission_overwrites?.find(
+        (overwrite) => overwrite.id === seeded.guildId
+      )
+      expect(everyoneEntry?.deny).toBe('1024')
+    })
+
+    // The failure half of the same fix — a category-level permission
+    // repair that Discord permanently refuses is named on the report
+    // rather than silently accepted, and the category is still used for
+    // placement (every child channel carries its own explicit overwrite —
+    // ROST-16 — so this is a category-level honesty gap, not a leak).
+    it('names a category whose @everyone/admins repair permanently fails, without excluding it from placement', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '1024', deny: '0' },
+            { id: FAKE_BOT_USER_ID, type: 1, allow: '3088', deny: '0' },
+          ],
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+      discordServer.failNextPermissionPut(403, {
+        message: 'Missing Permissions',
+      })
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: true, categoryChannelCap: 50 }
+      )
+
+      expect(report.categoriesPermissionsNotRepaired).toEqual([
+        {
+          name: 'Test Course - STUDENTS 01',
+          reason: expect.stringContaining('403'),
+        },
+      ])
+      // Still used — the row still got its own channel, in this category.
+      expect(report.channelsCreated).toHaveLength(1)
+      expect(report.categoriesFailed).toEqual([])
+    })
+
+    // Blocker 2's other half — a category whose *bot-access* repair is
+    // permanently refused cannot be written into at all this run, and must
+    // not be silently offered as capacity (the placement loop would only
+    // 403 the moment it reached it, and a category with room never even
+    // gets that far, so nothing would ever report it). Fails without the
+    // fix: `categoriesFailed` is `[]`, `categoriesCreated` is `[]`, and the
+    // one row silently lands in `channelsNotCreated`.
+    it('excludes an adopted category from placement, and reports why, when its bot-access repair is permanently refused', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+          permission_overwrites: [], // no bot access
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+      discordServer.failNextPermissionPut(403, {
+        message: 'Missing Permissions',
+      })
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: true, categoryChannelCap: 2 }
+      )
+
+      expect(report.categoriesFailed).toEqual([
+        {
+          name: 'Test Course - STUDENTS 01',
+          reason: expect.stringContaining('403'),
+        },
+      ])
+      // Rerouted to a fresh category instead — numbered 02, continuing
+      // past the excluded 01 (requirement 2's own "never reuse a number").
+      expect(report.categoriesCreated).toEqual(['Test Course - STUDENTS 02'])
+      expect(report.channelsCreated).toHaveLength(1)
+    })
+
+    // The two-smaller-ones fix (review round 2): a permanent failure
+    // creating a category used to stop the loop silently — the report
+    // named only the first slot that failed, leaving any further
+    // still-needed category unmentioned even though the same permanent
+    // refusal would identically block it too. Fails without the fix:
+    // `categoriesFailed` has length 1, not 3.
+    it('names every still-needed category as failed, not only the first, once a permanent refusal stops further attempts', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+      discordServer.failNextChannelCreate(403, {
+        message: 'Missing Permissions',
+      })
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(3),
+        { createStudentCategories: true, categoryChannelCap: 1 }
+      )
+
+      expect(report.categoriesCreated).toEqual([])
+      expect(report.categoriesFailed).toEqual([
+        {
+          name: 'Test Course - STUDENTS 01',
+          reason: expect.stringContaining('403'),
+        },
+        {
+          name: 'Test Course - STUDENTS 02',
+          reason: expect.stringContaining('403'),
+        },
+        {
+          name: 'Test Course - STUDENTS 03',
+          reason: expect.stringContaining('403'),
+        },
+      ])
+      expect(report.channelsNotCreated).toHaveLength(3)
     })
   })
 })

@@ -230,8 +230,20 @@ export interface RosterImportReport {
   channelsFailed: ChannelFailedEntry[]
   /** Rework finding 6: two rows whose emails slug to the same channel name — see `ChannelNameCollisionEntry`'s own doc comment. */
   channelNameCollisions: ChannelNameCollisionEntry[]
-  /** A course role name that did not resolve in the guild — the admins overwrite this run applied is missing that grant for every channel it created, the same "skipped rather than fatal" treatment SRV-2 gives `discord-scaffold.ts`'s own role resolution. */
+  /**
+   * A course role name this run could not end up with an id for — before
+   * SRV-10, that meant "absent from the guild" (the admins overwrite this
+   * run applied would then be missing that grant for every channel it
+   * created, SRV-2's "skipped rather than fatal"); since SRV-10, an absent
+   * name is created rather than skipped (see `rolesCreated` below), so this
+   * now means the name resolved to nothing *and* creating it failed too —
+   * an ordinary Discord failure (a `403` for a bot missing Manage Roles,
+   * say), reported here the same way a failed channel create already is
+   * (`channelsFailed`), not thrown.
+   */
   unresolvedRoles: string[]
+  /** SRV-10: a course role name the guild lacked, created this run with an empty permission bitfield — never one that already resolved (`unresolvedRoles`' own doc comment covers what "still missing" means now). */
+  rolesCreated: string[]
   /**
    * Rework finding 13 (second bullet): what this handler structurally
    * cannot do, stated plainly on every run's own report rather than living
@@ -502,9 +514,32 @@ export function createRosterImportHandler(
       deps.discordRestClient.listGuildMembers(deps.botToken, guildId),
     ])
 
+    // SRV-10: a role named in the config but absent from the guild is
+    // created, not skipped — with an empty permission bitfield of its own
+    // (requirement 1), and only when `resolveRoleId` finds nothing
+    // (requirement 2: a name that already resolves is used exactly as it
+    // is). Creating a role can itself fail on an ordinary Discord error (a
+    // `403` for a bot missing Manage Roles, requirement 6) — caught here
+    // the same way a failed channel create is caught below
+    // (`channelsFailed`), so this does not abort the rest of the roster;
+    // the role name simply stays unresolved, exactly as SRV-2 already left
+    // an unresolvable name before this slice.
     const unresolvedRoles: string[] = []
-    const adminsRoleId = resolveRoleId(roles, course.adminsRole)
-    if (!adminsRoleId) unresolvedRoles.push(course.adminsRole)
+    const rolesCreated: string[] = []
+    let adminsRoleId = resolveRoleId(roles, course.adminsRole)
+    if (!adminsRoleId) {
+      try {
+        const created = await deps.discordRestClient.createGuildRole(
+          deps.botToken,
+          guildId,
+          { name: course.adminsRole }
+        )
+        adminsRoleId = created.id
+        rolesCreated.push(course.adminsRole)
+      } catch {
+        unresolvedRoles.push(course.adminsRole)
+      }
+    }
 
     const categoryStates = loadStudentCategoryStates(course, existingChannels)
 
@@ -525,6 +560,7 @@ export function createRosterImportHandler(
       channelsFailed: [],
       channelNameCollisions: [],
       unresolvedRoles,
+      rolesCreated,
       limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
 

@@ -9134,3 +9134,59 @@ and the refusal message says so, rather than pretending the two saves are one tr
 after the prompt may land on the old tab button: `goToTab`'s `.focus()` runs before `Modal`'s own
 `dialog.close()` restores focus to the opener, which by then carries `tabIndex={-1}`. jsdom cannot see
 it; `e2e/course-configuration.spec.ts` now asserts it in a real browser.
+
+## D-84 — `apps/worker`/`packages/discord-rest`: SRV-10 — a missing role is created, not skipped
+
+SRV-10's own contract: a course names an admins role and a students role, and a name the guild lacks is
+created — with an empty permission bitfield of its own — rather than left for every channel overwrite
+naming it to silently omit the grant. `packages/discord-rest/src/client.ts` gains `createGuildRole`
+(`POST /guilds/{id}/roles`, `permissions: '0'`), following `createGuildCategory`/`createGuildChannel`'s
+own shape exactly — same error handling (`DiscordRequestError`, `explainDiscordStatus`'s existing 403
+guidance already names Manage Roles), same "no companion method that edits or removes it" (SRV-8
+extended to roles: neither `discord-scaffold.ts` nor `roster-import.ts` renames or recolors a role it
+creates).
+
+**Both call sites keep their own `resolveRoleId`/`normalizeName`, per the brief.** SRV-10 does not
+introduce a shared "resolve or create a role" helper across `discord-scaffold.ts` and `roster-import.ts`
+— each file's own module comment already argues why an app does not share this kind of thing across
+handlers via a package it does not own, and the two files' actual role needs differ: scaffolding
+resolves/creates both `adminsRole` and `studentsRole` (both are named in category/channel overwrites);
+roster import only ever resolves/creates `adminsRole` (a student's own channel overwrite never names the
+students role at all — the channel is private to the one admitted student, not shared with the whole
+class). A shared helper would either carry a parameter neither file's own local `resolveOrCreateRole`
+needs, or hide that difference behind a signature that looks identical but is not. Each file gets its own
+small `resolveOrCreateRole(name)` closure instead — a few duplicated lines, not a new abstraction for a
+future this slice does not have.
+
+**A creation failure keeps a role "unresolved," rather than aborting the run.** Requirement 6: a 403 for
+a bot missing Manage Roles is an ordinary Discord failure, not a reason to fail the whole job. This
+extends SRV-2's existing "skipped rather than fatal" treatment of an unresolved role name rather than
+replacing it: before this slice, `unresolvedRoles` meant "absent from the guild"; after it, an absent
+name is created (`rolesCreated`, the new field naming what SRV-10 requires be reported), so
+`unresolvedRoles` now means "absent from the guild _and_ creating it also failed" — the doc comments on
+both files' own report interfaces say so explicitly, since a reader of one run's report has no reason to
+have this file open. `discord-scaffold.ts`'s own `resolveOrCreateRole` is `async` and awaited sequentially
+for `adminsRole` then `studentsRole` — two Discord calls at most, not worth `Promise.all`-ing given the
+try/catch each one needs independently.
+
+**Existing tests updated, not merely added to.** `discord-scaffold.test.ts`'s own "reports a role name
+that does not resolve in the guild" test asserted the pre-SRV-10 contract directly (`unresolvedRoles`
+containing a name the guild lacked) — that assertion is now false under the new contract, so the test is
+rewritten as three: creates a missing role with an empty bitfield, leaves an existing one untouched (no
+create call), and reports (without aborting) a 403 creating one. `roster-import.test.ts` gained the
+equivalent three for its own single role, `adminsRole`. Both fakes
+(`packages/discord-rest/tests/helpers/fake-discord-server.ts`,
+`apps/worker/tests/helpers/fake-discord-guild-server.ts`) gained a stateful `POST /guilds/{id}/roles`
+route (appends to the guild's own role list, echoes an assigned id back — the same shape their existing
+`POST /guilds/{id}/channels` routes already use) and a failure-injection queue
+(`respondToGuildRoles`/`failNextRoleCreate`) matching their own existing channel-creation failure
+injection. `apps/api/tests/helpers/fake-discord-rest-client.ts` and
+`apps/worker/tests/helpers/fake-discord-guild-server.ts` both needed `createGuildRole` stubs purely to
+keep satisfying `DiscordRestClient` as the port grew — neither `apps/api`'s routes nor anything besides
+these two handlers ever calls it.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green:
+2495 vitest, 90 node (this slice's own net addition: the pre-SRV-10 role test in
+`discord-scaffold.test.ts` split into three, plus two more in `discord-scaffold.test.ts`, three new in
+`roster-import.test.ts`, and two new in `packages/discord-rest/tests/client.test.ts`). `npm run
+board:derive` left `scripts/board/manifest.yaml` byte-for-byte unchanged.

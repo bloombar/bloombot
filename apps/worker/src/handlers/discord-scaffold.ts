@@ -174,8 +174,18 @@ export interface ScaffoldReport {
   undeclaredCategories: string[]
   /** A channel present in a *declared* category that no course in this organization declares (SRV-8, finding 3 of the rework) — a category the organization does not declare at all is already covered by naming the category itself, above; this only names a channel one level inside a category that is still recognised. Reported, never removed. */
   undeclaredChannels: string[]
-  /** A course role name (`adminsRole`/`studentsRole`) that did not resolve to a role in the guild (SRV-2's "skipped rather than treated as fatal") — reported instead of guessed at. */
+  /**
+   * A course role name (`adminsRole`/`studentsRole`) this run could not end
+   * up with an id for — before SRV-10, that meant "absent from the guild"
+   * (SRV-2's "skipped rather than treated as fatal"); since SRV-10, an
+   * absent name is created rather than skipped (see `rolesCreated` below),
+   * so this now means the name resolved to nothing *and* creating it
+   * failed too (requirement 6: an ordinary Discord failure — a `403` for a
+   * bot missing Manage Roles, say — reported here rather than thrown).
+   */
   unresolvedRoles: string[]
+  /** SRV-10: a course role name the guild lacked, created this run with an empty permission bitfield — never one that already resolved (`unresolvedRoles`' own doc comment covers what "still missing" means now). */
+  rolesCreated: string[]
 }
 
 /** Case- and whitespace-insensitive name matching — `discord_manager.py`'s own `.lower().strip()` comparison, carried over so a *category* named identically but for casing is recognised as the same one. Not used for a channel's own name — see `normalizeChannelName`, below, and this file's own module comment. */
@@ -387,13 +397,40 @@ export function createDiscordScaffoldHandler(
       deps.discordRestClient.getBotUserId(deps.botToken),
     ])
 
-    // SRV-2: a role named in the config but absent from the guild is
-    // skipped, not fatal — reported in `unresolvedRoles` instead.
+    // SRV-10: a role named in the config but absent from the guild is
+    // created, not skipped (requirement 1: with an empty permission
+    // bitfield of its own — this role exists to be named in a channel
+    // overwrite, never to carry a server-wide power). A name that already
+    // resolves is used exactly as it is (requirement 2) — `resolveRoleId`
+    // is tried first, and `createGuildRole` is reached only when it finds
+    // nothing. Creating a role can itself fail on an ordinary Discord error
+    // (a `403` for a bot missing Manage Roles, requirement 6) — caught here
+    // the same way a failed channel creation is caught in
+    // `roster-import.ts`, so one course's missing role does not abort the
+    // rest of this run; the name simply stays unresolved, exactly as SRV-2
+    // already left an unresolvable name before this slice.
     const unresolvedRoles: string[] = []
-    const adminsRoleId = resolveRoleId(roles, course.adminsRole)
-    if (!adminsRoleId) unresolvedRoles.push(course.adminsRole)
-    const studentsRoleId = resolveRoleId(roles, course.studentsRole)
-    if (!studentsRoleId) unresolvedRoles.push(course.studentsRole)
+    const rolesCreated: string[] = []
+    async function resolveOrCreateRole(
+      roleName: string
+    ): Promise<string | undefined> {
+      const existingId = resolveRoleId(roles, roleName)
+      if (existingId) return existingId
+      try {
+        const created = await deps.discordRestClient.createGuildRole(
+          deps.botToken,
+          guildId,
+          { name: roleName }
+        )
+        rolesCreated.push(roleName)
+        return created.id
+      } catch {
+        unresolvedRoles.push(roleName)
+        return undefined
+      }
+    }
+    const adminsRoleId = await resolveOrCreateRole(course.adminsRole)
+    const studentsRoleId = await resolveOrCreateRole(course.studentsRole)
 
     // Discord's own `@everyone` role shares its guild's id (`channel-overwrites.ts`'s
     // own doc comment) — nothing to resolve for it.
@@ -648,6 +685,7 @@ export function createDiscordScaffoldHandler(
       undeclaredCategories,
       undeclaredChannels,
       unresolvedRoles,
+      rolesCreated,
     }
   }
 }

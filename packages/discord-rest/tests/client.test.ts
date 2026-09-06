@@ -430,6 +430,53 @@ describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuild
   })
 })
 
+describe('createGuildRole (SRV-10)', () => {
+  it('creates a role with an empty permission bitfield, as a JSON POST with a Bot authorization', async () => {
+    const created = await client.createGuildRole('bot-token', 'guild-1', {
+      name: 'course-admins',
+    })
+
+    expect(created).toMatchObject({ name: 'course-admins' })
+    expect(created.id).toEqual(expect.any(String))
+    expect(server.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/guilds/guild-1/roles',
+      headers: expect.objectContaining({
+        authorization: 'Bot bot-token',
+        'content-type': 'application/json',
+      }) as unknown,
+    })
+    // Requirement 1 of SRV-10: an empty permission bitfield, explicitly —
+    // never Discord's own create-role default.
+    expect(server.requests[0]?.body).toEqual({
+      name: 'course-admins',
+      permissions: '0',
+    })
+
+    // The fake's own guild store actually holds it now, the same
+    // "idempotence depends on a subsequent read seeing it" proof
+    // `createGuildCategory`'s own test above makes. `listGuildRoles`'s own
+    // `parseRoleList` is tolerant of fields this package does not read
+    // (`permissions` included), so the round trip carries that field too —
+    // `created` above is `parseRole`'s narrower `{ id, name }` shape.
+    const roles = await client.listGuildRoles('bot-token', 'guild-1')
+    expect(roles).toEqual([{ ...created, permissions: '0' }])
+  })
+
+  it('throws DiscordRequestError for a non-2xx response (a bot missing Manage Roles, say)', async () => {
+    server.respondToGuildRoles({
+      status: 403,
+      body: { message: 'Missing Permissions' },
+    })
+
+    await expect(
+      client.createGuildRole('bot-token', 'guild-1', { name: 'course-admins' })
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
+    )
+  })
+})
+
 describe('listGuildMembers (ROST-10/ROST-11)', () => {
   it("resolves a member's id, username and display-name fallback chain (nick, then global_name, then username)", async () => {
     server.setGuildMembers('guild-1', [

@@ -35,6 +35,11 @@
  * `grantChannelMemberAccess` is at `client.ts`'s: it only ever rewrites one
  * target's own overwrite entry on a channel already in `guildChannels`,
  * never the channel's `name`/`parentId`/anything else.
+ *
+ * `POST /guilds/{id}/roles` (SRV-10) is stateful the same way `POST
+ * /guilds/{id}/channels` is: it appends the created role to this guild's
+ * own role list, assigns it an id, and echoes it back, so a subsequent
+ * `GET /guilds/{id}/roles` sees exactly what the create call made.
  */
 
 import {
@@ -92,7 +97,12 @@ export class FakeDiscordServer {
   private guildMembers = new Map<string, unknown[]>()
   private guildChannelsQueue: (FakeResponse | undefined)[] = []
   private channelPermissionPutQueue: (FakeResponse | undefined)[] = []
+  // SRV-10 — queued the same way `guildChannelsQueue` is, for a test proving
+  // `createGuildRole` surfaces a non-2xx response (a 403 for a bot missing
+  // Manage Roles, say) rather than assuming every call succeeds.
+  private guildRolesQueue: (FakeResponse | undefined)[] = []
   private nextChannelId = 1
+  private nextRoleId = 1
 
   private constructor(server: Server) {
     this.server = server
@@ -143,6 +153,11 @@ export class FakeDiscordServer {
   /** Queue one response for the next `PUT /channels/{id}/permissions/{id}` — for a test proving `grantChannelMemberAccess` (rework finding 5) surfaces a non-2xx response the same as every other write in this package. */
   respondToChannelPermissionPut(response: FakeResponse): void {
     this.channelPermissionPutQueue.push(response)
+  }
+
+  /** Queue one response for the next `POST /guilds/{id}/roles` — for a test proving `createGuildRole` (SRV-10) surfaces a non-2xx response (a bot missing Manage Roles, say) rather than assuming every call succeeds. */
+  respondToGuildRoles(response: FakeResponse): void {
+    this.guildRolesQueue.push(response)
   }
 
   /** What `getUserGuilds` (an `Authorization: Bearer ...` call) returns for every subsequent request, until changed again. */
@@ -303,10 +318,31 @@ export class FakeDiscordServer {
     }
 
     const rolesMatch = /^\/guilds\/([^/]+)\/roles$/.exec(pathname ?? '')
-    if (req.method === 'GET' && rolesMatch) {
+    if (rolesMatch) {
       const guildId = rolesMatch[1] ?? ''
-      this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
-      return
+      if (req.method === 'GET') {
+        this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
+        return
+      }
+      if (req.method === 'POST') {
+        const queued = this.guildRolesQueue.shift()
+        if (queued) {
+          this.respondJson(res, queued.status, queued.body)
+          return
+        }
+        // SRV-10 — stateful the same way `POST /guilds/{id}/channels` is
+        // above: the created role is appended to this guild's own role
+        // list, so a subsequent `GET` (or another create call in the same
+        // test) sees exactly what this one created.
+        const created = {
+          id: `role-${this.nextRoleId++}`,
+          ...(parsedBody as Record<string, unknown>),
+        }
+        const existing = this.guildRoles.get(guildId) ?? []
+        this.guildRoles.set(guildId, [...existing, created])
+        this.respondJson(res, 200, created)
+        return
+      }
     }
 
     // ROST-10/ROST-11 — paginated the same way `/users/@me/guilds` is

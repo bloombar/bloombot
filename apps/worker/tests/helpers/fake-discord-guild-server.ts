@@ -33,6 +33,14 @@
  * a failed write per row (rework findings 4/5) rather than throwing out of
  * the whole run.
  *
+ * `POST /guilds/{id}/roles` (SRV-10) is stateful the same way `POST
+ * /guilds/{id}/channels` is: the created role is appended to this guild's
+ * own role list and echoed back, so a subsequent `GET /guilds/{id}/roles`
+ * (or a second scaffold/import run in the same test) sees exactly what it
+ * made. `failNextRoleCreate` queues a non-2xx response — a `403` for a bot
+ * missing Manage Roles, say — the same failure-injection shape
+ * `failNextChannelCreate` already gives channel creation.
+ *
  * Finding 1 of the SRV-6..8 rework: a created `GUILD_TEXT` channel's own
  * `name` is slugged before it is stored and echoed back — lowercased, each
  * run of whitespace collapsed to a single `-` — the same transform Discord's
@@ -77,8 +85,10 @@ export class FakeDiscordGuildServer {
   private guildRoles = new Map<string, unknown[]>()
   private guildMembers = new Map<string, unknown[]>()
   private nextChannelId = 1
+  private nextRoleId = 1
   private channelCreateFailureQueue: { status: number; body: unknown }[] = []
   private permissionPutFailureQueue: { status: number; body: unknown }[] = []
+  private roleCreateFailureQueue: { status: number; body: unknown }[] = []
 
   private constructor(server: Server) {
     this.server = server
@@ -136,9 +146,19 @@ export class FakeDiscordGuildServer {
     this.permissionPutFailureQueue.push({ status, body })
   }
 
+  /** Queue one failure response for the next `POST /guilds/{id}/roles` — SRV-10 requirement 6: a bot missing Manage Roles gets a 403 that must be reported and must not abort the rest of the run. */
+  failNextRoleCreate(status: number, body: unknown): void {
+    this.roleCreateFailureQueue.push({ status, body })
+  }
+
   /** `guildId`'s channels/categories as they stand right now — including anything a create call has appended since `setGuildChannels`, and with a `GUILD_TEXT` channel's name already slugged — the same escape hatch `packages/discord-rest`'s own `FakeDiscordServer#guildChannelsFor` provides, for a test that wants to assert on the guild's actual state rather than only on `requests`/`writeRequests()`. */
   guildChannelsFor(guildId: string): unknown[] {
     return this.guildChannels.get(guildId) ?? []
+  }
+
+  /** `guildId`'s roles as they stand right now — including any `POST /guilds/{id}/roles` create this run made (SRV-10) — the same escape hatch `guildChannelsFor` provides for channels, for a test that wants the real id a create call assigned rather than re-deriving it from a recorded request body. */
+  guildRolesFor(guildId: string): unknown[] {
+    return this.guildRoles.get(guildId) ?? []
   }
 
   /** Every `POST`/`PATCH`/`DELETE` this fake has ever received — a test's own structural proof, alongside `DiscordRestClient`'s own missing methods, that SRV-8 held: no delete call of any kind reached even a fake willing to record one. */
@@ -209,10 +229,27 @@ export class FakeDiscordGuildServer {
     }
 
     const rolesMatch = /^\/guilds\/([^/]+)\/roles$/.exec(pathname ?? '')
-    if (req.method === 'GET' && rolesMatch) {
+    if (rolesMatch) {
       const guildId = rolesMatch[1] ?? ''
-      this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
-      return
+      if (req.method === 'GET') {
+        this.respondJson(res, 200, this.guildRoles.get(guildId) ?? [])
+        return
+      }
+      if (req.method === 'POST') {
+        const queuedFailure = this.roleCreateFailureQueue.shift()
+        if (queuedFailure) {
+          this.respondJson(res, queuedFailure.status, queuedFailure.body)
+          return
+        }
+        const created = {
+          id: `role-${this.nextRoleId++}`,
+          ...parsedBody,
+        }
+        const existing = this.guildRoles.get(guildId) ?? []
+        this.guildRoles.set(guildId, [...existing, created])
+        this.respondJson(res, 200, created)
+        return
+      }
     }
 
     // ROST-10/ROST-11 — paginated the same way

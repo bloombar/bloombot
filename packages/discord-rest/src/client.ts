@@ -50,6 +50,18 @@
  * one thing this method now can, narrowly, change. See `docs/DECISIONS.md`
  * for the fuller reasoning, including why the alternative (refusing ROST-5
  * outright) was rejected.
+ *
+ * `createGuildRole` (SRV-10) is this file's other guild-write call: a
+ * course names an admins role and a students role, and a name the guild
+ * lacks is created rather than left for every channel overwrite naming it
+ * to silently omit the grant. `POST /guilds/{id}/roles` with `permissions:
+ * '0'` — the role exists only to be named in a channel overwrite, never to
+ * carry any of Discord's own server-wide powers, so nothing about it asks
+ * for one. `discord-scaffold.ts` and `roster-import.ts` are this method's
+ * only callers, and neither this client nor either of them ever renames or
+ * edits a role it (or anyone else) already created — SRV-8's "never
+ * delete or edit" extended to roles the same way it already covers
+ * categories and channels.
  */
 
 import { CONFIG } from '@bloombot/config'
@@ -330,6 +342,21 @@ export interface DiscordRestClient {
     channelId: string,
     memberId: string
   ): Promise<void>
+
+  /**
+   * Create a role (SRV-10) — `POST /guilds/{guildId}/roles`, sent with
+   * `permissions: '0'` so the created role carries none of Discord's own
+   * server-wide powers; it exists only to be named in a channel overwrite
+   * `discord-scaffold.ts`/`roster-import.ts` build. Neither `name` nor
+   * anything else about it is ever changed again through this client — the
+   * same "never delete or edit" this file's own module comment already
+   * holds `createGuildCategory`/`createGuildChannel` to.
+   */
+  createGuildRole(
+    botToken: string,
+    guildId: string,
+    input: { name: string }
+  ): Promise<DiscordRole>
 }
 
 export interface CreateDiscordRestClientOptions {
@@ -515,6 +542,17 @@ function parseRoleList(body: unknown): DiscordRole[] {
     )
   }
   return body as DiscordRole[]
+}
+
+/** Parse a `POST /guilds/{id}/roles` success body (SRV-10) — narrowed to the `id`/`name` a caller needs to name this role in a later channel overwrite, tolerant of every other field Discord sends (colour, permissions, position, ...). */
+function parseRole(body: unknown): DiscordRole {
+  const payload = body as { id?: unknown; name?: unknown }
+  if (typeof payload.id !== 'string' || typeof payload.name !== 'string') {
+    throw new Error(
+      'Discord role creation returned a 2xx response with no usable role'
+    )
+  }
+  return { id: payload.id, name: payload.name }
 }
 
 /** Parse one guild-member entry (`GET /guilds/{id}/members`) — Discord nests the account itself under `user`, and a member's own nickname (`nick`) and the account's `global_name` are both optional, so `displayName`'s own fallback chain (this file's own `DiscordGuildMember` doc comment) is resolved here, once, rather than by every caller. Tolerant of a malformed entry (dropped, not thrown on) — the same "best-effort data for a report" treatment `parsePermissionOverwrite` gives a channel's own overwrites. */
@@ -808,6 +846,24 @@ export function createDiscordRestClient(
       if (!response.ok) {
         throw new DiscordRequestError(response.status, response.body)
       }
+    },
+
+    async createGuildRole(botToken, guildId, input): Promise<DiscordRole> {
+      const response = await postJson(
+        `${apiBase}/guilds/${guildId}/roles`,
+        `Bot ${botToken}`,
+        // `permissions: '0'` (SRV-10): this role is created only to be named
+        // in a channel overwrite, never to grant any of Discord's own
+        // server-wide powers — an empty bitfield says so explicitly rather
+        // than relying on whatever Discord's own create-role default happens
+        // to be.
+        { name: input.name, permissions: '0' },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseRole(response.body)
     },
   }
 }

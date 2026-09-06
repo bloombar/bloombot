@@ -964,7 +964,13 @@ describe('discordServers.scaffold handler', () => {
 
   // A role that does not resolve in the guild is reported rather than
   // silently skipped or guessed at (SRV-2).
-  it('reports a role name that does not resolve in the guild, and still creates the category without it', async () => {
+  // SRV-10, requirement 1: a role a course names and the guild lacks is
+  // created rather than left unresolved — with an empty permission
+  // bitfield of its own, since it exists only to be named in a channel
+  // overwrite. This test fails without SRV-10's code: before it, a role
+  // name matching nothing in the guild was reported in `unresolvedRoles`
+  // and never created.
+  it('creates a role the guild lacks, with an empty permission bitfield, rather than reporting it unresolved', async () => {
     testDb = createTestDatabase()
     discordServer = await FakeDiscordGuildServer.start()
     const seeded = seedOrganizationWithBoundCourse(testDb.db, [
@@ -981,13 +987,84 @@ describe('discordServers.scaffold handler', () => {
       seeded.courseId
     )) as {
       unresolvedRoles: string[]
+      rolesCreated: string[]
     }
 
-    expect(report.unresolvedRoles).toEqual([seeded.studentsRole])
-    // The category was still created — an unresolved role is reported, not
-    // fatal.
+    expect(report.unresolvedRoles).toEqual([])
+    expect(report.rolesCreated).toEqual([seeded.studentsRole])
+
+    const roleCreate = discordServer.requests.find(
+      (request) => request.method === 'POST' && request.path.endsWith('/roles')
+    )
+    expect(roleCreate).toBeDefined()
+    expect(roleCreate?.body).toEqual({
+      name: seeded.studentsRole,
+      // Requirement 1: an empty permission bitfield, explicitly — never
+      // Administrator, Manage Channels, or anything else.
+      permissions: '0',
+    })
+
+    // The category was still created, now naming the newly created role.
     const created = discordServer.writeRequests()
-    expect(created).toHaveLength(2) // category + temp placeholder
+    expect(created).toHaveLength(3) // role + category + temp placeholder
+  })
+
+  // SRV-10, requirement 2: a role that already resolves is used exactly as
+  // it is — no create call at all for either the admins or students role.
+  it('uses an existing role untouched, making no create call for it', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { unresolvedRoles: string[]; rolesCreated: string[] }
+
+    expect(report.rolesCreated).toEqual([])
+    expect(report.unresolvedRoles).toEqual([])
+    expect(
+      discordServer.requests.some(
+        (request) =>
+          request.method === 'POST' && request.path.endsWith('/roles')
+      )
+    ).toBe(false)
+  })
+
+  // SRV-10, requirement 6: creating a role needs Manage Roles — a bot
+  // without it gets a 403, an ordinary Discord failure reported the same
+  // way an unresolvable role name always has been, not an unhandled throw
+  // that fails the whole job.
+  it('reports a 403 creating a missing role as unresolved, without aborting the rest of the run', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+    ])
+    discordServer.failNextRoleCreate(403, { message: 'Missing Permissions' })
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      unresolvedRoles: string[]
+      rolesCreated: string[]
+      categories: { status: string }[]
+    }
+
+    expect(report.rolesCreated).toEqual([])
+    expect(report.unresolvedRoles).toEqual([seeded.studentsRole])
+    // The rest of the run was not aborted — the category was still created.
+    expect(report.categories[0]?.status).toBe('created')
   })
 
   // Finding 4 of the SRV-6..8 rework: an instructor sets `admins_only: true`

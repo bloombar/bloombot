@@ -93,7 +93,7 @@
  * object every tab already shared. `activeTab` only ever decides which
  * mounted panel is *visible*.
  *
- * WEB-35: leaving a tab with unsaved settings asks first — save, discard,
+ * WEB-38: leaving a tab with unsaved settings asks first — save, discard,
  * or stay put (`goToTabGuarded`, below). Nothing is lost by switching
  * tabs (every panel stays mounted), so this is about not wandering away
  * from an edit and forgetting it, not about rescuing state.
@@ -457,6 +457,13 @@ export function CourseEditor({
   const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [saving, setSaving] = useState(false)
+  // Review must-fix 1: true for the whole of the tab prompt's own "Save
+  // changes" — `saving` alone leaves the `Save course` button live while
+  // `saveDirtyWork` is awaiting the instructions half.
+  const [switchSaving, setSwitchSaving] = useState(false)
+  // True only for the one case that needs saying out loud: the prompt's
+  // "Save changes" wrote the instructions and then the form was refused.
+  const [halfSaved, setHalfSaved] = useState(false)
   // TEN-9 — every binding this organization has ever held (active or
   // removed, `discordServers.list`'s own shape), fetched once per
   // organization. Only the active ones (`activeBindings`, below) decide
@@ -600,6 +607,7 @@ export function CourseEditor({
    */
   const handleSave = async (): Promise<boolean> => {
     setError(undefined)
+    setHalfSaved(false)
     const maxRequestsPerDay = parseMaxRequestsPerDay(form.maxRequestsPerDay)
     if (!maxRequestsPerDay.ok) {
       // Finding 2 (WEB-7 rework): refuse client-side rather than ever
@@ -707,14 +715,39 @@ export function CourseEditor({
    * module comment on why they were never folded into one call), and a
    * half that is already clean is not re-sent.
    */
+  /**
+   * Saves whatever is actually unsaved, and reports whether all of it
+   * landed. Instructions first, then the course form: each is its own
+   * action with its own failure (`components/CourseInstructions.tsx`'s own
+   * module comment on why they were never folded into one call), and a
+   * half that is already clean is not re-sent.
+   *
+   * Review must-fix 4: an instructions edit this page cannot reach is a
+   * failure, not a success. `instructionsActionsRef` is `null` only when
+   * that section is not mounted, which cannot happen while
+   * `instructionsDirty` is true (a tab, once visited, stays mounted — this
+   * file's own module comment) — but "cannot happen" is an invariant
+   * nothing here asserts, and reading `undefined` as "saved" would move
+   * the tab while the edit sat unsaved and unreachable. Refusing is the
+   * answer that stays true if the mounting rule ever changes.
+   */
   const saveDirtyWork = async (): Promise<boolean> => {
+    let instructionsWritten = false
     if (instructionsDirty) {
-      const savedInstructions = await instructionsActionsRef.current?.save()
-      // `undefined` — the section is not mounted, so there is no edit it
-      // could be holding; nothing to save and nothing to fail.
-      if (savedInstructions === false) return false
+      const actions = instructionsActionsRef.current
+      if (!actions) return false
+      if (!(await actions.save())) return false
+      instructionsWritten = true
     }
-    if (formDirty) return handleSave()
+    if (formDirty) {
+      const savedForm = await handleSave()
+      // The two halves are two requests, not one transaction (review
+      // note): the instructions are already stored and no later "Discard"
+      // can take them back, so a refusal of the *form* half says so
+      // rather than leaving someone to assume nothing was written.
+      setHalfSaved(!savedForm && instructionsWritten)
+      return savedForm
+    }
     return true
   }
 
@@ -738,13 +771,25 @@ export function CourseEditor({
    * confirm would have to fold "discard" and "stay here" together, and
    * either answer is wrong for half the people who meant the other.
    *
-   * A refused save keeps the person on the tab they were on, with the
-   * refusal on screen — going anyway would leave the message behind on a
-   * tab nobody is looking at, the same failure `switchToTabForField`
-   * exists to prevent.
+   * **A refused save never reaches the tab that was clicked** (WEB-38).
+   * Where it leaves the person is `switchToTabForField`'s call, not this
+   * one: a refusal naming a field lands on that field's own tab so the
+   * inline message is actually visible (WEB-16), which may be the tab they
+   * were already on, and a refusal naming no field this form renders
+   * leaves them exactly where they were. Either way the edit is still
+   * unsaved and still theirs to deal with — review must-fix 2, which found
+   * this file's own comment claiming "stays on the tab they were on"
+   * while the code did the more useful thing.
+   *
+   * Review must-fix 1: while a save is in flight — this one's, or the
+   * `Save course` button's — a tab click is ignored rather than opening a
+   * second prompt over a `baseline` that has not moved yet. Clicking Save
+   * course and then a tab used to fire a second, concurrent
+   * `courses.save`, both racing to set `form`, `baseline` and `onSaved`.
    */
   const goToTabGuarded = async (next: CourseEditorTab) => {
     if (next === activeTabRef.current) return
+    if (saving || switchSaving) return
     if (!isDirty) {
       goToTab(next)
       return
@@ -759,7 +804,18 @@ export function CourseEditor({
     })
     if (choice === 'cancel') return
     if (choice === 'confirm') {
-      if (!(await saveDirtyWork())) return
+      // `switchSaving` covers the whole of `saveDirtyWork`, including the
+      // stretch where it is awaiting the *instructions* save and the
+      // form's own `saving` is still false — without it the `Save course`
+      // button stayed live through that window (must-fix 1's own mirror).
+      setSwitchSaving(true)
+      let saved: boolean
+      try {
+        saved = await saveDirtyWork()
+      } finally {
+        setSwitchSaving(false)
+      }
+      if (!saved) return
     } else {
       discardDirtyWork()
     }
@@ -1594,6 +1650,12 @@ export function CourseEditor({
       )}
 
       {error && <ErrorMessage error={error} />}
+      {halfSaved && (
+        <p role="status" className="text-sm text-neutral-600">
+          Your instructions were saved before this was refused, and stay saved —
+          discarding now would only discard the settings above.
+        </p>
+      )}
 
       {/* WEB-15/WEB-35: the one primary action this form offers, always
           visible regardless of which tab is showing — an edit made on one
@@ -1602,9 +1664,9 @@ export function CourseEditor({
         <Button
           variant="primary"
           onClick={() => void handleSave()}
-          disabled={saving}
+          disabled={saving || switchSaving}
         >
-          {saving ? 'Saving…' : 'Save course'}
+          {saving || switchSaving ? 'Saving…' : 'Save course'}
         </Button>
       </div>
     </section>

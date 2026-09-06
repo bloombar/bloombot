@@ -233,6 +233,97 @@ describe('CourseInstructions (WEB-19)', () => {
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
   })
 
+  // Review must-fix 3: `refresh` swallows an `ApiError` from
+  // `courseInstructions.list` and returns `undefined`, so a save whose
+  // follow-up history read fails used to leave `baseline` behind the text
+  // the server had already stored — still "dirty" over a saved edit, which
+  // made `pages/CourseEditor.tsx`'s tab prompt ask again and write a
+  // second, identical revision.
+  it('a save whose follow-up history read fails is still reconciled, and still clean (WEB-16)', async () => {
+    listCourseInstructionRevisions
+      .mockResolvedValueOnce([revision({ instructions: 'Be helpful.' })])
+      .mockRejectedValueOnce(new ApiError(500, { error: 'internal_error' }))
+    saveCourseInstructions.mockResolvedValue({
+      id: 'course-1',
+      instructions: 'Be kind.',
+    })
+    const onDirtyChange = vi.fn()
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={onDirtyChange}
+      />
+    )
+    await screen.findByDisplayValue('Be helpful.')
+    onDirtyChange.mockClear()
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Be kind.' },
+    })
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }))
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalledTimes(1))
+
+    // Fails before the fix: the failed list left `baseline` on
+    // "Be helpful." while the textarea held the saved "Be kind.", so this
+    // stayed `true` forever.
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false))
+    expect(screen.getByLabelText('Instructions')).toHaveValue('Be kind.')
+    // The read failure is still reported as what it is, and the Save
+    // button is spent — nothing here re-sends the revision just written.
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Save instructions' })
+    ).toBeDisabled()
+  })
+
+  // Review must-fix 1: `pages/CourseEditor.tsx`'s tab prompt can call this
+  // section's save in the same tick as its own button, before any
+  // re-render has made `saving` visible — so the guard is a ref.
+  it('never runs a second save while one is already in flight', async () => {
+    listCourseInstructionRevisions.mockResolvedValue([
+      revision({ instructions: 'Be helpful.' }),
+    ])
+    let release: (value: unknown) => void = () => {}
+    saveCourseInstructions.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve
+      })
+    )
+    let actions: { save: () => Promise<boolean> } | null = null
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+        onRegisterActions={(registered) => {
+          actions = registered
+        }}
+      />
+    )
+    await screen.findByDisplayValue('Be helpful.')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Be kind.' },
+    })
+    await waitFor(() => expect(actions).not.toBeNull())
+
+    // The section's own button starts one...
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }))
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalledTimes(1))
+    // ...and the handle the page holds must not start another.
+    const second = await actions!.save()
+    expect(second).toBe(false)
+    expect(saveCourseInstructions).toHaveBeenCalledTimes(1)
+
+    release({ id: 'course-1', instructions: 'Be kind.' })
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalledTimes(1))
+  })
+
   it('the Save button is disabled until the text actually changes, and while it is blank', async () => {
     listCourseInstructionRevisions.mockResolvedValue([
       revision({ instructions: 'Be helpful.' }),

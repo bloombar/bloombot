@@ -131,6 +131,10 @@ export function CourseInstructions({
   // itself decides the textarea should show the server's own value (below).
   const hasPendingEditRef = useRef(false)
 
+  // Review must-fix 1: whether a save is in flight *right now*, readable
+  // without waiting on a render — see `handleSave` below.
+  const savingRef = useRef(false)
+
   const refresh = useCallback(
     // `force`: `handleSave`/`handleRestore` pass `true` — an explicit save
     // or restore must always end with the textarea showing exactly what was
@@ -159,6 +163,10 @@ export function CourseInstructions({
         (caught: unknown) => {
           if (caught instanceof ApiError) setLoadError(caught)
           else throw caught
+          // `undefined`, distinct from a list: this call did *not*
+          // reconcile `text`/`baseline` with the server, and a caller that
+          // needs them reconciled (`handleSave`, below) has to say so
+          // itself rather than assume this ran (review must-fix 3).
           return undefined
         }
       ),
@@ -183,17 +191,42 @@ export function CourseInstructions({
   // save actually landed, so a caller that saves on the way somewhere else
   // (the course editor's tab prompt) can stay put when it did not.
   const handleSave = useCallback(async (): Promise<boolean> => {
+    // Review must-fix 1: never a second save while one is in flight. A ref
+    // rather than the `saving` state, for the same reason
+    // `hasPendingEditRef` is one — this function is handed out through
+    // `onRegisterActions` and called from `pages/CourseEditor.tsx`'s own
+    // tab prompt, which may fire in the same tick as this section's own
+    // Save button, before any re-render has made new state visible.
+    if (savingRef.current) return false
+    savingRef.current = true
     setSaveError(undefined)
     setSaving(true)
+    // The text this save is writing, captured before any await — what the
+    // server ends up holding, whatever is typed while it is in flight.
+    const saved = text
     try {
-      await saveCourseInstructions(organizationId, courseId, text)
-      await refresh({ force: true })
+      await saveCourseInstructions(organizationId, courseId, saved)
+      // Review must-fix 3: the save landed, so this section is reconciled
+      // with the server *here*, not as a side effect of the history list
+      // coming back. `refresh` swallows its own `ApiError` and returns
+      // `undefined`, so a 500 on the follow-up list used to leave
+      // `baseline` behind the saved text — the section still "dirty" over
+      // an edit already stored, which made the next tab switch prompt
+      // again and write a second, identical revision.
+      setBaseline(saved)
+      if (!hasPendingEditRef.current) setText(saved)
+      const list = await refresh({ force: true })
+      // A failed list is a failed *read* — it is reported inline through
+      // `loadError` and leaves the history stale, but the save itself
+      // stands and this section is no longer dirty.
+      if (list === undefined) hasPendingEditRef.current = false
       return true
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
       return false
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }, [organizationId, courseId, text, refresh])

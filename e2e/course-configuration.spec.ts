@@ -394,6 +394,16 @@ test("a course's settings tabs are real addresses — switching, reloading and s
     'aria-selected',
     'true'
   )
+  // Review note: where focus lands after the dialog closes. `goToTab`
+  // focuses the newly selected tab, but `Modal`'s own `dialog.close()`
+  // runs afterwards and the browser's restoration hands focus back to
+  // whatever opened the dialog — the tab button that was clicked, which by
+  // then carries `tabIndex={-1}`. jsdom's `<dialog>` polyfill cannot see
+  // this at all (`apps/web/tests/setup.ts`), so a real browser is the only
+  // place it can be asserted: focus must be on the tab now selected, so
+  // the keyboard's next Left/Right moves from where the reader actually
+  // is.
+  await expect(page.getByRole('tab', { name: 'Roster' })).toBeFocused()
   await page.getByRole('tab', { name: 'General' }).click()
   await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
 })

@@ -3366,8 +3366,8 @@
     answers rather than the usual two: save the changes and carry on to the tab
     that was clicked, discard them and carry on, or stay on this tab with the
     edit intact. Cancel and Escape both mean stay. A save the server refuses
-    keeps the person on the tab they were on with the refusal on screen, rather
-    than switching away and…"
+    never reaches the tab that was clicked. Where it does leave the person is
+    wherever the refusal can…"
   section: §34 Web Control Panel
   family: WEB
   phase: 22

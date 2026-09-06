@@ -1,6 +1,8 @@
 /**
  * `pages/CourseEditor.tsx` (WEB-8, WEB-9): the CFG-2/3/4 form, saved
- * through `courses.save`, plus `courses.enable`/`courses.disable` — and the
+ * through `courses.save` — `disableCourse` is still mocked, but only so a
+ * case can assert this screen never calls it (WEB-37: the immediate
+ * enable/disable control lives on the project page now) — and the
  * two behaviours WEB-9 names explicitly: the category and role names shown
  * prominently, and a refused save rendering the conflict's own message
  * (naming the other course and its project).
@@ -21,7 +23,6 @@ import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 const {
   getCourse,
   saveCourse,
-  enableCourse,
   disableCourse,
   listCourseAttachments,
   listCourseInstructionRevisions,
@@ -33,7 +34,6 @@ const {
 } = vi.hoisted(() => ({
   getCourse: vi.fn(),
   saveCourse: vi.fn(),
-  enableCourse: vi.fn(),
   disableCourse: vi.fn(),
   listCourseAttachments: vi.fn(),
   listCourseInstructionRevisions: vi.fn(),
@@ -52,7 +52,6 @@ vi.mock('../src/api/client.js', async () => {
     ...actual,
     getCourse,
     saveCourse,
-    enableCourse,
     disableCourse,
     listCourseAttachments,
     listCourseInstructionRevisions,
@@ -742,7 +741,12 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
     )
   })
 
-  it('a refused save keeps the person on the tab, with the refusal on screen', async () => {
+  // Review must-fix 2: a refusal naming no field this form renders leaves
+  // the person exactly where they were. `mappedIssue` is `undefined` here
+  // (a 409 carries a `conflict`, not `issues`), so `switchToTabForField`
+  // does not fire at all — which is precisely why this case alone used to
+  // pass over the defect the case below catches.
+  it('a refused save naming no rendered field keeps the person on the tab, with the refusal on screen', async () => {
     getCourse.mockResolvedValue(COURSE)
     saveCourse.mockRejectedValue(
       new ApiError(409, {
@@ -773,6 +777,136 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
       'true'
     )
     expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+  })
+
+  // Review must-fix 2, the case the 409 above hid: a refusal that *does*
+  // name a field lands on that field's own tab (WEB-16), and never on the
+  // tab the click asked for. Fails before the fix in the documentation
+  // sense — the code went to Discord while WEB-38, the docblock and D-83
+  // all promised General — and fails outright if anyone ever "fixes" the
+  // code to the old prose, since the inline message would then render on a
+  // tab nobody is looking at.
+  it('a refused save naming a field lands on that field’s own tab, never on the tab that was clicked', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(400, {
+        error: 'action_input_invalid',
+        issues: [
+          {
+            path: ['adminsRole'],
+            message: 'This role no longer exists on the bound Discord server.',
+          },
+        ],
+      })
+    )
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    // Ask for AI...
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // ...and land on Discord, where the refused field actually is.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
+      'This role no longer exists on the bound Discord server.'
+    )
+    // Never the tab that was clicked, and the edit is still unsaved.
+    expect(onNavigateTab).not.toHaveBeenCalledWith('ai')
+    expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
+    expect(screen.getByLabelText('Title')).toHaveValue('Web Design II')
+  })
+
+  // Review must-fix 1: nothing consulted `saving`, so a tab click while
+  // `Save course` was in flight found `baseline` unmoved, prompted, and
+  // fired a second concurrent `courses.save` — two requests racing to set
+  // `form`, `baseline` and `onSaved`.
+  it('a tab click while a save is in flight neither prompts nor fires a second save', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    let releaseSave: (course: Course) => void = () => {}
+    saveCourse.mockReturnValue(
+      new Promise<Course>((resolve) => {
+        releaseSave = resolve
+      })
+    )
+    const onNavigateTab = renderEditor()
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await screen.findByRole('button', { name: 'Saving…' })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+    // No prompt, no navigation, and above all no second request.
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onNavigateTab).not.toHaveBeenCalled()
+
+    releaseSave({ ...COURSE, title: 'Web Design II' })
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+    )
+    expect(saveCourse).toHaveBeenCalledTimes(1)
+  })
+
+  // Review must-fix 1's mirror: while the prompt is awaiting the
+  // *instructions* half, the form's own `saving` is still false — the Save
+  // course button used to stay live right through that window.
+  it('the Save course button is unavailable while the prompt is saving the instructions half', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    let releaseInstructions: (value: unknown) => void = () => {}
+    saveCourseInstructions.mockReturnValue(
+      new Promise((resolve) => {
+        releaseInstructions = resolve
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalled())
+    // Two "Saving…" buttons at this moment — the instructions section's
+    // own, and the form's, which is the one this case is about; before the
+    // fix the second still read "Save course" and was clickable.
+    const savingButtons = screen.getAllByRole('button', { name: 'Saving…' })
+    expect(savingButtons).toHaveLength(2)
+    for (const button of savingButtons) expect(button).toBeDisabled()
+
+    releaseInstructions({ saved: true })
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+    )
   })
 
   // WEB-19: an unsaved *Instructions* edit is unsaved settings too, even

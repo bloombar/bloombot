@@ -67,6 +67,21 @@
  * students to prove the spillover, defaulting to Discord's own real limit,
  * 50.
  *
+ * **Two rows whose emails share a local part still both get a channel
+ * (ROST-14)**: a channel is named after the local part of the student's
+ * email (ROST-3), so `ada@school.edu` and `ada@gmail.com` both slug to
+ * `ada`. Rather than refusing the second row a channel entirely (the old
+ * behaviour this superseded — a student who cannot be given a channel
+ * cannot be answered privately), or numbering the rows in whatever order
+ * they happen to appear in the file (this slice's own first draft, reverted
+ * — see `docs/DECISIONS.md`'s own entry on ROST-14 for why an ordinal tied to row position
+ * is a defect, not a scope note: it can hand two different students *each
+ * other's* channel across two imports of a roster that merely gained or
+ * lost a row), every row's name is a pure function of the *set* of distinct
+ * addresses in this roster — `assignChannelNames`, below — so no ordering
+ * of any roster containing the same addresses ever produces a different
+ * name for any of them.
+ *
  * **Idempotence (ROST-11)**: a channel is matched, across every student
  * category, by its slugged name (`normalizeChannelName`, the same transform
  * `discord-scaffold.ts` applies for the same Discord-side-slugging reason —
@@ -85,6 +100,8 @@
  * (`RosterImportReport.limitations`), not only in `docs/DECISIONS.md`.
  */
 
+import { createHash } from 'node:crypto'
+
 import { courses, discordServers, enrolments, people } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import { parseRosterCsv, type RosterParseError } from '@bloombot/schemas'
@@ -94,6 +111,7 @@ import {
   denyEveryoneOverwrite,
   describeDiscordError,
   DiscordRequestError,
+  normalizeChannelName,
   overwriteAllowsView,
   type DiscordChannel,
   type DiscordGuildMember,
@@ -183,14 +201,74 @@ export interface ChannelFailedEntry {
   reason: string
 }
 
-/** Rework finding 6: two different rows' emails slug to the same channel name (`ada@school.edu`/`ada@gmail.com` both to `ada`) — the second is refused a channel entirely rather than silently sharing (or failing to reach) the first's, since this handler has no way to tell which student a shared name actually belongs to. */
-export interface ChannelNameCollisionEntry {
+/**
+ * ROST-14: a row whose email's local part slugs to the same name as another
+ * distinct address in this roster (`ada@school.edu`/`ada@gmail.com` both
+ * slug to `ada`) — this row still got a channel, disambiguated by domain
+ * (`ada-school`, `ada-gmail`, …) rather than refused one (the old
+ * "collision" behaviour this type used to name and document — see this
+ * file's own module comment) or numbered by row position (this slice's own
+ * reverted first draft — see `docs/DECISIONS.md`'s own entry on ROST-14).
+ * Reported so an instructor can still tell the rows apart and correct the
+ * underlying address if they would rather have the bare name.
+ */
+export interface ChannelNameDisambiguatedEntry {
   line: number
   email: string
+  /** The plain, local-part-only name this row's channel would have gotten had nothing else in the roster shared it. */
+  baseChannelName: string
+  /** The name this row's channel actually got, disambiguated from every other address sharing `baseChannelName`. */
   channelName: string
-  /** The row that claimed `channelName` first, this run — named so an instructor knows which two rows to go correct. */
-  collidesWithLine: number
-  collidesWithEmail: string
+  /** Every other distinct address in this roster this row's name was disambiguated against — named so an instructor can see the whole cluster, not just one counterpart. */
+  sharesSlugWith: string[]
+}
+
+/**
+ * ROST-16: a row whose matched, same-named channel turned out to already
+ * belong to somebody else (`channelBelongsToSomeoneElse`'s own doc comment
+ * has the check) — this row was given its own channel under a different,
+ * free name instead of being granted (or silently denied) access to the
+ * one it first matched. Reported plainly, not folded into
+ * `channelsCreated` alone, because "this student's channel is not the name
+ * you would expect" is exactly the kind of thing an instructor needs to
+ * read to go find it, or to understand why two students ended up with
+ * differently-shaped names for what looks like the same collision.
+ */
+export interface ChannelOwnershipConflictEntry {
+  line: number
+  email: string
+  /** The name this row would have matched, that turned out to already grant a different individual member. */
+  conflictingChannelName: string
+  /** The free name this row's own channel was matched or created under instead — derived from this row's own address (`ownAddressCandidates`), so a later import of the same roster arrives at the identical name and re-adopts it rather than creating another. */
+  newChannelName: string
+}
+
+/**
+ * Round 2's honesty finding, not a defect this slice can close: a name is
+ * unique, never permanent (`docs/SPEC.md`'s own amendment to ROST-14). A
+ * student's name can legitimately change between two imports — a second
+ * `ada` joins and disambiguates the first, an address is corrected — and
+ * when it does, the *old* channel is not found (nothing looks for it by
+ * anything but its current name) and is not touched, while a new one is
+ * created under the new name. The student ends up with two channels, and
+ * the old one is left silently granting them. This entry is what keeps
+ * that silent: reported once a fresh channel has actually been created for
+ * a member who already had view access to some *other* channel this course
+ * already placed a student in, naming both, so an instructor can go merge
+ * or remove the stale one by hand until ROST-17 remembers a channel by the
+ * person it belongs to rather than by its current name and closes this for
+ * good. Round 3's must-fix: this used to fire before the create even
+ * attempted, so a failed create reported an orphan against a channel that
+ * was never made; it is now reported only once `createGuildChannel` itself
+ * has resolved.
+ */
+export interface ChannelOrphanedEntry {
+  line: number
+  email: string
+  /** The channel this student already had, that the new name no longer matches. */
+  previousChannelName: string
+  /** The new channel this run created because the old one could no longer be found by name. */
+  newChannelName: string
 }
 
 /** Rework finding 13 (first bullet): a field `mergeRosterFields` declined to change because a surface already proved a different value for this person — named so an instructor who re-imports a corrected roster row can tell the correction did not take, rather than reading `peopleMerged` as unqualified success. */
@@ -230,8 +308,12 @@ export interface RosterImportReport {
   channelsNotCreated: ChannelNotCreatedEntry[]
   /** Rework finding 4: a channel this run tried and failed to create — Discord's own error (a 429, 403 or 400, say), caught per row so the rest of the roster still imports; see `ChannelFailedEntry`'s own doc comment. */
   channelsFailed: ChannelFailedEntry[]
-  /** Rework finding 6: two rows whose emails slug to the same channel name — see `ChannelNameCollisionEntry`'s own doc comment. */
-  channelNameCollisions: ChannelNameCollisionEntry[]
+  /** ROST-14: a row whose channel name was disambiguated by domain because another distinct address in this roster shares its local part — see `ChannelNameDisambiguatedEntry`'s own doc comment. */
+  channelNameDisambiguated: ChannelNameDisambiguatedEntry[]
+  /** ROST-16: a row whose name match was refused because it already belonged to somebody else, and was given its own channel under a different name instead — see `ChannelOwnershipConflictEntry`'s own doc comment. */
+  channelOwnershipConflicts: ChannelOwnershipConflictEntry[]
+  /** Round 2's honesty finding: a fresh channel was created for a student who already had a different one under a name this run no longer generates for them — see `ChannelOrphanedEntry`'s own doc comment. */
+  channelsOrphaned: ChannelOrphanedEntry[]
   /**
    * A course role name this run could not end up with an id for — before
    * SRV-10, that meant "absent from the guild" (the admins overwrite this
@@ -285,10 +367,7 @@ function normalizeName(name: string): string {
   return name.trim().toLowerCase()
 }
 
-/** The same slugging transform `discord-scaffold.ts`'s own `normalizeChannelName` applies, for the same reason (Discord silently slugs a `GUILD_TEXT` channel's name at creation) — see this file's own module comment. Duplicated for the same reason `normalizeName` above is. */
-function normalizeChannelName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, '-')
-}
+/** Discord's own slugging of a `GUILD_TEXT` channel's name — `@bloombot/discord-rest`'s `normalizeChannelName` (`channel-naming.ts`'s own module comment has the reasoning for why this is no longer copied by hand into every file that needs it). */
 
 function resolveRoleId(
   roles: { id: string; name: string }[],
@@ -378,6 +457,320 @@ function channelNameForEmail(email: string): string {
   return normalizeChannelName(localPart)
 }
 
+/**
+ * Discord's own real channel-name limit (API v10) — every name this file
+ * generates is capped to it (`composeChannelName`, below), not merely the
+ * bare local part: round 3's own must-fix. A disambiguator (a full domain,
+ * or a hash) is never shortened to make room, since shortening it is what
+ * would reopen the very ties this scheme exists to avoid; the local part is
+ * truncated instead; see that function's own doc comment.
+ */
+const MAX_CHANNEL_NAME_LENGTH = 100
+
+/**
+ * Composes a channel name from a local part and a (possibly empty) suffix
+ * — `''` for the bare level-1 name, `-<domain>` for level 2, `-<hash>` for
+ * level 3 — enforcing `MAX_CHANNEL_NAME_LENGTH` by shortening the local
+ * part, never the suffix. Round 3's fix for the length half of must-fix 1:
+ * the previous scheme's own disambiguator grew with the local part's own
+ * length (four base-36 digits *per character*), so a merely 26-character
+ * local part alone could exceed Discord's limit before the suffix was even
+ * added, and truncating that disambiguator to fit would have destroyed the
+ * very uniqueness it existed to provide. A fixed-length suffix (this
+ * file's replacement scheme uses only a full domain or a short hash, never
+ * something that scales with the local part) sidesteps that entirely: the
+ * local part is the only part that can be arbitrarily long, so it is the
+ * only part this function ever shortens.
+ */
+function composeChannelName(localPart: string, suffix: string): string {
+  const base = normalizeChannelName(localPart)
+  const maxBaseLength = Math.max(1, MAX_CHANNEL_NAME_LENGTH - suffix.length)
+  const truncatedBase =
+    base.length > maxBaseLength ? base.slice(0, maxBaseLength) : base
+  return normalizeChannelName(`${truncatedBase}${suffix}`).slice(
+    0,
+    MAX_CHANNEL_NAME_LENGTH
+  )
+}
+
+/** The domain slugged as one unit — every `.` becomes a `-`, so `school.edu` reads `school-edu` — level 2's own disambiguator (`levelTwoName`, below). Deliberately the *whole* domain in one step, not one label folded in at a time the way an earlier draft of this scheme did: escalating one label per round is exactly what let two addresses whose domains differ only in whether a separator is a `.` or a `-` (`my.school.edu` vs `my-school.edu`, both of which slug to `my-school-edu`) tie at every step and never converge — see `docs/DECISIONS.md`'s own entry on ROST-14 for the hang this caused. Fixed steps, not a loop, is the whole point of this file's replacement scheme. */
+function slugDomain(domain: string): string {
+  return normalizeChannelName(domain.split('.').join('-'))
+}
+
+/**
+ * A short, hex-digest disambiguator of the *entire* normalized address
+ * (local part and domain together, lowercased) — level 3's own fallback,
+ * reached only when even the full domain does not tell two addresses
+ * apart (the whitespace-collapse collision above, `ada b@x.edu` versus
+ * `ada-b@x.edu`, ties at every level up to here since both slug the same
+ * local part *and* share a domain). `sha256` over the whole address means
+ * the two addresses that reach this level are hashed as the distinct
+ * strings they actually are, not as whatever lossy slug they share.
+ * `hashLength` starts small (8 hex characters, below) and is only grown in
+ * fixed steps if two addresses still tie at that length — bounded by
+ * `HASH_LENGTHS`, never a loop that keeps escalating on its own.
+ */
+function addressDigest(email: string, hashLength: number): string {
+  return createHash('sha256')
+    .update(email.trim().toLowerCase())
+    .digest('hex')
+    .slice(0, hashLength)
+}
+
+/** The fixed set of hash lengths level 3 tries, in order, each only reached if every shorter one still ties — see `addressDigest`'s own doc comment. Four fixed sizes, the last one the full `sha256` digest: this is a bounded list, walked at most once, never a loop that can spin. */
+const HASH_LENGTHS = [8, 16, 32, 64] as const
+
+/** Level 1: the bare local part — used when no other address in the roster shares it. */
+function levelOneName(email: string): string {
+  return composeChannelName(email.split('@')[0] ?? email, '')
+}
+
+/** Level 2: local part plus the *whole* domain, slugged as one unit — reached only by a group that collided at level 1. */
+function levelTwoName(email: string): string {
+  const domain = email.split('@')[1] ?? ''
+  return composeChannelName(
+    email.split('@')[0] ?? email,
+    `-${slugDomain(domain)}`
+  )
+}
+
+/** Level 3: local part plus a hash of the whole address — reached only by a (sub-)group still colliding at level 2. See `addressDigest`'s own doc comment for `hashLength`. */
+function levelThreeName(email: string, hashLength: number): string {
+  return composeChannelName(
+    email.split('@')[0] ?? email,
+    `-${addressDigest(email, hashLength)}`
+  )
+}
+
+/** Groups `items` by `keyFn(item)`, preserving each bucket's own insertion order — the one small helper both `assignChannelNames`' three fixed passes and nothing else in this file needs. */
+function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const key = keyFn(item)
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(item)
+    else groups.set(key, [item])
+  }
+  return groups
+}
+
+/**
+ * ROST-14, round 3's replacement algorithm: names every distinct email
+ * address in one roster, all at once, so the name any one row gets is a
+ * pure function of the *set* of addresses this roster contains — never of
+ * row order, never of anything outside this roster, and never computed by
+ * a loop that keeps escalating until nothing collides.
+ *
+ * **Why round 2's own escalation loop is gone.** That design folded in one
+ * more domain label per round, for as long as two addresses still tied,
+ * with no ceiling — and `normalizeChannelName` treats a domain's `.` and a
+ * literal `-` identically (both collapse to `-`), so `my.school.edu` and
+ * `my-school.edu` produce the *identical* string at every label boundary
+ * and the loop never converges. Reproduced against the real handler: three
+ * rows, killed at 120s and ~117% CPU, still running. Fuzzed against a
+ * 90-address pool, 1074 of 200,000 random rosters hung the same way.
+ * Because the loop is synchronous, it blocks the event loop outright — the
+ * job's own handler timeout is powerless against code that never yields —
+ * so one bad CSV permanently pins a worker core. That draft's own doc
+ * comment claimed the escalation "always eventually stops colliding,"
+ * which this bug disproves; nothing here repeats that claim about
+ * anything this file cannot actually prove terminates.
+ *
+ * **The replacement: three fixed levels, no loop over levels.** Level 1 is
+ * the bare local part (`levelOneName`). Level 2 folds in the *whole*
+ * domain in one step, not one label at a time (`levelTwoName`) — an
+ * address only reaches this level if it collided with another at level 1.
+ * Level 3 is a hash of the entire address (`levelThreeName`), reached only
+ * by a (sub-)group still colliding at level 2. Each level is one pass over
+ * however many addresses still need resolving — three passes, full stop,
+ * however many addresses or domain labels are involved. Level 3's own
+ * hash length can grow in a few fixed steps (`HASH_LENGTHS`) if two
+ * addresses still tie at the shortest one, but that is a bounded list
+ * walked at most once, not a loop that keeps escalating on its own —
+ * terminates by construction, not by observation.
+ *
+ * **The cross-bucket hazard is still caught.** A generated level-2 or
+ * level-3 name can land on a name some *other*, already-resolved address
+ * owns outright (`ada@school.edu`/`ada@gmail.com` escalating toward a name
+ * a real `ada-school-edu@evil.edu` already holds bare) — checked by
+ * looking up every candidate against every name already locked in from an
+ * earlier pass, not only against the other members of its own original
+ * group. An address that loses that check moves on to the next level
+ * itself; the address that already owned the name outright is never
+ * touched or forced to move.
+ *
+ * **What is still true, unchanged from round 2.** Two distinct addresses
+ * (after the one deliberate case-insensitive merge, below) essentially
+ * never end this process tied: level 3's hash is computed over the whole
+ * address, not the lossy slug the two shared to get there, so two
+ * genuinely different addresses produce different hashes at everyday
+ * hash lengths. The one case this cannot rule out by construction — two
+ * distinct addresses whose full `sha256` digest is identical — is a real
+ * hash collision, astronomically unlikely and not specific to this
+ * scheme; such a pair is locked in at the full digest anyway rather than
+ * left unresolved, since there is nothing further this file can usefully
+ * try.
+ *
+ * **What this deliberately does not do.** It has no memory beyond the
+ * `emails` argument, and no access to the guild — so it cannot know that a
+ * generated name happens to match a channel that already exists in Discord
+ * for an address that is *not* in this roster (a student who left, say).
+ * That is a real hazard, and it is not this function's to close: the
+ * caller checks a matched channel's own ownership before treating it as
+ * this row's (ROST-16, below) precisely because a name match alone is not
+ * proof of ownership. Keeping that check outside this function, and this
+ * function itself dependent on nothing but the roster's own set of
+ * addresses, is what leaves room for ROST-17 to slot a real lookup in
+ * front of it later without this function changing shape.
+ */
+function assignChannelNames(emails: readonly string[]): {
+  /** Assigned name, keyed by the address's own lowercased, trimmed form. */
+  nameByAddress: Map<string, string>
+  /** Every other distinct address this address's name was disambiguated against, keyed the same way — empty for an address nothing collided with. */
+  disambiguatedAgainst: Map<string, string[]>
+} {
+  // Case-insensitive de-duplication first: two rows for the same address,
+  // spelled with different casing, are the same student and must consume
+  // one name, not two — consistent with every name this function returns
+  // being lowercased in the end anyway.
+  const firstSpellingByAddress = new Map<string, string>()
+  for (const email of emails) {
+    const key = email.trim().toLowerCase()
+    if (!firstSpellingByAddress.has(key)) firstSpellingByAddress.set(key, email)
+  }
+  const addresses = [...firstSpellingByAddress.keys()]
+  const original = (address: string): string =>
+    firstSpellingByAddress.get(address) ?? address
+
+  const nameByAddress = new Map<string, string>()
+  const conflictedWith = new Map<string, Set<string>>(
+    addresses.map((address) => [address, new Set<string>()])
+  )
+  // Every name already locked in, and which address holds it — checked by
+  // every later pass so a generated name can never quietly collide with an
+  // address that already owns it outright (the cross-bucket hazard, this
+  // function's own doc comment).
+  const addressForLockedName = new Map<string, string>()
+
+  function lock(address: string, name: string): void {
+    nameByAddress.set(address, name)
+    addressForLockedName.set(name, address)
+  }
+
+  function recordMutualConflict(group: readonly string[]): void {
+    for (const address of group) {
+      for (const other of group) {
+        if (other !== address) conflictedWith.get(address)?.add(other)
+      }
+    }
+  }
+
+  function recordClash(group: readonly string[], owner: string): void {
+    for (const address of group) {
+      conflictedWith.get(address)?.add(owner)
+      conflictedWith.get(owner)?.add(address)
+    }
+  }
+
+  // ---- Level 1 ----
+  const byLevel1 = groupBy(addresses, (address) =>
+    levelOneName(original(address))
+  )
+  const pendingLevel2: string[] = []
+  for (const [name, group] of byLevel1) {
+    if (group.length === 1 && group[0] !== undefined) {
+      lock(group[0], name)
+    } else {
+      pendingLevel2.push(...group)
+      recordMutualConflict(group)
+    }
+  }
+
+  // ---- Level 2 ----
+  const pendingLevel3: string[] = []
+  if (pendingLevel2.length > 0) {
+    const byLevel2 = groupBy(pendingLevel2, (address) =>
+      levelTwoName(original(address))
+    )
+    for (const [name, group] of byLevel2) {
+      const clashOwner = addressForLockedName.get(name)
+      if (
+        group.length === 1 &&
+        clashOwner === undefined &&
+        group[0] !== undefined
+      ) {
+        lock(group[0], name)
+      } else {
+        pendingLevel3.push(...group)
+        if (group.length > 1) recordMutualConflict(group)
+        if (clashOwner !== undefined) recordClash(group, clashOwner)
+      }
+    }
+  }
+
+  // ---- Level 3 ----
+  if (pendingLevel3.length > 0) {
+    let remaining: string[] = pendingLevel3
+    for (const hashLength of HASH_LENGTHS) {
+      if (remaining.length === 0) break
+      const byLevel3 = groupBy(remaining, (address) =>
+        levelThreeName(original(address), hashLength)
+      )
+      const stillTied: string[] = []
+      for (const [name, group] of byLevel3) {
+        const clashOwner = addressForLockedName.get(name)
+        if (
+          group.length === 1 &&
+          clashOwner === undefined &&
+          group[0] !== undefined
+        ) {
+          lock(group[0], name)
+        } else {
+          stillTied.push(...group)
+          if (group.length > 1) recordMutualConflict(group)
+          if (clashOwner !== undefined) recordClash(group, clashOwner)
+        }
+      }
+      remaining = stillTied
+    }
+    // Exhausted every hash length (the full 64-character `sha256` digest)
+    // and still tied — this function's own doc comment has the reasoning
+    // for why nothing further is attempted: locked in anyway, rather than
+    // left unresolved.
+    for (const address of remaining) {
+      lock(address, levelThreeName(original(address), 64))
+    }
+  }
+
+  const disambiguatedAgainst = new Map<string, string[]>()
+  for (const address of addresses) {
+    const others = [...(conflictedWith.get(address) ?? [])]
+      .map((other) => original(other))
+      .sort((a, b) => a.localeCompare(b))
+    disambiguatedAgainst.set(address, others)
+  }
+  return { nameByAddress, disambiguatedAgainst }
+}
+
+/**
+ * ROST-16's own escalation sequence for *one* address, independent of any
+ * roster-wide collision — used only when a name match is refused because
+ * it already belongs to somebody else (`channelBelongsToSomeoneElse`,
+ * below), never during `assignChannelNames`' own roster-wide pass. Reuses
+ * the identical three levels that function uses (`levelOneName`,
+ * `levelTwoName`, `levelThreeName` across `HASH_LENGTHS`), so a fallback
+ * name is never invented ad hoc — six candidates at most, a fixed list,
+ * never a loop.
+ */
+function ownAddressCandidates(email: string): string[] {
+  return [
+    levelOneName(email),
+    levelTwoName(email),
+    ...HASH_LENGTHS.map((hashLength) => levelThreeName(email, hashLength)),
+  ]
+}
+
 /** Rework finding 5: does `channel`'s own `permissionOverwrites` already grant `memberId` view access? Read from whatever `listGuildChannels` (or this run's own `createGuildChannel`) last returned for it — never re-fetched — so a channel this run already granted access to earlier in the same loop, or one that was created *with* the grant already baked in (the ordinary, non-late-joining case), is not sent a second, redundant `grantChannelMemberAccess` write. */
 function memberAlreadyGranted(
   channel: DiscordChannel,
@@ -387,6 +780,49 @@ function memberAlreadyGranted(
     (entry) => entry.type === 1 && entry.id === memberId
   )
   return overwrite !== undefined && overwriteAllowsView(overwrite)
+}
+
+/**
+ * ROST-16's cheap ownership guard, narrowed after round 2's must-fix 2: does
+ * `channel` already grant view access to a member who was resolved for a
+ * *different row of this same roster*? The first draft asked only "is this
+ * grant not `member`'s own id," which was true of almost everything —
+ * a teaching assistant an instructor added by hand (not on the roster at
+ * all, so not evidence of anything), or *every* grant on *every* channel
+ * once a row's own handle fails to resolve (`member` is `undefined`, so
+ * `overwrite.id !== member?.id` is `true` unconditionally) — measured to
+ * evict a renamed student from her own channel on every import, and to
+ * report a hand-added TA grant as "already somebody else's." Two rows on
+ * this roster genuinely competing for one channel is the only case this
+ * check can actually justify, so it is the only case it looks for now:
+ *
+ * - An unresolved row (`member` is `undefined`) identifies no rival owner
+ *   at all — it never refuses a match, full stop, whatever the channel's
+ *   permissions say.
+ * - A grant belonging to somebody who isn't even resolved for any row of
+ *   this roster (`rosterMemberIds` does not have it) is not a rival either
+ *   — a TA, a co-instructor, anyone this platform did not put there itself.
+ *
+ * Still heuristic, not authoritative: a channel whose true owner never
+ * joined the guild (still admin-only) gives no signal either way, and two
+ * *different* rosters (not two rows of the same one) coincidentally
+ * generating the same name for two different real students is exactly the
+ * gap ROST-17's durable person→channel record exists to close, not this
+ * function.
+ */
+function channelBelongsToSomeoneElse(
+  channel: DiscordChannel,
+  member: DiscordGuildMember | undefined,
+  rosterMemberIds: ReadonlySet<string>
+): boolean {
+  if (!member) return false
+  return (channel.permissionOverwrites ?? []).some(
+    (overwrite) =>
+      overwrite.type === 1 &&
+      overwrite.id !== member.id &&
+      rosterMemberIds.has(overwrite.id) &&
+      overwriteAllowsView(overwrite)
+  )
 }
 
 /** One student category this run can place a channel into — its declared name, its real Discord category id, and the channels already inside it (mutated locally as this run creates more, so a later row in the same roster sees an up-to-date count). */
@@ -578,25 +1014,78 @@ export function createRosterImportHandler(
       channelAccessGrantFailed: [],
       channelsNotCreated: [],
       channelsFailed: [],
-      channelNameCollisions: [],
+      channelNameDisambiguated: [],
+      channelOwnershipConflicts: [],
+      channelsOrphaned: [],
       unresolvedRoles,
       rolesCreated,
       limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
 
-    // Rework finding 6: which row, this run, first claimed a given slugged
-    // channel name — so a second row with a *different* email but the same
-    // local part (`ada@school.edu`/`ada@gmail.com`, both `ada`) is reported
-    // as a collision instead of silently sharing (or failing to reach) the
-    // first row's own channel. Keyed purely from the CSV's own data, before
-    // any Discord call, so a collision is caught even for a row whose own
-    // channel creation later fails or has no room (`channelsFailed`/
-    // `channelsNotCreated`).
-    const channelNameOwners = new Map<string, { line: number; email: string }>()
+    // ROST-14: every row's channel name, computed once from the whole
+    // roster's own set of addresses — see `assignChannelNames`' own doc
+    // comment for the algorithm and what it guarantees. Computed up front,
+    // before any Discord call, so the name a row gets does not depend on
+    // whether its own channel creation later succeeds, fails or finds no
+    // room (`channelsFailed`/`channelsNotCreated` still get a stable name
+    // to report against).
+    const { nameByAddress, disambiguatedAgainst } = assignChannelNames(
+      rows.map((row) => row.email)
+    )
+    // Names already spoken for by a row processed earlier in this loop —
+    // ROST-16's conflict fallback (below) can push a row onto a name
+    // `assignChannelNames` did not generate for it (the next candidate in
+    // its own `ownAddressCandidates` sequence, once an existing channel
+    // under its assigned name turns out to belong to somebody else) —
+    // checked so that fallback never collides with another row's own
+    // assigned or already-picked name either.
+    const namesInUse = new Set(nameByAddress.values())
 
-    for (const row of rows) {
+    // Round 3's "cheap one": every row's own handle resolution, computed
+    // exactly once, up front — both `rosterMemberIds` (ROST-16's must-fix
+    // 2, below) and the main loop's own per-row `member` are read from
+    // this same array by index, so the two can never drift apart the way
+    // two separate `resolveMember` calls risked (`resolveMember` is pure,
+    // so drifting was never about correctness, only about paying for the
+    // lookup twice and inviting the two call sites to quietly diverge
+    // later).
+    const resolutionsByRow = rows.map((row) =>
+      resolveMember(row.discord, members)
+    )
+
+    // ROST-16's must-fix 2: which guild members this *roster* resolves to
+    // at all — the set `channelBelongsToSomeoneElse` (below) checks a
+    // conflicting grant against, so a hand-added TA (not a member any row
+    // resolves to) is never mistaken for a rival student, and a row's own
+    // unresolved handle never manufactures a rival out of a grant that
+    // names nobody this roster recognizes.
+    const rosterMemberIds = new Set(
+      resolutionsByRow
+        .filter(
+          (
+            resolution
+          ): resolution is Extract<MemberResolution, { kind: 'resolved' }> =>
+            resolution.kind === 'resolved'
+        )
+        .map((resolution) => resolution.member.id)
+    )
+
+    // Round 3's other "cheap one": defined once, referencing `categoryStates`
+    // by closure, rather than redefined (and re-`flatMap`ping every
+    // category) on every single row.
+    const findChannelNamed = (
+      name: string
+    ): { channel: DiscordChannel; category: string } | undefined =>
+      categoryStates
+        .flatMap((state) =>
+          state.channels.map((channel) => ({ channel, category: state.name }))
+        )
+        .find(({ channel }) => normalizeChannelName(channel.name) === name)
+
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex] as RosterRowWithLine
       // ---- ROST-10: person resolution, merged never overwritten (PPL-4) ----
-      const resolution = resolveMember(row.discord, members)
+      const resolution = resolutionsByRow[rowIndex] as MemberResolution
       const member =
         resolution.kind === 'resolved' ? resolution.member : undefined
       // See this file's own module comment: a resolved member's real
@@ -701,59 +1190,124 @@ export function createRosterImportHandler(
         })
       }
 
-      // ---- ROST-11/ROST-12: the student's private channel ----
-      const channelName = channelNameForEmail(row.email)
-
-      // Rework finding 6 — see `channelNameOwners`'s own comment above.
-      const owner = channelNameOwners.get(channelName)
-      if (owner && owner.email !== row.email) {
-        report.channelNameCollisions.push({
+      // ---- ROST-11/ROST-12/ROST-14/ROST-16: the student's private channel ----
+      const baseChannelName = channelNameForEmail(row.email)
+      const addressKey = row.email.trim().toLowerCase()
+      // Computed once, up front, from the whole roster — see
+      // `assignChannelNames`' own doc comment. Falling back to the bare
+      // name is defensive only: every row's email fed that computation, so
+      // the lookup always hits.
+      let channelName = nameByAddress.get(addressKey) ?? baseChannelName
+      if (channelName !== baseChannelName) {
+        report.channelNameDisambiguated.push({
           line: row.line,
           email: row.email,
+          baseChannelName,
           channelName,
-          collidesWithLine: owner.line,
-          collidesWithEmail: owner.email,
+          sharesSlugWith: disambiguatedAgainst.get(addressKey) ?? [],
         })
-        continue
       }
-      if (!owner)
-        channelNameOwners.set(channelName, { line: row.line, email: row.email })
 
-      const alreadyPresent = categoryStates
-        .flatMap((state) =>
-          state.channels.map((channel) => ({ channel, category: state.name }))
-        )
-        .find(
-          ({ channel }) => normalizeChannelName(channel.name) === channelName
-        )
-      if (alreadyPresent) {
+      let matched = findChannelNamed(channelName)
+
+      // ROST-16: a name match is not proof of ownership. Names can
+      // legitimately drift — a student leaves and frees a bare name, an
+      // address is corrected, a second `ada` joins and this row's own name
+      // disambiguates out from under it (ROST-14) — and without ROST-17's
+      // durable person→channel record this handler cannot yet tell "this is
+      // genuinely my channel" from "this happens to be named what mine
+      // would be." `channelBelongsToSomeoneElse`'s own doc comment has the
+      // narrowed test (round 2's must-fix 2, re-verified sound in round 3).
+      // A refused match resumes this row's *own* `ownAddressCandidates`
+      // sequence — the same fixed levels `assignChannelNames` used, one
+      // level further — rather than inventing a position-based name: that
+      // is what lets the *next* import of the same roster land on the
+      // identical fallback name and re-adopt whatever this run created,
+      // instead of creating another one on every run (round 2's must-fix
+      // 3, also re-verified sound). Bounded by construction — at most six
+      // fixed candidates (`ownAddressCandidates`'s own doc comment), never
+      // a loop that keeps escalating on its own.
+      if (
+        matched &&
+        channelBelongsToSomeoneElse(matched.channel, member, rosterMemberIds)
+      ) {
+        const conflictingChannelName = channelName
+        const candidates = ownAddressCandidates(row.email)
+        const resumeFrom = candidates.indexOf(channelName) + 1
+        let resolvedCandidate: string | undefined
+        let candidateMatch: ReturnType<typeof findChannelNamed>
+        for (let i = Math.max(resumeFrom, 0); i < candidates.length; i++) {
+          const candidate = candidates[i] as string
+          if (namesInUse.has(candidate)) continue
+          const existing = findChannelNamed(candidate)
+          if (
+            existing &&
+            channelBelongsToSomeoneElse(
+              existing.channel,
+              member,
+              rosterMemberIds
+            )
+          ) {
+            continue
+          }
+          resolvedCandidate = candidate
+          candidateMatch = existing
+          break
+        }
+        // Every one of the six fixed candidates was somehow unusable —
+        // practically unreachable (the last is a full `sha256` digest of
+        // this exact address, unique to it on its own) — used anyway
+        // rather than left unresolved.
+        channelName =
+          resolvedCandidate ?? (candidates[candidates.length - 1] as string)
+        namesInUse.add(channelName)
+        matched = candidateMatch
+        report.channelOwnershipConflicts.push({
+          line: row.line,
+          email: row.email,
+          conflictingChannelName,
+          newChannelName: channelName,
+        })
+      }
+
+      if (matched) {
         // Rework finding 5: a channel that already exists is no longer
         // frozen forever for the one student it belongs to — a handle that
         // now resolves (the student has since joined the server) gets its
         // access repaired, through the one narrowly-scoped write this
         // package makes to a channel it did not just create.
-        if (
-          member &&
-          !memberAlreadyGranted(alreadyPresent.channel, member.id)
-        ) {
+        if (member && !memberAlreadyGranted(matched.channel, member.id)) {
           try {
             await deps.discordRestClient.grantChannelMemberAccess(
               deps.botToken,
-              alreadyPresent.channel.id,
+              matched.channel.id,
               member.id
             )
+            // Round 2's must-fix 1 (second half): kept current in place,
+            // the same way a created channel is appended to `target.channels`
+            // below — without this, a later row in the *same* run that
+            // checks this exact channel's ownership (`channelBelongsToSomeoneElse`)
+            // would read the permission list `listGuildChannels` returned at
+            // the top of this run, missing the grant this line just made.
+            matched.channel.permissionOverwrites = [
+              ...(matched.channel.permissionOverwrites ?? []).filter(
+                (overwrite) =>
+                  !(overwrite.type === 1 && overwrite.id === member.id)
+              ),
+              allowMemberOverwrite(member.id),
+            ]
             report.channelAccessGranted.push({
               line: row.line,
               email: row.email,
               channelName,
-              category: alreadyPresent.category,
+              category: matched.category,
             })
           } catch (error) {
             report.channelAccessGrantFailed.push({
               line: row.line,
               email: row.email,
               channelName,
-              category: alreadyPresent.category,
+              category: matched.category,
               reason: describeDiscordError(error),
             })
           }
@@ -762,7 +1316,7 @@ export function createRosterImportHandler(
             line: row.line,
             email: row.email,
             channelName,
-            category: alreadyPresent.category,
+            category: matched.category,
           })
         }
         continue
@@ -782,6 +1336,21 @@ export function createRosterImportHandler(
         })
         continue
       }
+
+      // Round 2's honesty finding: about to *attempt* a brand-new channel —
+      // if this member already has view access to some *other* channel this
+      // course placed a student in, that other channel is the one this
+      // student actually used, under a name this run no longer generates
+      // for them (see `ChannelOrphanedEntry`'s own doc comment). Computed
+      // here (before the create, so it still reads the pre-create state),
+      // but not reported until the create actually succeeds, below — round
+      // 3's must-fix: a failed create must not tell an instructor to go
+      // reconcile a stale channel against a new one that was never made.
+      const existingOwnChannel = member
+        ? categoryStates
+            .flatMap((state) => state.channels)
+            .find((channel) => memberAlreadyGranted(channel, member.id))
+        : undefined
 
       const overwrites: DiscordPermissionOverwrite[] = [
         denyEveryoneOverwrite(guildId),
@@ -821,6 +1390,14 @@ export function createRosterImportHandler(
           channelName: created.name,
           category: target.name,
         })
+        if (existingOwnChannel) {
+          report.channelsOrphaned.push({
+            line: row.line,
+            email: row.email,
+            previousChannelName: existingOwnChannel.name,
+            newChannelName: created.name,
+          })
+        }
       } catch (error) {
         report.channelsFailed.push({
           line: row.line,

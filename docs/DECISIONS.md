@@ -9786,16 +9786,44 @@ created). The far more ordinary case — an address corrected while a handle *st
 imports — is untouched by this: that row's own identity never changes between imports, so its channel is
 found directly by the *remembered* lookup, on the same person id, and never reaches this carve-out at all.
 Chose to close this rather than only document it: the conjunction this fix adds is cheap (one more
-comparison already-fetched data supports) and the alternative — leaving a documented bound where a genuinely
-different student can still be hers is a live, if narrow, path to reading somebody else's transcript.
+comparison, over data already fetched for the identity check) and the alternative — leaving a documented
+bound where a genuinely different student can still be granted another's channel — is a live, if narrow,
+path to reading somebody else's transcript.
 
 **Verification (round 2).** `npm run lint && npx prettier --check . && npm run typecheck && npm test && npx
 playwright test` all green: 2557 vitest (2 new in `packages/db/tests/people-merge.test.ts` — `mergePeople`
 repoints a remembered channel, and leaves the survivor's own alone when both already have one; 2 new in
 `apps/worker/tests/handlers/roster-import.test.ts` — the merge-then-reimport regression, and the
-handle-reuse-with-address-mismatch probe), 90 node, 38 Playwright e2e. Both new handler tests confirmed red
-first: the merge case failed with a second `alice`-named channel created (`channelsCreated` non-empty)
-against `mergePeople` with the `roster_channel_assignments` repoint temporarily removed; the handle-reuse
-probe failed with Bob's row landing in `channelAccessGranted` for Alice's own channel, against the
-identity-only (no address) predicate. The `mergePeople` repoint test failed the same way against the
-pre-fix function directly (`expected undefined to be 'chan-1'`).
+handle-reuse-with-address-mismatch probe), 90 node, 38 Playwright e2e. Three of the four new tests genuinely
+pin this change, each confirmed red first: the merge case failed with a second `alice`-named channel
+created (`channelsCreated` non-empty) against `mergePeople` with the `roster_channel_assignments` repoint
+temporarily removed; the handle-reuse probe failed with Bob's row landing in `channelAccessGranted` for
+Alice's own channel, against the identity-only (no address) predicate; the `mergePeople` repoint test
+failed the same way against the pre-fix function directly (`expected undefined to be 'chan-1'`). The
+fourth — "leaves the survivor's own remembered channel alone when both people already have one" — passes
+even with no repoint at all (the loser's row trivially stays put with nothing to move it); it is kept as a
+guard against a future naive blind-move hitting `roster_channel_assignments_course_person_unique`, not
+counted as pinning this round's own fix.
+
+**Review round 3 — a real defect two earlier reviews missed, in the first commit.** `roster_channel_assignments`
+references `people.id`, `courses.id` and `organizations.id` with no `onDelete`, and `foreign_keys = ON` is
+set on every connection (`client.ts`). `repos/organizations.ts#deleteOrganizationData` sweeps roughly two
+dozen child tables in FK-safe order and never touched the new one — it deleted `people` while assignment
+rows still pointed at them, so deleting *any* organization that had ever run a roster import creating a
+student channel (after this slice, essentially every real tenant) threw `FOREIGN KEY constraint failed` out
+of the admin tenant-deletion endpoint (`apps/api/src/routes/admin.ts`). The existing org-deletion tests
+missed it only because `seedFullTenant` — the one fixture this file's own tests build a "one row in
+(nearly) every organization-scoped table" tenant from — never seeded one. Fixed by deleting
+`roster_channel_assignments` in `deleteOrganizationData`, ahead of the `people` delete (the same
+children-before-parents ordering this function already holds itself to), and by seeding a remembered
+channel in `seedFullTenant` itself, confirmed red first: with the delete statement removed, three of this
+file's own tests threw `FOREIGN KEY constraint failed` mid-transaction. `previewOrganizationDeletion`
+(read separately from the delete, so an administrator sees a count *before* confirming) gained a matching
+`rosterChannelAssignments` field — named alongside `courses`/`people`, not left out with the deliberately
+uncounted bookkeeping tables that doc comment already lists, since a remembered channel is a fact about a
+real, named Discord channel a student and an instructor both recognize.
+
+**Verification (round 3).** `npm run lint && npx prettier --check . && npm run typecheck && npm test && npx
+playwright test` all green: 2557 vitest (no new files — `packages/db/tests/organizations-deletion.test.ts`'s
+own `seedFullTenant` and its existing assertions were extended in place, not given new `it` blocks), 90
+node, 38 Playwright e2e.

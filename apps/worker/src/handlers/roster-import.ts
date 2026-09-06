@@ -1291,55 +1291,27 @@ export function createRosterImportHandler(
       // to close), so a remembered-elsewhere match escalates through the
       // same fixed candidate sequence rather than a separate refusal path.
       //
-      // One deliberate carve-out on the "remembered elsewhere" half: this
-      // file's own module comment documents a pre-existing identity-model
-      // gap it does not close — a row whose handle resolves to nobody gets
-      // a synthetic, handle-keyed person, and a *later* import where the
-      // same handle now resolves creates a second, genuinely different
-      // `people` row for the same real student, since nothing in this file
-      // reconciles the two (that reconciliation exists only for a live
-      // Discord message, `handleMention`'s own doc comment; `mergePeople`
-      // itself now carries a remembered channel forward on an actual
-      // merge, `repos/people.ts`'s own doc comment — this carve-out is for
-      // the narrower case where no merge has happened *yet*).
-      //
-      // Review finding (D-88), round 1: an earlier draft compared *stored
-      // email strings* instead, which excused far more than the one gap
-      // above — any two genuinely different people who ever carried the
-      // same address (an address reissued after a student leaves; two
-      // stored spellings differing only by case) satisfied it too, so a
-      // name match onto a departed student's channel was silently
-      // reassigned to a stranger, reported as a routine access repair with
-      // no ownership conflict at all. Replaced with an identity check: is
-      // the remembered owner *this row's own* synthetic, handle-keyed
-      // person — the exact identity `resolvePersonByIdentity` above would
-      // have created for this row had its handle never resolved?
-      //
-      // Review finding, round 2: the identity check alone still rests on
-      // one string, the *handle* rather than the email — and a synthetic
-      // `handle:<h>` person is not provably this row's, because two
-      // different real students can supply the identical raw handle text
-      // across two different imports. Concretely: Alice's handle `ada`
-      // never resolves and she is remembered under `handle:ada`; the
-      // *next* term, a genuinely different student, Bob, happens to own
-      // the real Discord username `ada` and happens to share Alice's old
-      // address's local part too — `handle:ada` still resolves to Alice's
-      // (still-unmerged) synthetic person, so the identity check alone
-      // says "this is Bob's own history" when it is not. Requiring *both*
-      // the handle identity and the stored email to agree closes this: two
-      // real students sharing one exact handle string is already a
-      // coincidence; requiring the address to coincide too, in the same
-      // two imports, is the conjunction that makes it not worth guessing
-      // at. The cost, accepted deliberately: a row whose *both* handle
-      // newly resolves *and* address is corrected in the very same import
-      // no longer qualifies for the carve-out, and is treated as
-      // `channelBelongsToSomeoneElse`'s own case instead (escalated to a
-      // fresh, disambiguated channel, ROST-16) — the ordinary
-      // "handle stays unresolved while an address is corrected" case is
-      // untouched by this, since that case never leaves the person's
-      // identity unchanged and so never reaches this branch at all (the
-      // channel is found directly, by the *remembered* lookup above, on
-      // the same person id).
+      // One deliberate carve-out on the "remembered elsewhere" half, for
+      // a pre-existing identity-model gap this file's own module comment
+      // documents: a row whose handle resolves to nobody gets a synthetic,
+      // handle-keyed person, and a *later* import where the same handle
+      // now resolves creates a second, genuinely different `people` row
+      // for the same real student — nothing here reconciles the two
+      // (`mergePeople` now carries a remembered channel forward on an
+      // *actual* merge, `repos/people.ts`'s own doc comment; this
+      // carve-out is only for the narrower case where no merge has
+      // happened yet). The remembered owner must be exactly the synthetic,
+      // handle-keyed person this row's own handle would resolve to had it
+      // never resolved, *and* that owner's stored email must match this
+      // row's own — both, not either. See D-88 (`docs/DECISIONS.md`) for
+      // why: an email-only version let a departed student's channel be
+      // silently reassigned to whoever the address was later reissued to;
+      // a handle-identity-only version let two different real students who
+      // happen to share one raw handle string across two imports inherit
+      // each other's channel. The accepted cost of requiring both,
+      // likewise detailed there: a row whose handle newly resolves *and*
+      // whose address is corrected in the very same import escalates via
+      // `channelBelongsToSomeoneElse` instead of qualifying here.
       let rememberedAsSomeoneElse = false
       if (!remembered && matched) {
         const rememberedElsewhere =

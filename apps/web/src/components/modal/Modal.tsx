@@ -1,7 +1,9 @@
 /**
- * WEB-15/WEB-17: the one modal dialog this panel renders — alert, confirm
- * and prompt are three *modes* of this single component, not three
- * separate implementations. `ModalProvider.tsx` is the only thing that
+ * WEB-15/WEB-17: the one modal dialog this panel renders — alert, confirm,
+ * prompt and choice are four *modes* of this single component, not four
+ * separate implementations. ("Choice" is a confirm with a third button —
+ * "save, discard, or stay here" — added for the course editor's own
+ * per-tab unsaved-changes prompt.) `ModalProvider.tsx` is the only thing that
  * renders this component; nothing else in this app renders a `<dialog>`
  * itself (`AppShell.tsx`'s own mobile drawer is a different kind of
  * surface — a persistent navigation panel, not an alert/confirm/prompt —
@@ -21,7 +23,8 @@
  *    destructive confirm's default focus lands on Cancel, never on the
  *    destructive button itself — accidentally pressing `Enter` the instant
  *    the dialog opens must never run the destructive action.
- *  - **`Escape` closes a cancellable dialog** (confirm, prompt) — the
+ *  - **`Escape` closes a cancellable dialog** (confirm, prompt, choice) —
+ *    for a choice it means "stay here", the same answer Cancel gives. The
  *    native dialog's own `cancel` event already fires for it; this
  *    component's own `onCancel` is what that event resolves to.
  *  - **A prompt's value comes back through the same `onConfirm`,** and its
@@ -34,7 +37,7 @@ import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { Button } from '../Button.js'
 import { textInputClasses } from '../fieldStyles.js'
 
-export type ModalKind = 'alert' | 'confirm' | 'prompt'
+export type ModalKind = 'alert' | 'confirm' | 'prompt' | 'choice'
 
 export interface ModalProps {
   open: boolean
@@ -46,6 +49,17 @@ export interface ModalProps {
   cancelLabel?: string
   /** `kind: 'confirm'` only — renders the confirm button in the danger palette (WEB-15), and moves initial focus to Cancel instead of it. */
   destructive?: boolean
+  /**
+   * `kind: 'choice'` only — the label of the third button, the one that
+   * is neither "do the thing" (confirm) nor "back out" (cancel). A
+   * three-way question ("Save, discard, or stay?") needs exactly one more
+   * button than a confirm does, so it is one more mode of this same
+   * component rather than a second dialog implementation (this file's own
+   * module comment).
+   */
+  altLabel?: string
+  /** `kind: 'choice'` only — activated by the `altLabel` button. */
+  onAlt?: () => void
   /** `kind: 'prompt'` only. */
   promptLabel?: string
   promptValue?: string
@@ -64,6 +78,8 @@ export function Modal({
   confirmLabel,
   cancelLabel,
   destructive = false,
+  altLabel,
+  onAlt,
   promptLabel,
   promptValue = '',
   promptPlaceholder,
@@ -170,6 +186,16 @@ export function Modal({
               onClick={onCancel}
             >
               {cancelLabel ?? 'Cancel'}
+            </Button>
+          )}
+          {/* The third way out of a `choice` dialog — "discard", where the
+              confirm button is "save" and cancel is "stay here". Rendered
+              between the two so the two *destructive-ish* answers are not
+              adjacent to each other, and typed `button` so it never
+              submits the form (which is what runs `onConfirm`). */}
+          {kind === 'choice' && altLabel !== undefined && (
+            <Button type="button" variant="secondary" onClick={onAlt}>
+              {altLabel}
             </Button>
           )}
           <Button

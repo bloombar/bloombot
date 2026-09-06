@@ -98,7 +98,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // WEB-19/FILE-4: instructions are saved through their own versioned
   // action, offered only once the course exists — see

@@ -92,7 +92,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 2. WEB-20: issue a join link and copy it — the secret is shown exactly
   //    once, right here.
@@ -289,7 +289,7 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
   await page.getByLabel('Students role').fill(`students-w23-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   await expect(page.getByRole('heading', { name: 'Join links' })).toBeVisible()
   await expect(page.getByText('No join links issued yet.')).toBeVisible()
@@ -393,7 +393,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   await page.getByLabel('Students role').fill(`students-e12-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 1. Issue — the secret is shown once, right here, exactly as WEB-20's own
   //    test above proves. Deliberately never copied or read in this test:

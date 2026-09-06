@@ -3422,7 +3422,7 @@
   section: §34 Web Control Panel
   family: ROST
   phase: 23
-  status: In progress
+  status: Done
   review: false
 - id: ROST-17
   title: A student's channel is remembered, not re-derived

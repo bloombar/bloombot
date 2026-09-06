@@ -1130,16 +1130,15 @@ describe('roster.import handler', () => {
       )
 
       expect(report.rolesCreated).toEqual([])
-      // Named with its own reason (a 403), the same as every other failed
-      // Discord write this report already carries a reason for
-      // (`channelsFailed`/`channelAccessGrantFailed`) — not a bare name a
-      // raw report could not tell apart from a rate limit.
+      // Named with its own reason — `DiscordRequestError.message`, not a
+      // bare status, so a bot missing Manage Roles reads differently from
+      // a role sitting above the bot in the guild's own role order, even
+      // though both are `403`s (`describeDiscordError`'s own SRV-10
+      // rework, shared with `discord-scaffold.ts` via `@bloombot/discord-rest`).
       expect(report.unresolvedRoles).toEqual([
-        {
-          role: seeded.adminsRole,
-          reason: 'Discord responded with status 403',
-        },
+        { role: seeded.adminsRole, reason: expect.stringContaining('403') },
       ])
+      expect(report.unresolvedRoles[0]?.reason).toContain('Manage Roles')
       // The rest of the run was not aborted — the student's channel was
       // still created.
       expect(report.channelsCreated).toHaveLength(1)

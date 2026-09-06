@@ -825,6 +825,33 @@ describe('courses repo', () => {
       expect(result.conflict.name).toBe('same-role')
     })
 
+    // SRV-10's own rework: `apps/worker`'s role resolution
+    // (`discordServers.scaffold`/`roster.import`) compares a course's role
+    // names against a Discord guild's own roles case- and
+    // whitespace-insensitively — this check has to match that, or a course
+    // naming `adminsRole: "Staff"` and `studentsRole: "staff"` passes here
+    // as two different names and then resolves onto the very same Discord
+    // role once scaffolded, granting the admins-only overwrite to every
+    // student. This test fails without the fix: before it, differently
+    // cased/spaced names were accepted as distinct.
+    it('refuses a save whose admin and student role are the same name once case and surrounding whitespace are ignored', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          adminsRole: 'Staff',
+          studentsRole: '  staff  ',
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('studentsRole')
+    })
+
     it('refuses a save with two categories sharing the same name', () => {
       testDb = createTestDatabase()
       const { orgA, projectA } = seedTwoOrganizations(testDb)

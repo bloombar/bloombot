@@ -9135,7 +9135,7 @@ after the prompt may land on the old tab button: `goToTab`'s `.focus()` runs bef
 `dialog.close()` restores focus to the opener, which by then carries `tabIndex={-1}`. jsdom cannot see
 it; `e2e/course-configuration.spec.ts` now asserts it in a real browser.
 
-## D-85 — `apps/worker`/`packages/discord-rest`: SRV-10 — a missing role is created, not skipped
+## D-84 — `apps/worker`/`packages/discord-rest`: SRV-10 — a missing role is created, not skipped
 
 SRV-10's own contract: a course names an admins role and a students role, and a name the guild lacks is
 created — with an empty permission bitfield of its own — rather than left for every channel overwrite
@@ -9259,9 +9259,86 @@ reviewer offered as the alternative to reconsidering.
 **Verification (round 2).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` —
 2500 vitest (5 new: one transient-rethrow test and one case/whitespace-match test in each handler's own
 test file, plus the "role not found" panel test in `apps/web/tests/roster-import.test.tsx` split into two
-— the reason-and-copy test and a new `rolesCreated` test), 90 node. Each new test confirmed red against the pre-fix code
-before this round: the 429 tests resolved instead of rejecting (the bare `catch` swallowed the status),
-the case/whitespace tests posted a second `POST .../roles` (the un-pushed `roles` array still missed the
-just-created entry — reachable directly in `discord-scaffold.ts`'s own two-role run, exercised here through
-the same-name match rather than the cross-course collision itself, which needs two full runs to observe),
-and the panel copy test failed on the literal string `'not found in the server'` still present.
+— the reason-and-copy test and a new `rolesCreated` test), 90 node. The two 429 tests confirmed red
+against the pre-fix code (they resolved instead of rejecting — the bare `catch` swallowed the status), and
+the panel copy test confirmed red on the literal string `'not found in the server'` still present. The two
+case/whitespace-match tests were **not** confirmed red and a since-corrected round-2 draft of this entry
+wrongly claimed they were: both pass unchanged against `418cc98`, because the regression they guard
+against (differently-cased role names creating a duplicate role) needs the un-pushed `roles` array from
+must-fix 1 above *and* a second, differently-cased name in the same run to surface — a single already-cased
+match, which is all either test exercises, never reached the un-pushed line at all. They are legitimate
+regression guards (the reviewer's own ask — case/whitespace matching for a role had no test before this
+round, and the *consequence* of a regression there changed from "reports one unresolved role" to "creates
+a duplicate role"), just not proof that this round's own fix does anything; the corrected claim is this
+paragraph.
+
+**Review round 2 (four must-fixes).** Round 1's serious finding — a bare `catch` swallowing every failure
+creating a role, must-fix 1 there — was independently probed (429, 500, 503, a raw `fetch failed`, an
+`AbortError`) and confirmed fixed, with zero channels created before the throw. Four items remained:
+
+1. **The `Staff`/`staff` aliasing hazard was not fixed — round 1's own fix made it fire a run earlier.**
+   Pushing the created role into the searched list (round 1) was correct and stays; it just meant
+   `discord-scaffold.ts`'s second `resolveOrCreateRole` call now *finds* the first call's own role and
+   returns its id for both names in the very first run, rather than only aliasing on a second run the way
+   the pre-round-1 code did. The root cause round 1 did not touch:
+   `packages/db/src/repos/courses.ts`'s own `findSelfConflict` compared `adminsRole === studentsRole`
+   *exactly*, while every role resolution in `apps/worker` (`resolveRoleId`) compares normalized names, so
+   a course naming `adminsRole: "Staff"` and `studentsRole: "staff"` passed the save-time check as two
+   distinct names and then aliased onto one Discord role the moment either handler ran. Fixed at the root:
+   `findSelfConflict` now compares `normalizeRoleName(adminsRole)` against
+   `normalizeRoleName(studentsRole)` (trim + lowercase, the same normalization `resolveRoleId` already
+   applies), refusing the save outright — a genuine, deliberate reach outside this slice's original
+   worker-only scope, since the actual defect lives in `packages/db`, not `apps/worker`.
+   `discord-scaffold.ts` also gained its own defense in depth: a course saved *before* this fix already
+   exists in the database with an aliasing pair, so after resolving both role ids the handler now refuses
+   outright (throws, naming both role names and the guild) if `adminsRoleId === studentsRoleId`, rather
+   than building an aliased overwrite and reporting `succeeded`. `roster-import.ts` needs no equivalent
+   check — it only ever resolves `adminsRole`, never `studentsRole`, so the two names can never collide
+   inside that handler. Two role-name arrays (`categoryOverwrites`/`adminsOnlyOverwrites` in
+   `discord-scaffold.ts`) were also built by plain concatenation, which would happily post Discord the same
+   role id twice in one body if any future path ever resolved the same id into both slots — a real,
+   redundant artifact independent of how the aliasing itself is prevented — so both arrays are now passed
+   through a small `dedupeOverwritesById` (first occurrence wins) before use. No dedicated test exercises
+   `dedupeOverwritesById` in isolation: with the refusal above in place, nothing in this handler can
+   currently produce a duplicate id for it to collapse, and exporting an internal helper solely to unit-test
+   an unreachable branch was judged not worth the surface area; the alias-refusal test below is what proves
+   the aliasing itself never reaches that code.
+2. **The verification claim in this entry's own round-2 paragraph was corrected** — see that paragraph,
+   rewritten in place above rather than left standing next to a correction.
+3. **D-84, not D-85.** `418cc98` (this slice's first commit) claimed D-84; a later round-2 draft of this
+   entry renumbered it to D-85 believing D-84 had been claimed elsewhere, but the shared integration branch
+   has no D-84 at all — `feat/ROST-14-suffixed-channel-names` claimed D-85 for its own entry, not D-84.
+   Renumbered back to D-84, leaving ROST-14 on D-85 and D-80 through D-83 untouched.
+4. **`describeDiscordError` could not distinguish the refusals it exists to distinguish.** It returned only
+   `` `Discord responded with status ${error.status}` ``, so a bot missing Manage Roles and a role sitting
+   above the bot in the guild's own role order — both `403`s — produced byte-identical panel text, and
+   Discord's 250-role-per-guild cap read as a bare `400`. `DiscordRequestError.message` already carries
+   `explainDiscordStatus`'s own human text (naming all three causes explicitly) and, by that class's own
+   constructor, never carries `.body` — exactly as safe to surface as the bare status was, and strictly
+   more useful. `describeDiscordError` now returns `error.message` for a `DiscordRequestError`, falling back
+   to a plain `Error`'s own message or `'an unknown error'` otherwise, unchanged from before.
+
+**Two simplifications taken, one call reaffirmed.** `describeDiscordError` and `UnresolvedRoleEntry` moved
+into `@bloombot/discord-rest` (beside `DiscordRequestError`, which the formatter reads and the entry type
+exists to describe a failure creating), removing the duplicate copies from both `discord-scaffold.ts` and
+`roster-import.ts`. Unlike the two files' own `resolveOrCreateRole` logic (round 1's duplication call,
+reaffirmed — see that entry, above), a parameterless error formatter and a two-field type carry no
+behaviour for either file to diverge on, so there was nothing "handler-specific" about keeping them
+duplicated. `apps/web/src/api/types.ts` keeps its own inline `{ role, reason }` shape rather than importing
+`UnresolvedRoleEntry` from the package — that app depends on zero `@bloombot/*` packages by design (its own
+module comment: every API shape here is hand-mirrored from the worker/action layer, never imported, "the
+same boundary... one level stricter: apps do not import each other's source at all, workspace package or
+not") — so this is the one copy of the four the reviewer counted that stays, and it stays for the same
+reason the whole file already hand-mirrors every other report shape. The redundant `const created: DiscordRole`
+type annotations in both handlers were also dropped — `createGuildRole` already returns that type.
+
+**Verification (round 3).** `npm run lint && npx prettier --check . && npm run typecheck && npm test &&
+npx playwright test` all green: 2505 vitest (5 new — one alias-refusal test in `discord-scaffold.test.ts`,
+one case/whitespace-insensitivity test for the DB-level fix in `packages/db/tests/courses.test.ts`, and
+three for `describeDiscordError` in `packages/discord-rest/tests/client.test.ts`), 90 node, 38 Playwright
+e2e specs. Every new test confirmed red before its fix: the alias-refusal test resolved with
+`rolesCreated: ["Staff"]` and an aliased overwrite instead of rejecting (temporarily replacing the `if`
+guard's condition with `false` and restoring it after); the two existing "reports a 403" assertions in
+`discord-scaffold.test.ts`/`roster-import.test.ts` failed on the old bare-status reason once
+`describeDiscordError` moved to `error.message`, and were updated to assert the richer text
+(`toContain('Manage Roles')`) rather than the old exact string.

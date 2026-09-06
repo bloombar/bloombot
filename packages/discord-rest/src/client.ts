@@ -164,6 +164,49 @@ export class DiscordRequestError extends Error {
   }
 }
 
+/**
+ * A human-readable reason for a failed Discord write — every failure report
+ * in `apps/worker`'s two handlers (`discord-scaffold.ts`'s `unresolvedRoles`,
+ * `roster-import.ts`'s `unresolvedRoles`/`channelsFailed`/
+ * `channelAccessGrantFailed`) uses this, rather than each duplicating its
+ * own copy the way `resolveRoleId`/`normalizeName` are deliberately
+ * duplicated across those two files (their own module comments explain why
+ * — an app does not share *handler* logic across files via a package it
+ * does not own). A parameterless error formatter is not handler logic; it
+ * belongs beside `DiscordRequestError` itself, the one type it actually
+ * reads.
+ *
+ * SRV-10's own rework: this used to return only
+ * `` `Discord responded with status ${error.status}` ``, which could not
+ * tell a bot missing Manage Roles apart from a role sitting above the bot
+ * in the guild's role order — both `403`s. `DiscordRequestError.message`
+ * already carries `explainDiscordStatus`'s own human text (which names
+ * exactly those causes) and, by that class's own constructor, never
+ * carries `.body` — so it is exactly as safe to surface as the bare status
+ * was, and strictly more useful.
+ */
+export function describeDiscordError(error: unknown): string {
+  if (error instanceof DiscordRequestError) {
+    return error.message
+  }
+  return error instanceof Error ? error.message : 'an unknown error'
+}
+
+/**
+ * SRV-10: a course role name (`adminsRole`/`studentsRole`) a handler tried
+ * to create because the guild had nothing matching it, and Discord refused
+ * on a permanent error — `reason` is `describeDiscordError`'s own
+ * human-readable cause. Shared between `discord-scaffold.ts` (which
+ * resolves/creates both role names) and `roster-import.ts` (which resolves
+ * only `adminsRole`) rather than duplicated: unlike the two files' own
+ * `resolveOrCreateRole` logic, a plain two-field type carries no behaviour
+ * to diverge, so there is nothing here for either file to own separately.
+ */
+export interface UnresolvedRoleEntry {
+  role: string
+  reason: string
+}
+
 /** A category or text channel, as SRV-6's guild-write calls read and return it — Discord's own channel object, narrowed to the fields a scaffold run matches and creates by (`type`, `name`, `parentId`), tolerant of fields this package does not read. */
 export interface DiscordChannel {
   id: string

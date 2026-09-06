@@ -2,6 +2,7 @@
 
 export {
   createDiscordRestClient,
+  describeDiscordError,
   DiscordRequestError,
   type CreateDiscordRestClientOptions,
   type DiscordChannel,
@@ -10,6 +11,7 @@ export {
   type DiscordOAuthToken,
   type DiscordRestClient,
   type DiscordRole,
+  type UnresolvedRoleEntry,
 } from './client.js'
 
 export { buildDiscordAuthorizationUrl } from './authorize-url.js'

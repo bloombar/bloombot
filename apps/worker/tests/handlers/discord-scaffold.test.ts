@@ -1060,15 +1060,14 @@ describe('discordServers.scaffold handler', () => {
     }
 
     expect(report.rolesCreated).toEqual([])
-    // Named with its own reason (a 403), the same as every other failed
-    // Discord write in this app — not a bare name a raw report could not
-    // tell apart from a rate limit.
+    // Named with its own reason — `DiscordRequestError.message`, not a bare
+    // status, so a bot missing Manage Roles reads differently from a role
+    // sitting above the bot in the guild's own role order, even though
+    // both are `403`s (`describeDiscordError`'s own SRV-10 rework).
     expect(report.unresolvedRoles).toEqual([
-      {
-        role: seeded.studentsRole,
-        reason: 'Discord responded with status 403',
-      },
+      { role: seeded.studentsRole, reason: expect.stringContaining('403') },
     ])
+    expect(report.unresolvedRoles[0]?.reason).toContain('Manage Roles')
     // The rest of the run was not aborted — the category was still created.
     expect(report.categories[0]?.status).toBe('created')
   })
@@ -1136,6 +1135,45 @@ describe('discordServers.scaffold handler', () => {
       discordServer.requests.some(
         (r) => r.method === 'POST' && r.path.endsWith('/roles')
       )
+    ).toBe(false)
+  })
+
+  // SRV-10 review round 2, must-fix 1: `packages/db/src/repos/courses.ts`
+  // now refuses to *save* a course whose admins/students role names
+  // normalize to the same thing (`courses.test.ts`'s own new case), but a
+  // course saved before that fix already exists in the database with
+  // exactly that shape — this handler needs its own defense, not merely
+  // the repo's, since proceeding would silently grant the students role
+  // every admins-only channel's own overwrite, unrepairable once created
+  // (SRV-8). The bad row is written directly, below the repo layer, the
+  // same device this file's own TEN-9 tests use to reach a state the repo
+  // layer itself now refuses to produce. This test fails without the fix:
+  // before it, both names resolved onto the one role Discord created for
+  // the first, and the category below was created with `role-1` granted
+  // twice — once as "admins", once as "students".
+  it('refuses to scaffold when the admins and students role names resolve to the same Discord role, rather than silently aliasing them', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    testDb.db.$client
+      .prepare(
+        'UPDATE courses SET admins_role = ?, students_role = ? WHERE id = ?'
+      )
+      .run('Staff', 'staff', seeded.courseId)
+    discordServer.setGuildRoles(seeded.guildId, [])
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toThrow(
+      /resolves its admins role .* and students role .* to the same Discord role/
+    )
+
+    // Refused before any category was created — not half-scaffolded with
+    // the aliased grant baked in.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
     ).toBe(false)
   })
 

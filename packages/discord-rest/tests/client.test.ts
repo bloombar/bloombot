@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   createDiscordRestClient,
+  describeDiscordError,
   DiscordRequestError,
   type DiscordRestClient,
 } from '../src/client.js'
@@ -474,6 +475,31 @@ describe('createGuildRole (SRV-10)', () => {
     ).rejects.toMatchObject(
       expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
     )
+  })
+})
+
+// SRV-10's own rework: this used to return only the bare status, which
+// could not tell a bot missing Manage Roles apart from a role sitting
+// above the bot in the guild's own role order — both `403`s. This test
+// fails without the fix: `describeDiscordError` would return
+// `'Discord responded with status 403'` for both cases below, not the two
+// distinct messages `explainDiscordStatus` already writes for them.
+describe('describeDiscordError (SRV-10)', () => {
+  it("surfaces DiscordRequestError's own message, not merely its bare status", () => {
+    const error = new DiscordRequestError(403, { message: 'irrelevant' })
+
+    expect(describeDiscordError(error)).toBe(error.message)
+    expect(describeDiscordError(error)).toContain('Manage Roles')
+  })
+
+  it('falls back to a plain Error message for anything else Discord-shaped', () => {
+    expect(describeDiscordError(new Error('socket hang up'))).toBe(
+      'socket hang up'
+    )
+  })
+
+  it('names an unknown error for a thrown value that is not even an Error', () => {
+    expect(describeDiscordError('not an error at all')).toBe('an unknown error')
   })
 })
 

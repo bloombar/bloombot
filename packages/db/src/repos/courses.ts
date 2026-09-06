@@ -352,6 +352,26 @@ function findCourseNameConflict(
 }
 
 /**
+ * SRV-10's own rework: `discordServers.scaffold`/`roster.import`
+ * (`apps/worker`) resolve a course's role names against a Discord guild's
+ * own roles case- and whitespace-insensitively (each handler's own
+ * `resolveRoleId`) — the same normalization Discord's own UI effectively
+ * imposes, since two roles differing only by case read as the same thing to
+ * anyone administering the server by hand. `findSelfConflict`, below, has to
+ * compare `adminsRole`/`studentsRole` the same way, not by exact string:
+ * before this, a course naming `adminsRole: "Staff"` and
+ * `studentsRole: "staff"` passed this check as two different names, and
+ * `apps/worker`'s own SRV-10 role-creation code then resolved both names
+ * onto the *same* Discord role — silently granting the admins-only
+ * overwrite to every student. See `docs/DECISIONS.md` for the fuller
+ * reasoning behind reaching into this repo from what started as a
+ * worker-only slice.
+ */
+function normalizeRoleName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+/**
  * PROJ-3 within a single course: an admin and student role that are the same
  * name, or two categories that share a name, break the "unique across every
  * enabled course" invariant inside one course rather than across two — the
@@ -363,7 +383,10 @@ function findCourseNameConflict(
 function findSelfConflict(
   input: NameCheckInput
 ): CourseNameConflict | undefined {
-  if (input.adminsRole === input.studentsRole) {
+  if (
+    normalizeRoleName(input.adminsRole) ===
+    normalizeRoleName(input.studentsRole)
+  ) {
     return {
       field: 'studentsRole',
       name: input.studentsRole,

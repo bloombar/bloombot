@@ -92,13 +92,14 @@ import {
   allowMemberOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
+  describeDiscordError,
   DiscordRequestError,
   overwriteAllowsView,
   type DiscordChannel,
   type DiscordGuildMember,
   type DiscordPermissionOverwrite,
   type DiscordRestClient,
-  type DiscordRole,
+  type UnresolvedRoleEntry,
 } from '@bloombot/discord-rest'
 
 type CourseWithCategories = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -179,12 +180,6 @@ export interface ChannelFailedEntry {
   email: string
   channelName: string
   category: string
-  reason: string
-}
-
-/** SRV-10: a course role name (`adminsRole`) this run tried to create because the guild had nothing matching it, and Discord refused on a permanent error — `reason` is `describeDiscordError`'s own human-readable cause, the same shape `ChannelFailedEntry` above already gives every other failed Discord write in this handler. */
-export interface UnresolvedRoleEntry {
-  role: string
   reason: string
 }
 
@@ -394,14 +389,6 @@ function memberAlreadyGranted(
   return overwrite !== undefined && overwriteAllowsView(overwrite)
 }
 
-/** Rework finding 4/5: a human-readable reason for a failed Discord write, without leaking whatever `DiscordRequestError.body` carries (that class's own doc comment explains why it stays out of `.message`) into a report a browser or log line will show verbatim. */
-function describeDiscordError(error: unknown): string {
-  if (error instanceof DiscordRequestError) {
-    return `Discord responded with status ${error.status}`
-  }
-  return error instanceof Error ? error.message : 'an unknown error'
-}
-
 /** One student category this run can place a channel into — its declared name, its real Discord category id, and the channels already inside it (mutated locally as this run creates more, so a later row in the same roster sees an up-to-date count). */
 interface CategoryState {
   name: string
@@ -554,10 +541,11 @@ export function createRosterImportHandler(
     let adminsRoleId = resolveRoleId(roles, course.adminsRole)
     if (!adminsRoleId) {
       try {
-        const created: DiscordRole =
-          await deps.discordRestClient.createGuildRole(deps.botToken, guildId, {
-            name: course.adminsRole,
-          })
+        const created = await deps.discordRestClient.createGuildRole(
+          deps.botToken,
+          guildId,
+          { name: course.adminsRole }
+        )
         roles.push(created)
         adminsRoleId = created.id
         rolesCreated.push(course.adminsRole)

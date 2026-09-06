@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   createDiscordRestClient,
+  describeDiscordError,
   DiscordRequestError,
   type DiscordRestClient,
 } from '../src/client.js'
@@ -427,6 +428,78 @@ describe('listGuildChannels / listGuildRoles / createGuildCategory / createGuild
     ).rejects.toMatchObject(
       expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
     )
+  })
+})
+
+describe('createGuildRole (SRV-10)', () => {
+  it('creates a role with an empty permission bitfield, as a JSON POST with a Bot authorization', async () => {
+    const created = await client.createGuildRole('bot-token', 'guild-1', {
+      name: 'course-admins',
+    })
+
+    expect(created).toMatchObject({ name: 'course-admins' })
+    expect(created.id).toEqual(expect.any(String))
+    expect(server.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/guilds/guild-1/roles',
+      headers: expect.objectContaining({
+        authorization: 'Bot bot-token',
+        'content-type': 'application/json',
+      }) as unknown,
+    })
+    // Requirement 1 of SRV-10: an empty permission bitfield, explicitly —
+    // never Discord's own create-role default.
+    expect(server.requests[0]?.body).toEqual({
+      name: 'course-admins',
+      permissions: '0',
+    })
+
+    // The fake's own guild store actually holds it now, the same
+    // "idempotence depends on a subsequent read seeing it" proof
+    // `createGuildCategory`'s own test above makes. `listGuildRoles`'s own
+    // `parseRoleList` is tolerant of fields this package does not read
+    // (`permissions` included), so the round trip carries that field too —
+    // `created` above is `parseRole`'s narrower `{ id, name }` shape.
+    const roles = await client.listGuildRoles('bot-token', 'guild-1')
+    expect(roles).toEqual([{ ...created, permissions: '0' }])
+  })
+
+  it('throws DiscordRequestError for a non-2xx response (a bot missing Manage Roles, say)', async () => {
+    server.respondToGuildRoles({
+      status: 403,
+      body: { message: 'Missing Permissions' },
+    })
+
+    await expect(
+      client.createGuildRole('bot-token', 'guild-1', { name: 'course-admins' })
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
+    )
+  })
+})
+
+// SRV-10's own rework: this used to return only the bare status, which
+// could not tell a bot missing Manage Roles apart from a role sitting
+// above the bot in the guild's own role order — both `403`s. This test
+// fails without the fix: `describeDiscordError` would return
+// `'Discord responded with status 403'` for both cases below, not the two
+// distinct messages `explainDiscordStatus` already writes for them.
+describe('describeDiscordError (SRV-10)', () => {
+  it("surfaces DiscordRequestError's own message, not merely its bare status", () => {
+    const error = new DiscordRequestError(403, { message: 'irrelevant' })
+
+    expect(describeDiscordError(error)).toBe(error.message)
+    expect(describeDiscordError(error)).toContain('Manage Roles')
+  })
+
+  it('falls back to a plain Error message for anything else Discord-shaped', () => {
+    expect(describeDiscordError(new Error('socket hang up'))).toBe(
+      'socket hang up'
+    )
+  })
+
+  it('names an unknown error for a thrown value that is not even an Error', () => {
+    expect(describeDiscordError('not an error at all')).toBe('an unknown error')
   })
 })
 

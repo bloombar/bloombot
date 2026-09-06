@@ -449,7 +449,17 @@ export interface RosterImportReport {
     collidesWithLine: number
     collidesWithEmail: string
   }[]
-  unresolvedRoles: string[]
+  /**
+   * SRV-10: a course role name (the admins role) this run tried to create,
+   * because the server had nothing matching it, and Discord refused —
+   * `reason` names why (a bot missing Manage Roles, say), the same shape
+   * `channelsFailed`/`channelAccessGrantFailed` above already carry a
+   * reason with. A name the server lacked that this run *did* manage to
+   * create is not here — see `rolesCreated` below.
+   */
+  unresolvedRoles: { role: string; reason: string }[]
+  /** SRV-10: a course role name the server lacked, created by this run — never one that already existed (an existing role is used exactly as it is, untouched). */
+  rolesCreated: string[]
   /** ROST-6's own welcome message, and any other structural gap this run wants named plainly — see `RosterImportReport.limitations`'s own doc comment in `apps/worker`. */
   limitations: string[]
 }

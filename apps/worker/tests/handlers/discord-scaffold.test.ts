@@ -962,9 +962,13 @@ describe('discordServers.scaffold handler', () => {
     ).toBe(true)
   })
 
-  // A role that does not resolve in the guild is reported rather than
-  // silently skipped or guessed at (SRV-2).
-  it('reports a role name that does not resolve in the guild, and still creates the category without it', async () => {
+  // SRV-10, requirement 1: a role a course names and the guild lacks is
+  // created rather than left unresolved — with an empty permission
+  // bitfield of its own, since it exists only to be named in a channel
+  // overwrite. This test fails without SRV-10's code: before it, a role
+  // name matching nothing in the guild was reported in `unresolvedRoles`
+  // and never created.
+  it('creates a role the guild lacks, with an empty permission bitfield, rather than reporting it unresolved', async () => {
     testDb = createTestDatabase()
     discordServer = await FakeDiscordGuildServer.start()
     const seeded = seedOrganizationWithBoundCourse(testDb.db, [
@@ -981,13 +985,232 @@ describe('discordServers.scaffold handler', () => {
       seeded.courseId
     )) as {
       unresolvedRoles: string[]
+      rolesCreated: string[]
     }
 
-    expect(report.unresolvedRoles).toEqual([seeded.studentsRole])
-    // The category was still created — an unresolved role is reported, not
-    // fatal.
+    expect(report.unresolvedRoles).toEqual([])
+    expect(report.rolesCreated).toEqual([seeded.studentsRole])
+
+    const roleCreate = discordServer.requests.find(
+      (request) => request.method === 'POST' && request.path.endsWith('/roles')
+    )
+    expect(roleCreate).toBeDefined()
+    expect(roleCreate?.body).toEqual({
+      name: seeded.studentsRole,
+      // Requirement 1: an empty permission bitfield, explicitly — never
+      // Administrator, Manage Channels, or anything else.
+      permissions: '0',
+    })
+
+    // The category was still created, now naming the newly created role.
     const created = discordServer.writeRequests()
-    expect(created).toHaveLength(2) // category + temp placeholder
+    expect(created).toHaveLength(3) // role + category + temp placeholder
+  })
+
+  // SRV-10, requirement 2: a role that already resolves is used exactly as
+  // it is — no create call at all for either the admins or students role.
+  it('uses an existing role untouched, making no create call for it', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { unresolvedRoles: string[]; rolesCreated: string[] }
+
+    expect(report.rolesCreated).toEqual([])
+    expect(report.unresolvedRoles).toEqual([])
+    expect(
+      discordServer.requests.some(
+        (request) =>
+          request.method === 'POST' && request.path.endsWith('/roles')
+      )
+    ).toBe(false)
+  })
+
+  // SRV-10, requirement 6: creating a role needs Manage Roles — a bot
+  // without it gets a 403, an ordinary Discord failure reported the same
+  // way an unresolvable role name always has been, not an unhandled throw
+  // that fails the whole job.
+  it('reports a 403 creating a missing role as unresolved, without aborting the rest of the run', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+    ])
+    discordServer.failNextRoleCreate(403, { message: 'Missing Permissions' })
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      unresolvedRoles: { role: string; reason: string }[]
+      rolesCreated: string[]
+      categories: { status: string }[]
+    }
+
+    expect(report.rolesCreated).toEqual([])
+    // Named with its own reason — `DiscordRequestError.message`, not a bare
+    // status, so a bot missing Manage Roles reads differently from a role
+    // sitting above the bot in the guild's own role order, even though
+    // both are `403`s (`describeDiscordError`'s own SRV-10 rework).
+    expect(report.unresolvedRoles).toEqual([
+      { role: seeded.studentsRole, reason: expect.stringContaining('403') },
+    ])
+    expect(report.unresolvedRoles[0]?.reason).toContain('Manage Roles')
+    // The rest of the run was not aborted — the category was still created.
+    expect(report.categories[0]?.status).toBe('created')
+  })
+
+  // SRV-10, requirement 6's other half: a *transient* failure (a `429`, a
+  // `5xx`) creating a role must not be swallowed the way a permanent one
+  // is — it has to throw out of the handler the same as every other
+  // Discord call here, so JOB-2 retries rather than this run reporting
+  // `succeeded` having silently skipped a grant no later run can repair
+  // (SRV-8 forbids editing an `already_present` channel's overwrites).
+  // This test fails without the fix: before it, the bare `catch` absorbed
+  // a 429 exactly like a 403, and the category below would have been
+  // created missing the students overwrite while the job still reported
+  // success.
+  it('rethrows a transient (429) failure creating a role, rather than absorbing it like a permanent one', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+    ])
+    discordServer.failNextRoleCreate(429, {
+      message: 'You are being rate limited',
+    })
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toMatchObject({ status: 429 })
+
+    // Nothing was created at all — the run stopped at the failed role
+    // creation rather than proceeding to create a mis-permissioned category.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+    ).toBe(false)
+  })
+
+  // A guild holding a role that differs from a course's declared name only
+  // in case or surrounding whitespace must still be recognised as the same
+  // one — the same case/whitespace-insensitive match `resolveRoleId` has
+  // always given a category or channel name. Before SRV-10 a regression
+  // here meant "reports one unresolved role"; after it, the same
+  // regression means "creates a duplicate role," a materially worse
+  // failure this test now pins directly.
+  it('matches an existing role that differs only in case or surrounding whitespace, creating nothing', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: `  ${seeded.adminsRole.toUpperCase()}  ` },
+      { id: 'role-students', name: seeded.studentsRole.toUpperCase() },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { unresolvedRoles: unknown[]; rolesCreated: string[] }
+
+    expect(report.rolesCreated).toEqual([])
+    expect(report.unresolvedRoles).toEqual([])
+    expect(
+      discordServer.requests.some(
+        (r) => r.method === 'POST' && r.path.endsWith('/roles')
+      )
+    ).toBe(false)
+  })
+
+  // SRV-10 review round 2, must-fix 1: `packages/db/src/repos/courses.ts`
+  // now refuses to *save* a course whose admins/students role names
+  // normalize to the same thing (`courses.test.ts`'s own new case), but a
+  // course saved before that fix already exists in the database with
+  // exactly that shape — this handler needs its own defense, not merely
+  // the repo's, since proceeding would silently grant the students role
+  // every admins-only channel's own overwrite, unrepairable once created
+  // (SRV-8). The bad row is written directly, below the repo layer, the
+  // same device this file's own TEN-9 tests use to reach a state the repo
+  // layer itself now refuses to produce. This test fails without the fix:
+  // before it, both names resolved onto the one role Discord created for
+  // the first, and the category below was created with `role-1` granted
+  // twice — once as "admins", once as "students".
+  it('refuses to scaffold when the admins and students role names resolve to the same Discord role, rather than silently aliasing them', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    testDb.db.$client
+      .prepare(
+        'UPDATE courses SET admins_role = ?, students_role = ? WHERE id = ?'
+      )
+      .run('Staff', 'staff', seeded.courseId)
+    discordServer.setGuildRoles(seeded.guildId, [])
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toThrow(
+      /resolves its admins role .* and students role .* to the same Discord role/
+    )
+
+    // Refused before any category was created — not half-scaffolded with
+    // the aliased grant baked in.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+    ).toBe(false)
+  })
+
+  // SRV-10 round 3, must-fix 3: Discord's own `@everyone` role's id equals
+  // the guild's own id, and `resolveRoleId` resolves a role named
+  // "@everyone" exactly like any other — a course whose admins role is
+  // (mistakenly or deliberately) named "@everyone" resolves `adminsRoleId`
+  // to `guildId`, colliding with `denyEveryoneOverwrite(guildId)`'s own
+  // entry. This test fails without the fix: before it, the admins-only
+  // channel below was created with only the `@everyone` deny and the bot
+  // grant — `dedupeOverwritesById` keeping the first occurrence and
+  // silently dropping the admin grant — reported `succeeded` with
+  // `unresolvedRoles: []`.
+  it("refuses to scaffold when a course's role resolves to the guild's own @everyone role", async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(
+      testDb.db,
+      [{ name: 'Week 1', channels: [{ name: 'staff', adminsOnly: true }] }],
+      { adminsRole: '@everyone' }
+    )
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: seeded.guildId, name: '@everyone' },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toThrow(
+      /resolves its admins role .* to guild .* own "@everyone" role/
+    )
+
+    // Refused before any category was created — not half-scaffolded with
+    // the dropped grant baked in.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+    ).toBe(false)
   })
 
   // Finding 4 of the SRV-6..8 rework: an instructor sets `admins_only: true`

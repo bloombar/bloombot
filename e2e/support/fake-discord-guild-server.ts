@@ -50,6 +50,7 @@
  * untouched — Discord does not slug a category's name the same way.
  */
 
+import { randomUUID } from 'node:crypto'
 import { normalizeChannelName } from '@bloombot/discord-rest'
 import {
   createServer,
@@ -81,6 +82,15 @@ export class FakeDiscordGuildServer {
   private guildChannels = new Map<string, unknown[]>()
   private guildRoles = new Map<string, unknown[]>()
   private guildMembers = new Map<string, unknown[]>()
+  // A per-instance prefix, not a bare counter starting at 1. Every spec
+  // starts its own fake but they share one `e2e.db`, so two fakes both
+  // numbering from 1 minted the *same* channel id for different courses —
+  // which ROST-17's globally-unique `roster_channel_assignments`
+  // `discord_channel_id` index then rejected, surfacing as a raw
+  // `SqliteError` that retried the job and failed whichever spec ran
+  // second. Real Discord ids are snowflakes, unique across every guild,
+  // so a fake that reuses them is modelling something Discord never does.
+  private readonly channelIdPrefix = randomUUID().slice(0, 8)
   private nextChannelId = 1
   private channelCreateFailureQueue: { status: number; body: unknown }[] = []
   private permissionPutFailureQueue: { status: number; body: unknown }[] = []
@@ -207,7 +217,7 @@ export class FakeDiscordGuildServer {
           return
         }
         const created = {
-          id: String(this.nextChannelId++),
+          id: `${this.channelIdPrefix}-${this.nextChannelId++}`,
           parent_id: null,
           ...parsedBody,
           // Finding 1 of the SRV-6..8 rework — see this file's own module

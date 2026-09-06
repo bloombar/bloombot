@@ -2320,6 +2320,12 @@ ones are made, and a category is never created to hold students who are already 
 the import behaves exactly as it does today, reporting what it could not place rather than creating
 anything.
 
+A category that already exists under the name being created is never duplicated. The existing one is
+used, and its permissions are checked against what the course asks for and repaired where they differ,
+rather than left as whatever a person set by hand. Matching is by the same case- and separator-tolerant
+comparison the import already uses to discover student categories, so a category an earlier run created
+is recognised by a later one.
+
 #### SRV-10 Scaffolding creates the roles a course names, if they are missing
 
 A course names an admins role and a students role, and both scaffolding and roster import resolve
@@ -2347,3 +2353,10 @@ channel and no other student's, while every instructor reaches all of them. A ro
 handle could not be resolved still gets a channel with the admin grant, reported as such, rather than
 a channel that quietly grants nobody. This holds for a channel created fresh, for one an earlier
 import already created, and for a suffixed name (ROST-14).
+
+A channel that already exists under the name being created is never duplicated. The existing one is
+used and its permissions are verified against the four rules above, repaired where they fall short —
+a student who could not be resolved on an earlier run and can be now is granted their own channel, an
+absent admins grant or `@everyone` deny is restored — and reported as repaired rather than as created.
+Verification never removes an overwrite the platform did not put there: an instructor who granted a
+teaching assistant access to one student's channel keeps that grant.

@@ -11,7 +11,7 @@
  * "saved twice" a single, deterministic click each time.
  */
 
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { renderWithModal, withModal } from './helpers/render-with-modal.js'
@@ -122,6 +122,16 @@ describe('ProjectsPanel (WEB-32, WEB-34)', () => {
 
     // Everything from here is about the *next* project's open, so the
     // first project's own legitimate fetch is not what this asserts on.
+    //
+    // Waited for rather than assumed: the heading renders when the project
+    // itself resolves, and this project's own `courses.list` is issued by a
+    // separate effect that can still be a tick behind it. Clearing the mock
+    // on the heading alone let that legitimate call land *after* the clear
+    // under load, where the loop below reads it as the stale-fetch defect —
+    // a failure of the test's timing, not of the component.
+    await waitFor(() =>
+      expect(listCourses).toHaveBeenCalledWith(expect.anything(), 'project-1')
+    )
     listCourses.mockClear()
 
     // Back to the list, then straight into the *other* project — the

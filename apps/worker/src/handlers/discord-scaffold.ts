@@ -80,11 +80,14 @@ import {
   allowBotOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
+  describeDiscordError,
+  DiscordRequestError,
   overwriteAllowsView,
   overwriteDeniesView,
   type DiscordChannel,
   type DiscordPermissionOverwrite,
   type DiscordRestClient,
+  type UnresolvedRoleEntry,
 } from '@bloombot/discord-rest'
 
 type CourseWithCategories = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -174,8 +177,22 @@ export interface ScaffoldReport {
   undeclaredCategories: string[]
   /** A channel present in a *declared* category that no course in this organization declares (SRV-8, finding 3 of the rework) — a category the organization does not declare at all is already covered by naming the category itself, above; this only names a channel one level inside a category that is still recognised. Reported, never removed. */
   undeclaredChannels: string[]
-  /** A course role name (`adminsRole`/`studentsRole`) that did not resolve to a role in the guild (SRV-2's "skipped rather than treated as fatal") — reported instead of guessed at. */
-  unresolvedRoles: string[]
+  /**
+   * A course role name (`adminsRole`/`studentsRole`) this run could not end
+   * up with an id for — before SRV-10, that meant "absent from the guild"
+   * (SRV-2's "skipped rather than treated as fatal"); since SRV-10, an
+   * absent name is created rather than skipped (see `rolesCreated` below),
+   * so this now means the name resolved to nothing *and* creating it
+   * failed on a *permanent* Discord error too (requirement 6 — a `403` for
+   * a bot missing Manage Roles, say; a transient failure, a `429` or a
+   * transport error, is never caught here at all and instead throws out of
+   * this function the same way every other Discord call in this file does,
+   * so JOB-2 retries rather than this run reporting `succeeded` having
+   * silently skipped a grant SRV-8 then forbids ever repairing).
+   */
+  unresolvedRoles: UnresolvedRoleEntry[]
+  /** SRV-10: a course role name the guild lacked, created this run with an empty permission bitfield — never one that already resolved (`unresolvedRoles`' own doc comment covers what "still missing" means now). */
+  rolesCreated: string[]
 }
 
 /** Case- and whitespace-insensitive name matching — `discord_manager.py`'s own `.lower().strip()` comparison, carried over so a *category* named identically but for casing is recognised as the same one. Not used for a channel's own name — see `normalizeChannelName`, below, and this file's own module comment. */
@@ -210,6 +227,37 @@ function resolveRoleId(
   return roles.find(
     (role) => normalizeName(role.name) === normalizeName(roleName)
   )?.id
+}
+
+/**
+ * SRV-10's own review rework: the two overwrite arrays built from
+ * `adminsRoleId`/`studentsRoleId` are built by concatenation, so any path
+ * that resolves the same Discord id into more than one slot of one of
+ * these arrays — the admins/students aliasing this file already refuses
+ * above, or a course naming a role "@everyone" (also refused above,
+ * `guildId` doubling as both the everyone-deny target and the resolved
+ * role id) — would post Discord a body naming that id twice. A plain
+ * `[a, b, c]` array offers Discord no guarantee against that on its own.
+ *
+ * Keeps only the *first* occurrence of each `id`. That is a narrow,
+ * fail-closed guard, not a correct resolution: in the one case this file
+ * knows can reach it if a refusal above were ever bypassed (`@everyone` as
+ * a course's own role), the first occurrence is `denyEveryoneOverwrite`'s
+ * deny, so the *second* — the admin grant — is the one silently dropped.
+ * Kept anyway, deliberately, because the alternative (posting the same id
+ * twice, deny then allow) is worse: Discord's own last-write-wins behavior
+ * for a duplicate target in one overwrite array is undocumented, so this
+ * guards against whichever way that resolves rather than trusting it.
+ */
+function dedupeOverwritesById(
+  overwrites: DiscordPermissionOverwrite[]
+): DiscordPermissionOverwrite[] {
+  const seen = new Set<string>()
+  return overwrites.filter((overwrite) => {
+    if (seen.has(overwrite.id)) return false
+    seen.add(overwrite.id)
+    return true
+  })
 }
 
 function parsePayload(raw: unknown): { courseId: string } {
@@ -387,13 +435,117 @@ export function createDiscordScaffoldHandler(
       deps.discordRestClient.getBotUserId(deps.botToken),
     ])
 
-    // SRV-2: a role named in the config but absent from the guild is
-    // skipped, not fatal — reported in `unresolvedRoles` instead.
-    const unresolvedRoles: string[] = []
-    const adminsRoleId = resolveRoleId(roles, course.adminsRole)
-    if (!adminsRoleId) unresolvedRoles.push(course.adminsRole)
-    const studentsRoleId = resolveRoleId(roles, course.studentsRole)
-    if (!studentsRoleId) unresolvedRoles.push(course.studentsRole)
+    // SRV-10: a role named in the config but absent from the guild is
+    // created, not skipped (requirement 1: with an empty permission
+    // bitfield of its own — this role exists to be named in a channel
+    // overwrite, never to carry a server-wide power). A name that already
+    // resolves is used exactly as it is (requirement 2) — `resolveRoleId`
+    // is tried first, and `createGuildRole` is reached only when it finds
+    // nothing.
+    //
+    // Two rework fixes on top of the original slice:
+    //
+    // - The created role is pushed into `roles` itself (mutated in place),
+    //   not merely returned. `courses.ts`'s own admins/students uniqueness
+    //   check now normalizes the same way `resolveRoleId` does (SRV-10
+    //   round 3's own fix at the root — see `docs/DECISIONS.md`), so a
+    //   *new* course can no longer be saved with `adminsRole: "Staff"` and
+    //   `studentsRole: "staff"`; a course saved before that fix landed
+    //   already exists with exactly that shape, though, and without this
+    //   push the second call below would not see the role the first call
+    //   just created, creating a second, colliding "staff" role and (on
+    //   the next run) resolving both names onto whichever one
+    //   `listGuildRoles` happens to return first — the students role then
+    //   admin-granted on every admins-only channel. This file's own
+    //   `adminsRoleId === studentsRoleId` refusal, below, is the other half
+    //   of defending a course already stored that way.
+    // - A creation failure is caught only when Discord's own response says
+    //   it is permanent (`DiscordRequestError.permanent` — a `403` for a
+    //   bot missing Manage Roles, requirement 6). A transient failure (a
+    //   `429`, a `5xx`, a raw transport error with no `.permanent` to
+    //   consult at all) is rethrown — this file's own module comment states
+    //   the contract for every other Discord call here ("simply throws out
+    //   of this function — JOB-2's ordinary retry/backoff takes it from
+    //   there"), and a role creation absorbed here unconditionally used to
+    //   turn a one-off rate limit into a course whose channels are created
+    //   moments later missing the admins/students overwrite, reported
+    //   `succeeded`, and never repairable afterward (SRV-8 forbids editing
+    //   an `already_present` channel's overwrites, so a retry finds
+    //   everything already there and fixes nothing).
+    const unresolvedRoles: UnresolvedRoleEntry[] = []
+    const rolesCreated: string[] = []
+    async function resolveOrCreateRole(
+      roleName: string
+    ): Promise<string | undefined> {
+      const existingId = resolveRoleId(roles, roleName)
+      if (existingId) return existingId
+      try {
+        const created = await deps.discordRestClient.createGuildRole(
+          deps.botToken,
+          guildId,
+          { name: roleName }
+        )
+        roles.push(created)
+        rolesCreated.push(roleName)
+        return created.id
+      } catch (error) {
+        if (error instanceof DiscordRequestError && error.permanent) {
+          unresolvedRoles.push({
+            role: roleName,
+            reason: describeDiscordError(error),
+          })
+          return undefined
+        }
+        throw error
+      }
+    }
+    const adminsRoleId = await resolveOrCreateRole(course.adminsRole)
+    const studentsRoleId = await resolveOrCreateRole(course.studentsRole)
+
+    // Defense in depth, not the primary fix: `packages/db/src/repos/courses.ts`'s
+    // own `findSelfConflict` now refuses to *save* a course whose admins and
+    // students role names normalize to the same thing (SRV-10's own
+    // rework — see `docs/DECISIONS.md`), so a course saved after that fix
+    // landed can never reach this point with `adminsRoleId === studentsRoleId`.
+    // A course saved *before* that fix already exists in the database with
+    // exactly that shape, though, and this run has no way to tell "the two
+    // names genuinely alias in this guild" apart from "coincidence" — either
+    // way, proceeding would silently grant the students role every
+    // admins-only channel's own overwrite, unrepairable once created (SRV-8).
+    // Refused outright, the same "state it and stop" every other
+    // configuration problem in this handler gets (the ambiguous-server-binding
+    // check, above), rather than guessed at or silently half-honoured.
+    if (
+      adminsRoleId !== undefined &&
+      studentsRoleId !== undefined &&
+      adminsRoleId === studentsRoleId
+    ) {
+      throw new Error(
+        `discordServers.scaffold: course "${course.id}" resolves its admins role ("${course.adminsRole}") and students role ("${course.studentsRole}") to the same Discord role in guild "${guildId}" — refusing to scaffold, since every admins-only channel would then grant the students role too. Rename one of the two roles in the guild (or the course's own role names) so they resolve to two different roles, then retry.`
+      )
+    }
+
+    // SRV-10 round 3, must-fix 3: Discord's own `@everyone` role's id
+    // *equals the guild's own id* (`channel-overwrites.ts`'s own doc
+    // comment) — a course naming its admins or students role "@everyone"
+    // (or a course category role legitimately named that in the guild)
+    // resolves straight onto `guildId` the same way any other role name
+    // would, colliding with `denyEveryoneOverwrite(guildId)`'s own entry
+    // below. `dedupeOverwritesById` (its own comment, below) would then
+    // keep the `@everyone` deny and silently drop the admin grant, since
+    // both share `id: guildId` — an admins-only channel created that way
+    // denies everyone and grants nobody, reported `succeeded`, and
+    // unrepairable once created (SRV-8). Refused the same way the aliasing
+    // above is, before either overwrite array is even built.
+    if (adminsRoleId === guildId || studentsRoleId === guildId) {
+      const offending =
+        adminsRoleId === guildId
+          ? { which: 'admins', name: course.adminsRole }
+          : { which: 'students', name: course.studentsRole }
+      throw new Error(
+        `discordServers.scaffold: course "${course.id}" resolves its ${offending.which} role ("${offending.name}") to guild "${guildId}"'s own "@everyone" role — refusing to scaffold, since an overwrite naming "@everyone" would collide with the mandatory @everyone-deny overwrite every category and admins-only channel gets. Point the course's role at a real Discord role, not "@everyone", then retry.`
+      )
+    }
 
     // Discord's own `@everyone` role shares its guild's id (`channel-overwrites.ts`'s
     // own doc comment) — nothing to resolve for it.
@@ -405,17 +557,22 @@ export function createDiscordScaffoldHandler(
     // it comes back `403` — observed in the field, and the reason
     // `allowBotOverwrite` exists.
     const botOverwrite = allowBotOverwrite(botUserId)
-    const categoryOverwrites: DiscordPermissionOverwrite[] = [
-      everyoneOverwrite,
-      botOverwrite,
-      ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
-      ...(studentsRoleId ? [allowRoleOverwrite(studentsRoleId)] : []),
-    ]
-    const adminsOnlyOverwrites: DiscordPermissionOverwrite[] = [
-      everyoneOverwrite,
-      botOverwrite,
-      ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
-    ]
+    // `dedupeOverwritesById`, below — narrow protection, not the primary
+    // fix; the two refusals above are what actually keep a duplicate id out
+    // of these arrays today.
+    const categoryOverwrites: DiscordPermissionOverwrite[] =
+      dedupeOverwritesById([
+        everyoneOverwrite,
+        botOverwrite,
+        ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
+        ...(studentsRoleId ? [allowRoleOverwrite(studentsRoleId)] : []),
+      ])
+    const adminsOnlyOverwrites: DiscordPermissionOverwrite[] =
+      dedupeOverwritesById([
+        everyoneOverwrite,
+        botOverwrite,
+        ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
+      ])
 
     // Mutated locally as this run creates categories/channels, so a course
     // declaring the same name twice (or a bare category's own placeholder
@@ -648,6 +805,7 @@ export function createDiscordScaffoldHandler(
       undeclaredCategories,
       undeclaredChannels,
       unresolvedRoles,
+      rolesCreated,
     }
   }
 }

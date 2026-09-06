@@ -352,6 +352,26 @@ function findCourseNameConflict(
 }
 
 /**
+ * SRV-10's own rework: `discordServers.scaffold`/`roster.import`
+ * (`apps/worker`) resolve a course's role names against a Discord guild's
+ * own roles case- and whitespace-insensitively (each handler's own
+ * `resolveRoleId`) — the same normalization Discord's own UI effectively
+ * imposes, since two roles differing only by case read as the same thing to
+ * anyone administering the server by hand. `findSelfConflict`, below, has to
+ * compare `adminsRole`/`studentsRole` the same way, not by exact string:
+ * before this, a course naming `adminsRole: "Staff"` and
+ * `studentsRole: "staff"` passed this check as two different names, and
+ * `apps/worker`'s own SRV-10 role-creation code then resolved both names
+ * onto the *same* Discord role — silently granting the admins-only
+ * overwrite to every student. See `docs/DECISIONS.md` for the fuller
+ * reasoning behind reaching into this repo from what started as a
+ * worker-only slice.
+ */
+function normalizeRoleName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+/**
  * PROJ-3 within a single course: an admin and student role that are the same
  * name, or two categories that share a name, break the "unique across every
  * enabled course" invariant inside one course rather than across two — the
@@ -359,17 +379,47 @@ function findCourseNameConflict(
  * `input` against *other* courses. Checked before the cross-course check so
  * a self-conflicting input is refused for the reason that actually applies
  * to it, not misreported as colliding with a candidate it never reached.
+ *
+ * SRV-10 round 3, must-fix 1: `checkRoles` (default `true`, so `createCourse`
+ * calls this exactly as before) lets `updateCourse` skip the role-aliasing
+ * half of this check when the incoming pair is byte-identical to what is
+ * already stored. Without it, a course saved *before* the normalized
+ * comparison above existed — and stored with an aliasing pair — could never
+ * be saved again for *any* reason: `courses.save` always sends both role
+ * fields (they are required, unlike `promptId`/`vectorStoreId`'s "omitted
+ * preserves stored"), so even a save that only renames the course or edits
+ * a category re-submitted the same aliasing pair and was refused on a field
+ * nothing about that save touched. The category-duplicate half of this
+ * check always runs regardless — an update can introduce a duplicate
+ * category name on its own, independent of whether the roles changed.
  */
 function findSelfConflict(
-  input: NameCheckInput
+  input: NameCheckInput,
+  options: { checkRoles?: boolean } = {}
 ): CourseNameConflict | undefined {
-  if (input.adminsRole === input.studentsRole) {
+  const checkRoles = options.checkRoles ?? true
+  if (
+    checkRoles &&
+    normalizeRoleName(input.adminsRole) ===
+      normalizeRoleName(input.studentsRole)
+  ) {
+    // SRV-10 round 3, must-fix 2: quotes *both* values (not only
+    // `studentsRole`, which used to read as a mystery to an instructor
+    // looking at two visibly different strings) and, when they are not the
+    // same literal string, says plainly that Discord ignores the
+    // difference — case and surrounding whitespace only. Names the Discord
+    // tab explicitly: this message is the whole story for an MCP caller
+    // (no `body.issues` accompanies an `action_conflict` the way one does
+    // an `action_input_invalid`, so nothing else tells a caller where to
+    // look — see `docs/DECISIONS.md`), and for the panel, which does not
+    // switch tabs for a conflict either.
+    const sameLiteralString = input.adminsRole === input.studentsRole
     return {
       field: 'studentsRole',
       name: input.studentsRole,
-      message:
-        `Role name "${input.studentsRole}" is used for both the admin and ` +
-        `student role of this course; they must be different.`,
+      message: sameLiteralString
+        ? `Role name "${input.studentsRole}" is used for both the admins role and the students role of this course (Discord tab); they must be different.`
+        : `Admins role "${input.adminsRole}" and students role "${input.studentsRole}" differ only in capitalization or surrounding whitespace, so Discord would treat them as the same role; rename one on the Discord tab so they are clearly different.`,
     }
   }
 
@@ -809,7 +859,21 @@ export function updateCourse(
   const projectResult = loadOwnedProject(organizationId, input.projectId, db)
   if (!projectResult.ok) return projectResult
 
-  const selfConflict = findSelfConflict(input)
+  // SRV-10 round 3, must-fix 1: the role-aliasing half of `findSelfConflict`
+  // only runs when this save actually changes one (or both) role names —
+  // `existing` is what is already stored, and `courses.save` always sends
+  // both fields, so a save that leaves an already-aliasing pair exactly as
+  // it was must go through untouched (an instructor renaming the course, or
+  // editing anything else, is not the moment to refuse on a field nothing
+  // about this save touched). A save that changes either name is checked in
+  // full, including onto a *new* aliasing pair. The stored pair is still
+  // caught loudly at scaffold time by `discord-scaffold.ts`'s own defense
+  // in depth — this repo layer is not the only place it is refused, just
+  // not the place that blocks unrelated work.
+  const rolesChanged =
+    input.adminsRole !== existing.adminsRole ||
+    input.studentsRole !== existing.studentsRole
+  const selfConflict = findSelfConflict(input, { checkRoles: rolesChanged })
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
   return db.transaction((tx) => {

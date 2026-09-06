@@ -1027,6 +1027,196 @@ describe('roster.import handler', () => {
   // scaffolding, one level over: an organization holding two active
   // bindings must not have every roster import refuse ("no active Discord
   // server bound," a message that lied when two were in fact bound) —
+  // SRV-10: a course's admins role is created rather than left unresolved
+  // when the guild lacks it, an existing role is used untouched, and a
+  // permission failure creating one is reported without aborting the run —
+  // the same three requirements `discord-scaffold.test.ts` proves for its
+  // own two role names.
+  describe('SRV-10 — the admins role is created when the guild lacks it', () => {
+    it('creates the admins role with an empty permission bitfield, rather than reporting it unresolved', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      // Override the roles this file's own `seedCourseWithStudentCategory`
+      // seeds — the guild has no role matching the course's admins role at
+      // all this time.
+      discordServer.setGuildRoles(seeded.guildId, [])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.unresolvedRoles).toEqual([])
+      expect(report.rolesCreated).toEqual([seeded.adminsRole])
+      const roleCreate = discordServer.requests.find(
+        (r) => r.method === 'POST' && r.path.endsWith('/roles')
+      )
+      expect(roleCreate).toBeDefined()
+      expect(roleCreate?.body).toEqual({
+        name: seeded.adminsRole,
+        // Requirement 1: an empty permission bitfield — never
+        // Administrator, Manage Channels, or anything else.
+        permissions: '0',
+      })
+      // The newly created role — its real id, read from the fake's own
+      // guild store rather than re-derived from the posted request body,
+      // which never carries the id Discord assigns — still names the
+      // channel's admin overwrite.
+      const createdRole = discordServer
+        .guildRolesFor(seeded.guildId)
+        .find(
+          (role) => (role as { name?: string }).name === seeded.adminsRole
+        ) as { id?: string } | undefined
+      const channelCreate = discordServer.requests.find(
+        (r) => r.method === 'POST' && r.path.endsWith('/channels')
+      )
+      const overwrites = channelCreate?.body?.['permission_overwrites'] as {
+        id: string
+      }[]
+      expect(overwrites.some((o) => o.id === createdRole?.id)).toBe(true)
+    })
+
+    it('uses an existing admins role untouched, making no create call for it', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.rolesCreated).toEqual([])
+      expect(report.unresolvedRoles).toEqual([])
+      expect(
+        discordServer.requests.some(
+          (r) => r.method === 'POST' && r.path.endsWith('/roles')
+        )
+      ).toBe(false)
+    })
+
+    it('reports a 403 creating a missing admins role as unresolved, without aborting the rest of the import', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildRoles(seeded.guildId, [])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      discordServer.failNextRoleCreate(403, { message: 'Missing Permissions' })
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.rolesCreated).toEqual([])
+      // Named with its own reason — `DiscordRequestError.message`, not a
+      // bare status, so a bot missing Manage Roles reads differently from
+      // a role sitting above the bot in the guild's own role order, even
+      // though both are `403`s (`describeDiscordError`'s own SRV-10
+      // rework, shared with `discord-scaffold.ts` via `@bloombot/discord-rest`).
+      expect(report.unresolvedRoles).toEqual([
+        { role: seeded.adminsRole, reason: expect.stringContaining('403') },
+      ])
+      expect(report.unresolvedRoles[0]?.reason).toContain('Manage Roles')
+      // The rest of the run was not aborted — the student's channel was
+      // still created.
+      expect(report.channelsCreated).toHaveLength(1)
+    })
+
+    // A *transient* failure (a `429`, a `5xx`) creating the admins role
+    // must not be swallowed the way a permanent one is — it has to throw
+    // out of the handler, so JOB-2 retries rather than this run reporting
+    // `succeeded` having silently created every student's channel missing
+    // the admins grant. This test fails without the fix: before it, the
+    // bare `catch` absorbed a 429 exactly like a 403 and the import
+    // proceeded to create the channel anyway.
+    it('rethrows a transient (429) failure creating the admins role, rather than absorbing it like a permanent one', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildRoles(seeded.guildId, [])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      discordServer.failNextRoleCreate(429, {
+        message: 'You are being rate limited',
+      })
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      await expect(
+        runImport(seeded.organizationId, seeded.courseId, csv)
+      ).rejects.toMatchObject({ status: 429 })
+
+      // Nothing was created at all — the run stopped at the failed role
+      // creation rather than proceeding to create a mis-permissioned
+      // channel.
+      expect(
+        discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+      ).toBe(false)
+    })
+
+    // A guild holding a role that differs from the course's declared
+    // admins role only in case or surrounding whitespace must still be
+    // recognised as the same one — the same case/whitespace-insensitive
+    // match `resolveRoleId` has always given a category or channel name.
+    // Before SRV-10 a regression here meant "reports one unresolved role";
+    // after it, the same regression means "creates a duplicate role," a
+    // materially worse failure this test now pins directly.
+    it('matches an existing admins role that differs only in case or surrounding whitespace, creating nothing', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: `  ${seeded.adminsRole.toUpperCase()}  ` },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.rolesCreated).toEqual([])
+      expect(report.unresolvedRoles).toEqual([])
+      expect(
+        discordServer.requests.some(
+          (r) => r.method === 'POST' && r.path.endsWith('/roles')
+        )
+      ).toBe(false)
+    })
+  })
+
   // resolved through the course's own server instead.
   describe('an organization with more than one active binding (TEN-9)', () => {
     it("imports into the course's own server, never the organization's other active binding", async () => {

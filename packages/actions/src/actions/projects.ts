@@ -414,13 +414,32 @@ export const duplicateProjectAction: Action<
           },
           tx
         )
-        // Unreachable in practice: `enabled: false` means `createCourse` never
-        // runs PROJ-3's cross-course check at all (its own guard, `input.enabled
-        // && projectResult.project.archivedAt === null`), and `newProject.id`
-        // was created in this organization moments earlier. Guarded rather
-        // than asserted, the same discipline every other action in this file
-        // holds itself to for a race nothing here causes on purpose.
-        if (!result.ok) throw new ActionConflictError(result.conflict)
+        // `enabled: false` means `createCourse` never runs PROJ-3's
+        // *cross-course* check (its own guard, `input.enabled &&
+        // projectResult.project.archivedAt === null`), and `newProject.id`
+        // was created in this organization moments earlier — that half is
+        // genuinely unreachable in practice. `createCourse`'s own
+        // *self*-conflict check (`findSelfConflict`, `repos/courses.ts`)
+        // is not guarded by `enabled` at all, though, and since SRV-10
+        // round 3 it is no longer vacuous either: `source` is copied
+        // verbatim, including its `adminsRole`/`studentsRole`, and a
+        // course saved before that check's normalized comparison existed
+        // can be stored with an aliasing pair (must-fix 1's own
+        // grandfathering — a save that leaves such a pair untouched still
+        // goes through). Duplicating that course is a *create*, which
+        // `findSelfConflict` always checks, so this branch is genuinely
+        // reachable for such a source course, and the whole duplicate
+        // (every course in the project, not just this one) fails as soon
+        // as it is reached. The message names which course caused it —
+        // `result.conflict.message` alone says only that some role name
+        // collided, not which of potentially several courses in this
+        // project it came from.
+        if (!result.ok) {
+          throw new ActionConflictError({
+            ...result.conflict,
+            message: `Course "${source.title}": ${result.conflict.message}`,
+          })
+        }
 
         // FILE-6/MDL-9 (also-fix) — copied the same as every other field
         // above, not dropped: without this, rolling a term forward

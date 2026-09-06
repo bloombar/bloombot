@@ -40,6 +40,7 @@ function emptyReport(
     channelsFailed: [],
     channelNameCollisions: [],
     unresolvedRoles: [],
+    rolesCreated: [],
     limitations: [],
     ...overrides,
   }
@@ -195,13 +196,26 @@ describe('RosterImport (WEB-21)', () => {
     expect(report).toHaveTextContent('Alex Chen, Alex Diaz')
   })
 
-  it('a finished report names a role that did not resolve in the guild', async () => {
+  // SRV-10: since the worker now tries to create a missing role rather
+  // than merely reporting it missing, `unresolvedRoles` means "the server
+  // lacked it and this run tried and failed to create it" — the old copy
+  // ("Roles not found in the server") is false once the product itself
+  // attempts creation, so this pins both the new copy and the reason the
+  // attempt failed (`entry.reason`, the same shape `channelsFailed` already
+  // carries a reason with). This test fails against the pre-fix copy: the
+  // rendered text no longer contains "not found in the server".
+  it('a finished report names a role this run tried and failed to create, and why', async () => {
     importRoster.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(
       job({
         status: 'succeeded',
         result: emptyReport({
-          unresolvedRoles: ['admins-wd-fa26'],
+          unresolvedRoles: [
+            {
+              role: 'admins-wd-fa26',
+              reason: 'Discord responded with status 403',
+            },
+          ],
         }),
       })
     )
@@ -212,6 +226,31 @@ describe('RosterImport (WEB-21)', () => {
 
     const report = await screen.findByTestId('roster-import-report')
     expect(report).toHaveTextContent('admins-wd-fa26')
+    expect(report).toHaveTextContent('Discord responded with status 403')
+    expect(report).not.toHaveTextContent('not found in the server')
+  })
+
+  // SRV-10: "what was created is reported" (the SPEC's own words) applies
+  // to a role the same way it already does to a channel — this test fails
+  // without `rolesCreated` reaching the panel at all.
+  it('a finished report names a role this run created because the server lacked it', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          rolesCreated: ['admins-wd-fa26'],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('admins-wd-fa26')
+    expect(report).toHaveTextContent('created')
   })
 
   it("a finished report states the run's own structural limitations", async () => {

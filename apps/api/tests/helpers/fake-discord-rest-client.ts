@@ -125,6 +125,13 @@ export function createFakeDiscordRestClient(
         parentId: input.parentId,
       })
     },
+    // SRV-10's own addition — same reasoning as the guild-management calls
+    // above: nothing in `apps/api`'s own routes calls this (it is
+    // `discord-scaffold.ts`/`roster-import.ts`'s alone), so this fake only
+    // needs to keep satisfying `DiscordRestClient` as that port grows.
+    createGuildRole(_botToken, _guildId, input): Promise<DiscordRole> {
+      return Promise.resolve({ id: 'fake-role-id', name: input.name })
+    },
     // Rework finding 5's own narrow addition — same reasoning as the
     // guild-management calls above: nothing in `apps/api`'s own routes
     // calls this (it is `roster-import.ts`'s alone), so this fake only

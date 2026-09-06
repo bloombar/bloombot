@@ -343,17 +343,39 @@ export function RosterImport({
             </div>
           )}
 
-          {/* Rework finding (must-fix): every channel this run created is
-              missing this role's own access grant — silent otherwise. */}
+          {/* SRV-10: a role the server lacked is created automatically now,
+              never merely reported missing — named here the same way a
+              created channel is above, so an instructor can see what the
+              run did on their behalf. */}
+          {report.rolesCreated.length > 0 && (
+            <div>
+              <p className="font-medium text-neutral-700">
+                Roles created because the server did not have them yet:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.rolesCreated.map((role) => (
+                  <li key={role}>{role}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* SRV-10: this run tried to create the role and Discord refused
+              — a real failure (a bot missing the Manage Roles permission,
+              say), not "not found," so every channel this run created is
+              still missing that role's own access grant. `reason` says why
+              the attempt failed, the same as `channelsFailed` above. */}
           {report.unresolvedRoles.length > 0 && (
             <div>
               <p className="font-medium text-warning-700">
-                Roles not found in the server — every channel this run created
-                is missing that role&apos;s own access grant:
+                Roles this run tried to create and could not — every channel
+                this run created is missing that role&apos;s own access grant:
               </p>
               <ul className="list-disc pl-5 text-neutral-700">
-                {report.unresolvedRoles.map((role) => (
-                  <li key={role}>{role}</li>
+                {report.unresolvedRoles.map((entry) => (
+                  <li key={entry.role}>
+                    {entry.role} — {entry.reason}
+                  </li>
                 ))}
               </ul>
             </div>

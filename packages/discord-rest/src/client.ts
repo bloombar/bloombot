@@ -50,6 +50,18 @@
  * one thing this method now can, narrowly, change. See `docs/DECISIONS.md`
  * for the fuller reasoning, including why the alternative (refusing ROST-5
  * outright) was rejected.
+ *
+ * `createGuildRole` (SRV-10) is this file's other guild-write call: a
+ * course names an admins role and a students role, and a name the guild
+ * lacks is created rather than left for every channel overwrite naming it
+ * to silently omit the grant. `POST /guilds/{id}/roles` with `permissions:
+ * '0'` — the role exists only to be named in a channel overwrite, never to
+ * carry any of Discord's own server-wide powers, so nothing about it asks
+ * for one. `discord-scaffold.ts` and `roster-import.ts` are this method's
+ * only callers, and neither this client nor either of them ever renames or
+ * edits a role it (or anyone else) already created — SRV-8's "never
+ * delete or edit" extended to roles the same way it already covers
+ * categories and channels.
  */
 
 import { CONFIG } from '@bloombot/config'
@@ -150,6 +162,49 @@ export class DiscordRequestError extends Error {
       configurable: true,
     })
   }
+}
+
+/**
+ * A human-readable reason for a failed Discord write — every failure report
+ * in `apps/worker`'s two handlers (`discord-scaffold.ts`'s `unresolvedRoles`,
+ * `roster-import.ts`'s `unresolvedRoles`/`channelsFailed`/
+ * `channelAccessGrantFailed`) uses this, rather than each duplicating its
+ * own copy the way `resolveRoleId`/`normalizeName` are deliberately
+ * duplicated across those two files (their own module comments explain why
+ * — an app does not share *handler* logic across files via a package it
+ * does not own). A parameterless error formatter is not handler logic; it
+ * belongs beside `DiscordRequestError` itself, the one type it actually
+ * reads.
+ *
+ * SRV-10's own rework: this used to return only
+ * `` `Discord responded with status ${error.status}` ``, which could not
+ * tell a bot missing Manage Roles apart from a role sitting above the bot
+ * in the guild's role order — both `403`s. `DiscordRequestError.message`
+ * already carries `explainDiscordStatus`'s own human text (which names
+ * exactly those causes) and, by that class's own constructor, never
+ * carries `.body` — so it is exactly as safe to surface as the bare status
+ * was, and strictly more useful.
+ */
+export function describeDiscordError(error: unknown): string {
+  if (error instanceof DiscordRequestError) {
+    return error.message
+  }
+  return error instanceof Error ? error.message : 'an unknown error'
+}
+
+/**
+ * SRV-10: a course role name (`adminsRole`/`studentsRole`) a handler tried
+ * to create because the guild had nothing matching it, and Discord refused
+ * on a permanent error — `reason` is `describeDiscordError`'s own
+ * human-readable cause. Shared between `discord-scaffold.ts` (which
+ * resolves/creates both role names) and `roster-import.ts` (which resolves
+ * only `adminsRole`) rather than duplicated: unlike the two files' own
+ * `resolveOrCreateRole` logic, a plain two-field type carries no behaviour
+ * to diverge, so there is nothing here for either file to own separately.
+ */
+export interface UnresolvedRoleEntry {
+  role: string
+  reason: string
 }
 
 /** A category or text channel, as SRV-6's guild-write calls read and return it — Discord's own channel object, narrowed to the fields a scaffold run matches and creates by (`type`, `name`, `parentId`), tolerant of fields this package does not read. */
@@ -330,6 +385,21 @@ export interface DiscordRestClient {
     channelId: string,
     memberId: string
   ): Promise<void>
+
+  /**
+   * Create a role (SRV-10) — `POST /guilds/{guildId}/roles`, sent with
+   * `permissions: '0'` so the created role carries none of Discord's own
+   * server-wide powers; it exists only to be named in a channel overwrite
+   * `discord-scaffold.ts`/`roster-import.ts` build. Neither `name` nor
+   * anything else about it is ever changed again through this client — the
+   * same "never delete or edit" this file's own module comment already
+   * holds `createGuildCategory`/`createGuildChannel` to.
+   */
+  createGuildRole(
+    botToken: string,
+    guildId: string,
+    input: { name: string }
+  ): Promise<DiscordRole>
 }
 
 export interface CreateDiscordRestClientOptions {
@@ -515,6 +585,17 @@ function parseRoleList(body: unknown): DiscordRole[] {
     )
   }
   return body as DiscordRole[]
+}
+
+/** Parse a `POST /guilds/{id}/roles` success body (SRV-10) — narrowed to the `id`/`name` a caller needs to name this role in a later channel overwrite, tolerant of every other field Discord sends (colour, permissions, position, ...). */
+function parseRole(body: unknown): DiscordRole {
+  const payload = body as { id?: unknown; name?: unknown }
+  if (typeof payload.id !== 'string' || typeof payload.name !== 'string') {
+    throw new Error(
+      'Discord role creation returned a 2xx response with no usable role'
+    )
+  }
+  return { id: payload.id, name: payload.name }
 }
 
 /** Parse one guild-member entry (`GET /guilds/{id}/members`) — Discord nests the account itself under `user`, and a member's own nickname (`nick`) and the account's `global_name` are both optional, so `displayName`'s own fallback chain (this file's own `DiscordGuildMember` doc comment) is resolved here, once, rather than by every caller. Tolerant of a malformed entry (dropped, not thrown on) — the same "best-effort data for a report" treatment `parsePermissionOverwrite` gives a channel's own overwrites. */
@@ -808,6 +889,24 @@ export function createDiscordRestClient(
       if (!response.ok) {
         throw new DiscordRequestError(response.status, response.body)
       }
+    },
+
+    async createGuildRole(botToken, guildId, input): Promise<DiscordRole> {
+      const response = await postJson(
+        `${apiBase}/guilds/${guildId}/roles`,
+        `Bot ${botToken}`,
+        // `permissions: '0'` (SRV-10): this role is created only to be named
+        // in a channel overwrite, never to grant any of Discord's own
+        // server-wide powers — an empty bitfield says so explicitly rather
+        // than relying on whatever Discord's own create-role default happens
+        // to be.
+        { name: input.name, permissions: '0' },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseRole(response.body)
     },
   }
 }

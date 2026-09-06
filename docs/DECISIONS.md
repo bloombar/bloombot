@@ -9135,7 +9135,7 @@ after the prompt may land on the old tab button: `goToTab`'s `.focus()` runs bef
 `dialog.close()` restores focus to the opener, which by then carries `tabIndex={-1}`. jsdom cannot see
 it; `e2e/course-configuration.spec.ts` now asserts it in a real browser.
 
-## D-84 — `apps/worker`/`packages/discord-rest`: SRV-10 — a missing role is created, not skipped
+## D-85 — `apps/worker`/`packages/discord-rest`: SRV-10 — a missing role is created, not skipped
 
 SRV-10's own contract: a course names an admins role and a students role, and a name the guild lacks is
 created — with an empty permission bitfield of its own — rather than left for every channel overwrite
@@ -9190,3 +9190,78 @@ these two handlers ever calls it.
 `discord-scaffold.test.ts` split into three, plus two more in `discord-scaffold.test.ts`, three new in
 `roster-import.test.ts`, and two new in `packages/discord-rest/tests/client.test.ts`). `npm run
 board:derive` left `scripts/board/manifest.yaml` byte-for-byte unchanged.
+
+**Review round 1 (four must-fixes, two test gaps).** The reviewer confirmed `permissions: '0'` sent
+explicitly, not omitted, is load-bearing — Discord defaults an omitted `permissions` on role creation to
+`@everyone`'s own permissions, so a guild where `@everyone` has been granted something would otherwise
+have handed the created role that grant. The three `toEqual` assertions pinning the exact posted body stay
+as they are. Four defects, all in the two handlers' own `resolveOrCreateRole` logic, not in
+`createGuildRole` itself:
+
+1. **A bare `catch` turned a transient failure into permanently wrong permissions.** The original code
+   absorbed every error creating a role — a 429, a 5xx, a raw transport error — identically to a genuine
+   403, contradicting `discord-scaffold.ts`'s own module comment ("a rate limit, a transport error...
+   simply throws out of this function — JOB-2's ordinary retry/backoff takes it from there"). A 429 on
+   role creation used to throw and retry; after the original slice, it was swallowed, the run proceeded to
+   create every category and channel missing the admins/students overwrite, and reported `succeeded` — SRV-8
+   then forbids ever repairing an `already_present` channel's overwrites, so the mis-permissioning was
+   permanent. Both handlers now catch only `DiscordRequestError` whose own `.permanent` is `true`;
+   everything else (including a plain `Error` with no `.permanent` to consult) rethrows. A new test in each
+   handler proves a 429 propagates and creates nothing downstream.
+2. **A created role was never added to the list `resolveRoleId` searches.** `packages/db/src/repos/courses.ts`
+   rejects a course only when `adminsRole === studentsRole` *exactly*; `resolveRoleId` compares
+   normalized names. A course naming `adminsRole: "Staff"` and `studentsRole: "staff"` passes the exact
+   check, and without pushing a newly created role into the searched list, `discord-scaffold.ts`'s second
+   `resolveOrCreateRole` call could not see the first call's own role, creating a second, colliding
+   `staff` — and a later run would resolve both names onto whichever role Discord returns first,
+   admin-granting the students role on every admins-only channel. Both handlers now push the created role
+   into the array they searched (`roster-import.ts` only ever resolves one role, `adminsRole`, so this is
+   defensive there rather than reachable today, but keeps the two files' logic in the same shape rather
+   than one silently depending on an invariant the other does not). A case/whitespace-insensitive-match
+   test was added to both handlers, since the consequence of a regression there changed with this slice —
+   from "reports one unresolved role" to "creates a duplicate."
+3. **The panel said something false, and `unresolvedRoles` carried no reason.** `RosterImport.tsx`'s
+   copy ("Roles not found in the server") was accurate before this slice, when a missing role was never
+   attempted; after it, the heading only ever fires once the product has already tried and failed to
+   create the role, so the old copy told an instructor to go make it by hand with no sign the system had
+   tried or why it was refused. Both handlers' `unresolvedRoles` are now `{ role, reason }[]` —
+   `describeDiscordError`'s own status-only reason, the same shape `channelsFailed`/
+   `channelAccessGrantFailed` already carry — and `apps/web/src/api/types.ts`/`RosterImport.tsx` render it
+   plus a new `rolesCreated` section (SRV-10's own "what was created is reported," which reached the raw
+   job result but not the panel). Scaffold reports are not rendered in `apps/web` at all (pre-existing,
+   left alone) — `ScaffoldReport.unresolvedRoles` still moved to the same `{ role, reason }` shape for
+   consistency and because a raw job-result reader deserves the same "tell a 403 from a 429" the roster
+   report now gives.
+4. **Concurrency was never stated, and is a real, if narrow, exposure.** Neither handler serialises a
+   scaffold and a roster import for the same course, multiple workers are supported (`packages/jobs`), and
+   the handler timeout stops awaiting a call still in flight while the original `POST /roles` keeps
+   travelling to Discord. Unlike a category or channel, Discord permits two roles with the same name, so
+   there is no match-by-name dedup to fall back on the way `discord-scaffold.ts`'s own idempotence already
+   relies on for categories and channels: two runs racing to create the same missing role can both succeed,
+   `resolveRoleId` then picks whichever one `listGuildRoles` happens to return first, and the losing run's
+   channels are left pointing at an orphan role nobody is ever assigned. This is a known, accepted bound
+   for this slice, not a bug fixed here — distributed locking across `apps/worker`'s own workers is out of
+   scope, and the existing re-list-on-every-run behaviour is what recovers from it *for future runs*: a
+   third scaffold or import resolves onto whichever role `resolveRoleId` finds, consistently, from then on,
+   even though the very first race can leave one run's channels stuck on the orphan. Recorded here rather
+   than fixed, per the reviewer's own framing.
+
+**Duplication reconsidered, kept.** The reviewer noted findings 1 and 2 needed fixing in both files, the
+cost of this slice's original "no shared helper" call. Reconsidered and kept: `discord-scaffold.ts` resolves
+two role names per run and needs its own `resolveOrCreateRole(roleName)` closure either way; `roster-import.ts`
+resolves exactly one, inline, and a shared helper would need a signature (an array of names, or a single
+name plus a "which report field" parameter) that only exists to serve the file that does not need it. The
+two copies' actual logic (existing-first, permanent-vs-transient catch, mutate the searched list, push a
+report entry) is now kept intentionally identical in shape and comment cross-references the other by name,
+so a future change to one is easy to find and mirror in the other — the "genuinely identical copies" the
+reviewer offered as the alternative to reconsidering.
+
+**Verification (round 2).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` —
+2500 vitest (5 new: one transient-rethrow test and one case/whitespace-match test in each handler's own
+test file, plus the "role not found" panel test in `apps/web/tests/roster-import.test.tsx` split into two
+— the reason-and-copy test and a new `rolesCreated` test), 90 node. Each new test confirmed red against the pre-fix code
+before this round: the 429 tests resolved instead of rejecting (the bare `catch` swallowed the status),
+the case/whitespace tests posted a second `POST .../roles` (the un-pushed `roles` array still missed the
+just-created entry — reachable directly in `discord-scaffold.ts`'s own two-role run, exercised here through
+the same-name match rather than the cross-course collision itself, which needs two full runs to observe),
+and the panel copy test failed on the literal string `'not found in the server'` still present.

@@ -98,6 +98,7 @@ import {
   type DiscordGuildMember,
   type DiscordPermissionOverwrite,
   type DiscordRestClient,
+  type DiscordRole,
 } from '@bloombot/discord-rest'
 
 type CourseWithCategories = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -181,6 +182,12 @@ export interface ChannelFailedEntry {
   reason: string
 }
 
+/** SRV-10: a course role name (`adminsRole`) this run tried to create because the guild had nothing matching it, and Discord refused on a permanent error — `reason` is `describeDiscordError`'s own human-readable cause, the same shape `ChannelFailedEntry` above already gives every other failed Discord write in this handler. */
+export interface UnresolvedRoleEntry {
+  role: string
+  reason: string
+}
+
 /** Rework finding 6: two different rows' emails slug to the same channel name (`ada@school.edu`/`ada@gmail.com` both to `ada`) — the second is refused a channel entirely rather than silently sharing (or failing to reach) the first's, since this handler has no way to tell which student a shared name actually belongs to. */
 export interface ChannelNameCollisionEntry {
   line: number
@@ -236,12 +243,17 @@ export interface RosterImportReport {
    * run applied would then be missing that grant for every channel it
    * created, SRV-2's "skipped rather than fatal"); since SRV-10, an absent
    * name is created rather than skipped (see `rolesCreated` below), so this
-   * now means the name resolved to nothing *and* creating it failed too —
-   * an ordinary Discord failure (a `403` for a bot missing Manage Roles,
-   * say), reported here the same way a failed channel create already is
-   * (`channelsFailed`), not thrown.
+   * now means the name resolved to nothing *and* creating it failed on a
+   * *permanent* Discord error too (a `403` for a bot missing Manage Roles,
+   * say — `reason` names it, the same as `ChannelFailedEntry`). A transient
+   * failure (a `429`, a `5xx`, a raw transport error) is never caught here
+   * at all and throws instead, the same as every other Discord call this
+   * handler does not wrap in its own per-row `try`/`catch` — see this
+   * file's own admins-role resolution, below, for why absorbing one
+   * unconditionally would leave a course's channels created moments later
+   * missing the admins grant, reported `succeeded`, and never repairable.
    */
-  unresolvedRoles: string[]
+  unresolvedRoles: UnresolvedRoleEntry[]
   /** SRV-10: a course role name the guild lacked, created this run with an empty permission bitfield — never one that already resolved (`unresolvedRoles`' own doc comment covers what "still missing" means now). */
   rolesCreated: string[]
   /**
@@ -518,26 +530,46 @@ export function createRosterImportHandler(
     // created, not skipped — with an empty permission bitfield of its own
     // (requirement 1), and only when `resolveRoleId` finds nothing
     // (requirement 2: a name that already resolves is used exactly as it
-    // is). Creating a role can itself fail on an ordinary Discord error (a
-    // `403` for a bot missing Manage Roles, requirement 6) — caught here
-    // the same way a failed channel create is caught below
-    // (`channelsFailed`), so this does not abort the rest of the roster;
-    // the role name simply stays unresolved, exactly as SRV-2 already left
-    // an unresolvable name before this slice.
-    const unresolvedRoles: string[] = []
+    // is). The created role is pushed into `roles` itself (mutated in
+    // place) the same way `discord-scaffold.ts`'s own `resolveOrCreateRole`
+    // does — this handler only ever resolves the one `adminsRole` name, so
+    // nothing here can create it twice in the same run the way two
+    // differently-cased role names could in that file, but a later reader
+    // of `roles` (there is none today) inheriting a stale list would be the
+    // same class of bug, and keeping the two files' role-creation logic in
+    // the same shape is cheaper than explaining why one of them skips it.
+    //
+    // A creation failure is caught only when Discord's own response says it
+    // is permanent (`DiscordRequestError.permanent` — a `403` for a bot
+    // missing Manage Roles, requirement 6). A transient failure (a `429`, a
+    // `5xx`, a raw transport error with no `.permanent` to consult at all)
+    // is rethrown — absorbing it unconditionally used to turn a one-off
+    // rate limit into a run that creates every student's channel moments
+    // later missing the admins overwrite, reports `succeeded`, and can
+    // never repair it afterward (this handler's own rework finding 5 makes
+    // an already-present channel's *member* grant repairable on a later
+    // import, but nothing repairs the admins overwrite the same way).
+    const unresolvedRoles: UnresolvedRoleEntry[] = []
     const rolesCreated: string[] = []
     let adminsRoleId = resolveRoleId(roles, course.adminsRole)
     if (!adminsRoleId) {
       try {
-        const created = await deps.discordRestClient.createGuildRole(
-          deps.botToken,
-          guildId,
-          { name: course.adminsRole }
-        )
+        const created: DiscordRole =
+          await deps.discordRestClient.createGuildRole(deps.botToken, guildId, {
+            name: course.adminsRole,
+          })
+        roles.push(created)
         adminsRoleId = created.id
         rolesCreated.push(course.adminsRole)
-      } catch {
-        unresolvedRoles.push(course.adminsRole)
+      } catch (error) {
+        if (error instanceof DiscordRequestError && error.permanent) {
+          unresolvedRoles.push({
+            role: course.adminsRole,
+            reason: describeDiscordError(error),
+          })
+        } else {
+          throw error
+        }
       }
     }
 

@@ -1130,10 +1130,91 @@ describe('roster.import handler', () => {
       )
 
       expect(report.rolesCreated).toEqual([])
-      expect(report.unresolvedRoles).toEqual([seeded.adminsRole])
+      // Named with its own reason (a 403), the same as every other failed
+      // Discord write this report already carries a reason for
+      // (`channelsFailed`/`channelAccessGrantFailed`) — not a bare name a
+      // raw report could not tell apart from a rate limit.
+      expect(report.unresolvedRoles).toEqual([
+        {
+          role: seeded.adminsRole,
+          reason: 'Discord responded with status 403',
+        },
+      ])
       // The rest of the run was not aborted — the student's channel was
       // still created.
       expect(report.channelsCreated).toHaveLength(1)
+    })
+
+    // A *transient* failure (a `429`, a `5xx`) creating the admins role
+    // must not be swallowed the way a permanent one is — it has to throw
+    // out of the handler, so JOB-2 retries rather than this run reporting
+    // `succeeded` having silently created every student's channel missing
+    // the admins grant. This test fails without the fix: before it, the
+    // bare `catch` absorbed a 429 exactly like a 403 and the import
+    // proceeded to create the channel anyway.
+    it('rethrows a transient (429) failure creating the admins role, rather than absorbing it like a permanent one', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildRoles(seeded.guildId, [])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      discordServer.failNextRoleCreate(429, {
+        message: 'You are being rate limited',
+      })
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      await expect(
+        runImport(seeded.organizationId, seeded.courseId, csv)
+      ).rejects.toMatchObject({ status: 429 })
+
+      // Nothing was created at all — the run stopped at the failed role
+      // creation rather than proceeding to create a mis-permissioned
+      // channel.
+      expect(
+        discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+      ).toBe(false)
+    })
+
+    // A guild holding a role that differs from the course's declared
+    // admins role only in case or surrounding whitespace must still be
+    // recognised as the same one — the same case/whitespace-insensitive
+    // match `resolveRoleId` has always given a category or channel name.
+    // Before SRV-10 a regression here meant "reports one unresolved role";
+    // after it, the same regression means "creates a duplicate role," a
+    // materially worse failure this test now pins directly.
+    it('matches an existing admins role that differs only in case or surrounding whitespace, creating nothing', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: `  ${seeded.adminsRole.toUpperCase()}  ` },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.rolesCreated).toEqual([])
+      expect(report.unresolvedRoles).toEqual([])
+      expect(
+        discordServer.requests.some(
+          (r) => r.method === 'POST' && r.path.endsWith('/roles')
+        )
+      ).toBe(false)
     })
   })
 

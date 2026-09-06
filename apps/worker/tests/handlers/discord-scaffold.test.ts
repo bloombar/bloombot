@@ -962,8 +962,6 @@ describe('discordServers.scaffold handler', () => {
     ).toBe(true)
   })
 
-  // A role that does not resolve in the guild is reported rather than
-  // silently skipped or guessed at (SRV-2).
   // SRV-10, requirement 1: a role a course names and the guild lacks is
   // created rather than left unresolved — with an empty permission
   // bitfield of its own, since it exists only to be named in a channel
@@ -1056,15 +1054,89 @@ describe('discordServers.scaffold handler', () => {
       seeded.organizationId,
       seeded.courseId
     )) as {
-      unresolvedRoles: string[]
+      unresolvedRoles: { role: string; reason: string }[]
       rolesCreated: string[]
       categories: { status: string }[]
     }
 
     expect(report.rolesCreated).toEqual([])
-    expect(report.unresolvedRoles).toEqual([seeded.studentsRole])
+    // Named with its own reason (a 403), the same as every other failed
+    // Discord write in this app — not a bare name a raw report could not
+    // tell apart from a rate limit.
+    expect(report.unresolvedRoles).toEqual([
+      {
+        role: seeded.studentsRole,
+        reason: 'Discord responded with status 403',
+      },
+    ])
     // The rest of the run was not aborted — the category was still created.
     expect(report.categories[0]?.status).toBe('created')
+  })
+
+  // SRV-10, requirement 6's other half: a *transient* failure (a `429`, a
+  // `5xx`) creating a role must not be swallowed the way a permanent one
+  // is — it has to throw out of the handler the same as every other
+  // Discord call here, so JOB-2 retries rather than this run reporting
+  // `succeeded` having silently skipped a grant no later run can repair
+  // (SRV-8 forbids editing an `already_present` channel's overwrites).
+  // This test fails without the fix: before it, the bare `catch` absorbed
+  // a 429 exactly like a 403, and the category below would have been
+  // created missing the students overwrite while the job still reported
+  // success.
+  it('rethrows a transient (429) failure creating a role, rather than absorbing it like a permanent one', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+    ])
+    discordServer.failNextRoleCreate(429, {
+      message: 'You are being rate limited',
+    })
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toMatchObject({ status: 429 })
+
+    // Nothing was created at all — the run stopped at the failed role
+    // creation rather than proceeding to create a mis-permissioned category.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+    ).toBe(false)
+  })
+
+  // A guild holding a role that differs from a course's declared name only
+  // in case or surrounding whitespace must still be recognised as the same
+  // one — the same case/whitespace-insensitive match `resolveRoleId` has
+  // always given a category or channel name. Before SRV-10 a regression
+  // here meant "reports one unresolved role"; after it, the same
+  // regression means "creates a duplicate role," a materially worse
+  // failure this test now pins directly.
+  it('matches an existing role that differs only in case or surrounding whitespace, creating nothing', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week 1', channels: [] },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: `  ${seeded.adminsRole.toUpperCase()}  ` },
+      { id: 'role-students', name: seeded.studentsRole.toUpperCase() },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { unresolvedRoles: unknown[]; rolesCreated: string[] }
+
+    expect(report.rolesCreated).toEqual([])
+    expect(report.unresolvedRoles).toEqual([])
+    expect(
+      discordServer.requests.some(
+        (r) => r.method === 'POST' && r.path.endsWith('/roles')
+      )
+    ).toBe(false)
   })
 
   // Finding 4 of the SRV-6..8 rework: an instructor sets `admins_only: true`

@@ -2295,12 +2295,24 @@ sharing one channel between two students is worse than having none — but the s
 channel is a real person who cannot be answered privately, and the instructor's only remedy is to go
 and edit somebody's email address.
 
-Every row gets a channel. The first claim on a slug keeps the bare name; each subsequent row taking
-the same slug is given a numbered suffix — `ada`, `ada-2`, `ada-3` — assigned in the order the rows
-appear, so a re-import of an unchanged roster produces the same names it did the first time and
-creates nothing new. A suffixed name is matched, created and permissioned exactly like any other
-channel, and the import's report says which rows were suffixed and why, so an instructor can still
-correct the underlying email if they would rather.
+Every row gets a channel, and the name it gets depends only on the addresses the roster contains —
+never on where the row happened to sit in the file. Two rows never receive the same name: distinct
+addresses produce distinct names, and only a letter-case difference in one address counts as the same
+student. What a name does *not* promise is permanence across imports: a second `ada` joining the class
+disambiguates the first, and until a student's channel is remembered rather than re-derived (ROST-17),
+that is a name the next import will look for and not find. A numbered suffix assigned in row order would be
+stable only for a roster that never changes: add a student ahead of a colliding pair, or export the
+same class in a different order, and `ada-2` and `ada-3` swap owners, so the next import hands each
+student the other's channel. Instead, a slug claimed by more than one row disambiguates on the part
+of the address that actually differs — the domain. `ada@school.edu` and `ada@gmail.com` become
+`ada-school` and `ada-gmail`; where the first domain label is shared too, enough of the remaining
+domain is added to tell them apart. The result depends only on the two addresses, so any ordering of
+any roster containing them produces the same two names.
+
+A row whose slug nothing else claims keeps the bare local part, as it always has. The import's report
+says which rows were disambiguated and what they were named, so an instructor can still correct the
+underlying address if they would rather. A disambiguated name is matched, created and permissioned
+exactly like any other channel.
 
 #### ROST-15 An import creates the student categories it needs
 
@@ -2314,10 +2326,17 @@ An import creates the student categories it needs. The panel offers this when im
 turned on by default, alongside the base name to use — defaulting to the course's own title followed
 by ` - STUDENTS`. With it on, the import works out how many categories the roster requires at fifty
 channels each, counts what already exists, and creates the rest, numbered in sequence from the base
-name (`Python - STUDENTS - 01`, `Python - STUDENTS - 02`). Existing categories are used before new
+name — `<base name> <n>`, so `Python - STUDENTS 01`, `Python - STUDENTS 02`, matching the naming
+convention ROST-11 already discovers categories by. Existing categories are used before new
 ones are made, and a category is never created to hold students who are already placed. With it off,
 the import behaves exactly as it does today, reporting what it could not place rather than creating
 anything.
+
+A category that already exists under the name being created is never duplicated. The existing one is
+used, and its permissions are checked against what the course asks for and repaired where they differ,
+rather than left as whatever a person set by hand. Matching is by the same case- and separator-tolerant
+comparison the import already uses to discover student categories, so a category an earlier run created
+is recognised by a later one.
 
 #### SRV-10 Scaffolding creates the roles a course names, if they are missing
 
@@ -2346,3 +2365,67 @@ channel and no other student's, while every instructor reaches all of them. A ro
 handle could not be resolved still gets a channel with the admin grant, reported as such, rather than
 a channel that quietly grants nobody. This holds for a channel created fresh, for one an earlier
 import already created, and for a suffixed name (ROST-14).
+
+A channel is never handed to a student it does not belong to. Before an existing channel is adopted
+for somebody — granted to them, or reported as already theirs — the platform checks that it is not
+already somebody else's: a channel remembered as another person's (ROST-17), or one whose permissions
+already grant an individual who is *another student on this roster*, belongs to that other student and
+must never be granted to a second one. The test is deliberately that narrow. A member grant the
+platform cannot account for — a teaching assistant an instructor added by hand — is not evidence the
+channel belongs to somebody else, and must not evict the student whose channel it is. Nor may a row
+whose own Discord handle failed to resolve be refused its own existing channel: nothing about that
+row identifies a rival owner, so it keeps what it has. Until ROST-17 remembers ownership outright,
+this check is a floor and not a proof, and the cases it cannot see are the reason ROST-17 exists. Names can legitimately drift — a student leaves and frees a bare
+name, an address is corrected, a second `ada` joins and disambiguates the first (ROST-14) — and a
+name-based match alone would then walk one student straight into another's private channel and their
+transcript. Where a match is refused for this reason the import creates the student their own channel
+and reports the refusal, rather than granting or silently skipping.
+
+A channel that already exists under the name being created, and passes that ownership check, is never
+duplicated. The existing one is used and its permissions are verified against the four rules above,
+repaired where they fall short —
+a student who could not be resolved on an earlier run and can be now is granted their own channel, an
+absent admins grant or `@everyone` deny is restored — and reported as repaired rather than as created.
+Verification never removes an overwrite the platform did not put there: an instructor who granted a
+teaching assistant access to one student's channel keeps that grant.
+
+#### ROST-17 A student's channel is remembered, not re-derived
+
+An import finds a student's existing channel by recomputing the name it would create and looking for
+that name in the server. This works only while the name a student's address produces never changes —
+and it can change for reasons outside anybody's control: a second student with the same email local
+part joins the class, so the first student's bare `ada` becomes the disambiguated `ada-school`
+(ROST-14); an instructor renames a channel by hand; a roster is exported with a corrected address.
+Each of those makes the next import look for a name nothing has, and create a second channel for a
+student who already has one — in whichever student category has room, so the duplicate need not even
+sit beside the original.
+
+The platform remembers which Discord channel belongs to which person in which course, recorded when
+the channel is created and read back on every later import. A student who already has a channel is
+never given another, whatever their channel is called now, whatever their row's position, and
+whichever category it lives in. An import that finds a remembered channel verifies its permissions
+(ROST-16) and reports it as already present, rather than creating anything.
+
+A channel created before this record existed is adopted the first time an import matches it by name —
+but only if it is not already remembered as another person's, and only if its permissions do not
+already grant a different individual student (ROST-16). Adoption is how a course scaffolded by an
+earlier version avoids acquiring duplicates; it must never become how one student inherits another's
+conversations. A remembered channel that has since been deleted from the server is recognised as gone
+and recreated, rather than leaving the student with no channel and the platform insisting they have
+one.
+
+#### SRV-11 Two courses cannot claim the same Discord role under different spellings
+
+A course's admins and students role names are compared against each other under Discord's own
+case- and whitespace-insensitive matching, so one course can no longer name `Staff` and `staff` and
+have both resolve to a single role (SRV-10). The comparison that keeps two *different* courses from
+claiming the same role is still exact. So course A naming `Staff` as its admins role and course B
+naming `staff` as its students role are both accepted, in one organization and one Discord server —
+and at scaffold time both resolve to the same role, granting course B's students every one of course
+A's admins-only channels. It is the same privilege escalation SRV-10 closes, split across two courses
+instead of hidden inside one.
+
+Two courses in the same organization and server cannot claim the same role name under any spelling
+that Discord would treat as one role. A pair already stored that way keeps working and can still be
+edited, the same grandfathering SRV-10's own check applies, and the refusal names the other course
+and the role, so an instructor knows which two things collide.

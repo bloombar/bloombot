@@ -3382,9 +3382,9 @@
     that sharing one channel between two students is worse than having none —
     but the student left without a channel is a real person who cannot be
     answered privately, and the instructor's only remedy is to go and edit
-    somebody's email address. Every row gets a channel. The first claim on a
-    slug keeps the bare name; each subsequent row taking the same slug is given
-    a numbered suffix — ada, ada-2, ada-3…"
+    somebody's email address. Every row gets a channel, and the name it gets
+    depends only on the addresses the roster contains — never on where the row
+    happened to sit in the file. Two rows never…"
   section: §34 Web Control Panel
   family: ROST
   phase: 23
@@ -3424,6 +3424,23 @@
   phase: 23
   status: Backlog
   review: false
+- id: ROST-17
+  title: A student's channel is remembered, not re-derived
+  full: "An import finds a student's existing channel by recomputing the name it
+    would create and looking for that name in the server. This works only while
+    the name a student's address produces never changes — and it can change for
+    reasons outside anybody's control: a second student with the same email
+    local part joins the class, so the first student's bare ada becomes the
+    disambiguated ada-school (ROST-14); an instructor renames a channel by hand;
+    a roster is exported with a corrected address. Each of those makes the next
+    import look for a name nothing has, and create a second channel for a
+    student who already has one — in whichever student category has room, so the
+    duplicate need not even sit…"
+  section: §34 Web Control Panel
+  family: ROST
+  phase: 23
+  status: Backlog
+  review: false
 - id: SRV-10
   title: Scaffolding creates the roles a course names, if they are missing
   full: "A course names an admins role and a students role, and both scaffolding
@@ -3439,5 +3456,22 @@
   section: §34 Web Control Panel
   family: SRV
   phase: 23
-  status: In progress
+  status: In review
+  review: false
+- id: SRV-11
+  title: Two courses cannot claim the same Discord role under different spellings
+  full: A course's admins and students role names are compared against each other
+    under Discord's own case- and whitespace-insensitive matching, so one course
+    can no longer name Staff and staff and have both resolve to a single role
+    (SRV-10). The comparison that keeps two different courses from claiming the
+    same role is still exact. So course A naming Staff as its admins role and
+    course B naming staff as its students role are both accepted, in one
+    organization and one Discord server — and at scaffold time both resolve to
+    the same role, granting course B's students every one of course A's
+    admins-only channels. It is the same privilege escalation SRV-10 closes,
+    split across two courses instead of…
+  section: §34 Web Control Panel
+  family: SRV
+  phase: 23
+  status: Backlog
   review: false

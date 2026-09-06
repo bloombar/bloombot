@@ -15,6 +15,7 @@ import {
   organizations,
   people,
   projects,
+  rosterChannelAssignments,
   transcriptAccess,
   transcriptExports,
 } from '@bloombot/db'
@@ -31,11 +32,12 @@ afterEach(() => {
  * A reasonably full tenant: a project, a course, an instructor account, two
  * students (one merged into the other), a conversation with a message, a
  * cost-ledger entry, a course attachment row, an enrolment, a Discord server
- * binding, a queued job, a transcript-access-log row and a transcript
- * export row — one row in (nearly) every organization-scoped table, so
- * `deleteOrganizationData` (ADMIN-5) is exercised against the same shape a
- * real tenant would leave behind, not just the tables a narrower test
- * happens to touch. Synthetic data only (QA-3).
+ * binding, a queued job, a transcript-access-log row, a transcript
+ * export row and a remembered roster channel (ROST-17) — one row in
+ * (nearly) every organization-scoped table, so `deleteOrganizationData`
+ * (ADMIN-5) is exercised against the same shape a real tenant would leave
+ * behind, not just the tables a narrower test happens to touch. Synthetic
+ * data only (QA-3).
  */
 function seedFullTenant(testDatabase: TestDatabase) {
   const organizationId = randomUUID()
@@ -132,6 +134,22 @@ function seedFullTenant(testDatabase: TestDatabase) {
     testDatabase.db
   )
 
+  // ROST-17 — references both `people` and `courses`; this row is what a
+  // seed missing entirely from this fixture let past two earlier reviews:
+  // `deleteOrganizationData` threw `FOREIGN KEY constraint failed` on the
+  // `people` delete below for any organization that had ever run a roster
+  // import creating a student channel, which none of this file's own
+  // seeds exercised.
+  rosterChannelAssignments.recordChannelAssignment(
+    organizationId,
+    {
+      courseId: course.id,
+      personId: survivor.id,
+      discordChannelId: `chan-${randomUUID()}`,
+    },
+    testDatabase.db
+  )
+
   discordServers.claimDiscordServerBinding(
     organizationId,
     { serverId: randomUUID(), installedByAccountId: instructor.id },
@@ -180,6 +198,7 @@ describe('organizations.previewOrganizationDeletion (ADMIN-5)', () => {
       discordServerBindings: 1,
       courseAttachments: 1,
       queuedJobs: 1,
+      rosterChannelAssignments: 1,
     })
     // Nothing was actually touched — still there afterward.
     expect(
@@ -205,7 +224,12 @@ describe('organizations.deleteOrganizationData (ADMIN-5)', () => {
       testDb.db
     )
 
-    expect(result).toMatchObject({ organizationId, courses: 1, people: 2 })
+    expect(result).toMatchObject({
+      organizationId,
+      courses: 1,
+      people: 2,
+      rosterChannelAssignments: 1,
+    })
     expect(
       organizations.getOrganizationById(organizationId, testDb.db)
     ).toBeUndefined()
@@ -214,6 +238,14 @@ describe('organizations.deleteOrganizationData (ADMIN-5)', () => {
     ).toBeUndefined()
     expect(
       people.getPerson(organizationId, survivor.id, testDb.db)
+    ).toBeUndefined()
+    expect(
+      rosterChannelAssignments.getChannelAssignmentForPerson(
+        organizationId,
+        course.id,
+        survivor.id,
+        testDb.db
+      )
     ).toBeUndefined()
     // Confirms the whole tenant is actually gone, not merely the rows this
     // test happened to name — a fresh preview against the same id finds

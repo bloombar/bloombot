@@ -82,6 +82,27 @@
  * of any roster containing the same addresses ever produces a different
  * name for any of them.
  *
+ * **A channel is remembered, not re-derived (ROST-17)**: everything above
+ * finds a student's channel by recomputing the name their address would
+ * produce today and looking for that name in the guild — which only works
+ * while that name never changes, and ROST-14's own disambiguation is one of
+ * several ordinary reasons it does (an instructor renames a channel by
+ * hand; an address is corrected). `roster_channel_assignments`
+ * (`@bloombot/db`'s `rosterChannelAssignments`) is the durable record this
+ * handler consults *first*, for every row, before any of the name-based
+ * matching below ever runs: a person with a remembered channel for this
+ * course has it looked up by id, verified (ROST-16) and reported present,
+ * never re-derived by name at all — and a remembered channel that no
+ * longer exists in the guild is recreated, rather than left as a record
+ * pointing at nothing. Only a row with no remembered channel reaches the
+ * name-based matching and `channelBelongsToSomeoneElse` ownership guard
+ * below, and adopting a match that way records it, so the *next* import of
+ * the same roster finds it by id too. Adoption itself still refuses a
+ * match already remembered as a *different* person's outright — a name
+ * collision `channelBelongsToSomeoneElse`'s own narrow, roster-scoped test
+ * cannot see on its own, which is exactly the gap that function's own doc
+ * comment names as ROST-17's to close.
+ *
  * **Idempotence (ROST-11)**: a channel is matched, across every student
  * category, by its slugged name (`normalizeChannelName`, the same transform
  * `discord-scaffold.ts` applies for the same Discord-side-slugging reason —
@@ -102,7 +123,13 @@
 
 import { createHash } from 'node:crypto'
 
-import { courses, discordServers, enrolments, people } from '@bloombot/db'
+import {
+  courses,
+  discordServers,
+  enrolments,
+  people,
+  rosterChannelAssignments,
+} from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import { parseRosterCsv, type RosterParseError } from '@bloombot/schemas'
 import {
@@ -1208,7 +1235,41 @@ export function createRosterImportHandler(
         })
       }
 
-      let matched = findChannelNamed(channelName)
+      // ROST-17: a person with a remembered channel for this course is
+      // looked up by *id*, not by the name this row would derive today —
+      // this file's own module comment has the full reasoning. `undefined`
+      // both for a row nobody has ever remembered a channel for, and for
+      // one whose remembered channel no longer exists in the guild
+      // (requirement 4: recognized as gone, not trusted) — either way,
+      // `remembered` alone (not `matched`) is what decides whether the
+      // name-based matching and `channelBelongsToSomeoneElse` guard below
+      // even run: a remembered-but-deleted channel skips straight to
+      // channel creation, further down, rather than risking a name lookup
+      // adopting some unrelated channel that merely happens to share
+      // today's derived name.
+      const remembered = rosterChannelAssignments.getChannelAssignmentForPerson(
+        context.organizationId,
+        course.id,
+        person.id,
+        context.db
+      )
+      let matched = remembered
+        ? categoryStates
+            .flatMap((state) =>
+              state.channels.map((channel) => ({
+                channel,
+                category: state.name,
+              }))
+            )
+            .find(({ channel }) => channel.id === remembered.discordChannelId)
+        : findChannelNamed(channelName)
+      if (remembered && matched) {
+        // The reported name is this channel's own real, current name — not
+        // whatever `assignChannelNames` would derive for this row today,
+        // which is precisely what this row's channel is remembered instead
+        // of re-deriving from (this file's own module comment on ROST-17).
+        channelName = matched.channel.name
+      }
 
       // ROST-16: a name match is not proof of ownership. Names can
       // legitimately drift — a student leaves and frees a bare name, an
@@ -1218,6 +1279,73 @@ export function createRosterImportHandler(
       // genuinely my channel" from "this happens to be named what mine
       // would be." `channelBelongsToSomeoneElse`'s own doc comment has the
       // narrowed test (round 2's must-fix 2, re-verified sound in round 3).
+      // Only reached for a row with no remembered channel at all
+      // (`!remembered`) — a row whose own channel is already remembered
+      // never needs this guard, and the deleted-and-recreated case above
+      // never reaches this name-based path either. Requirement 3's own
+      // first clause — a channel already remembered as a *different*
+      // person's — is folded into the exact same escalation this guard
+      // already triggers: `channelBelongsToSomeoneElse` cannot see across
+      // two separate imports of two different rosters on its own (that
+      // function's own doc comment names this precisely as ROST-17's gap
+      // to close), so a remembered-elsewhere match escalates through the
+      // same fixed candidate sequence rather than a separate refusal path.
+      //
+      // One deliberate carve-out on the "remembered elsewhere" half, for
+      // a pre-existing identity-model gap this file's own module comment
+      // documents: a row whose handle resolves to nobody gets a synthetic,
+      // handle-keyed person, and a *later* import where the same handle
+      // now resolves creates a second, genuinely different `people` row
+      // for the same real student — nothing here reconciles the two
+      // (`mergePeople` now carries a remembered channel forward on an
+      // *actual* merge, `repos/people.ts`'s own doc comment; this
+      // carve-out is only for the narrower case where no merge has
+      // happened yet). The remembered owner must be exactly the synthetic,
+      // handle-keyed person this row's own handle would resolve to had it
+      // never resolved, *and* that owner's stored email must match this
+      // row's own — both, not either. See D-88 (`docs/DECISIONS.md`) for
+      // why: an email-only version let a departed student's channel be
+      // silently reassigned to whoever the address was later reissued to;
+      // a handle-identity-only version let two different real students who
+      // happen to share one raw handle string across two imports inherit
+      // each other's channel. The accepted cost of requiring both,
+      // likewise detailed there: a row whose handle newly resolves *and*
+      // whose address is corrected in the very same import escalates via
+      // `channelBelongsToSomeoneElse` instead of qualifying here.
+      let rememberedAsSomeoneElse = false
+      if (!remembered && matched) {
+        const rememberedElsewhere =
+          rosterChannelAssignments.getChannelAssignmentByDiscordChannelId(
+            context.organizationId,
+            matched.channel.id,
+            context.db
+          )
+        const rememberedOwner = rememberedElsewhere
+          ? people.getPerson(
+              context.organizationId,
+              rememberedElsewhere.personId,
+              context.db
+            )
+          : undefined
+        const syntheticOwnerOfThisHandle =
+          rememberedOwner !== undefined &&
+          people.resolveIdentity(
+            context.organizationId,
+            {
+              surface: 'discord' as const,
+              externalId: `handle:${normalizeHandle(row.discord)}`,
+            },
+            context.db
+          )?.id === rememberedOwner.id
+        const sameStoredAddress =
+          rememberedOwner !== undefined &&
+          rememberedOwner.email?.trim().toLowerCase() ===
+            row.email.trim().toLowerCase()
+        rememberedAsSomeoneElse =
+          rememberedOwner !== undefined &&
+          !(syntheticOwnerOfThisHandle && sameStoredAddress)
+      }
+
       // A refused match resumes this row's *own* `ownAddressCandidates`
       // sequence — the same fixed levels `assignChannelNames` used, one
       // level further — rather than inventing a position-based name: that
@@ -1228,8 +1356,10 @@ export function createRosterImportHandler(
       // fixed candidates (`ownAddressCandidates`'s own doc comment), never
       // a loop that keeps escalating on its own.
       if (
+        !remembered &&
         matched &&
-        channelBelongsToSomeoneElse(matched.channel, member, rosterMemberIds)
+        (rememberedAsSomeoneElse ||
+          channelBelongsToSomeoneElse(matched.channel, member, rosterMemberIds))
       ) {
         const conflictingChannelName = channelName
         const candidates = ownAddressCandidates(row.email)
@@ -1240,13 +1370,21 @@ export function createRosterImportHandler(
           const candidate = candidates[i] as string
           if (namesInUse.has(candidate)) continue
           const existing = findChannelNamed(candidate)
+          const existingRememberedElsewhere = existing
+            ? rosterChannelAssignments.getChannelAssignmentByDiscordChannelId(
+                context.organizationId,
+                existing.channel.id,
+                context.db
+              )
+            : undefined
           if (
             existing &&
-            channelBelongsToSomeoneElse(
-              existing.channel,
-              member,
-              rosterMemberIds
-            )
+            (existingRememberedElsewhere ||
+              channelBelongsToSomeoneElse(
+                existing.channel,
+                member,
+                rosterMemberIds
+              ))
           ) {
             continue
           }
@@ -1271,6 +1409,19 @@ export function createRosterImportHandler(
       }
 
       if (matched) {
+        // ROST-17 requirements 1/3: remembered from here on — an
+        // idempotent upsert whether this channel is being adopted by name
+        // for the first time, or was already remembered and is simply
+        // being reconfirmed (`recordChannelAssignment`'s own doc comment).
+        rosterChannelAssignments.recordChannelAssignment(
+          context.organizationId,
+          {
+            courseId: course.id,
+            personId: person.id,
+            discordChannelId: matched.channel.id,
+          },
+          context.db
+        )
         // Rework finding 5: a channel that already exists is no longer
         // frozen forever for the one student it belongs to — a handle that
         // now resolves (the student has since joined the server) gets its
@@ -1384,6 +1535,21 @@ export function createRosterImportHandler(
         // student in one file matches it, rather than creating a second
         // channel).
         target.channels = [...target.channels, created]
+        // ROST-17 requirements 1/4: remembered the moment it is created —
+        // whether this is the first channel this person has ever had for
+        // this course, or the replacement for one that was remembered and
+        // has since been deleted from the server
+        // (`recordChannelAssignment`'s own upsert lands on the same row
+        // either way).
+        rosterChannelAssignments.recordChannelAssignment(
+          context.organizationId,
+          {
+            courseId: course.id,
+            personId: person.id,
+            discordChannelId: created.id,
+          },
+          context.db
+        )
         report.channelsCreated.push({
           line: row.line,
           email: row.email,

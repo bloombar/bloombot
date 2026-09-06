@@ -20,6 +20,7 @@ import {
   jobs,
   organizations,
   people,
+  rosterChannelAssignments,
 } from '@bloombot/db'
 import {
   createDiscordRestClient,
@@ -381,6 +382,554 @@ describe('roster.import handler', () => {
     expect(report.channelsFailed[0]?.reason).toContain('429')
     // Grace's row still imported — the failure did not abort the run.
     expect(report.channelsCreated.map((c) => c.channelName)).toEqual(['grace'])
+  })
+
+  describe('ROST-17 — a student channel is remembered, not re-derived', () => {
+    it("keeps a student's channel across an import whose corrected address would otherwise derive a different name", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ada,Lovelace,ada@example.edu,adalovelace,adal'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+      const guildChannels = (guildId: string) =>
+        discordServer.guildChannelsFor(guildId) as Record<string, unknown>[]
+      const firstChannel = guildChannels(seeded.guildId).find(
+        (c) => c['name'] === 'ada'
+      )
+      const person = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+
+      // The roster is re-exported with Ada's address corrected — the same
+      // person (same Discord handle), but `channelNameForEmail` now derives
+      // a *different* name from this row than it did on the first import.
+      // Before this record existed, the next import would look for a
+      // channel named "ada-corrected", not find one, and create a second
+      // channel for a student who already had one — this is exactly the
+      // defect ROST-17 exists to close.
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [
+          HEADER,
+          'Ada,Lovelace,ada-corrected@example.edu,adalovelace,adal',
+        ].join('\n')
+      )
+
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({ line: 2 }),
+      ])
+      expect(
+        guildChannels(seeded.guildId).filter((c) => c['type'] !== 4)
+      ).toHaveLength(1) // no second channel was created
+      const remembered = rosterChannelAssignments.getChannelAssignmentForPerson(
+        seeded.organizationId,
+        seeded.courseId,
+        person.id,
+        testDb.db
+      )
+      expect(remembered?.discordChannelId).toBe(firstChannel?.['id'])
+    })
+
+    // Review finding (must-fix 1): `mergePeople` did not repoint
+    // `roster_channel_assignments` alongside identities/enrolments/
+    // conversations, so a channel remembered under a synthetic,
+    // handle-keyed person stayed attributed to the tombstoned loser the
+    // instant that identity proved out and merged into a real person — the
+    // next import, finding nothing remembered under the survivor, matched
+    // the channel by name instead, read the dead loser as "somebody else"
+    // (its identity had moved), and handed the survivor a second channel.
+    it("keeps a student's remembered channel after her synthetic identity merges into her real one (person-link flow)", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      // Nobody resolves yet — Ada's handle is unresolved on this import, so
+      // she is kept under a synthetic, handle-keyed identity.
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ada,Lovelace,ada@example.edu,adalovelace,adal'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+      const syntheticPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'handle:adalovelace' },
+        testDb.db
+      )
+
+      // Ada now proves her real Discord identity through the person-link
+      // flow (`apps/api`'s `person-link.ts` calls `mergePeople` exactly
+      // this way) — a *different* person is the survivor, the synthetic
+      // one becomes the loser.
+      const realPerson = people.createPerson(
+        seeded.organizationId,
+        {},
+        testDb.db
+      )
+      const merge = people.mergePeople(
+        seeded.organizationId,
+        realPerson.id,
+        syntheticPerson.id,
+        testDb.db
+      )
+      expect(merge?.alreadyMerged).toBe(false)
+      // The identity now resolves to the survivor — this is what makes
+      // `handle:adalovelace` no longer point at the person the channel was
+      // remembered for, unless the record moved with it.
+      expect(
+        people.resolveIdentity(
+          seeded.organizationId,
+          { surface: 'discord', externalId: 'handle:adalovelace' },
+          testDb.db
+        )?.id
+      ).toBe(realPerson.id)
+
+      // Her handle still has not resolved to any guild member — the next
+      // import's row still constructs the identical `handle:adalovelace`
+      // identity, which now resolves straight to the survivor.
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ada,Lovelace,ada@example.edu,adalovelace,adal'].join('\n')
+      )
+
+      // No second channel — her one remembered channel, carried forward
+      // onto the survivor by the merge itself, is found directly by the
+      // survivor's own id and reported present, never re-created.
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({ line: 2 }),
+      ])
+      expect(second.channelOwnershipConflicts).toEqual([])
+      expect(
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          realPerson.id,
+          testDb.db
+        )?.discordChannelId
+      ).toBeDefined()
+      const channels = (
+        discordServer.guildChannelsFor(seeded.guildId) as Record<
+          string,
+          unknown
+        >[]
+      ).filter((c) => c['type'] !== 4)
+      expect(channels.map((c) => c['name'])).toEqual(['ada'])
+    })
+
+    it('recreates a remembered channel that has since been deleted from the server, rather than leaving the student with none', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      expect(first.channelsCreated).toHaveLength(1)
+      const firstChannelId = first.channelsCreated[0]?.channelName
+
+      // The channel is deleted from the server — the guild now holds only
+      // the (still-scaffolded) empty category.
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+      ])
+
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      // Recognized as gone and recreated — not reported as already present
+      // (there is nothing there any more), and not left off the roster.
+      expect(second.channelsCreated).toEqual([
+        expect.objectContaining({ line: 2, channelName: firstChannelId }),
+      ])
+      expect(second.channelsAlreadyPresent).toEqual([])
+      expect(second.channelsNotCreated).toEqual([])
+
+      const person = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      const remembered = rosterChannelAssignments.getChannelAssignmentForPerson(
+        seeded.organizationId,
+        seeded.courseId,
+        person.id,
+        testDb.db
+      )
+      const newChannel = (
+        discordServer.guildChannelsFor(seeded.guildId) as Record<
+          string,
+          unknown
+        >[]
+      ).find((c) => c['name'] === firstChannelId)
+      expect(remembered?.discordChannelId).toBe(newChannel?.['id'])
+    })
+
+    it("never adopts a channel already remembered as another student's own channel", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ann-1', username: 'annfirst' } },
+      ])
+
+      // A first student is imported and given the channel "ann".
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ann,First,ann@example.edu,annfirst,gh-1'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'ann' }),
+      ])
+
+      // A second, genuinely different student joins a *later* roster —
+      // a different address whose local part happens to slug to the same
+      // name (`channelNameForEmail` only ever looks at the local part).
+      // Nothing in this run's own roster collides (the first student is not
+      // in this file at all), so only the remembered record stands between
+      // this row and the first student's own private channel — exactly the
+      // gap `channelBelongsToSomeoneElse`'s own doc comment names as
+      // ROST-17's to close, since that guard alone cannot see across two
+      // separate imports of two different rosters.
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ann-2', username: 'annsecond' } },
+      ])
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Ann,Second,ann@another.org,annsecond,gh-2'].join('\n')
+      )
+
+      // Never adopted, and never simply refused either — folded into the
+      // same ROST-16 escalation a roster-internal collision already uses:
+      // the second student gets her own, disambiguated channel instead.
+      expect(second.channelsAlreadyPresent).toEqual([])
+      expect(second.channelAccessGranted).toEqual([])
+      expect(second.channelsNotCreated).toEqual([])
+      expect(second.channelOwnershipConflicts).toEqual([
+        expect.objectContaining({
+          line: 2,
+          email: 'ann@another.org',
+          conflictingChannelName: 'ann',
+        }),
+      ])
+      expect(second.channelsCreated).toEqual([
+        expect.objectContaining({ line: 2, email: 'ann@another.org' }),
+      ])
+      expect(second.channelsCreated[0]?.channelName).not.toBe('ann')
+
+      // The first student's channel still belongs to them alone.
+      const firstPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ann-1' },
+        testDb.db
+      )
+      const remembered = rosterChannelAssignments.getChannelAssignmentForPerson(
+        seeded.organizationId,
+        seeded.courseId,
+        firstPerson.id,
+        testDb.db
+      )
+      expect(remembered).toBeDefined()
+    })
+
+    // Review finding: an earlier draft of the "remembered elsewhere" carve
+    // out compared stored *email strings*, which excuses far more than the
+    // one identity-model gap it was meant for — any two genuinely
+    // different people who ever carried the same address satisfied it.
+    // Alice graduates; her address is reissued to Bob the next term; Bob's
+    // own row has never had a channel. The bare string match must not let
+    // Bob inherit Alice's channel (and, through it, her transcript).
+    it("never hands a departed student's channel to a new student who is later issued the same address", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-alice', username: 'alice' } },
+      ])
+
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Alice,A,ada@example.edu,alice,gh-alice'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+      const alice = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-alice' },
+        testDb.db
+      )
+      const aliceChannel =
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          alice.id,
+          testDb.db
+        )
+      expect(aliceChannel?.discordChannelId).toBeDefined()
+
+      // Next term: Alice has graduated, and the identical address is
+      // reissued to a genuinely different student, Bob — a different
+      // Discord handle and a different resolved member entirely.
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-bob', username: 'bob' } },
+      ])
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Bob,B,ada@example.edu,bob,gh-bob'].join('\n')
+      )
+
+      // Bob is never granted Alice's channel, silently or otherwise.
+      expect(second.channelAccessGranted).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([])
+      const aliceChannelStill =
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          alice.id,
+          testDb.db
+        )
+      // Alice's own record was never reassigned to Bob.
+      expect(aliceChannelStill?.discordChannelId).toBe(
+        aliceChannel?.discordChannelId
+      )
+      const aliceChannelOnGuild = (
+        discordServer.guildChannelsFor(seeded.guildId) as Record<
+          string,
+          unknown
+        >[]
+      ).find((c) => c['id'] === aliceChannel?.discordChannelId) as
+        { permission_overwrites: { id: string; type: number }[] } | undefined
+      const individualGrants =
+        aliceChannelOnGuild?.permission_overwrites.filter(
+          (o) => o.type === 1
+        ) ?? []
+      // Bob's own snowflake was never granted view access to Alice's
+      // channel.
+      expect(individualGrants.map((o) => o.id)).not.toContain('snowflake-bob')
+    })
+
+    // Same hazard, the other way a stored string can coincide: two
+    // genuinely different people whose stored emails differ only by case.
+    it('never hands a channel to a different student whose stored email differs from the owner only by case', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-carol', username: 'carol' } },
+      ])
+
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Carol,C,Ada@school.edu,carol,gh-carol'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+      const carol = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-carol' },
+        testDb.db
+      )
+
+      // A genuinely different student, Dana, is imported later with the
+      // identical address spelled in a different case.
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-dana', username: 'dana' } },
+      ])
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Dana,D,ada@school.edu,dana,gh-dana'].join('\n')
+      )
+
+      expect(second.channelAccessGranted).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([])
+      const carolChannelStill =
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          carol.id,
+          testDb.db
+        )
+      expect(carolChannelStill?.discordChannelId).toBeDefined()
+    })
+
+    // Round 2 (D-88): the identity check alone still rests on one string —
+    // the *handle*, not the email — and a synthetic `handle:<h>` person is
+    // not provably this row's: two different real students can supply the
+    // identical raw handle text across two different imports. Alice's
+    // handle never resolves and she is remembered under `handle:ada`; the
+    // next term, a genuinely different student, Bob, happens to own the
+    // real Discord username `ada` *and* happens to share Alice's old
+    // address's local part — the identity check alone would say "this is
+    // Bob's own history." Requiring the stored address to agree too is
+    // what refuses it.
+    it('never hands a channel to a different student who happens to supply the same raw handle text a still-unresolved row was remembered under', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      // Alice's own handle, "ada", never resolves to anyone this import.
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Alice,A,alice@old.edu,ada,gh-alice'].join('\n')
+      )
+      expect(first.channelsCreated).toEqual([
+        expect.objectContaining({ channelName: 'alice' }),
+      ])
+      const alice = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'handle:ada' },
+        testDb.db
+      )
+
+      // Next term: Bob, a genuinely different student, really does own the
+      // Discord username `ada` (it resolves this time), and his own
+      // address happens to share Alice's old local part.
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-bob', username: 'ada' } },
+      ])
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        [HEADER, 'Bob,B,alice@new.edu,ada,gh-bob'].join('\n')
+      )
+
+      // Bob is never granted Alice's channel — refused and given his own
+      // instead, the same ROST-16 escalation a roster-internal collision
+      // already uses.
+      expect(second.channelAccessGranted).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([])
+      expect(second.channelOwnershipConflicts).toEqual([
+        expect.objectContaining({ line: 2, email: 'alice@new.edu' }),
+      ])
+      const aliceChannelStill =
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          alice.id,
+          testDb.db
+        )
+      expect(aliceChannelStill?.discordChannelId).toBeDefined()
+      const aliceChannelOnGuild = (
+        discordServer.guildChannelsFor(seeded.guildId) as Record<
+          string,
+          unknown
+        >[]
+      ).find((c) => c['id'] === aliceChannelStill?.discordChannelId) as
+        { permission_overwrites: { id: string; type: number }[] } | undefined
+      const individualGrants =
+        aliceChannelOnGuild?.permission_overwrites.filter(
+          (o) => o.type === 1
+        ) ?? []
+      expect(individualGrants.map((o) => o.id)).not.toContain('snowflake-bob')
+    })
+
+    it("adopts a course's pre-existing channel once, and does not duplicate it on a later import", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      expect(first.channelsCreated).toHaveLength(1)
+
+      // Simulate a channel that predates ROST-17's own record — an earlier
+      // version of this course's own import created it, and nothing ever
+      // recorded who it belongs to.
+      const person = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      testDb.db.$client
+        .prepare(
+          'DELETE FROM roster_channel_assignments WHERE course_id = ? AND person_id = ?'
+        )
+        .run(seeded.courseId, person.id)
+      expect(
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          person.id,
+          testDb.db
+        )
+      ).toBeUndefined()
+
+      // The next import matches it by name, adopts it (remembers it), and
+      // reports it as already present rather than creating a duplicate.
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({ line: 2 }),
+      ])
+      expect(
+        rosterChannelAssignments.getChannelAssignmentForPerson(
+          seeded.organizationId,
+          seeded.courseId,
+          person.id,
+          testDb.db
+        )
+      ).toBeDefined()
+
+      // A third import still finds exactly one channel — adoption did not
+      // duplicate it, and the remembered record now serves every later run.
+      const third = await runImport(seeded.organizationId, seeded.courseId, csv)
+      expect(third.channelsCreated).toEqual([])
+      expect(
+        (
+          discordServer.guildChannelsFor(seeded.guildId) as Record<
+            string,
+            unknown
+          >[]
+        ).filter((c) => c['type'] !== 4)
+      ).toHaveLength(1)
+    })
   })
 
   describe('rework finding 5 — an already-present channel is repaired for a newly-resolved member', () => {
@@ -1354,7 +1903,14 @@ describe('roster.import handler', () => {
       expect(individualGrants.map((o) => o.id)).toEqual(['snowflake-x'])
     })
 
-    it('reports an orphaned channel when removing a colliding row frees the bare name for the remaining student', async () => {
+    // ROST-17 closes this the way `ChannelOrphanedEntry`'s own doc comment
+    // (above) always said it eventually would: Ada A's channel is now
+    // remembered by *her*, not re-derived from whatever name her address
+    // currently slugs to — so freeing the bare `ada` name by removing the
+    // colliding row no longer moves her to a second channel at all. She
+    // keeps the one she already has, under its own real name, and no
+    // orphan is created because nothing new is.
+    it('keeps the remembered channel when removing a colliding row frees the bare name, rather than moving the student to a fresh one', async () => {
       testDb = createTestDatabase()
       discordServer = await FakeDiscordGuildServer.start()
       const seeded = seedCourseWithStudentCategory()
@@ -1377,9 +1933,9 @@ describe('roster.import handler', () => {
         'ada@b.edu': 'ada-b-edu',
       })
 
-      // The second import's roster no longer includes `ada@b.edu` — `ada@a.edu`
-      // is now the only address slugging to `ada`, so it is entitled to the
-      // bare name again.
+      // The second import's roster no longer includes `ada@b.edu` — before
+      // ROST-17, `ada@a.edu` would have been entitled to the bare name
+      // again and moved there, orphaning her first channel.
       const secondCsv = [HEADER, 'Ada,A,ada@a.edu,ada-a,gh-a'].join('\n')
       const second = await runImport(
         seeded.organizationId,
@@ -1387,18 +1943,14 @@ describe('roster.import handler', () => {
         secondCsv
       )
 
-      expect(namesByEmail(second)['ada@a.edu']).toBe('ada')
-      expect(second.channelsOrphaned).toEqual([
-        {
-          line: 2,
-          email: 'ada@a.edu',
-          previousChannelName: 'ada-a-edu',
-          newChannelName: 'ada',
-        },
-      ])
-      // All three text channels still exist — `ada-b-edu` (Ada B's own,
-      // never touched by the second import at all) and both of Ada A's,
-      // old and new. Nothing was deleted or migrated, only reported.
+      // Found by her own remembered record, under the name she already
+      // has — never re-derived, never moved, and nothing new created.
+      expect(namesByEmail(second)['ada@a.edu']).toBe('ada-a-edu')
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsOrphaned).toEqual([])
+      // Both original channels still exist, untouched — `ada-b-edu`
+      // (Ada B's own, never touched by the second import at all) and Ada
+      // A's, and no bare `ada` channel was ever created.
       const channels = discordServer.guildChannelsFor(seeded.guildId) as {
         name: string
         type: number
@@ -1408,15 +1960,15 @@ describe('roster.import handler', () => {
           .filter((c) => c.type === 0)
           .map((c) => c.name)
           .sort()
-      ).toEqual(['ada', 'ada-a-edu', 'ada-b-edu'])
+      ).toEqual(['ada-a-edu', 'ada-b-edu'])
     })
 
-    // Round 3's own must-fix: the orphan push used to happen before the
-    // `createGuildChannel` call, so a failed create reported *both*
-    // `channelsFailed` and `channelsOrphaned` — telling the instructor to
-    // go reconcile a stale channel against a new one that was never
-    // actually made. It must only fire once the create really succeeds.
-    it('does not report an orphan when the new channel fails to create', async () => {
+    // The same closing applies to round 3's own must-fix scenario: since
+    // Ada A's remembered channel is found directly, this run never
+    // attempts to create anything for her at all — there is no create left
+    // to fail, and so nothing for `channelsFailed`/`channelsOrphaned` to
+    // disagree about.
+    it('does not attempt to create (or fail creating) a channel for a student whose own channel is already remembered', async () => {
       testDb = createTestDatabase()
       discordServer = await FakeDiscordGuildServer.start()
       const seeded = seedCourseWithStudentCategory()
@@ -1431,9 +1983,10 @@ describe('roster.import handler', () => {
       ].join('\n')
       await runImport(seeded.organizationId, seeded.courseId, firstCsv)
 
-      // The second import's roster is down to just `ada@a.edu` again, so it
-      // is entitled to the bare `ada` — but this run's own create for it is
-      // made to fail.
+      // The second import's roster is down to just `ada@a.edu` again —
+      // before ROST-17 this would have been entitled to (and attempted) the
+      // bare `ada`, made to fail here; her remembered channel means this
+      // run never calls `createGuildChannel` for her row at all.
       discordServer.failNextChannelCreate(500, { message: 'server error' })
       const secondCsv = [HEADER, 'Ada,A,ada@a.edu,ada-a,gh-a'].join('\n')
       const second = await runImport(
@@ -1442,8 +1995,12 @@ describe('roster.import handler', () => {
         secondCsv
       )
 
-      expect(second.channelsFailed).toEqual([
-        expect.objectContaining({ email: 'ada@a.edu', channelName: 'ada' }),
+      expect(second.channelsFailed).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({
+          email: 'ada@a.edu',
+          channelName: 'ada-a-edu',
+        }),
       ])
       // No orphan reported — nothing new was actually created for there to
       // be a stale channel to reconcile it against.

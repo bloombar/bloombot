@@ -31,6 +31,7 @@ import {
   personIdentities,
   personLinkChallenges,
   projects,
+  rosterChannelAssignments,
   tenantDeletions,
   transcriptAccessLog,
   transcriptExports,
@@ -154,6 +155,8 @@ export interface OrganizationDeletionPreview {
   discordServerBindings: number
   courseAttachments: number
   queuedJobs: number
+  /** ROST-17 — how many students currently have a remembered channel, across every course in this organization. Named alongside `courses`/`people` above (rather than left out with `cost_ledger_entries`/`person_identities`, this doc comment's own list of the deliberately-uncounted) because a remembered channel is a fact about a real, named Discord channel an instructor and a student both recognize — closer to "a course" than to bookkeeping. */
+  rosterChannelAssignments: number
 }
 
 export function previewOrganizationDeletion(
@@ -219,6 +222,13 @@ export function previewOrganizationDeletion(
         .select({ count: sql<number>`count(*)` })
         .from(courseAttachments)
         .where(eq(courseAttachments.organizationId, organizationId))
+        .get()
+    ),
+    rosterChannelAssignments: count(
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(rosterChannelAssignments)
+        .where(eq(rosterChannelAssignments.organizationId, organizationId))
         .get()
     ),
     queuedJobs: count(
@@ -318,6 +328,16 @@ export function deleteOrganizationData(
       .run()
     tx.delete(personIdentities)
       .where(eq(personIdentities.organizationId, organizationId))
+      .run()
+    // ROST-17 — references both `people` and `courses`; deleted here,
+    // ahead of either, the same "children before the parents they
+    // reference" ordering this function's own doc comment already holds
+    // itself to (`foreign_keys = ON` on every connection actually enforces
+    // it). Missing this row is exactly why deleting an organization that
+    // had ever run a roster import creating a student channel used to
+    // throw `FOREIGN KEY constraint failed` on the `people` delete below.
+    tx.delete(rosterChannelAssignments)
+      .where(eq(rosterChannelAssignments.organizationId, organizationId))
       .run()
     // Break `people`'s own self-reference before deleting any of it (this
     // function's own doc comment).

@@ -307,4 +307,4 @@ name collision that leaves one student with nothing. This phase makes an import 
 creates the categories and roles it needs, gives every student a channel, and proves the permissions
 on those channels are what a private channel actually requires.
 
-**In scope:** ROST-14, ROST-15, ROST-16, ROST-17, SRV-10
+**In scope:** ROST-14, ROST-15, ROST-16, ROST-17, SRV-10, SRV-11

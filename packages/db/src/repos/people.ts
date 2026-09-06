@@ -25,6 +25,7 @@ import {
   messages,
   people,
   personIdentities,
+  rosterChannelAssignments,
   usageCounters,
   type Surface,
 } from '../schema.js'
@@ -851,6 +852,54 @@ export function mergePeople(
           .where(eq(enrolments.id, enrolment.id))
           .run()
       }
+    }
+
+    // roster_channel_assignments (ROST-17) — the durable channel-ownership
+    // record has to survive a merge the same as identities/enrolments
+    // above, or a channel remembered under a synthetic, handle-keyed
+    // person stays attributed to the tombstoned loser the instant that
+    // identity proves out and merges into a real person: the next import,
+    // finding nothing remembered under the survivor's own id, treats the
+    // channel as unclaimed and hands the survivor a second one — the exact
+    // duplicate ROST-17 exists to prevent, reopened at the one place this
+    // file did not carry the record forward.
+    const loserChannelAssignments = tx
+      .select()
+      .from(rosterChannelAssignments)
+      .where(
+        and(
+          eq(rosterChannelAssignments.organizationId, organizationId),
+          eq(rosterChannelAssignments.personId, loserPersonId)
+        )
+      )
+      .all()
+    for (const assignment of loserChannelAssignments) {
+      const survivorAlreadyHasOne = tx
+        .select({ id: rosterChannelAssignments.id })
+        .from(rosterChannelAssignments)
+        .where(
+          and(
+            eq(rosterChannelAssignments.organizationId, organizationId),
+            eq(rosterChannelAssignments.courseId, assignment.courseId),
+            eq(rosterChannelAssignments.personId, survivorPersonId)
+          )
+        )
+        .get()
+      if (survivorAlreadyHasOne) {
+        // The rare case where two separate identities, later discovered to
+        // be one person, were each independently given their own channel
+        // for the same course — left as the loser's own row rather than
+        // moved or overwritten (which would collide with
+        // `roster_channel_assignments_course_person_unique` anyway): this
+        // package has no verb for reconciling two channels into one, and
+        // an instructor merging the two transcripts by hand still needs
+        // both rows to find them.
+        continue
+      }
+      tx.update(rosterChannelAssignments)
+        .set({ personId: survivorPersonId })
+        .where(eq(rosterChannelAssignments.id, assignment.id))
+        .run()
     }
 
     // Conversations and messages (CONV-1, CONV-2).

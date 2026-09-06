@@ -1439,3 +1439,61 @@ export const courseWebSources = sqliteTable(
     ),
   ]
 )
+
+// ROST-17 — which Discord channel belongs to which person in which course,
+// recorded when `apps/worker`'s `roster.import` handler creates or adopts
+// one, and read back on every later import so a student's channel is found
+// by *this* rather than by recomputing the name it would create — a name
+// that can legitimately drift (a second student disambiguates the first,
+// ROST-14; an instructor renames a channel by hand; an address is
+// corrected), which is exactly what made the old name-only lookup create a
+// second channel for a student who already had one. One row per
+// `(courseId, personId)` pair: a student has at most one remembered channel
+// per course, and re-importing after that channel is deleted from the
+// server (`repos/roster-channel-assignments.ts#recordChannelAssignment`'s
+// own doc comment) updates this same row to the replacement rather than
+// adding a second. `discordChannelId` is also unique on its own — a
+// Discord channel snowflake belongs to exactly one person, so two rows
+// pointing at the same channel would mean two people share one private
+// conversation, the exact hazard this table exists to close.
+export const rosterChannelAssignments = sqliteTable(
+  'roster_channel_assignments',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    discordChannelId: text('discord_channel_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // What `repos/roster-channel-assignments.ts#getChannelAssignmentForPerson`
+    // looks a student's own channel up by, and the first of the two reads
+    // `recordChannelAssignment`'s own read-then-write transaction runs (that
+    // function's own doc comment) to replace a deleted-and-recreated
+    // channel's id on the same row rather than inserting a second one.
+    uniqueIndex('roster_channel_assignments_course_person_unique').on(
+      table.courseId,
+      table.personId
+    ),
+    // What `#getChannelAssignmentByDiscordChannelId` looks a channel up by
+    // before it is adopted for somebody, to refuse adopting one already
+    // remembered as another person's (ROST-17's own requirement 3) — and
+    // what stops a future direct writer from ever recording the same
+    // channel for two people, the same "let the database refuse it"
+    // discipline `course_web_sources_course_domain_unique` above already
+    // holds itself to.
+    uniqueIndex('roster_channel_assignments_channel_unique').on(
+      table.discordChannelId
+    ),
+    index('roster_channel_assignments_organization_id_idx').on(
+      table.organizationId
+    ),
+  ]
+)

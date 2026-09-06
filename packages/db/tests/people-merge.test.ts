@@ -18,6 +18,7 @@ import {
   people,
   personLinkChallenges,
   projects,
+  rosterChannelAssignments,
   usage,
   type Database,
 } from '@bloombot/db'
@@ -271,6 +272,91 @@ describe('people.ts#mergePeople (LINK-4)', () => {
         testDb.db
       )?.id
     ).toBe(survivor.id)
+  })
+
+  // ROST-17 regression: a channel remembered under a synthetic,
+  // handle-keyed person must survive that person merging into a real one
+  // — otherwise the next roster import finds nothing under the survivor's
+  // own id, the name match's "remembered elsewhere" carve-out cannot
+  // recognize the dead loser as this row's own history any more (its
+  // identity has moved), and the student is handed a second channel.
+  it('repoints a remembered roster channel from the loser to the survivor', () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    rosterChannelAssignments.recordChannelAssignment(
+      organizationId,
+      { courseId, personId: loser.id, discordChannelId: 'chan-1' },
+      testDb.db
+    )
+
+    const result = people.mergePeople(
+      organizationId,
+      survivor.id,
+      loser.id,
+      testDb.db
+    )
+
+    expect(result?.alreadyMerged).toBe(false)
+    expect(
+      rosterChannelAssignments.getChannelAssignmentForPerson(
+        organizationId,
+        courseId,
+        survivor.id,
+        testDb.db
+      )?.discordChannelId
+    ).toBe('chan-1')
+    // The loser no longer holds it — moved, not copied.
+    expect(
+      rosterChannelAssignments.getChannelAssignmentForPerson(
+        organizationId,
+        courseId,
+        loser.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+
+  it("leaves the survivor's own remembered channel alone when both people already have one for the same course", () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    rosterChannelAssignments.recordChannelAssignment(
+      organizationId,
+      { courseId, personId: survivor.id, discordChannelId: 'chan-survivor' },
+      testDb.db
+    )
+    rosterChannelAssignments.recordChannelAssignment(
+      organizationId,
+      { courseId, personId: loser.id, discordChannelId: 'chan-loser' },
+      testDb.db
+    )
+
+    people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+
+    // The survivor's own record is untouched — never overwritten by the
+    // loser's, and the constraint that would refuse a blind move is never
+    // even reached.
+    expect(
+      rosterChannelAssignments.getChannelAssignmentForPerson(
+        organizationId,
+        courseId,
+        survivor.id,
+        testDb.db
+      )?.discordChannelId
+    ).toBe('chan-survivor')
+    // The loser's row is left in place (still findable by channel id),
+    // rather than moved or deleted — there is no verb for reconciling two
+    // channels into one.
+    expect(
+      rosterChannelAssignments.getChannelAssignmentByDiscordChannelId(
+        organizationId,
+        'chan-loser',
+        testDb.db
+      )?.personId
+    ).toBe(loser.id)
   })
 
   it('marks the survivor connected (LINK-1s own gate) and the loser as merged into it', () => {

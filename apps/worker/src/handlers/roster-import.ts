@@ -1298,23 +1298,48 @@ export function createRosterImportHandler(
       // same handle now resolves creates a second, genuinely different
       // `people` row for the same real student, since nothing in this file
       // reconciles the two (that reconciliation exists only for a live
-      // Discord message, `handleMention`'s own doc comment). Review finding
-      // (D-87): an earlier draft of this carve-out compared *stored email
-      // strings* instead, which excuses far more than the one gap above —
-      // any two genuinely different people who ever carried the same
-      // address (an address reissued after a student leaves; two stored
-      // spellings differing only by case) satisfied it too, so a name
-      // match onto a departed student's channel was silently reassigned to
-      // a stranger, reported as a routine access repair with no ownership
-      // conflict at all. The predicate now asks the one question that
-      // actually distinguishes the identity-gap case from a stranger: is
+      // Discord message, `handleMention`'s own doc comment; `mergePeople`
+      // itself now carries a remembered channel forward on an actual
+      // merge, `repos/people.ts`'s own doc comment — this carve-out is for
+      // the narrower case where no merge has happened *yet*).
+      //
+      // Review finding (D-88), round 1: an earlier draft compared *stored
+      // email strings* instead, which excused far more than the one gap
+      // above — any two genuinely different people who ever carried the
+      // same address (an address reissued after a student leaves; two
+      // stored spellings differing only by case) satisfied it too, so a
+      // name match onto a departed student's channel was silently
+      // reassigned to a stranger, reported as a routine access repair with
+      // no ownership conflict at all. Replaced with an identity check: is
       // the remembered owner *this row's own* synthetic, handle-keyed
       // person — the exact identity `resolvePersonByIdentity` above would
-      // have created for this row had its handle never resolved? That is
-      // true only when this row's own earlier import left it unresolved
-      // and remembered under `handle:<this row's handle>`; it is never
-      // true for a different real person who merely happens to share this
-      // row's current address.
+      // have created for this row had its handle never resolved?
+      //
+      // Review finding, round 2: the identity check alone still rests on
+      // one string, the *handle* rather than the email — and a synthetic
+      // `handle:<h>` person is not provably this row's, because two
+      // different real students can supply the identical raw handle text
+      // across two different imports. Concretely: Alice's handle `ada`
+      // never resolves and she is remembered under `handle:ada`; the
+      // *next* term, a genuinely different student, Bob, happens to own
+      // the real Discord username `ada` and happens to share Alice's old
+      // address's local part too — `handle:ada` still resolves to Alice's
+      // (still-unmerged) synthetic person, so the identity check alone
+      // says "this is Bob's own history" when it is not. Requiring *both*
+      // the handle identity and the stored email to agree closes this: two
+      // real students sharing one exact handle string is already a
+      // coincidence; requiring the address to coincide too, in the same
+      // two imports, is the conjunction that makes it not worth guessing
+      // at. The cost, accepted deliberately: a row whose *both* handle
+      // newly resolves *and* address is corrected in the very same import
+      // no longer qualifies for the carve-out, and is treated as
+      // `channelBelongsToSomeoneElse`'s own case instead (escalated to a
+      // fresh, disambiguated channel, ROST-16) — the ordinary
+      // "handle stays unresolved while an address is corrected" case is
+      // untouched by this, since that case never leaves the person's
+      // identity unchanged and so never reaches this branch at all (the
+      // channel is found directly, by the *remembered* lookup above, on
+      // the same person id).
       let rememberedAsSomeoneElse = false
       if (!remembered && matched) {
         const rememberedElsewhere =
@@ -1330,7 +1355,7 @@ export function createRosterImportHandler(
               context.db
             )
           : undefined
-        const syntheticOwner =
+        const syntheticOwnerOfThisHandle =
           rememberedOwner !== undefined &&
           people.resolveIdentity(
             context.organizationId,
@@ -1340,8 +1365,13 @@ export function createRosterImportHandler(
             },
             context.db
           )?.id === rememberedOwner.id
+        const sameStoredAddress =
+          rememberedOwner !== undefined &&
+          rememberedOwner.email?.trim().toLowerCase() ===
+            row.email.trim().toLowerCase()
         rememberedAsSomeoneElse =
-          rememberedOwner !== undefined && !syntheticOwner
+          rememberedOwner !== undefined &&
+          !(syntheticOwnerOfThisHandle && sameStoredAddress)
       }
 
       // A refused match resumes this row's *own* `ownAddressCandidates`

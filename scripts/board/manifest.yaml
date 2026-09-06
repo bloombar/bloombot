@@ -3354,7 +3354,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: Backlog
+  status: Done
   review: false
 - id: WEB-38
   title: Leaving a settings tab with unsaved changes asks first
@@ -3371,5 +3371,5 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: Backlog
+  status: Done
   review: false

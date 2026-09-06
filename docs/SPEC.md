@@ -2362,8 +2362,19 @@ handle could not be resolved still gets a channel with the admin grant, reported
 a channel that quietly grants nobody. This holds for a channel created fresh, for one an earlier
 import already created, and for a suffixed name (ROST-14).
 
-A channel that already exists under the name being created is never duplicated. The existing one is
-used and its permissions are verified against the four rules above, repaired where they fall short —
+A channel is never handed to a student it does not belong to. Before an existing channel is adopted
+for somebody — granted to them, or reported as already theirs — the platform checks that it is not
+already somebody else's: a channel remembered as another person's (ROST-17), or one whose permissions
+already grant an individual member who is not this student, belongs to that other student and must
+never be granted to a second one. Names can legitimately drift — a student leaves and frees a bare
+name, an address is corrected, a second `ada` joins and disambiguates the first (ROST-14) — and a
+name-based match alone would then walk one student straight into another's private channel and their
+transcript. Where a match is refused for this reason the import creates the student their own channel
+and reports the refusal, rather than granting or silently skipping.
+
+A channel that already exists under the name being created, and passes that ownership check, is never
+duplicated. The existing one is used and its permissions are verified against the four rules above,
+repaired where they fall short —
 a student who could not be resolved on an earlier run and can be now is granted their own channel, an
 absent admins grant or `@everyone` deny is restored — and reported as repaired rather than as created.
 Verification never removes an overwrite the platform did not put there: an instructor who granted a
@@ -2386,7 +2397,10 @@ never given another, whatever their channel is called now, whatever their row's 
 whichever category it lives in. An import that finds a remembered channel verifies its permissions
 (ROST-16) and reports it as already present, rather than creating anything.
 
-A channel created before this record existed is adopted the first time an import matches it by name,
-so a course scaffolded by an earlier version does not acquire duplicates on its next import. A
-remembered channel that has since been deleted from the server is recognised as gone and recreated,
-rather than leaving the student with no channel and the platform insisting they have one.
+A channel created before this record existed is adopted the first time an import matches it by name —
+but only if it is not already remembered as another person's, and only if its permissions do not
+already grant a different individual student (ROST-16). Adoption is how a course scaffolded by an
+earlier version avoids acquiring duplicates; it must never become how one student inherits another's
+conversations. A remembered channel that has since been deleted from the server is recognised as gone
+and recreated, rather than leaving the student with no channel and the platform insisting they have
+one.

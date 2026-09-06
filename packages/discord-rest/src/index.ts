@@ -31,3 +31,5 @@ export {
 } from './channel-overwrites.js'
 
 export { DiscordTransportError } from './http.js'
+
+export { normalizeChannelName } from './channel-naming.js'

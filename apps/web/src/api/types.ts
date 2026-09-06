@@ -442,12 +442,27 @@ export interface RosterImportReport {
     category: string
     reason: string
   }[]
-  channelNameCollisions: {
+  /** ROST-14: a row whose channel name was disambiguated by domain (`ada-school`, `ada-gmail`) because another distinct address in this roster shares its local part — a channel it still got, not one it was refused; see `apps/worker`'s own `ChannelNameDisambiguatedEntry` doc comment. */
+  channelNameDisambiguated: {
     line: number
     email: string
+    baseChannelName: string
     channelName: string
-    collidesWithLine: number
-    collidesWithEmail: string
+    sharesSlugWith: string[]
+  }[]
+  /** ROST-16: a row whose matched, same-named channel already belonged to a different student *on this same roster* — refused, and given its own channel under a name derived from its own address instead; see `apps/worker`'s own `ChannelOwnershipConflictEntry` doc comment. */
+  channelOwnershipConflicts: {
+    line: number
+    email: string
+    conflictingChannelName: string
+    newChannelName: string
+  }[]
+  /** Round 2's honesty finding: a fresh channel was created for a student who already had a different one under a name this run no longer generates for them — see `apps/worker`'s own `ChannelOrphanedEntry` doc comment. */
+  channelsOrphaned: {
+    line: number
+    email: string
+    previousChannelName: string
+    newChannelName: string
   }[]
   /**
    * SRV-10: a course role name (the admins role) this run tried to create,

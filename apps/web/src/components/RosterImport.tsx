@@ -304,16 +304,69 @@ export function RosterImport({
             </div>
           )}
 
-          {report.channelNameCollisions.length > 0 && (
+          {/* ROST-14: a disambiguated channel is an ordinary channel this
+              run created (or matched), not a failure — rendered in the
+              neutral style `unresolvedHandles` above uses, never the danger
+              styling `channelsNotCreated`/`channelsFailed` get, so an
+              instructor does not read a successfully-created `ada-school`
+              as something that went wrong. */}
+          {report.channelNameDisambiguated.length > 0 && (
             <div>
-              <p className="font-medium text-danger-700">
-                Rows whose channel names collided:
+              <p className="font-medium text-warning-700">
+                Rows whose email shares a name with another address in this
+                roster — given a domain-disambiguated channel name instead:
               </p>
-              <ul className="list-disc pl-5 text-danger-700">
-                {report.channelNameCollisions.map((entry) => (
-                  <li key={`collision-${entry.line}`}>
-                    Line {entry.line}: {entry.email} collides with line{' '}
-                    {entry.collidesWithLine} ({entry.collidesWithEmail})
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.channelNameDisambiguated.map((entry) => (
+                  <li key={`disambiguated-${entry.line}`}>
+                    Line {entry.line}: {entry.email} → #{entry.channelName}{' '}
+                    (shares &quot;{entry.baseChannelName}&quot; with{' '}
+                    {entry.sharesSlugWith.join(', ')})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ROST-16: a name match this run refused because the channel it
+              found already belonged to a different student — the student
+              still got a channel, under a different name, rather than being
+              granted (or silently denied) somebody else's. */}
+          {report.channelOwnershipConflicts.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Rows whose matched channel already belonged to a different
+                student — given a new channel of their own instead:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.channelOwnershipConflicts.map((entry) => (
+                  <li key={`ownership-${entry.line}`}>
+                    Line {entry.line}: {entry.email} — #
+                    {entry.conflictingChannelName} was already somebody
+                    else&apos;s, created #{entry.newChannelName} instead
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Round 2's honesty finding: a name is unique, not permanent
+              (docs/SPEC.md's own amendment to ROST-14) — a student whose
+              name drifted between two imports now has two channels, the
+              old one still granting them and left untouched. Not this
+              slice's to fix (ROST-17 is), but it must not be silent. */}
+          {report.channelsOrphaned.length > 0 && (
+            <div>
+              <p className="font-medium text-warning-700">
+                Rows whose new channel means an older one is now stranded —
+                still granting the student, and not deleted or merged:
+              </p>
+              <ul className="list-disc pl-5 text-neutral-700">
+                {report.channelsOrphaned.map((entry) => (
+                  <li key={`orphaned-${entry.line}`}>
+                    Line {entry.line}: {entry.email} — #
+                    {entry.previousChannelName} is stranded; now using #
+                    {entry.newChannelName}
                   </li>
                 ))}
               </ul>

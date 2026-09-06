@@ -9413,3 +9413,167 @@ test confirmed red first: the untouched-pair update test failed (`expected false
 `unresolvedRoles: []` and a channel missing its real admin grant (temporarily replacing the new `if` guard's
 condition with `false`); the project-duplicate test's course-name assertion failed against the unprefixed
 message (temporarily reverting the `ActionConflictError` wrap).
+
+## D-85 — `apps/worker`: ROST-14/ROST-16 — a channel name is a function of the address, never of row order or position
+
+**Superseded, not amended.** A first draft of this slice (`e4a2507`) gave every colliding row a channel by
+numbering them in CSV row order (`ada`, `ada-2`, `ada-3`). That draft is wrong, not merely incomplete: the
+ordinal a row gets depends on which rows sit above it in the file, so removing or reordering a row silently
+reassigns another student's channel to somebody else on the next import — exactly the private-transcript
+leak this slice exists to prevent, self-inflicted. Row order is now nowhere in the algorithm.
+
+**What replaced it, round 2.** `assignChannelNames` named every distinct address in a roster in one pass,
+all at once, so a row's name was a pure function of the *set* of addresses the roster contained. A slug two
+or more addresses shared was disambiguated by domain, one label at a time, in rounds that regrouped *every*
+address in the roster after each round — not just the ones that originally collided, because a generated
+name can land on another address's own bare name — until nothing collided. **This algorithm itself is gone
+as of round 3** — see that round's own entry below for why (a hang, not a style preference) — but the
+shared-namespace property it established (checking a candidate against every already-resolved address, not
+only the ones it originally collided with) survives into round 3's replacement.
+
+**Round 2 must-fix 1 (superseded by round 3).** Round 2 fixed a real bug — a naming scheme whose own doc
+comment claimed "only a letter-case difference can tie" was false, since `normalizeChannelName` collapses
+whitespace to `-` and let `ada b@x.edu`/`ada-b@x.edu` tie all the way through every domain label — by
+folding in one domain label at a time, escalating forever until nothing collided, with a hash-like
+fingerprint as the eventual fallback. **That fix introduced round 3's own bug** (the unbounded escalation
+loop, below); the specific whitespace-collision case it fixed is still fixed, but by round 3's fixed-level
+scheme now, not by this one. Nothing here repeats the "always eventually stops colliding" claim that
+round 3 disproved.
+The same must-fix's second half is unaffected and still stands: `channelBelongsToSomeoneElse` used to read
+the permission list `listGuildChannels` returned once at the top of the run, never updated after
+`grantChannelMemberAccess` — a grant made moments earlier for a different row, in the same run, was
+invisible to the very next row's own check. Fixed the same way `target.channels` was already kept current
+for a create: the channel's own `permissionOverwrites` are updated in place immediately after a successful
+grant.
+
+**Round 2 must-fix 2 — the ownership guard was checking the wrong thing.** `overwrite.id !== member?.id`
+is `true` for almost everything: a teaching assistant an instructor granted by hand (not on the roster at
+all), or — because `member` is `undefined` whenever a row's own handle does not resolve — *every* grant on
+*every* channel that row happens to match. Measured: a renamed student evicted from her own channel on
+every import (`ada`, `ada-2`, `ada-3`, `ada-4` across four runs), and a hand-added TA's grant reported as
+"already somebody else's" while Ada herself was moved off her own transcript. ROST-16 names the TA case
+explicitly as something that must survive. The guard is now exactly as narrow as it can actually justify: a
+channel belongs to somebody else only when one of its individual grants resolves to a member *this same
+roster resolved for a different row* (`rosterMemberIds`, built once from every row's own handle) — a TA is
+not on the roster, so is never a rival; a row whose own handle failed to resolve identifies no rival owner
+at all, so it never refuses its own match, regardless of what the channel's permissions say.
+
+**Round 2 must-fix 3 — the conflict fallback reintroduced positional naming, and never converged.**
+Skipping any name that already existed meant a genuine re-import (the same conflict, the same two students)
+could never re-adopt the channel it created last time — measured `ada-2`, `ada-3`, `ada-4` across successive
+runs of one unchanged roster — and numbering by `-2`/`-3` within one run handed two conflicting rows a name
+that depended on which one this loop reached first, the exact scheme this whole slice exists to remove.
+The fallback now resumes the conflicted row's *own* fixed escalation sequence (`ownAddressCandidates`,
+round 3's rename of round 2's `candidateAtLevel`) one step further — a fixed list of at most six candidates,
+never a loop — so the name it lands on is a function of its own address alone, and a second import of the
+same roster reaches the identical fallback name and re-adopts what the first import created. Verified sound
+in round 3 too: unchanged in behaviour, only renamed.
+
+**Round 3 — the round-2 escalation loop itself hung.** `docs/DECISIONS.md` is supposed to be corrected when
+a claim turns out false, not just when the code around it changes; round 2's own `while (changed)` loop
+escalated one domain *label* at a time, with no ceiling, on the strength of a proof that turned out wrong.
+`normalizeChannelName` collapses both `.` and a literal `-` to the same `-`, so `my.school.edu` and
+`my-school.edu` produce the *identical* string at every label boundary — the loop never converges. Measured
+against the real handler: three rows, killed at 120 seconds, ~117% CPU, still running; fuzzed against a
+90-address pool, 1074 of 200,000 random rosters hung the same way. Because the escalation is synchronous, it
+blocks the event loop outright — the job's own handler timeout is powerless against code that never yields
+control back — so one bad CSV permanently pins a worker core. Hyphenated institutional domains beside
+subdomained ones are not an edge case; a hang reachable by ordinary input data is a defect in the algorithm,
+not a bug to patch around a fourth time.
+
+**Round 3's replacement: three fixed levels, no loop over levels.** Level 1 is the bare local part. Level 2
+folds in the *whole* domain in one step (`school.edu` → `-school-edu`), not one label at a time — reached
+only by a group that collided at level 1. Level 3 is a `sha256` hash of the entire address, at one of four
+fixed lengths (`HASH_LENGTHS`: 8, 16, 32, 64 hex characters, the last one the full digest) — reached only by
+a (sub-)group still colliding at level 2, and grown only if a shorter length still ties. Three passes, plus
+at most four hash-length attempts within the third — a bounded, small amount of work regardless of how many
+addresses or domain labels are involved, terminating by construction rather than by an argument about what
+the code happens to do. The cross-bucket hazard round 2 also handled — a generated name landing on a name
+some other, already-resolved address owns outright — is still caught the same way: every candidate is
+checked against every name already locked in from an earlier pass, not only against the members of its own
+original group.
+
+**What round 3 can actually prove, stated no more strongly than that.** Two distinct addresses (after the
+one deliberate case-insensitive merge) essentially never end this process tied, because level 3's hash is
+computed over the whole address, not the lossy slug that put them in the same bucket. The one case this
+cannot rule out by construction is a genuine `sha256` collision between two different addresses — real,
+but astronomically unlikely, and not specific to this scheme; such a pair is locked in at the full digest
+anyway, since there is nothing further worth trying. Round 2's own doc comments claimed the escalation
+"always eventually stops colliding" and that the fingerprint made two addresses "never" tie except by case
+— both stronger than round 2's code could actually prove, which is exactly how the hang above went
+unnoticed. Nothing in round 3's own comments claims more than the paragraph above states.
+
+**Round 3, also fixed — the length limit.** Round 2's own fallback fingerprint spent four base-36 digits
+*per character* of the local part, so a merely 26-character local part could exceed Discord's 100-character
+channel-name limit on its own, before any disambiguator was even added — and truncating that fingerprint to
+fit would have destroyed the very injectivity it existed to provide. Round 3's disambiguators are fixed-length
+(a full domain, or a short hash) regardless of the local part's own length, so the local part is the only
+part that can be arbitrarily long, and it is the only part `composeChannelName` ever truncates — the
+disambiguator is never shortened. `FakeDiscordGuildServer` (both copies — `apps/worker`'s own and `e2e`'s)
+now enforces the same 100-character limit the real API does, rather than echoing back whatever it is posted
+however long: a test could not previously see a name the real API would refuse, which is exactly the kind of
+drift the `normalizeChannelName` cleanup two paragraphs down was meant to end for this file generally.
+
+**Round 3, also fixed — an orphan reported when nothing was created.** `channelsOrphaned`'s own push used
+to happen before the `try { createGuildChannel }` around it, so a failed create reported *both*
+`channelsFailed` and `channelsOrphaned` for the same row — telling an instructor to go reconcile a stale
+channel against a new one that was never actually made. Moved inside the `try`, after the create resolves.
+The test that should have caught this only asserted the report field, not the guild's own state; it now
+also asserts that a failed create leaves the guild exactly as it was.
+
+**Not a defect, said plainly instead of left implicit.** A name is unique, never permanent
+(`docs/SPEC.md`'s own amendment to ROST-14): a joining or departing `ada` changes an incumbent's name, a
+new channel is created under the new one, and the old channel — still granting that student — is left
+behind, unreferenced by anything that looks for them by name. Two channels, one student, transcript
+stranded, until ROST-17 remembers a channel by the person it belongs to rather than by its current name.
+Reported now rather than left silent: `channelsOrphaned` fires whenever a fresh channel is about to be
+created for a member who already has view access to some other channel this course placed a student in.
+Nothing here deletes or merges the stale channel — a roster split across two imports (`ada` created via the
+ownership guard, then a later merged file disambiguating both `ada`s) can still leave a student with more
+than one stranded channel until ROST-17 lands; this is visibility, not closure.
+
+**A note on the previous draft's own D-84.** That entry claimed the ordinal scheme's instability was "a
+rename this handler cannot detect" — true as description of the mechanism, wrong as reassurance: there is
+no rename path anywhere in this handler, so a channel that silently changes owners between two imports is
+not renamed, it is handed to the wrong student outright. This entry replaces D-84's numbers and its
+framing; D-84 itself is deleted rather than left to stand beside a correction. Round 2's own three
+must-fixes are recorded above rather than as a second, separate entry, for the same reason: this is the
+current, corrected state of ROST-14/ROST-16, not a change log of everything that was ever wrong with it.
+
+**One duplication removed.** `normalizeChannelName` existed by hand in four places — `roster-import.ts`,
+`discord-scaffold.ts`, and both test fakes (`apps/worker/tests/helpers/fake-discord-guild-server.ts`,
+`e2e/support/fake-discord-guild-server.ts`, the latter as `slugifyChannelName`) — on the theory that an app
+does not share this kind of thing with another app, or a test helper, via a package it does not own. That
+theory is what let one of the four drift (a fake that echoed a posted name verbatim, unslugged), hiding a
+real bug for a week, because the fake no longer disagreed with the handler that was wrong. Exported once
+from `@bloombot/discord-rest` (`channel-naming.ts`) instead — every one of the four already crosses that
+boundary (three import a real client from it; the fourth stands in for the same client's own server), so
+this closes the drift for the cost of one export.
+
+**Verification (round 2).** Eight cases added to `apps/worker/tests/handlers/roster-import.test.ts`, two
+rewritten: two addresses that slug identically and share a domain (whitespace vs. dash) get distinct names
+and stay distinct across a re-import; a hand-added grant belonging to nobody on the roster does not refuse a
+match; an unresolved row is never refused its own existing channel even when that channel already grants
+another roster member; a genuine roster-internal rival grant is refused and the row's own fallback sequence
+supplies a name; that fallback is re-adopted, not recreated, on a re-import; a grant made moments earlier in
+the same run is visible to the very next row's own ownership check; and removing a colliding row frees the
+bare name for the remaining student while reporting the orphaned channel left behind. Every case was
+confirmed red against round 1's own commit (`9016ee3`) before being fixed.
+
+**Verification (round 3).** `npm run lint && npx prettier --check . && npm run typecheck` clean; `npm test`
+green. Four more cases: two addresses whose domains differ only by a separator (`my.school.edu` vs.
+`my-school.edu`) resolve to distinct names without hanging (the exact reproduction that motivated the
+rewrite — deliberately *not* re-run against round 2's own code in this pass, since round 2's version of it
+is a genuine hang and re-running it risks doing to this session what it already did to a worker process; the
+mechanism was instead confirmed by reading round 2's own diff, which is exactly the `.`/`-`-collapsing
+lockstep the fix targets); a 120-character local part is capped at 100 characters by truncating the local
+part, never the disambiguator, and the fake's own new length enforcement proves the result is something the
+real API would actually accept; and a failed create reports `channelsFailed` without also reporting
+`channelsOrphaned`, confirmed red against round 2's own commit (`105f55c`) by asserting the guild's state
+directly (that test's own predecessor asserted only the report field, which is why it did not catch this).
+The naming-disambiguation hazard test was strengthened to force a genuine cross-bucket clash under the new
+scheme (round 2's own version of it happened not to collide at all once the domain step changed from one
+label to the whole domain, so it was passing without exercising the clash-handling code it existed to
+prove). Two "cheap" cleanups alongside: `rosterMemberIds` and the per-row `member` are now both read from
+one upfront pass of `resolveMember`, rather than computed twice; `findChannelNamed` is defined once per run
+instead of once per row.

@@ -70,10 +70,11 @@
  * whatever the *handler* that ran it wrote back: a completed
  * `roster.import` job's own `RosterImportReport`
  * (`apps/worker/src/handlers/roster-import.ts`) carries a student's email
- * or Discord handle in eight of its own array fields
+ * or Discord handle in ten of its own array fields
  * (`unresolvedHandles`, `channelsCreated`, `channelsAlreadyPresent`,
  * `channelAccessGranted`, `channelsNotCreated`, `channelsFailed`,
- * `channelNameCollisions`, `ambiguousHandles`, plus `peopleCreated`/
+ * `channelNameDisambiguated`, `channelOwnershipConflicts`,
+ * `channelsOrphaned`, `ambiguousHandles`, plus `peopleCreated`/
  * `peopleMerged`/`rosterFieldsDeclined`). `roster.import` itself is
  * deliberately off this surface for exactly that reason (previous
  * paragraph); a first version of this file stripped only `payload` and

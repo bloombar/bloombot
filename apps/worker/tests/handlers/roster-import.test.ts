@@ -49,6 +49,18 @@ afterEach(async () => {
 const retryPolicy: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
 const HEADER = 'First,Last,Email,Discord,GitHub'
 
+/** Every `channelsCreated`/`channelsAlreadyPresent` entry a run reported, keyed by email — order-independent, since the whole point of ROST-14's scheme is that a row's name never depends on where it sits in the file. Shared by the ROST-14 and ROST-16 describe blocks below. */
+function namesByEmail(report: RosterImportReport): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const entry of [
+    ...report.channelsCreated,
+    ...report.channelsAlreadyPresent,
+  ]) {
+    out[entry.email] = entry.channelName
+  }
+  return out
+}
+
 /** Runs the handler directly (no queue) against `discordServer`. */
 async function runImport(
   organizationId: string,
@@ -489,40 +501,965 @@ describe('roster.import handler', () => {
     })
   })
 
-  // Rework finding 6: two different rows' emails slug to the same channel
-  // name — the second must be reported as a collision, not silently filed
-  // as "already present" (which reads as "already set up").
-  it('reports two different emails that slug to the same channel name as a collision, not a false already-present', async () => {
-    testDb = createTestDatabase()
-    discordServer = await FakeDiscordGuildServer.start()
-    const seeded = seedCourseWithStudentCategory()
-    discordServer.setGuildMembers(seeded.guildId, [
-      { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
-      { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
-    ])
+  // ROST-14: two different rows' emails slug to the same channel name
+  // (`ada@school.edu`/`ada@gmail.com` both to `ada`) — every row still gets
+  // a channel; the second is numbered rather than refused one, and reported
+  // so an instructor can still tell the two rows apart.
+  describe('ROST-14 — every row gets a channel, disambiguated by domain, never by row position', () => {
+    it('disambiguates two rows whose emails slug to the same name by domain, not position', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
 
-    const csv = [
-      HEADER,
-      'Ada,S,ada@school.edu,ada-school,gh1',
-      'Ada,G,ada@gmail.com,ada-gmail,gh2',
-    ].join('\n')
+      const csv = [
+        HEADER,
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
 
-    const report = await runImport(seeded.organizationId, seeded.courseId, csv)
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
 
-    expect(report.channelNameCollisions).toEqual([
-      {
-        line: 3,
-        email: 'ada@gmail.com',
-        channelName: 'ada',
-        collidesWithLine: 2,
-        collidesWithEmail: 'ada@school.edu',
-      },
-    ])
-    // Only the first row's own channel was ever created — the second was
-    // refused a channel entirely rather than sharing (or failing against)
-    // the first's.
-    expect(report.channelsCreated).toHaveLength(1)
-    expect(report.channelsAlreadyPresent).toEqual([])
+      expect(namesByEmail(report)).toEqual({
+        'ada@school.edu': 'ada-school-edu',
+        'ada@gmail.com': 'ada-gmail-com',
+      })
+      expect(report.channelNameDisambiguated).toEqual([
+        expect.objectContaining({
+          line: 2,
+          email: 'ada@school.edu',
+          baseChannelName: 'ada',
+          channelName: 'ada-school-edu',
+          sharesSlugWith: ['ada@gmail.com'],
+        }),
+        expect.objectContaining({
+          line: 3,
+          email: 'ada@gmail.com',
+          baseChannelName: 'ada',
+          channelName: 'ada-gmail-com',
+          sharesSlugWith: ['ada@school.edu'],
+        }),
+      ])
+      // Both rows got a channel — neither was refused one, and neither kept
+      // the bare `ada` (the SPEC's own worked example: both change).
+      expect(report.channelsCreated).toHaveLength(2)
+    })
+
+    // This is the test that would have caught the defect a positional
+    // ordinal scheme had: reversing the two colliding rows must not change
+    // either name. It fails against `e4a2507` (the reverted ordinal draft),
+    // where the row that comes first always keeps the bare name and the
+    // other is numbered — so swapping the rows swaps which student gets
+    // which channel.
+    it('produces the identical two names regardless of which row comes first', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+
+      const forward = [
+        HEADER,
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
+      const reversed = [
+        HEADER,
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+        'Ada,S,ada@school.edu,ada-school,gh1',
+      ].join('\n')
+
+      const forwardReport = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        forward
+      )
+      // Fresh database and guild for the reversed run — this test is about
+      // what one import derives from a given set of addresses, not about
+      // two imports of the same file.
+      testDb.cleanup()
+      await discordServer.stop()
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const reseeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(reseeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+      const reversedReport = await runImport(
+        reseeded.organizationId,
+        reseeded.courseId,
+        reversed
+      )
+
+      expect(namesByEmail(reversedReport)).toEqual(namesByEmail(forwardReport))
+    })
+
+    // Deliberately a *colliding* third row, not merely an unrelated one: an
+    // unrelated row never shifted anybody's ordinal even under the reverted
+    // positional scheme, so it would have passed for the wrong reason. What
+    // actually needs proving is that a third address sharing the same slug,
+    // inserted ahead of an existing colliding pair, does not perturb the
+    // names those two already had — the identical-roster reorder test above
+    // covers pure reordering; this one covers a change in *membership*.
+    it("changes neither existing student's name when a third colliding row is inserted ahead of them", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+
+      const withoutExtra = [
+        HEADER,
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
+      const withExtra = [
+        HEADER,
+        'Ada,H,ada@hotmail.com,ada-hotmail,gh0',
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
+
+      const without = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        withoutExtra
+      )
+      testDb.cleanup()
+      await discordServer.stop()
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const reseeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(reseeded.guildId, [
+        { user: { id: 'snowflake-ada-0', username: 'ada-hotmail' } },
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+      const withIt = await runImport(
+        reseeded.organizationId,
+        reseeded.courseId,
+        withExtra
+      )
+
+      expect(namesByEmail(withIt)['ada@school.edu']).toBe(
+        namesByEmail(without)['ada@school.edu']
+      )
+      expect(namesByEmail(withIt)['ada@gmail.com']).toBe(
+        namesByEmail(without)['ada@gmail.com']
+      )
+      // The third address got its own name too, in the same one shared
+      // namespace, not something disjoint from the other two.
+      expect(namesByEmail(withIt)['ada@hotmail.com']).toBe('ada-hotmail-com')
+    })
+
+    it('treats two rows for the same address, spelled with different letter case, as one student — one channel, not two', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+        'Ada,Lovelace,ADA@EXAMPLE.EDU,adalovelace,adal',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelsCreated).toHaveLength(1)
+      expect(report.channelsCreated[0]?.channelName).toBe('ada')
+      expect(report.channelNameDisambiguated).toEqual([])
+    })
+
+    it('disambiguates correctly, in either order, when a generated name would otherwise land on a real address', async () => {
+      // Three addresses: two slug to `ada` and would disambiguate to
+      // `ada-school-edu`/`ada-gmail-com` at level 2; the third's own local
+      // part is literally `ada-school-edu` — exactly the name
+      // `ada@school.edu` would otherwise land on. Both orderings must
+      // resolve every address to a name nothing else in the roster shares,
+      // and the address that already owned the name outright must never be
+      // the one that moves.
+      const rowsFor = (emails: string[]): string[] =>
+        emails.map((email, i) => `Ada,${i},${email},ada-${i},gh${i}`)
+
+      // Each call gets its own fresh database and guild — this test is
+      // about what one import derives from a given set of addresses, not
+      // about two imports of the same file — but leaves the *last* one
+      // standing for the shared `afterEach` above to tear down, rather than
+      // stopping it here too.
+      let priorServer: FakeDiscordGuildServer | undefined
+      async function runWithOrder(emails: string[]) {
+        if (priorServer) await priorServer.stop()
+        testDb = createTestDatabase()
+        discordServer = await FakeDiscordGuildServer.start()
+        const seeded = seedCourseWithStudentCategory()
+        discordServer.setGuildMembers(
+          seeded.guildId,
+          emails.map((_, i) => ({
+            user: { id: `snowflake-${i}`, username: `ada-${i}` },
+          }))
+        )
+        const csv = [HEADER, ...rowsFor(emails)].join('\n')
+        const report = await runImport(
+          seeded.organizationId,
+          seeded.courseId,
+          csv
+        )
+        priorServer = discordServer
+        return namesByEmail(report)
+      }
+
+      const addresses = [
+        'ada@school.edu',
+        'ada@gmail.com',
+        'ada-school-edu@evil.edu',
+      ]
+
+      const forward = await runWithOrder(addresses)
+      const reversed = await runWithOrder([...addresses].reverse())
+
+      // Every address got its own name, nothing shared, in both orders.
+      expect(new Set(Object.values(forward)).size).toBe(3)
+      expect(forward).toEqual(reversed)
+      // The address that already owned `ada-school-edu` outright (level 1)
+      // was never touched — it is `ada@school.edu`, escalating to avoid
+      // that name, that had to move to a level-3 hash instead.
+      expect(forward['ada-school-edu@evil.edu']).toBe('ada-school-edu')
+      expect(forward['ada@gmail.com']).toBe('ada-gmail-com')
+      expect(forward['ada@school.edu']).toMatch(/^ada-[0-9a-f]{8}$/)
+    })
+
+    // Round 2's must-fix 1: `normalizeChannelName` collapses whitespace to
+    // `-`, so these two addresses slug identically and share a domain — they
+    // tie at level 1 (identical local part) *and* level 2 (identical
+    // domain), leaving level 3's hash of the whole address (`levelThreeName`)
+    // as the only thing that tells them apart. Measured, before that level
+    // existed: row 1 created one channel, row 2 was filed
+    // `channelsAlreadyPresent` (a false "already set up"), and a later
+    // import granted both students the one channel row 1 made.
+    it('gives two addresses distinct names even when they slug identically and share a domain', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-1', username: 'row-one' } },
+        { user: { id: 'snowflake-2', username: 'row-two' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,One,ada b@x.edu,row-one,gh1',
+        'Ada,Two,ada-b@x.edu,row-two,gh2',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      // Both got a channel, and the two channels are actually different —
+      // not one created and the other misreported as already present.
+      expect(report.channelsCreated).toHaveLength(2)
+      const names = report.channelsCreated.map((c) => c.channelName)
+      expect(new Set(names).size).toBe(2)
+      expect(report.channelsAlreadyPresent).toEqual([])
+
+      // A re-import does not merge them onto one channel either — each
+      // address's own fingerprinted name is stable and distinct.
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toHaveLength(2)
+      const secondChannels = discordServer.guildChannelsFor(seeded.guildId) as {
+        name: string
+        permission_overwrites: { id: string; type: number }[]
+      }[]
+      for (const channelName of names) {
+        const channel = secondChannels.find((c) => c.name === channelName)
+        const individualGrants =
+          channel?.permission_overwrites.filter((o) => o.type === 1) ?? []
+        // Exactly one student ever has access to each of the two channels.
+        expect(individualGrants).toHaveLength(1)
+      }
+    })
+
+    // Round 3's own must-fix: the exact hang the coordinator measured. A
+    // round-2 draft escalated one domain *label* at a time and had no
+    // ceiling — `normalizeChannelName` collapses both `.` and `-` to the
+    // same `-`, so `my.school.edu` and `my-school.edu` produce the
+    // identical string at every label boundary, and that loop never
+    // converged (reproduced against the real handler: three rows, killed at
+    // 120s, ~117% CPU). This round's own scheme escalates the *whole*
+    // domain in one step (level 2) and falls back to a hash of the whole
+    // address (level 3) rather than looping over labels at all, so the
+    // identical pair below resolves in a small, fixed number of steps.
+    it('resolves two addresses whose domains differ only by a separator, without hanging', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-1', username: 'row-one' } },
+        { user: { id: 'snowflake-2', username: 'row-two' } },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,One,ada@my.school.edu,row-one,gh1',
+        'Ada,Two,ada@my-school.edu,row-two,gh2',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelsCreated).toHaveLength(2)
+      const names = report.channelsCreated.map((c) => c.channelName)
+      expect(new Set(names).size).toBe(2)
+    })
+
+    // Round 3's own must-fix: the previous scheme's disambiguator grew with
+    // the local part's own length (four base-36 digits *per character*), so
+    // a merely 26-character local part could exceed Discord's 100-character
+    // limit before the suffix was even added. This scheme's own
+    // disambiguators are fixed-length (a full domain, or a short hash), so
+    // only an implausibly long local part can still push a name over the
+    // limit — handled by truncating the local part itself, never the
+    // disambiguator (`composeChannelName`'s own doc comment).
+    it('caps a generated name at 100 characters by truncating the local part, never the disambiguator', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-1', username: 'row-one' } },
+      ])
+
+      const longLocalPart = 'a'.repeat(120)
+      const csv = [
+        HEADER,
+        `Ada,Long,${longLocalPart}@example.edu,row-one,gh1`,
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelsCreated).toHaveLength(1)
+      const created = report.channelsCreated[0]
+      expect(created?.channelName.length).toBeLessThanOrEqual(100)
+      // The fake enforces Discord's own real limit — a name over it would
+      // have come back as a failed create, not a silently-accepted one.
+      expect(report.channelsFailed).toEqual([])
+    })
+
+    it('re-imports an unchanged colliding roster without creating or renaming anything', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
+
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      const createCallsAfterFirstRun = discordServer.writeRequests().length
+
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(discordServer.writeRequests()).toHaveLength(
+        createCallsAfterFirstRun
+      )
+      expect(second.channelsCreated).toEqual([])
+      expect(namesByEmail(second)).toEqual(namesByEmail(first))
+    })
+
+    it('gives a disambiguated channel the same @everyone deny, admins-role grant and individual student grant as an unsuffixed one', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-1', username: 'ada-school' } },
+        { user: { id: 'snowflake-ada-2', username: 'ada-gmail' } },
+      ])
+      const csv = [
+        HEADER,
+        'Ada,S,ada@school.edu,ada-school,gh1',
+        'Ada,G,ada@gmail.com,ada-gmail,gh2',
+      ].join('\n')
+
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        name: string
+        permission_overwrites: { id: string; type: number; deny: string }[]
+      }[]
+      const first = channels.find((c) => c.name === 'ada-school-edu')
+      const second = channels.find((c) => c.name === 'ada-gmail-com')
+      expect(first).toBeDefined()
+      expect(second).toBeDefined()
+
+      const overwriteTargets = (
+        overwrites: { id: string; type: number }[]
+      ): string[] => overwrites.map((o) => o.id).sort()
+      expect(overwriteTargets(first!.permission_overwrites)).toEqual(
+        [seeded.guildId, 'role-admins', 'snowflake-ada-1'].sort()
+      )
+      expect(overwriteTargets(second!.permission_overwrites)).toEqual(
+        [seeded.guildId, 'role-admins', 'snowflake-ada-2'].sort()
+      )
+    })
+  })
+
+  describe('ROST-16 — a channel is never handed to a student it does not belong to', () => {
+    it('still matches an existing channel that grants nobody but the expected roles — the ordinary, non-conflicting case', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelOwnershipConflicts).toEqual([])
+      expect(report.channelAccessGranted).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+    })
+
+    // Round 2's must-fix 2: a grant the platform did not put there and does
+    // not recognize (a teaching assistant, added by hand) must not evict the
+    // student whose channel it actually is — the TA's id resolves for no row
+    // of this roster at all, so it is not a rival owner.
+    it('does not refuse a match because of a hand-added grant that belongs to nobody on this roster', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+        { user: { id: 'snowflake-ta', username: 'the-ta' } },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            // A teaching assistant an instructor granted access by hand —
+            // not a row on this roster at all.
+            { id: 'snowflake-ta', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelOwnershipConflicts).toEqual([])
+      expect(report.channelAccessGranted).toEqual([
+        expect.objectContaining({ channelName: 'ada' }),
+      ])
+      // The TA's own grant survives — nothing this run does removes an
+      // overwrite it did not put there.
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        id: string
+        permission_overwrites: { id: string }[]
+      }[]
+      const chanAda = channels.find((c) => c.id === 'chan-ada')
+      expect(chanAda?.permission_overwrites.map((o) => o.id)).toContain(
+        'snowflake-ta'
+      )
+    })
+
+    // Round 2's must-fix 2, second half: a row whose own handle never
+    // resolved identifies no rival owner at all — refusing its own match
+    // would evict a student the platform cannot even currently name, on the
+    // strength of nothing.
+    it('never refuses an unresolved row its own existing channel, even when that channel already grants another roster member', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      // "alice" resolves; "ada-renamed" (this row's own handle) does not —
+      // as if Ada renamed her Discord account since the last import.
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-alice', username: 'alice' } },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+        {
+          id: 'chan-alice',
+          type: 0,
+          name: 'alice',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+
+      const csv = [
+        HEADER,
+        'Alice,A,alice@keep.edu,alice,gh-a',
+        'Ada,Lovelace,ada@example.edu,ada-renamed,gh-b',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.unresolvedHandles).toEqual([
+        expect.objectContaining({ discord: 'ada-renamed' }),
+      ])
+      expect(report.channelOwnershipConflicts).toEqual([])
+      expect(report.channelsCreated).toEqual([])
+      expect(report.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({
+          email: 'alice@keep.edu',
+          channelName: 'alice',
+        }),
+        expect.objectContaining({
+          email: 'ada@example.edu',
+          channelName: 'ada',
+        }),
+      ])
+    })
+
+    // The genuine case this guard exists for: the member already granted is
+    // resolved for a *different row of this same roster* — a real rival.
+    it('refuses a match granting a different roster member, and derives a fallback name from its own address', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-alice', username: 'alice' } },
+        { user: { id: 'snowflake-ada-new', username: 'ada-new' } },
+      ])
+      // A channel named `ada` already exists, granting Alice — who is a
+      // real row on *this* roster, just not the one this name belongs to.
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+        {
+          id: 'chan-alice',
+          type: 0,
+          name: 'alice',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+
+      const csv = [
+        HEADER,
+        'Alice,A,alice@keep.edu,alice,gh-a',
+        'Ada,New,ada@newmail.edu,ada-new,gh-b',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(report.channelOwnershipConflicts).toEqual([
+        {
+          line: 3,
+          email: 'ada@newmail.edu',
+          conflictingChannelName: 'ada',
+          newChannelName: 'ada-newmail-edu',
+        },
+      ])
+      expect(report.channelsCreated).toEqual([
+        expect.objectContaining({
+          email: 'ada@newmail.edu',
+          channelName: 'ada-newmail-edu',
+        }),
+      ])
+      expect(report.channelAccessGranted).toEqual([]) // Alice's own channel was not touched.
+
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        id: string
+        permission_overwrites: unknown[]
+      }[]
+      const original = channels.find((c) => c.id === 'chan-ada')
+      expect(original?.permission_overwrites).toHaveLength(3)
+    })
+
+    // Round 2's must-fix 3: the fallback name is derived from the row's own
+    // address, so a second import of the *same* roster (Alice's channel
+    // still granting her, still colliding by name) lands on the identical
+    // fallback name and re-adopts the channel this run already created,
+    // rather than creating a second one on every run.
+    it('re-adopts its own conflict-fallback channel on a re-import, rather than creating another', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-alice', username: 'alice' } },
+        { user: { id: 'snowflake-ada-new', username: 'ada-new' } },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+        {
+          id: 'chan-alice',
+          type: 0,
+          name: 'alice',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+            { id: 'snowflake-alice', type: 1, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+      const csv = [
+        HEADER,
+        'Alice,A,alice@keep.edu,alice,gh-a',
+        'Ada,New,ada@newmail.edu,ada-new,gh-b',
+      ].join('\n')
+
+      const first = await runImport(seeded.organizationId, seeded.courseId, csv)
+      expect(first.channelsCreated).toHaveLength(1)
+      const createCallsAfterFirstRun = discordServer.writeRequests().length
+
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      expect(second.channelsCreated).toEqual([])
+      expect(second.channelsAlreadyPresent).toEqual([
+        expect.objectContaining({
+          email: 'alice@keep.edu',
+          channelName: 'alice',
+        }),
+        expect.objectContaining({
+          email: 'ada@newmail.edu',
+          channelName: 'ada-newmail-edu',
+        }),
+      ])
+      expect(discordServer.writeRequests()).toHaveLength(
+        createCallsAfterFirstRun
+      )
+    })
+
+    // Round 2's honesty finding: this is not a defect this slice can close
+    // (`ChannelOrphanedEntry`'s own doc comment), but it must not be silent.
+    // Removing a colliding row frees the bare name for the address that
+    // shared it — the same mechanism a roster "split" across two imports
+    // (a merged file that used to include both `ada`s, now imported without
+    // one of them) produces. The freed name is a genuinely new channel; the
+    // student's previous one is left behind, still granting them.
+    // Round 2's must-fix 1 (second half): `channelBelongsToSomeoneElse` used
+    // to read the channel list `listGuildChannels` returned at the top of
+    // the run, never updated after a `grantChannelMemberAccess` call — so a
+    // grant this same run made moments earlier, for a different row, was
+    // invisible to the very next row's own ownership check.
+    it("keeps a channel's own permissions current within one run, so a grant just made for one row is not invisible to the very next row's ownership check", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-x', username: 'ada-x' } },
+        { user: { id: 'snowflake-y', username: 'ada-y' } },
+      ])
+      // A channel already exists, admin-only — as if created before either
+      // student had joined the server.
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          name: 'Test Course - STUDENTS 01',
+          parent_id: null,
+        },
+        {
+          id: 'chan-ada',
+          type: 0,
+          name: 'ada',
+          parent_id: 'cat-1',
+          permission_overwrites: [
+            { id: seeded.guildId, type: 0, allow: '0', deny: '1024' },
+            { id: 'role-admins', type: 0, allow: '3072', deny: '0' },
+          ],
+        },
+      ])
+      // Two rows for the same address (a duplicate, mistakenly given two
+      // different Discord handles) — both now resolve, to two different
+      // real members. Both target the identical, already-existing `ada`
+      // channel: `assignChannelNames` treats one address as one name.
+      const csv = [
+        HEADER,
+        'Ada,X,ada@example.edu,ada-x,gh1',
+        'Ada,Y,ada@example.edu,ada-y,gh2',
+      ].join('\n')
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      // The first row's own grant repairs the channel; the second row's own
+      // grant must be refused — on the strength of the *first* row's own
+      // grant, which exists only because this run just made it moments
+      // earlier.
+      expect(report.channelAccessGranted).toEqual([
+        expect.objectContaining({
+          email: 'ada@example.edu',
+          channelName: 'ada',
+        }),
+      ])
+      expect(report.channelOwnershipConflicts).toEqual([
+        expect.objectContaining({
+          email: 'ada@example.edu',
+          conflictingChannelName: 'ada',
+        }),
+      ])
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        name: string
+        permission_overwrites: { id: string; type: number }[]
+      }[]
+      const chanAda = channels.find((c) => c.name === 'ada')
+      const individualGrants =
+        chanAda?.permission_overwrites.filter((o) => o.type === 1) ?? []
+      // Only the first row's own member ever got access to this channel.
+      expect(individualGrants.map((o) => o.id)).toEqual(['snowflake-x'])
+    })
+
+    it('reports an orphaned channel when removing a colliding row frees the bare name for the remaining student', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-a', username: 'ada-a' } },
+        { user: { id: 'snowflake-ada-b', username: 'ada-b' } },
+      ])
+      const firstCsv = [
+        HEADER,
+        'Ada,A,ada@a.edu,ada-a,gh-a',
+        'Ada,B,ada@b.edu,ada-b,gh-b',
+      ].join('\n')
+      const first = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        firstCsv
+      )
+      expect(namesByEmail(first)).toEqual({
+        'ada@a.edu': 'ada-a-edu',
+        'ada@b.edu': 'ada-b-edu',
+      })
+
+      // The second import's roster no longer includes `ada@b.edu` — `ada@a.edu`
+      // is now the only address slugging to `ada`, so it is entitled to the
+      // bare name again.
+      const secondCsv = [HEADER, 'Ada,A,ada@a.edu,ada-a,gh-a'].join('\n')
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        secondCsv
+      )
+
+      expect(namesByEmail(second)['ada@a.edu']).toBe('ada')
+      expect(second.channelsOrphaned).toEqual([
+        {
+          line: 2,
+          email: 'ada@a.edu',
+          previousChannelName: 'ada-a-edu',
+          newChannelName: 'ada',
+        },
+      ])
+      // All three text channels still exist — `ada-b-edu` (Ada B's own,
+      // never touched by the second import at all) and both of Ada A's,
+      // old and new. Nothing was deleted or migrated, only reported.
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        name: string
+        type: number
+      }[]
+      expect(
+        channels
+          .filter((c) => c.type === 0)
+          .map((c) => c.name)
+          .sort()
+      ).toEqual(['ada', 'ada-a-edu', 'ada-b-edu'])
+    })
+
+    // Round 3's own must-fix: the orphan push used to happen before the
+    // `createGuildChannel` call, so a failed create reported *both*
+    // `channelsFailed` and `channelsOrphaned` — telling the instructor to
+    // go reconcile a stale channel against a new one that was never
+    // actually made. It must only fire once the create really succeeds.
+    it('does not report an orphan when the new channel fails to create', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada-a', username: 'ada-a' } },
+        { user: { id: 'snowflake-ada-b', username: 'ada-b' } },
+      ])
+      const firstCsv = [
+        HEADER,
+        'Ada,A,ada@a.edu,ada-a,gh-a',
+        'Ada,B,ada@b.edu,ada-b,gh-b',
+      ].join('\n')
+      await runImport(seeded.organizationId, seeded.courseId, firstCsv)
+
+      // The second import's roster is down to just `ada@a.edu` again, so it
+      // is entitled to the bare `ada` — but this run's own create for it is
+      // made to fail.
+      discordServer.failNextChannelCreate(500, { message: 'server error' })
+      const secondCsv = [HEADER, 'Ada,A,ada@a.edu,ada-a,gh-a'].join('\n')
+      const second = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        secondCsv
+      )
+
+      expect(second.channelsFailed).toEqual([
+        expect.objectContaining({ email: 'ada@a.edu', channelName: 'ada' }),
+      ])
+      // No orphan reported — nothing new was actually created for there to
+      // be a stale channel to reconcile it against.
+      expect(second.channelsOrphaned).toEqual([])
+      // Only the one channel from the first import exists.
+      const channels = discordServer.guildChannelsFor(seeded.guildId) as {
+        name: string
+        type: number
+      }[]
+      expect(
+        channels
+          .filter((c) => c.type === 0)
+          .map((c) => c.name)
+          .sort()
+      ).toEqual(['ada-a-edu', 'ada-b-edu'])
+    })
   })
 
   describe('rework finding 8 — handle resolution prefers an exact username match over a nickname', () => {

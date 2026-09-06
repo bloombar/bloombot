@@ -52,6 +52,7 @@
  * untouched — Discord does not slug a category's name the same way.
  */
 
+import { normalizeChannelName } from '@bloombot/discord-rest'
 import {
   createServer,
   type IncomingMessage,
@@ -69,10 +70,10 @@ export interface RecordedRequest {
 /** Discord's own channel-type enum (API v10) — `0` is `GUILD_TEXT`, the only type this fake slugs a created name for; see this file's own module comment. */
 const CHANNEL_TYPE_GUILD_TEXT = 0
 
-/** Discord's own slugging of a `GUILD_TEXT` channel's name at creation — lowercase, whitespace runs collapsed to a single `-`. See this file's own module comment for why echoing it here (finding 1 of the SRV-6..8 rework) matters. */
-function slugifyChannelName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, '-')
-}
+/** Discord's own real channel-name length limit (API v10) — enforced below the same way the real API would refuse a create with a `name` over this, so a test cannot see a name the real API would reject: round 3's own must-fix. Before this, this fake simply echoed back whatever name it was posted, however long, which is exactly the kind of drift the `normalizeChannelName` cleanup (this file's own module comment) was meant to end. */
+const MAX_CHANNEL_NAME_LENGTH = 100
+
+/** Discord's own slugging of a `GUILD_TEXT` channel's name at creation — `@bloombot/discord-rest`'s own `normalizeChannelName`, not a hand-copied re-implementation: that drift (this fake used to echo a posted name verbatim, unslugged) is exactly what hid a real bug for a week — see this file's own module comment and `channel-naming.ts`'s. */
 
 /** The bot's own user id this fake reports from `/users/@me`, exported so a test can assert the overwrite the scaffold grants itself. */
 export const FAKE_BOT_USER_ID = 'fake-bot-user-id'
@@ -209,6 +210,18 @@ export class FakeDiscordGuildServer {
         }
         const postedName = parsedBody?.['name']
         const postedType = parsedBody?.['type']
+        if (
+          typeof postedName === 'string' &&
+          postedName.length > MAX_CHANNEL_NAME_LENGTH
+        ) {
+          this.respondJson(res, 400, {
+            message: 'Invalid Form Body',
+            errors: {
+              name: { _errors: [{ message: 'String value too long' }] },
+            },
+          })
+          return
+        }
         const created = {
           id: String(this.nextChannelId++),
           parent_id: null,
@@ -218,7 +231,7 @@ export class FakeDiscordGuildServer {
           // Discord's real API slugs it; a `GUILD_CATEGORY`'s is not.
           ...(postedType === CHANNEL_TYPE_GUILD_TEXT &&
           typeof postedName === 'string'
-            ? { name: slugifyChannelName(postedName) }
+            ? { name: normalizeChannelName(postedName) }
             : {}),
         }
         const existing = this.guildChannels.get(guildId) ?? []

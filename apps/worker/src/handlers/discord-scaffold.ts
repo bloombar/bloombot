@@ -82,6 +82,7 @@ import {
   denyEveryoneOverwrite,
   describeDiscordError,
   DiscordRequestError,
+  normalizeChannelName,
   overwriteAllowsView,
   overwriteDeniesView,
   type DiscordChannel,
@@ -214,11 +215,11 @@ function normalizeName(name: string): string {
  * chat` and a guild's own `general-chat` compare equal. `GUILD_CATEGORY`
  * names are not slugged this way — Discord stores and returns a category's
  * name verbatim but for case/whitespace, so categories keep using
- * `normalizeName` above.
+ * `normalizeName` above. `normalizeChannelName` itself now lives in
+ * `@bloombot/discord-rest` (`channel-naming.ts`'s own module comment has
+ * the reasoning for why this stopped being copied by hand) — imported
+ * above, not redefined here.
  */
-function normalizeChannelName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, '-')
-}
 
 function resolveRoleId(
   roles: { id: string; name: string }[],

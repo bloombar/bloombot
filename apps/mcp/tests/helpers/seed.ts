@@ -169,8 +169,11 @@ export function seedCompletedRosterImportJob(
     channelAccessGrantFailed: [],
     channelsNotCreated: [],
     channelsFailed: [],
-    channelNameCollisions: [],
+    channelNameDisambiguated: [],
+    channelOwnershipConflicts: [],
+    channelsOrphaned: [],
     unresolvedRoles: [],
+    rolesCreated: [],
     limitations: [],
   }
   jobs.completeJob(

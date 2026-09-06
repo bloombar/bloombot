@@ -394,16 +394,33 @@ test("a course's settings tabs are real addresses — switching, reloading and s
     'aria-selected',
     'true'
   )
-  // Review note: where focus lands after the dialog closes. `goToTab`
-  // focuses the newly selected tab, but `Modal`'s own `dialog.close()`
-  // runs afterwards and the browser's restoration hands focus back to
-  // whatever opened the dialog — the tab button that was clicked, which by
-  // then carries `tabIndex={-1}`. jsdom's `<dialog>` polyfill cannot see
-  // this at all (`apps/web/tests/setup.ts`), so a real browser is the only
-  // place it can be asserted: focus must be on the tab now selected, so
-  // the keyboard's next Left/Right moves from where the reader actually
-  // is.
-  await expect(page.getByRole('tab', { name: 'Roster' })).toBeFocused()
   await page.getByRole('tab', { name: 'General' }).click()
   await expect(page.getByLabel('Title')).toHaveValue(editedTitle)
+
+  // Where focus lands once the dialog closes. `goToTab` focuses the newly
+  // selected tab, but `Modal`'s own `dialog.close()` runs afterwards and
+  // the browser's restoration hands focus back to whatever *opened* the
+  // dialog. Round 2, finding 3: asserting this after a mouse click proves
+  // nothing, because the clicked tab is both the opener and the
+  // destination, so either mechanism satisfies it — the reviewer deleted
+  // `goToTab`'s own `.focus()`, rebuilt the bundle and watched that
+  // version still pass.
+  //
+  // The keyboard path is the one where the two differ: arrow keys move
+  // selection to the *next* tab while focus (and so the dialog's opener)
+  // is still on the current one. jsdom's `<dialog>` polyfill cannot see
+  // any of this, so a real browser is the only place it can be checked.
+  await page.getByLabel('Title').fill(`${editedTitle} (abandoned again)`)
+  await page.getByRole('tab', { name: 'General' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await page.getByRole('button', { name: 'Discard changes' }).click()
+  await expect(page.getByRole('tab', { name: 'AI' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  // Fails if `goToTab` stops moving focus itself: restoration would put it
+  // back on General, the tab that opened the dialog and is no longer
+  // selected — leaving the next Left/Right to move from somewhere the
+  // reader is not.
+  await expect(page.getByRole('tab', { name: 'AI' })).toBeFocused()
 })

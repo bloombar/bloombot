@@ -2257,12 +2257,13 @@ Leaving a tab with unsaved settings asks first, and offers three answers rather 
 save the changes and carry on to the tab that was clicked, discard them and carry on, or stay on
 this tab with the edit intact. Cancel and `Escape` both mean stay.
 
-A save the server refuses never reaches the tab that was clicked. Where it does leave the person is
-wherever the refusal can actually be read: a refusal naming a field lands on that field's own tab, so
-the inline message is in front of them (WEB-16) — often the tab they were already on — and a refusal
-naming no field this form renders leaves them exactly where they were. Either way the edit is still
-unsaved and still theirs. Carrying on to the requested tab regardless would leave the message
-somewhere nobody is looking.
+A save the server refuses lands wherever the refusal can actually be read, and never as a consequence
+of the click. A refusal naming a field goes to that field's own tab, so the inline message is in front
+of them (WEB-16) — sometimes the tab they were already on, sometimes, where two fields share a tab,
+the very tab they had clicked — and a refusal naming no field this form renders leaves them exactly
+where they were. Either way the edit is still unsaved and still theirs, and the prompt itself never
+carries them onward. Carrying on to the requested tab regardless would leave the message somewhere
+nobody is looking.
 
 An unsaved edit to a course's instructions counts as unsaved settings too, even though that section
 keeps its own text and its own save. Saving it is its own request, so a save accepted there and then

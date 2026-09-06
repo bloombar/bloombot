@@ -82,6 +82,8 @@ import { useModal } from './modal/ModalProvider.js'
 export interface CourseInstructionsActions {
   /** Saves the pending edit. Resolves `true` when it was written, `false` when the save was refused (the refusal is rendered inline here, as it already is for the section's own Save button). */
   save: () => Promise<boolean>
+  /** Whether a save is in flight *right now* — read synchronously, so the page's tab prompt can decline to open over a save this section has already started (round 2, finding 5). */
+  isSaving: () => boolean
   /** Throws the pending edit away, putting the textarea back to the current revision's own text. */
   discard: () => void
 }
@@ -215,11 +217,14 @@ export function CourseInstructions({
       // again and write a second, identical revision.
       setBaseline(saved)
       if (!hasPendingEditRef.current) setText(saved)
-      const list = await refresh({ force: true })
-      // A failed list is a failed *read* — it is reported inline through
-      // `loadError` and leaves the history stale, but the save itself
-      // stands and this section is no longer dirty.
-      if (list === undefined) hasPendingEditRef.current = false
+      // A failed list is a failed *read*: reported inline through
+      // `loadError`, leaving the history stale, while the save itself
+      // stands and this section is already reconciled above. Nothing here
+      // touches `hasPendingEditRef` — clearing it would tell the next
+      // background `refresh` it may overwrite an edit typed during this
+      // round trip, which is the bug that ref exists to prevent (round 2,
+      // non-blocking note).
+      await refresh({ force: true })
       return true
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
@@ -242,7 +247,13 @@ export function CourseInstructions({
   }, [baseline])
 
   useEffect(() => {
-    onRegisterActions?.({ save: handleSave, discard: handleDiscard })
+    onRegisterActions?.({
+      save: handleSave,
+      discard: handleDiscard,
+      // Reads the ref, not `saving`, so the answer is current at the
+      // moment it is asked rather than as of the last render.
+      isSaving: () => savingRef.current,
+    })
     // Unregistered on unmount so the page never holds handles onto a
     // section that is no longer on screen (the same discipline
     // `hooks/useUnsavedChangesGuard.ts` follows for its own guard).

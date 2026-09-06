@@ -714,13 +714,6 @@ export function CourseEditor({
    * action with its own failure (`components/CourseInstructions.tsx`'s own
    * module comment on why they were never folded into one call), and a
    * half that is already clean is not re-sent.
-   */
-  /**
-   * Saves whatever is actually unsaved, and reports whether all of it
-   * landed. Instructions first, then the course form: each is its own
-   * action with its own failure (`components/CourseInstructions.tsx`'s own
-   * module comment on why they were never folded into one call), and a
-   * half that is already clean is not re-sent.
    *
    * Review must-fix 4: an instructions edit this page cannot reach is a
    * failure, not a success. `instructionsActionsRef` is `null` only when
@@ -755,6 +748,10 @@ export function CourseEditor({
   const discardDirtyWork = () => {
     setForm(baseline)
     setError(undefined)
+    // Round 2, finding 4: cleared with the refusal it explains. Left
+    // behind, "your instructions were saved before this was refused"
+    // stayed on screen after a later discard, with no refusal in sight.
+    setHalfSaved(false)
     instructionsActionsRef.current?.discard()
   }
 
@@ -771,15 +768,19 @@ export function CourseEditor({
    * confirm would have to fold "discard" and "stay here" together, and
    * either answer is wrong for half the people who meant the other.
    *
-   * **A refused save never reaches the tab that was clicked** (WEB-38).
-   * Where it leaves the person is `switchToTabForField`'s call, not this
-   * one: a refusal naming a field lands on that field's own tab so the
-   * inline message is actually visible (WEB-16), which may be the tab they
-   * were already on, and a refusal naming no field this form renders
-   * leaves them exactly where they were. Either way the edit is still
-   * unsaved and still theirs to deal with — review must-fix 2, which found
-   * this file's own comment claiming "stays on the tab they were on"
-   * while the code did the more useful thing.
+   * **A refused save lands wherever the refusal can be read** (WEB-38) —
+   * never as a consequence of the click. `switchToTabForField`, not this
+   * function, decides: a refusal naming a field goes to that field's own
+   * tab so the inline message is visible (WEB-16), which may or may not be
+   * the tab that was clicked (`model` and `maxRequestsPerDay` both live on
+   * AI, so a refusal naming either lands on AI whether or not AI is where
+   * the click was headed); a refusal naming no field this form renders
+   * leaves the person exactly where they were. Either way the edit is
+   * still unsaved and still theirs to deal with, and the prompt itself
+   * never carries them onward. Review round 1 found this comment claiming
+   * "stays on the tab they were on"; round 2 found the replacement
+   * ("never reaches the tab that was clicked") false in the other
+   * direction. This is the narrow true statement.
    *
    * Review must-fix 1: while a save is in flight — this one's, or the
    * `Save course` button's — a tab click is ignored rather than opening a
@@ -789,7 +790,14 @@ export function CourseEditor({
    */
   const goToTabGuarded = async (next: CourseEditorTab) => {
     if (next === activeTabRef.current) return
+    // Round 2, finding 5: the instructions section's *own* Save counts as
+    // a save in flight too. Without it the prompt opened, "Save changes"
+    // hit that section's own in-flight guard, and the whole thing closed
+    // having done nothing and said nothing — no duplicate request, but a
+    // silent dead end. Not opening the prompt at all is the honest
+    // version of "a save is already running."
     if (saving || switchSaving) return
+    if (instructionsActionsRef.current?.isSaving()) return
     if (!isDirty) {
       goToTab(next)
       return

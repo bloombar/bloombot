@@ -786,7 +786,7 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
   // all promised General — and fails outright if anyone ever "fixes" the
   // code to the old prose, since the inline message would then render on a
   // tab nobody is looking at.
-  it('a refused save naming a field lands on that field’s own tab, never on the tab that was clicked', async () => {
+  it('a refused save naming a field lands on that field’s own tab, not on the tab the click asked for', async () => {
     getCourse.mockResolvedValue(COURSE)
     saveCourse.mockRejectedValue(
       new ApiError(400, {
@@ -820,7 +820,11 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
     expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
       'This role no longer exists on the bound Discord server.'
     )
-    // Never the tab that was clicked, and the edit is still unsaved.
+    // Not the tab the click asked for — though where a refusal lands is
+    // the refused *field's* tab, which can coincide with the clicked one
+    // (`model` and `maxRequestsPerDay` both live on AI). `adminsRole` is
+    // chosen here precisely so the two differ and the assertion means
+    // something (round 2, finding 1).
     expect(onNavigateTab).not.toHaveBeenCalledWith('ai')
     expect(screen.getByRole('tab', { name: 'AI' })).toHaveAttribute(
       'aria-selected',
@@ -906,6 +910,115 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
     releaseInstructions({ saved: true })
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+    )
+  })
+
+  // Round 2, finding 4: the half-commit notice must not outlive the
+  // refusal it explains — `discardDirtyWork` cleared `error` but not this.
+  it('says when a save half-committed, and stops saying it once the rest is discarded', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourseInstructions.mockResolvedValue({ saved: true })
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: { message: 'Category name "GLOBAL" is already used.' },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    // Both halves dirty: the instructions, and the form (Model lives on
+    // this same tab).
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'gpt-4o-mini' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // The instructions went through; the form did not.
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalled())
+    expect(
+      await screen.findByText(/instructions were saved before this was refused/)
+    ).toBeInTheDocument()
+
+    // Discard the rest: the refusal goes, and so must the notice about it.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/instructions were saved before this was refused/)
+      ).not.toBeInTheDocument()
+    )
+  })
+
+  // Round 2, finding 5: a tab click while the *instructions section's own*
+  // Save is in flight used to open the prompt, run into that section's own
+  // in-flight guard, and close having done and said nothing.
+  it('does not open the prompt while the instructions section is already saving', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    let release: (value: unknown) => void = () => {}
+    saveCourseInstructions.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve
+      })
+    )
+    const onNavigateTab = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onNavigateTab={onNavigateTab}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    // That section's own button, not the prompt's.
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }))
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    expect(onNavigateTab).not.toHaveBeenCalled()
+    expect(saveCourseInstructions).toHaveBeenCalledTimes(1)
+
+    // Released so the pending save cannot leak into the next case. What
+    // happens *after* it lands is deliberately not asserted here: whether
+    // the next click prompts depends on `instructionsDirty` having
+    // propagated through its own effect, which is a render-timing race
+    // rather than behaviour — asserting it made this case fail roughly one
+    // run in six. The clean-form path it would have covered is already its
+    // own case ("switching tabs with nothing unsaved calls onNavigateTab
+    // and asks nothing").
+    release({ id: 'course-1', instructions: 'Cite the syllabus.' })
+    await waitFor(() =>
+      expect(screen.getByLabelText('Instructions')).toHaveValue('')
     )
   })
 

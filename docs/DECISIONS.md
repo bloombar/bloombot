@@ -9054,9 +9054,10 @@ with no review step in between.
 
 **A tab switch asks before abandoning an edit (WEB-38).** `goToTabGuarded` wraps the tab controls' own
 `goToTab`: with anything unsaved it asks, with three answers — save and go, discard and go, or stay
-(Cancel and `Escape`). A refused save never reaches the tab that was clicked; where it *does*
-leave the person is `switchToTabForField`'s decision, not the prompt's — a refusal naming a field lands
-on that field's own tab so the inline message is visible (WEB-16), a refusal naming no rendered field
+(Cancel and `Escape`). A refused save lands wherever the refusal can be read, never as a
+consequence of the click: `switchToTabForField` decides, not the prompt — a refusal naming a field goes
+to that field's own tab so the inline message is visible (WEB-16), which may be the tab that was
+clicked (`model` and `maxRequestsPerDay` share the AI tab), and a refusal naming no rendered field
 leaves them where they were. Review must-fix 2 caught this file, the SPEC and the docblock all claiming
 the weaker "stays on the tab they were on" while the code did the more useful thing; the docs moved to
 the code, and both paths now have tests (a 409 with no `issues` array exercised neither, which is why
@@ -9085,7 +9086,7 @@ which now treats a `choice` the way it already treated a `confirm` (a meaningful
 `undefined`).
 
 **Verification.** `npm run lint && npm run format:check && npm run typecheck` clean; `npm test` green
-(2480 vitest, 90 node). Nine new cases, each confirmed red against the pre-change code in a throwaway
+(2488 vitest, 90 node). Nine new cases, each confirmed red against the pre-change code in a throwaway
 worktree: `tests/course-editor.test.tsx` (neither enable/disable button renders and unticking + Save sends
 `enabled: false` through `courses.save`; Cancel keeps both the tab and the edit; Discard resets the form
 and switches; Save saves then switches; a refused save never reaches the clicked tab, landing instead on the refused field's own tab and
@@ -9110,12 +9111,19 @@ were found at all:
    `CourseInstructions.handleSave` refuses a second save through `savingRef` — a ref, not state, since
    the prompt can call it in the same tick as that section's own button.
 2. **A refused save moved the tab** — see above; the documentation was wrong, not the behaviour, and
-   the original test hid it by using a 409 with no `issues` array.
+   the original test hid it by using a 409 with no `issues` array. Round 2 then found the replacement
+   claim ("never reaches the tab that was clicked") false in the other direction, since two fields
+   share the AI tab; the wording above is the narrow true one, and the lesson — twice now — is that
+   the documentation kept reaching further than the code had earned.
 3. **`instructionsDirty` could survive a successful save.** `refresh` swallows an `ApiError` and returns
    `undefined`, so a 500 on the follow-up history read left `baseline` behind the text the server had
    already stored: still "dirty" over a saved edit, prompting again on the next tab click and writing a
    second identical revision. `handleSave` now reconciles `baseline` to the text it just saved itself,
-   rather than depending on the list coming back; a failed list is reported as the read failure it is.
+   rather than depending on the list coming back; a failed list is surfaced through this section's ordinary
+   load-error path, which renders the generic refusal message rather than one naming the read
+   specifically — the save stands and the section is clean, but the on-screen wording does not itself
+   distinguish a failed history read from a failed save (round 2, honestly narrowed rather than
+   claimed).
 4. **An unreachable instructions section counted as saved.** `undefined` from an absent
    `instructionsActionsRef` fell through to success. Unreachable today (a visited tab stays mounted) but
    load-bearing on an invariant nothing asserts, so it now refuses.

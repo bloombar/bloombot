@@ -255,6 +255,99 @@ describe('RosterImport (WEB-21)', () => {
     expect(report).toHaveTextContent('created')
   })
 
+  // ROST-14/ROST-16: the three sections a roster import grew for channel
+  // naming and ownership. Each was rendered but never driven with data —
+  // `emptyReport()` seeds them as `[]`, so a wrong field name or a crash in
+  // roughly fifty lines of new markup would have passed green. These drive
+  // each one non-empty and assert the text an instructor actually acts on.
+  it('a finished report names a row whose channel name was disambiguated, and who it shares a name with', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          channelNameDisambiguated: [
+            {
+              line: 2,
+              email: 'ada@school.edu',
+              baseChannelName: 'ada',
+              channelName: 'ada-school-edu',
+              sharesSlugWith: ['ada@gmail.com'],
+            },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('ada@school.edu')
+    expect(report).toHaveTextContent('ada-school-edu')
+    // The other address is what tells an instructor which two rows collide,
+    // and it is the one field rendered through a `join` rather than printed
+    // directly — the shape most likely to break silently.
+    expect(report).toHaveTextContent('ada@gmail.com')
+  })
+
+  it('a finished report names a row refused a channel that already belonged to another student', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          channelOwnershipConflicts: [
+            {
+              line: 3,
+              email: 'bob@school.edu',
+              conflictingChannelName: 'bob',
+              newChannelName: 'bob-school-edu',
+            },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('bob@school.edu')
+    expect(report).toHaveTextContent('bob-school-edu')
+    expect(report).toHaveTextContent('already somebody else')
+  })
+
+  it('a finished report names a channel left stranded by a name that drifted', async () => {
+    importRoster.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(
+      job({
+        status: 'succeeded',
+        result: emptyReport({
+          channelsOrphaned: [
+            {
+              line: 4,
+              email: 'cyd@school.edu',
+              previousChannelName: 'cyd',
+              newChannelName: 'cyd-school-edu',
+            },
+          ],
+        }),
+      })
+    )
+
+    renderRosterImport()
+    chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+    fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+    const report = await screen.findByTestId('roster-import-report')
+    expect(report).toHaveTextContent('cyd@school.edu')
+    expect(report).toHaveTextContent('stranded')
+    expect(report).toHaveTextContent('cyd-school-edu')
+  })
+
   it("a finished report states the run's own structural limitations", async () => {
     importRoster.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(

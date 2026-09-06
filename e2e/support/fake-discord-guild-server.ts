@@ -71,8 +71,6 @@ const CHANNEL_TYPE_GUILD_TEXT = 0
 /** Discord's own real channel-name length limit (API v10), enforced the same way `apps/worker/tests/helpers/fake-discord-guild-server.ts`'s own copy of this fake is — round 3's own must-fix, kept identical across both copies for the same reason `normalizeChannelName` itself now lives in one place. */
 const MAX_CHANNEL_NAME_LENGTH = 100
 
-/** Discord's own slugging of a `GUILD_TEXT` channel's name at creation — `@bloombot/discord-rest`'s own `normalizeChannelName`, not a hand-copied re-implementation: that drift is exactly what hid a real bug for a week (this file's own module comment, and `channel-naming.ts`'s). */
-
 /** The bot's own user id this fake reports from `/users/@me`, exported so a test can assert the overwrite the scaffold grants itself. */
 export const FAKE_BOT_USER_ID = 'fake-bot-user-id'
 

@@ -387,6 +387,30 @@ export interface DiscordRestClient {
   ): Promise<void>
 
   /**
+   * ROST-15's own addition: write one already-built overwrite verbatim to a
+   * channel or category that already exists — `PUT
+   * /channels/{channelId}/permissions/{overwrite.id}`, the identical
+   * single-target call `grantBotChannelAccess`/`grantChannelMemberAccess`
+   * above already make, generalized to whichever overwrite the caller has
+   * already decided it needs rather than one this client builds for it.
+   * Still exactly SRV-8's one deliberate exception (this file's own module
+   * comment): it replaces one target's own `allow`/`deny` and nothing else
+   * about the channel — no `name`, no `parentId`, nothing that could rename,
+   * move or delete it.
+   *
+   * `roster-import.ts` is this method's only caller today: repairing a
+   * pre-existing student category's `@everyone` denial or admins-role grant
+   * when this run adopts one it did not create itself (ROST-15) — a
+   * category `discordServers.scaffold`'s own SRV-9 repair never sees, since
+   * it is never declared in `course.categories` at all.
+   */
+  putChannelPermissionOverwrite(
+    botToken: string,
+    channelId: string,
+    overwrite: DiscordPermissionOverwrite
+  ): Promise<void>
+
+  /**
    * Create a role (SRV-10) — `POST /guilds/{guildId}/roles`, sent with
    * `permissions: '0'` so the created role carries none of Discord's own
    * server-wide powers; it exists only to be named in a channel overwrite
@@ -878,6 +902,26 @@ export function createDiscordRestClient(
       const overwrite = allowMemberOverwrite(memberId)
       const response = await putJson(
         `${apiBase}/channels/${channelId}/permissions/${memberId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+    },
+
+    async putChannelPermissionOverwrite(
+      botToken,
+      channelId,
+      overwrite
+    ): Promise<void> {
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${overwrite.id}`,
         `Bot ${botToken}`,
         {
           type: overwrite.type,

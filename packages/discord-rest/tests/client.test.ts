@@ -15,6 +15,7 @@ import {
   DiscordRequestError,
   type DiscordRestClient,
 } from '../src/client.js'
+import { denyEveryoneOverwrite } from '../src/channel-overwrites.js'
 import { FakeDiscordServer } from './helpers/fake-discord-server.js'
 
 let server: FakeDiscordServer
@@ -653,5 +654,48 @@ describe('grantChannelMemberAccess (rework finding 5)', () => {
 
     const body = server.requests[0]?.body as Record<string, unknown>
     expect(Object.keys(body).sort()).toEqual(['allow', 'deny', 'type'])
+  })
+})
+
+// ROST-15's own addition — the same narrow single-target `PUT` shape
+// `grantChannelMemberAccess` above proves, generalized to an overwrite the
+// caller already built rather than one this client constructs.
+describe('putChannelPermissionOverwrite (ROST-15)', () => {
+  it("PUTs exactly the given overwrite onto the named channel's own target id", async () => {
+    const overwrite = denyEveryoneOverwrite('guild-1')
+
+    await client.putChannelPermissionOverwrite('bot-token', 'chan-1', overwrite)
+
+    expect(server.requests).toHaveLength(1)
+    expect(server.requests[0]).toMatchObject({
+      method: 'PUT',
+      path: `/channels/chan-1/permissions/${overwrite.id}`,
+      headers: expect.objectContaining({
+        authorization: 'Bot bot-token',
+        'content-type': 'application/json',
+      }) as unknown,
+    })
+    expect(server.requests[0]?.body).toEqual({
+      type: overwrite.type,
+      allow: overwrite.allow,
+      deny: overwrite.deny,
+    })
+  })
+
+  it('throws DiscordRequestError for a non-2xx response, the same as every other write in this package', async () => {
+    server.respondToChannelPermissionPut({
+      status: 403,
+      body: { message: 'Missing Permissions' },
+    })
+
+    await expect(
+      client.putChannelPermissionOverwrite(
+        'bot-token',
+        'chan-1',
+        denyEveryoneOverwrite('guild-1')
+      )
+    ).rejects.toMatchObject(
+      expect.objectContaining({ status: 403 }) as Partial<DiscordRequestError>
+    )
   })
 })

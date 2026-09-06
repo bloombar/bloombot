@@ -147,5 +147,13 @@ export function createFakeDiscordRestClient(
     grantBotChannelAccess(): Promise<void> {
       return Promise.resolve()
     },
+
+    // ROST-15's own narrow addition — same reasoning as the two calls
+    // above: nothing in `apps/api`'s own routes calls this (it is
+    // `roster-import.ts`'s alone), so this fake only needs to keep
+    // satisfying `DiscordRestClient` as that port grows.
+    putChannelPermissionOverwrite(): Promise<void> {
+      return Promise.resolve()
+    },
   }
 }

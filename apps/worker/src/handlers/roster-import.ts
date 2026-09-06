@@ -119,6 +119,37 @@
  * message ROST-6 also describes is still not sent or pinned at all — no
  * verb for it exists, and this run says so plainly in its own report
  * (`RosterImportReport.limitations`), not only in `docs/DECISIONS.md`.
+ *
+ * **ROST-15: an import creates the student categories it needs.** Before
+ * this, a roster bigger than the numbered `… - STUDENTS NN` categories a
+ * course happened to have scaffolded got every extra student reported
+ * under `channelsNotCreated` one at a time — Discord's own fifty-channel-
+ * per-category cap, met by a course an instructor never re-scaffolded
+ * after enrolment grew. `payload.createStudentCategories` (opt-in per
+ * import, defaulted `true` by `@bloombot/actions`' own `roster.import`
+ * action, never by this handler — a payload that omits it entirely, the
+ * shape every test of this handler predating this slice still sends, gets
+ * exactly what it always got: nothing created, everything that does not
+ * fit reported) works out how many categories the roster needs at
+ * `categoryChannelCap` each, counts what already exists under
+ * `payload.studentCategoryBaseName` (the course's own title plus
+ * `" - STUDENTS"`, unless the import asked for a different base name), and
+ * creates the rest, named `<base name> <n>` — the same
+ * `studentCategoryNumber` convention this file already discovers a
+ * *declared* category by, so a category one run creates (never declared in
+ * `course.categories` — this feature has no reach into course config,
+ * only the guild) is still recognised, and its number never reused, by the
+ * next (`categoryNumberForBaseName`). A category already sitting under the
+ * name this run would otherwise create is reused, not duplicated, and
+ * repaired for the one thing this run cannot work without — the bot's own
+ * access — the same narrow, single-target-`PUT` repair `discord-scaffold.ts`'s
+ * own SRV-9 already applies to a category it adopts, for the identical
+ * reason (see that file's own module comment). Creating a category is an
+ * ordinary Discord write like any other in this handler: a permanent
+ * refusal (`DiscordRequestError.permanent`) is caught and reported under
+ * `categoriesFailed`; anything else — a `429`, a transport error — is
+ * rethrown so JOB-2 retries, never absorbed the way a stray rework once
+ * left a rate limit looking like a permission problem.
  */
 
 import { createHash } from 'node:crypto'
@@ -133,6 +164,7 @@ import {
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import { parseRosterCsv, type RosterParseError } from '@bloombot/schemas'
 import {
+  allowBotOverwrite,
   allowMemberOverwrite,
   allowRoleOverwrite,
   denyEveryoneOverwrite,
@@ -140,6 +172,7 @@ import {
   DiscordRequestError,
   normalizeChannelName,
   overwriteAllowsView,
+  overwriteDeniesView,
   type DiscordChannel,
   type DiscordGuildMember,
   type DiscordPermissionOverwrite,
@@ -225,6 +258,12 @@ export interface ChannelFailedEntry {
   email: string
   channelName: string
   category: string
+  reason: string
+}
+
+/** ROST-15: a student category this run tried and failed to create — no `line`/`email`/`channelName`, unlike `ChannelFailedEntry` above, since a category is not tied to any one roster row. */
+export interface ChannelFailedCategoryEntry {
+  name: string
   reason: string
 }
 
@@ -360,6 +399,44 @@ export interface RosterImportReport {
   unresolvedRoles: UnresolvedRoleEntry[]
   /** SRV-10: a course role name the guild lacked, created this run with an empty permission bitfield — never one that already resolved (`unresolvedRoles`' own doc comment covers what "still missing" means now). */
   rolesCreated: string[]
+  /** ROST-15: a student category this run created because the roster needed more room than already existed under `studentCategoryBaseName` — never one this run merely reused (an already-present category under the target name is not re-created; see this file's own module comment). Empty when `createStudentCategories` was off, or on but the roster already fit. */
+  categoriesCreated: string[]
+  /**
+   * ROST-15: a category this run could not make usable for placement at
+   * all — either a brand-new one Discord permanently refused to create (a
+   * 403 for a bot missing Manage Channels, say), or an *adopted* one (found
+   * already existing under the base name, never declared) whose own bot
+   * access this run could not repair (round 2's fix: previously silent —
+   * the category was still offered as capacity, every `createGuildChannel`
+   * call inside it then 403'd one row at a time, reported as `channelsFailed`
+   * with no hint the real cause was the category itself, not the row).
+   * `reason` names why, the same shape `unresolvedRoles`/`channelsFailed`
+   * already carry one with. The students who would have landed in it are
+   * placed wherever this run's ordinary category-selection logic sends them
+   * next (a category with room, or `channelsNotCreated` if none is left —
+   * that message still only distinguishes "none scaffolded" from "every
+   * category full," so an instructor reading `channelsNotCreated` alone
+   * would not learn a permission failure was the actual cause; this array
+   * is what tells them). A transient failure (a 429, a transport error) is
+   * never caught here — it throws out of this handler the same as
+   * everywhere else, so JOB-2 retries.
+   */
+  categoriesFailed: ChannelFailedCategoryEntry[]
+  /**
+   * ROST-15, round 2's fix: a category this run *adopted* (found already
+   * existing under the base name being created, never one it declared or
+   * just created itself) whose own permissions do not match what the
+   * course asks for, and this run could not repair with the narrow
+   * single-target `PUT`s it has (`putChannelPermissionOverwrite`, a
+   * permanent Discord refusal). Reported here rather than silently
+   * accepted "as whatever a person set by hand" (the SPEC's own words this
+   * exists to satisfy). Every child channel this run places inside such a
+   * category still carries its own explicit deny/admin/member overwrite
+   * (ROST-16) regardless of what the category's own overwrites say, so
+   * this is a category-level honesty gap an instructor needs to go fix by
+   * hand, never a per-student access leak.
+   */
+  categoriesPermissionsNotRepaired: ChannelFailedCategoryEntry[]
   /**
    * Rework finding 13 (second bullet): what this handler structurally
    * cannot do, stated plainly on every run's own report rather than living
@@ -374,7 +451,24 @@ export interface RosterImportReport {
 const WELCOME_MESSAGE_NOT_SENT =
   "This run does not send or pin ROST-6's welcome message into a student's channel — packages/discord-rest has no postMessage/pinMessage verb yet. See docs/DECISIONS.md's own entry on this rework."
 
-function parsePayload(raw: unknown): { courseId: string; csvText: string } {
+/**
+ * ROST-15's own two fields on the job payload — both optional, and both
+ * left `undefined` (never defaulted here) when the caller omits them: this
+ * handler is not where "checked by default" lives (`@bloombot/actions`'
+ * own `roster.import` action defaults `createStudentCategories` for a
+ * dispatch through the panel — this file's own module comment) — so a
+ * payload predating this slice, or a caller that never mentions either
+ * field, gets exactly today's behaviour, which is this file's own
+ * requirement 5. `studentCategoryBaseName` is defaulted from the course's
+ * own title once the course is loaded, below, since this function parses
+ * the payload before the course is even fetched.
+ */
+function parsePayload(raw: unknown): {
+  courseId: string
+  csvText: string
+  createStudentCategories: boolean | undefined
+  studentCategoryBaseName: string | undefined
+} {
   if (
     typeof raw !== 'object' ||
     raw === null ||
@@ -385,8 +479,25 @@ function parsePayload(raw: unknown): { courseId: string; csvText: string } {
       'roster.import: payload must be an object shaped { courseId: string; csvText: string }'
     )
   }
-  const payload = raw as { courseId: string; csvText: string }
-  return { courseId: payload.courseId, csvText: payload.csvText }
+  const payload = raw as {
+    courseId: string
+    csvText: string
+    createStudentCategories?: unknown
+    studentCategoryBaseName?: unknown
+  }
+  return {
+    courseId: payload.courseId,
+    csvText: payload.csvText,
+    createStudentCategories:
+      typeof payload.createStudentCategories === 'boolean'
+        ? payload.createStudentCategories
+        : undefined,
+    studentCategoryBaseName:
+      typeof payload.studentCategoryBaseName === 'string' &&
+      payload.studentCategoryBaseName.trim().length > 0
+        ? payload.studentCategoryBaseName.trim()
+        : undefined,
+  }
 }
 
 /** Case- and whitespace-insensitive name matching — the same normalization `discord-scaffold.ts`'s own `normalizeName` applies to a *category's* own name (Discord does not slug a category's name the way it does a channel's). Duplicated rather than imported: this file and `discord-scaffold.ts` are two handlers in the same app, not a shared library either owns. */
@@ -418,6 +529,66 @@ function resolveRoleId(
 const STUDENT_CATEGORY_SUFFIX = /students[\s-]*(\d+)\s*$/i
 function studentCategoryNumber(name: string): number | undefined {
   const match = STUDENT_CATEGORY_SUFFIX.exec(name.trim())
+  if (!match?.[1]) return undefined
+  return Number(match[1])
+}
+
+/**
+ * ROST-15: `<base name> <n>`, zero-padded to two digits — `Python - STUDENTS
+ * 01`, `Python - STUDENTS 02`, exactly the SPEC's own examples. Two digits
+ * is the same width every worked example in the SPEC and this file's own
+ * fixtures use; a roster needing a three-digit category number would still
+ * work (`String(n)` never truncates), it would just stop being zero-padded
+ * to match the ones before it.
+ */
+function studentCategoryName(baseName: string, number: number): string {
+  return `${baseName} ${String(number).padStart(2, '0')}`
+}
+
+/**
+ * ROST-15, round 2's fix: collapses any run of whitespace and/or `-` into a
+ * single space, after trimming and lowercasing — the separator tolerance
+ * `studentCategoryNumber`'s own regex already gives the *suffix* half of a
+ * name (`students[\s-]*(\d+)`), extended here to the *base* half too, so
+ * `Test Course  -  STUDENTS 01` (an instructor's own double space) and
+ * `Test Course - STUDENTS 01` compare equal — before this, `normalizeName`
+ * alone (trim/lowercase only) told them apart, `categoryNumberForBaseName`
+ * never recognised the first as "already exists," and a second, functionally
+ * identical category was created and left in the guild permanently (SRV-8's
+ * own "never delete," here compounding a bug rather than only being unable
+ * to fix one by hand).
+ */
+function collapseSeparators(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, ' ')
+}
+
+/**
+ * ROST-15: does `categoryName` belong to the numbered family this run
+ * creates under `baseName` — and if so, which number? Anchored to
+ * `baseName` itself, unlike `studentCategoryNumber` above (which matches
+ * *any* category ending in "students NN", the convention a course's own
+ * `course.categories` are declared and discovered by) — a guild can host
+ * more than one course (TEN-9), and a category this run creates is never
+ * declared in `course.categories` at all, so nothing scopes it to *this*
+ * course except the base name the import itself asked for. Case- and
+ * separator-tolerant the same way `studentCategoryNumber` already is:
+ * `python - students 01`/`Python-STUDENTS-1` both match a base name of
+ * `Python - STUDENTS` — via `collapseSeparators`, above, not the plainer
+ * `normalizeName` (case/whitespace only) this file uses for a role or a
+ * *declared* category's own exact name.
+ */
+function categoryNumberForBaseName(
+  categoryName: string,
+  baseName: string
+): number | undefined {
+  const normalizedCategory = collapseSeparators(categoryName)
+  const normalizedBase = collapseSeparators(baseName)
+  if (!normalizedCategory.startsWith(normalizedBase)) return undefined
+  const remainder = normalizedCategory.slice(normalizedBase.length)
+  const match = /^\s*(\d+)$/.exec(remainder)
   if (!match?.[1]) return undefined
   return Number(match[1])
 }
@@ -864,13 +1035,31 @@ interface CategoryState {
  * convention), in ascending numeric order, each resolved to the guild
  * category `discordServers.scaffold` already created for it. A declared
  * student category not yet present in the guild is *not* included here —
- * this handler never creates a category of its own (this file's own module
- * comment) — so a row landing past the last resolved category is reported
- * under `channelsNotCreated`, not silently skipped.
+ * this handler on its own never creates a category (a course with
+ * `studentCategoryBaseName` left `undefined`, below, gets exactly that) —
+ * so a row landing past the last resolved category is reported under
+ * `channelsNotCreated`, not silently skipped.
+ *
+ * ROST-15: `studentCategoryBaseName`, when given, folds in every *other*
+ * numbered category the guild already holds under that base name too —
+ * one a run of this same feature created earlier, which `course.categories`
+ * never declares and the loop above would therefore never find on its own.
+ * Without this, "a category one run creates is recognised by the next"
+ * (requirement 2) would be false the very next time this handler ran: it
+ * would see only the declared categories, conclude none of the roster's
+ * own room existed, and create a duplicate run of categories on top of the
+ * ones already there. Deduplicated by the guild's own category id (a
+ * category matched both ways — the common case, an instructor's base name
+ * agreeing with what they declared — lands in exactly one `CategoryState`,
+ * never two independent ones whose channel counts could desync from each
+ * other as this run mutates them), then sorted by number so "existing
+ * categories fill first" (requirement 3) holds regardless of which of the
+ * two ways a category was found.
  */
 function loadStudentCategoryStates(
   course: CourseWithCategories,
-  existingChannels: DiscordChannel[]
+  existingChannels: DiscordChannel[],
+  studentCategoryBaseName?: string
 ): CategoryState[] {
   const guildCategories = existingChannels.filter(
     (channel) => channel.type === CHANNEL_TYPE_GUILD_CATEGORY
@@ -888,22 +1077,48 @@ function loadStudentCategoryStates(
   }
   declaredStudentCategories.sort((a, b) => a.number - b.number)
 
-  const states: CategoryState[] = []
-  for (const { category } of declaredStudentCategories) {
+  const byGuildCategoryId = new Map<
+    string,
+    { name: string; guildCategoryId: string; number: number }
+  >()
+  for (const { category, number } of declaredStudentCategories) {
     const guildCategory = guildCategories.find(
       (candidate) =>
         normalizeName(candidate.name) === normalizeName(category.name)
     )
     if (!guildCategory) continue // Not scaffolded in the guild yet — nothing to place a channel into.
-    states.push({
+    byGuildCategoryId.set(guildCategory.id, {
       name: category.name,
       guildCategoryId: guildCategory.id,
-      channels: existingChannels.filter(
-        (channel) => channel.parentId === guildCategory.id
-      ),
+      number,
     })
   }
-  return states
+
+  if (studentCategoryBaseName !== undefined) {
+    for (const guildCategory of guildCategories) {
+      if (byGuildCategoryId.has(guildCategory.id)) continue
+      const number = categoryNumberForBaseName(
+        guildCategory.name,
+        studentCategoryBaseName
+      )
+      if (number === undefined) continue
+      byGuildCategoryId.set(guildCategory.id, {
+        name: guildCategory.name,
+        guildCategoryId: guildCategory.id,
+        number,
+      })
+    }
+  }
+
+  return [...byGuildCategoryId.values()]
+    .sort((a, b) => a.number - b.number)
+    .map(({ name, guildCategoryId }) => ({
+      name,
+      guildCategoryId,
+      channels: existingChannels.filter(
+        (channel) => channel.parentId === guildCategoryId
+      ),
+    }))
 }
 
 /**
@@ -935,6 +1150,16 @@ export function createRosterImportHandler(
         `roster.import: course "${payload.courseId}" was not found in this organization`
       )
     }
+
+    // ROST-15: off unless the payload says otherwise (requirement 5 — this
+    // file's own module comment explains why the default lives in
+    // `@bloombot/actions`, not here) — and, when on, the base name defaults
+    // to the course's own title, only knowable once `course` is loaded,
+    // which is why `parsePayload` above leaves both `undefined` rather than
+    // defaulting them itself.
+    const createStudentCategories = payload.createStudentCategories ?? false
+    const studentCategoryBaseName =
+      payload.studentCategoryBaseName ?? `${course.title} - STUDENTS`
 
     // TEN-9 — resolved through the course's own server, not "the
     // organization's one binding": before this, an organization installing
@@ -1024,7 +1249,316 @@ export function createRosterImportHandler(
       }
     }
 
-    const categoryStates = loadStudentCategoryStates(course, existingChannels)
+    const categoryStates = loadStudentCategoryStates(
+      course,
+      existingChannels,
+      createStudentCategories ? studentCategoryBaseName : undefined
+    )
+
+    // ROST-15: a category `categoryStates` folded in above only because
+    // `studentCategoryBaseName` matched it — never one `course.categories`
+    // itself declares — was never adopted by anything else in this
+    // product; `discordServers.scaffold`'s own SRV-9 repair only ever
+    // looks at a course's *declared* categories. `botUserId` is fetched
+    // lazily (and only once) since the common case — a course with enough
+    // declared room already, or this feature switched off — never needs it
+    // at all.
+    const categoriesCreated: string[] = []
+    const categoriesFailed: ChannelFailedCategoryEntry[] = []
+    const categoriesPermissionsNotRepaired: ChannelFailedCategoryEntry[] = []
+    let botUserId: string | undefined
+    async function resolveBotUserId(): Promise<string> {
+      botUserId ??= await deps.discordRestClient.getBotUserId(deps.botToken)
+      return botUserId
+    }
+
+    // ROST-14: every row's channel name, computed once from the whole
+    // roster's own set of addresses — see `assignChannelNames`' own doc
+    // comment for the algorithm and what it guarantees. Computed up front,
+    // before any Discord call, so the name a row gets does not depend on
+    // whether its own channel creation later succeeds, fails or finds no
+    // room (`channelsFailed`/`channelsNotCreated` still get a stable name
+    // to report against).
+    const { nameByAddress, disambiguatedAgainst } = assignChannelNames(
+      rows.map((row) => row.email)
+    )
+    // Names already spoken for by a row processed earlier in this loop —
+    // ROST-16's conflict fallback (below) can push a row onto a name
+    // `assignChannelNames` did not generate for it (the next candidate in
+    // its own `ownAddressCandidates` sequence, once an existing channel
+    // under its assigned name turns out to belong to somebody else) —
+    // checked so that fallback never collides with another row's own
+    // assigned or already-picked name either.
+    const namesInUse = new Set(nameByAddress.values())
+
+    if (createStudentCategories) {
+      const declaredCategoryIds = new Set(
+        loadStudentCategoryStates(course, existingChannels).map(
+          (state) => state.guildCategoryId
+        )
+      )
+
+      // Round 2's must-fix 2: an adopted category is checked and repaired
+      // for *every* overwrite the course asks for, not only the bot's own
+      // — never left "as whatever a person set by hand" (the SPEC's own
+      // words). Walked backward with `splice` (not `filter`) so a category
+      // whose bot access this run cannot repair is removed from
+      // `categoryStates` in place, before the sizing below ever counts it
+      // as room this run could actually place a channel into — offering it
+      // as capacity that would only 403 the moment a channel create
+      // reached it is exactly the silent misattribution ("every category
+      // is full") this fix closes.
+      for (let i = categoryStates.length - 1; i >= 0; i--) {
+        const state = categoryStates[i] as CategoryState
+        if (declaredCategoryIds.has(state.guildCategoryId)) continue
+
+        const guildCategory = existingChannels.find(
+          (channel) => channel.id === state.guildCategoryId
+        )
+        let observedOverwrites = guildCategory?.permissionOverwrites ?? []
+
+        const id = await resolveBotUserId()
+        const botAlreadyGranted = observedOverwrites.some(
+          (overwrite) => overwrite.id === id
+        )
+        if (!botAlreadyGranted) {
+          try {
+            await deps.discordRestClient.grantBotChannelAccess(
+              deps.botToken,
+              state.guildCategoryId,
+              id
+            )
+            observedOverwrites = [...observedOverwrites, allowBotOverwrite(id)]
+          } catch (error) {
+            if (!(error instanceof DiscordRequestError && error.permanent)) {
+              throw error
+            }
+            // This category cannot be written into at all this run —
+            // excluded from placement outright (round 2's fix; previously
+            // silently offered as capacity — see `categoriesFailed`'s own
+            // doc comment) rather than reported only once a row's own
+            // `createGuildChannel` call happened to reach it, which never
+            // happens for a category that is already full.
+            categoryStates.splice(i, 1)
+            categoriesFailed.push({
+              name: state.name,
+              reason: describeDiscordError(error),
+            })
+            continue
+          }
+        }
+
+        // Requirement 4's own words: "checked against what the course asks
+        // for and repaired where they differ" — `@everyone`'s denial and
+        // the admins role's own grant, the two other overwrites this run's
+        // own created categories always carry (below). A category that
+        // already matches both is never written to at all (SRV-8's "never
+        // delete or edit" discipline — these are the two narrow,
+        // single-target `PUT`s `putChannelPermissionOverwrite` exists for,
+        // never a general edit).
+        const everyoneOverwrite = observedOverwrites.find(
+          (overwrite) => overwrite.id === guildId
+        )
+        const everyoneAlreadyDenied =
+          everyoneOverwrite !== undefined &&
+          overwriteDeniesView(everyoneOverwrite)
+        const adminsAlreadyGranted =
+          adminsRoleId === undefined ||
+          observedOverwrites.some(
+            (overwrite) =>
+              overwrite.id === adminsRoleId && overwriteAllowsView(overwrite)
+          )
+        const repairs: DiscordPermissionOverwrite[] = [
+          ...(everyoneAlreadyDenied ? [] : [denyEveryoneOverwrite(guildId)]),
+          ...(adminsRoleId && !adminsAlreadyGranted
+            ? [allowRoleOverwrite(adminsRoleId)]
+            : []),
+        ]
+        const repairFailureReasons: string[] = []
+        for (const overwrite of repairs) {
+          try {
+            await deps.discordRestClient.putChannelPermissionOverwrite(
+              deps.botToken,
+              state.guildCategoryId,
+              overwrite
+            )
+          } catch (error) {
+            if (!(error instanceof DiscordRequestError && error.permanent)) {
+              throw error
+            }
+            // Not excluded from placement — every channel this run places
+            // inside it still carries its own explicit deny/admin/member
+            // overwrite (ROST-16) regardless of the category's own; a
+            // category-level honesty gap, not a content leak, so it is
+            // named on the report and left usable.
+            repairFailureReasons.push(describeDiscordError(error))
+          }
+        }
+        if (repairFailureReasons.length > 0) {
+          categoriesPermissionsNotRepaired.push({
+            name: state.name,
+            reason: repairFailureReasons.join('; '),
+          })
+        }
+      }
+
+      // Requirement 3, round 2's fix: work out how many categories the
+      // roster needs at `categoryChannelCap` each, sized against the *free
+      // seats* `categoryStates` actually has left — not merely how many
+      // categories exist. Comparing against a bare count treated an
+      // already-full category (SRV-8's own "never delete" — a term's worth
+      // of alumni channels a course never re-scaffolds away) as capacity
+      // that plainly is not there, and created nothing while stranding
+      // every new student under `channelsNotCreated`; the box being
+      // checked did nothing at all in exactly the ordinary second-term
+      // case this feature exists for.
+      //
+      // Round 3's blocker: the numerator counts only rows that do not
+      // already hold a channel. A student who already has one occupies a
+      // seat, so counting them in the numerator *as well* as subtracting
+      // their seat below double-counted them — an unchanged 120-student
+      // roster asked for two categories more than it needed, created them
+      // empty, and reported `channelsCreated: []` beside
+      // `channelsAlreadyPresent: 120`. Categories built to hold students
+      // who were already placed is what ROST-15 rules out in as many
+      // words, and SRV-8's "never delete" then makes them permanent.
+      // Narrowed no further than that: a row that turns out to need no
+      // seat costs a little slack, whereas one wrongly excluded strands a
+      // real student.
+      // Matched by slugged name across every student category — the same
+      // comparison the placement loop below uses to decide a row is
+      // already present.
+      const placedChannelNames = new Set(
+        categoryStates.flatMap((state) =>
+          state.channels.map((channel) => normalizeChannelName(channel.name))
+        )
+      )
+      const rowsNeedingASeat = rows.filter((row) => {
+        const name = nameByAddress.get(row.email)
+        return name === undefined || !placedChannelNames.has(name)
+      }).length
+      const freeSeats = categoryStates.reduce(
+        (sum, state) =>
+          sum + Math.max(0, categoryChannelCap - state.channels.length),
+        0
+      )
+      const toCreate = Math.max(
+        0,
+        Math.ceil(
+          Math.max(0, rowsNeedingASeat - freeSeats) / categoryChannelCap
+        )
+      )
+      if (toCreate > 0) {
+        // Requirement 2: continue numbering past the highest number
+        // already used under this base name anywhere in the guild — not
+        // only the ones this run can place a channel into — so a category
+        // an instructor removed from `course.categories` (but never
+        // deleted from Discord — SRV-8's "never delete" applies here too;
+        // this handler has no delete verb to call even if it wanted to)
+        // still keeps its number from being reissued.
+        let nextNumber =
+          1 +
+          existingChannels
+            .filter((channel) => channel.type === CHANNEL_TYPE_GUILD_CATEGORY)
+            .reduce((max, candidate) => {
+              const number = categoryNumberForBaseName(
+                candidate.name,
+                studentCategoryBaseName
+              )
+              return number !== undefined && number > max ? number : max
+            }, 0)
+
+        for (let created = 0; created < toCreate; created++) {
+          const candidateName = studentCategoryName(
+            studentCategoryBaseName,
+            nextNumber
+          )
+          nextNumber += 1
+
+          // Requirement 4's "never duplicate," defense in depth:
+          // structurally unreachable in the ordinary case (`nextNumber`
+          // starts strictly after every category this run already folded
+          // into `categoryStates`, above), kept anyway the same way
+          // `discord-scaffold.ts`'s own `dedupeOverwritesById` stays as a
+          // fail-closed guard against a case that "should not" reach it —
+          // matched by `collapseSeparators`, the same case-/separator-
+          // tolerant comparison `categoryNumberForBaseName` already
+          // discovers a category by (round 2's fix — this used to compare
+          // by the plainer `normalizeName` alone, which missed a name
+          // differing only by separator and duplicated it).
+          const existingCategory = existingChannels.find(
+            (channel) =>
+              channel.type === CHANNEL_TYPE_GUILD_CATEGORY &&
+              collapseSeparators(channel.name) ===
+                collapseSeparators(candidateName)
+          )
+          if (existingCategory) {
+            categoryStates.push({
+              name: existingCategory.name,
+              guildCategoryId: existingCategory.id,
+              channels: existingChannels.filter(
+                (channel) => channel.parentId === existingCategory.id
+              ),
+            })
+            continue
+          }
+
+          const id = await resolveBotUserId()
+          const categoryOverwrites: DiscordPermissionOverwrite[] = [
+            denyEveryoneOverwrite(guildId),
+            allowBotOverwrite(id),
+            ...(adminsRoleId ? [allowRoleOverwrite(adminsRoleId)] : []),
+          ]
+
+          try {
+            const createdCategory =
+              await deps.discordRestClient.createGuildCategory(
+                deps.botToken,
+                guildId,
+                {
+                  name: candidateName,
+                  permissionOverwrites: categoryOverwrites,
+                }
+              )
+            existingChannels.push(createdCategory)
+            categoryStates.push({
+              name: createdCategory.name,
+              guildCategoryId: createdCategory.id,
+              channels: [],
+            })
+            categoriesCreated.push(createdCategory.name)
+          } catch (error) {
+            if (error instanceof DiscordRequestError && error.permanent) {
+              const reason = describeDiscordError(error)
+              categoriesFailed.push({ name: candidateName, reason })
+              // The bot lacking whatever permission this refused does not
+              // start working two categories later — stop trying rather
+              // than fail identically `toCreate` more times. Round 2's
+              // fix: every number this run still needed but never
+              // attempted is named too, with the same reason, so the
+              // report's own count of failures matches the shortfall this
+              // run could not close, rather than naming only the first.
+              for (
+                let remaining = created + 1;
+                remaining < toCreate;
+                remaining++
+              ) {
+                categoriesFailed.push({
+                  name: studentCategoryName(
+                    studentCategoryBaseName,
+                    nextNumber
+                  ),
+                  reason,
+                })
+                nextNumber += 1
+              }
+              break
+            }
+            throw error
+          }
+        }
+      }
+    }
 
     const report: RosterImportReport = {
       courseId: course.id,
@@ -1046,27 +1580,11 @@ export function createRosterImportHandler(
       channelsOrphaned: [],
       unresolvedRoles,
       rolesCreated,
+      categoriesCreated,
+      categoriesFailed,
+      categoriesPermissionsNotRepaired,
       limitations: [WELCOME_MESSAGE_NOT_SENT],
     }
-
-    // ROST-14: every row's channel name, computed once from the whole
-    // roster's own set of addresses — see `assignChannelNames`' own doc
-    // comment for the algorithm and what it guarantees. Computed up front,
-    // before any Discord call, so the name a row gets does not depend on
-    // whether its own channel creation later succeeds, fails or finds no
-    // room (`channelsFailed`/`channelsNotCreated` still get a stable name
-    // to report against).
-    const { nameByAddress, disambiguatedAgainst } = assignChannelNames(
-      rows.map((row) => row.email)
-    )
-    // Names already spoken for by a row processed earlier in this loop —
-    // ROST-16's conflict fallback (below) can push a row onto a name
-    // `assignChannelNames` did not generate for it (the next candidate in
-    // its own `ownAddressCandidates` sequence, once an existing channel
-    // under its assigned name turns out to belong to somebody else) —
-    // checked so that fallback never collides with another row's own
-    // assigned or already-picked name either.
-    const namesInUse = new Set(nameByAddress.values())
 
     // Round 3's "cheap one": every row's own handle resolution, computed
     // exactly once, up front — both `rosterMemberIds` (ROST-16's must-fix

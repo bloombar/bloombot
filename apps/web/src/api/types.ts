@@ -475,6 +475,12 @@ export interface RosterImportReport {
   unresolvedRoles: { role: string; reason: string }[]
   /** SRV-10: a course role name the server lacked, created by this run — never one that already existed (an existing role is used exactly as it is, untouched). */
   rolesCreated: string[]
+  /** ROST-15: a student category created because the roster needed more room than already existed under the base name the import asked for — never one this run merely reused. Empty unless the import turned this on and the roster did not already fit. */
+  categoriesCreated: string[]
+  /** ROST-15: a student category this run could not make usable for placement at all — a brand-new one Discord permanently refused to create, or an adopted one whose own bot access this run could not repair — `reason` names why, the same shape `channelsFailed`/`unresolvedRoles` already carry a reason with. */
+  categoriesFailed: { name: string; reason: string }[]
+  /** ROST-15, round 2: an adopted category (found already existing under the base name, never declared) whose own `@everyone` denial or admins-role grant this run could not repair — still used for placement (every child channel carries its own explicit overwrite regardless — ROST-16), so this is a category-level honesty gap an instructor needs to go fix by hand, not a per-student access leak. */
+  categoriesPermissionsNotRepaired: { name: string; reason: string }[]
   /** ROST-6's own welcome message, and any other structural gap this run wants named plainly — see `RosterImportReport.limitations`'s own doc comment in `apps/worker`. */
   limitations: string[]
 }

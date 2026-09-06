@@ -74,9 +74,42 @@ describe('roster.import (ROST-9)', () => {
       kind: 'roster.import',
       status: 'pending',
     })
+    // ROST-15: "checked by default" — an instructor dispatching this
+    // action without saying anything about student categories still gets
+    // `createStudentCategories: true` and a base name derived from the
+    // course's own title on the enqueued payload.
     expect(JSON.parse(created?.payload ?? '{}')).toEqual({
       courseId,
       csvText: CSV,
+      createStudentCategories: true,
+      studentCategoryBaseName: 'Test Course - STUDENTS',
+    })
+  })
+
+  // ROST-15: an explicit request travels through untouched — the panel's
+  // own checkbox and base-name field (`apps/web`'s `RosterImport.tsx`)
+  // both reach the payload exactly as given, never silently overridden by
+  // this action's own defaults.
+  it('carries an explicit createStudentCategories/studentCategoryBaseName through to the job payload untouched', async () => {
+    testDb = createTestDatabase()
+    const { organizationId } = seedOrganizationWithBoundServer(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+
+    const result = await dispatch(
+      importRosterAction,
+      {
+        courseId,
+        csvText: CSV,
+        createStudentCategories: false,
+        studentCategoryBaseName: 'Custom Base',
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    const created = allJobRows(testDb.db).find((row) => row.id === result.jobId)
+    expect(JSON.parse(created?.payload ?? '{}')).toMatchObject({
+      createStudentCategories: false,
+      studentCategoryBaseName: 'Custom Base',
     })
   })
 

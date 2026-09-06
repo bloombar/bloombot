@@ -43,6 +43,9 @@ function emptyReport(
     channelsOrphaned: [],
     unresolvedRoles: [],
     rolesCreated: [],
+    categoriesCreated: [],
+    categoriesFailed: [],
+    categoriesPermissionsNotRepaired: [],
     limitations: [],
     ...overrides,
   }
@@ -86,7 +89,12 @@ function renderRosterImport(
   } = {}
 ) {
   return render(
-    <RosterImport organizationId="org-1" courseId="course-1" {...overrides} />
+    <RosterImport
+      organizationId="org-1"
+      courseId="course-1"
+      courseTitle="Test Course"
+      {...overrides}
+    />
   )
 }
 
@@ -131,10 +139,219 @@ describe('RosterImport (WEB-21)', () => {
     chooseFile(rosterFile(csvText))
     fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
 
+    // ROST-15: the checkbox is checked and the base name field already
+    // populated by default (`courseTitle` + `" - STUDENTS"`) — both travel
+    // with the dispatch without the instructor touching either control.
     await waitFor(() =>
-      expect(importRoster).toHaveBeenCalledWith('org-1', 'course-1', csvText)
+      expect(importRoster).toHaveBeenCalledWith(
+        'org-1',
+        'course-1',
+        csvText,
+        true,
+        'Test Course - STUDENTS'
+      )
     )
     expect(await screen.findByText('Queued…')).toBeInTheDocument()
+  })
+
+  describe('ROST-15 — offering to create student categories', () => {
+    it('is checked by default, with the base name field defaulting to the course title plus " - STUDENTS"', () => {
+      renderRosterImport()
+
+      expect(
+        screen.getByRole('checkbox', {
+          name: "Create student categories if they don't exist",
+        })
+      ).toBeChecked()
+      expect(
+        screen.getByRole('textbox', {
+          name: 'Base name for new categories',
+        })
+      ).toHaveValue('Test Course - STUDENTS')
+    })
+
+    it('unchecking the box hides the base name field and sends false, without a base name override', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+
+      renderRosterImport()
+      fireEvent.click(
+        screen.getByRole('checkbox', {
+          name: "Create student categories if they don't exist",
+        })
+      )
+      expect(
+        screen.queryByRole('textbox', {
+          name: 'Base name for new categories',
+        })
+      ).not.toBeInTheDocument()
+
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      await waitFor(() =>
+        expect(importRoster).toHaveBeenCalledWith(
+          'org-1',
+          'course-1',
+          'First,Last,Email,Discord,GitHub\n',
+          false,
+          'Test Course - STUDENTS'
+        )
+      )
+    })
+
+    it('an edited base name travels with the dispatch', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+
+      renderRosterImport()
+      fireEvent.change(
+        screen.getByRole('textbox', { name: 'Base name for new categories' }),
+        { target: { value: 'Custom Base' } }
+      )
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      await waitFor(() =>
+        expect(importRoster).toHaveBeenCalledWith(
+          'org-1',
+          'course-1',
+          'First,Last,Email,Discord,GitHub\n',
+          true,
+          'Custom Base'
+        )
+      )
+    })
+
+    it('a finished report names a student category created because the roster needed more room', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(
+        job({
+          status: 'succeeded',
+          result: emptyReport({
+            categoriesCreated: ['Test Course - STUDENTS 03'],
+          }),
+        })
+      )
+
+      renderRosterImport()
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      const report = await screen.findByTestId('roster-import-report')
+      expect(report).toHaveTextContent('Test Course - STUDENTS 03')
+    })
+
+    it('a finished report names a student category this run tried and failed to create, and why', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(
+        job({
+          status: 'succeeded',
+          result: emptyReport({
+            categoriesFailed: [
+              {
+                name: 'Test Course - STUDENTS 03',
+                reason: 'Discord responded with status 403',
+              },
+            ],
+          }),
+        })
+      )
+
+      renderRosterImport()
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      const report = await screen.findByTestId('roster-import-report')
+      expect(report).toHaveTextContent('Test Course - STUDENTS 03')
+      expect(report).toHaveTextContent('Discord responded with status 403')
+    })
+
+    // Review round 2's blocker 2: an adopted category's own permission gap
+    // used to have nothing rendered for it at all — this fails without
+    // `categoriesPermissionsNotRepaired` reaching the panel.
+    it('a finished report names a category whose own permissions could not be repaired', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(
+        job({
+          status: 'succeeded',
+          result: emptyReport({
+            categoriesPermissionsNotRepaired: [
+              {
+                name: 'Test Course - STUDENTS 01',
+                reason: 'Discord responded with status 403',
+              },
+            ],
+          }),
+        })
+      )
+
+      renderRosterImport()
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      const report = await screen.findByTestId('roster-import-report')
+      expect(report).toHaveTextContent('Test Course - STUDENTS 01')
+      expect(report).toHaveTextContent('Discord responded with status 403')
+    })
+
+    // Review round 2's "kinder" fix: clearing the base name field while the
+    // box stays ticked must not dispatch `''`, which the action's own
+    // schema rejects outright.
+    it('falls back to the default base name when the field is cleared with the box still ticked', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+
+      renderRosterImport()
+      fireEvent.change(
+        screen.getByRole('textbox', { name: 'Base name for new categories' }),
+        { target: { value: '' } }
+      )
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      await waitFor(() =>
+        expect(importRoster).toHaveBeenCalledWith(
+          'org-1',
+          'course-1',
+          'First,Last,Email,Discord,GitHub\n',
+          true,
+          'Test Course - STUDENTS'
+        )
+      )
+    })
+
+    // Round 3: the field stops rendering when the box is unticked, but its
+    // state survives — so clearing it and then unticking used to dispatch
+    // `''` anyway, past the guard, and the instructor got the bare
+    // validation refusal this fallback exists to prevent.
+    it('falls back to the default base name even when the box was unticked after the field was cleared', async () => {
+      importRoster.mockResolvedValue({ jobId: 'job-1' })
+      getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+
+      renderRosterImport()
+      fireEvent.change(
+        screen.getByRole('textbox', { name: 'Base name for new categories' }),
+        { target: { value: '' } }
+      )
+      fireEvent.click(
+        screen.getByRole('checkbox', {
+          name: "Create student categories if they don't exist",
+        })
+      )
+      chooseFile(rosterFile('First,Last,Email,Discord,GitHub\n'))
+      fireEvent.click(screen.getByRole('button', { name: 'Import roster' }))
+
+      await waitFor(() =>
+        expect(importRoster).toHaveBeenCalledWith(
+          'org-1',
+          'course-1',
+          'First,Last,Email,Discord,GitHub\n',
+          false,
+          'Test Course - STUDENTS'
+        )
+      )
+    })
   })
 
   // ROST-9: "every row that could not be parsed with the line number it was

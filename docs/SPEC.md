@@ -2413,3 +2413,19 @@ earlier version avoids acquiring duplicates; it must never become how one studen
 conversations. A remembered channel that has since been deleted from the server is recognised as gone
 and recreated, rather than leaving the student with no channel and the platform insisting they have
 one.
+
+#### SRV-11 Two courses cannot claim the same Discord role under different spellings
+
+A course's admins and students role names are compared against each other under Discord's own
+case- and whitespace-insensitive matching, so one course can no longer name `Staff` and `staff` and
+have both resolve to a single role (SRV-10). The comparison that keeps two *different* courses from
+claiming the same role is still exact. So course A naming `Staff` as its admins role and course B
+naming `staff` as its students role are both accepted, in one organization and one Discord server —
+and at scaffold time both resolve to the same role, granting course B's students every one of course
+A's admins-only channels. It is the same privilege escalation SRV-10 closes, split across two courses
+instead of hidden inside one.
+
+Two courses in the same organization and server cannot claim the same role name under any spelling
+that Discord would treat as one role. A pair already stored that way keeps working and can still be
+edited, the same grandfathering SRV-10's own check applies, and the refusal names the other course
+and the role, so an instructor knows which two things collide.

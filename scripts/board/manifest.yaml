@@ -3456,5 +3456,22 @@
   section: §34 Web Control Panel
   family: SRV
   phase: 23
-  status: In progress
+  status: In review
+  review: false
+- id: SRV-11
+  title: Two courses cannot claim the same Discord role under different spellings
+  full: A course's admins and students role names are compared against each other
+    under Discord's own case- and whitespace-insensitive matching, so one course
+    can no longer name Staff and staff and have both resolve to a single role
+    (SRV-10). The comparison that keeps two different courses from claiming the
+    same role is still exact. So course A naming Staff as its admins role and
+    course B naming staff as its students role are both accepted, in one
+    organization and one Discord server — and at scaffold time both resolve to
+    the same role, granting course B's students every one of course A's
+    admins-only channels. It is the same privilege escalation SRV-10 closes,
+    split across two courses instead of…
+  section: §34 Web Control Panel
+  family: SRV
+  phase: 23
+  status: Backlog
   review: false

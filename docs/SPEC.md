@@ -2285,3 +2285,64 @@ This asks the modal layer for something a two-button confirm cannot express: "di
 here" are different answers, and folding them together loses the edit for the people who meant the
 other one. The shared modal grows a three-way choice, one more mode of the single dialog component
 this panel already uses rather than a second dialog implementation.
+
+#### ROST-14 Two students whose emails share a local part both get a channel
+
+A per-student channel is named after the local part of the student's email address (ROST-3), which
+means two students on the same roster can claim the same name: `ada@school.edu` and `ada@gmail.com`
+both slug to `ada`. Today the second is refused a channel entirely and reported, on the grounds that
+sharing one channel between two students is worse than having none — but the student left without a
+channel is a real person who cannot be answered privately, and the instructor's only remedy is to go
+and edit somebody's email address.
+
+Every row gets a channel. The first claim on a slug keeps the bare name; each subsequent row taking
+the same slug is given a numbered suffix — `ada`, `ada-2`, `ada-3` — assigned in the order the rows
+appear, so a re-import of an unchanged roster produces the same names it did the first time and
+creates nothing new. A suffixed name is matched, created and permissioned exactly like any other
+channel, and the import's report says which rows were suffixed and why, so an instructor can still
+correct the underlying email if they would rather.
+
+#### ROST-15 An import creates the student categories it needs
+
+Per-student channels are placed into the numbered `… STUDENTS <n>` categories a course declares, and
+only into ones that already exist in the Discord server: an import that runs before those categories
+have been scaffolded creates no channels at all and reports every student as unplaced. A roster
+larger than the categories that happen to exist is refused the same way, one student at a time,
+because Discord allows only fifty channels in a category.
+
+An import creates the student categories it needs. The panel offers this when importing a roster,
+turned on by default, alongside the base name to use — defaulting to the course's own title followed
+by ` - STUDENTS`. With it on, the import works out how many categories the roster requires at fifty
+channels each, counts what already exists, and creates the rest, numbered in sequence from the base
+name (`Python - STUDENTS - 01`, `Python - STUDENTS - 02`). Existing categories are used before new
+ones are made, and a category is never created to hold students who are already placed. With it off,
+the import behaves exactly as it does today, reporting what it could not place rather than creating
+anything.
+
+#### SRV-10 Scaffolding creates the roles a course names, if they are missing
+
+A course names an admins role and a students role, and both scaffolding and roster import resolve
+those names against the roles that exist in the Discord server. A name that matches nothing is
+skipped: channels are still created, but the permission overwrites that would have granted the
+admins role access, and denied the students role, are simply absent — so a course whose roles were
+never created by hand produces channels whose permissions do not say what the instructor asked for,
+and nothing in the product creates the roles for them.
+
+A role a course names and the server lacks is created rather than skipped. Both roles are created
+without any Discord permissions of their own — they exist to be named in channel overwrites, not to
+grant server-wide powers — and a role that already exists is used as it is, never modified. What was
+created is reported alongside everything else the run did.
+
+#### ROST-16 A student's channel is private to them, their instructors, and nobody else
+
+A per-student channel exists so one student can ask questions nobody else can read. Its permissions
+have to say exactly that, and today nothing verifies end to end that they do — the overwrites are
+built correctly in code, but no test drives a real import against a real server and reads back what
+the channel actually permits.
+
+A channel created by a roster import denies `@everyone`, grants the course's admins role, grants the
+individual student, and does not grant the course's students role — so a student reaches their own
+channel and no other student's, while every instructor reaches all of them. A row whose Discord
+handle could not be resolved still gets a channel with the admin grant, reported as such, rather than
+a channel that quietly grants nobody. This holds for a channel created fresh, for one an earlier
+import already created, and for a suffixed name (ROST-14).

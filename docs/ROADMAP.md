@@ -298,3 +298,13 @@ gave every screen an address; this phase gives the biggest screen an internal st
 addressing, and closes the gap between seeing a person’s name and reading what they asked.
 
 **In scope:** WEB-35, WEB-36, ROST-13, WEB-37, WEB-38
+
+## Phase 23 — A roster import that finishes the job
+
+Importing a roster does most of the work and then stops short of the parts that need a Discord server
+prepared by hand: categories that must already exist, roles that must already be named, and a channel
+name collision that leaves one student with nothing. This phase makes an import self-sufficient — it
+creates the categories and roles it needs, gives every student a channel, and proves the permissions
+on those channels are what a private channel actually requires.
+
+**In scope:** ROST-14, ROST-15, ROST-16, SRV-10

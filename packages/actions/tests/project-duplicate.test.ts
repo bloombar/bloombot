@@ -264,6 +264,58 @@ describe('projects.duplicate', () => {
     expect(courses.listCourses(organizationId, testDb.db, {}).length).toBe(0)
   })
 
+  // SRV-10 round 3: a course grandfathered with an aliasing admins/students
+  // role pair (saved before `repos/courses.ts`'s own normalized comparison
+  // existed — reached here the same way, directly below the repo layer) is
+  // copied verbatim by `projects.duplicate`, and the copy is a *create*,
+  // which `findSelfConflict` always checks regardless of `enabled`. This
+  // test fails without the fix: before it, `duplicateProjectAction`'s own
+  // conflict message named only a role, with nothing saying which of the
+  // project's courses caused it.
+  it('refuses to duplicate a project whose course carries a grandfathered aliasing role pair, naming the course', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    const source = courses.createCourse(
+      organizationId,
+      {
+        projectId,
+        title: 'Legacy Course',
+        enabled: false,
+        adminsRole: 'admins-legacy',
+        studentsRole: 'students-legacy',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!source.ok) throw new Error('setup failed: unexpected conflict')
+    // Grandfathered directly, below the repo layer — `createCourse` itself
+    // now refuses to produce this shape.
+    testDb.db.$client
+      .prepare(
+        'UPDATE courses SET admins_role = ?, students_role = ? WHERE id = ?'
+      )
+      .run('Staff', 'staff', source.course.id)
+
+    const attempt = dispatch(
+      duplicateProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionConflictError)
+    await expect(attempt).rejects.toThrow(/Legacy Course/)
+    // No orphaned project or course was left behind — the whole duplicate
+    // rolled back, same as any other failure partway through.
+    expect(
+      projects.listProjects(organizationId, testDb.db, {
+        includeArchived: true,
+      })
+    ).toHaveLength(1)
+  })
+
   // Finding 1 (rework pass): a failure partway through used to leave a new
   // project committed with only some of its courses copied — indistinguishable
   // from a complete duplicate — while consuming the chosen name, so a retry

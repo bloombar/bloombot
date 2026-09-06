@@ -230,22 +230,24 @@ function resolveRoleId(
 }
 
 /**
- * SRV-10's own review rework: `resolveOrCreateRole` pushing a newly created
- * role into the list `resolveRoleId` searches (its own comment, below) is
- * what stops two *differently-cased* role names from creating two separate
- * Discord roles inside one run — but the two overwrite arrays built from
- * `adminsRoleId`/`studentsRoleId` are still built by concatenation, so an
- * aliasing this file's own refusal check (below) somehow failed to catch —
- * or any other future path that resolves the same id twice into one of
- * these arrays — would still post Discord a body naming that id twice. A
- * plain `[a, b, c]` array offers Discord no such guarantee on its own, and
- * a duplicate entry in one `PUT`/`POST` body is a real, if redundant,
- * artifact regardless of how the aliasing that produced it is otherwise
- * resolved. Keeps the first occurrence of each `id`, which is always the
- * intended overwrite here (`everyoneOverwrite`/`botOverwrite` first, a role
- * grant after) — nothing in this file ever deliberately lists the same `id`
- * twice with two different `allow`/`deny` values for this to have to choose
- * between.
+ * SRV-10's own review rework: the two overwrite arrays built from
+ * `adminsRoleId`/`studentsRoleId` are built by concatenation, so any path
+ * that resolves the same Discord id into more than one slot of one of
+ * these arrays — the admins/students aliasing this file already refuses
+ * above, or a course naming a role "@everyone" (also refused above,
+ * `guildId` doubling as both the everyone-deny target and the resolved
+ * role id) — would post Discord a body naming that id twice. A plain
+ * `[a, b, c]` array offers Discord no guarantee against that on its own.
+ *
+ * Keeps only the *first* occurrence of each `id`. That is a narrow,
+ * fail-closed guard, not a correct resolution: in the one case this file
+ * knows can reach it if a refusal above were ever bypassed (`@everyone` as
+ * a course's own role), the first occurrence is `denyEveryoneOverwrite`'s
+ * deny, so the *second* — the admin grant — is the one silently dropped.
+ * Kept anyway, deliberately, because the alternative (posting the same id
+ * twice, deny then allow) is worse: Discord's own last-write-wins behavior
+ * for a duplicate target in one overwrite array is undocumented, so this
+ * guards against whichever way that resolves rather than trusting it.
  */
 function dedupeOverwritesById(
   overwrites: DiscordPermissionOverwrite[]
@@ -445,14 +447,18 @@ export function createDiscordScaffoldHandler(
     //
     // - The created role is pushed into `roles` itself (mutated in place),
     //   not merely returned. `courses.ts`'s own admins/students uniqueness
-    //   check compares the two names *exactly*, while `resolveRoleId`
-    //   compares them normalized — so a course naming `adminsRole: "Staff"`
-    //   and `studentsRole: "staff"` passes that check, and without this,
-    //   the second call below would not see the role the first call just
-    //   created, creating a second, colliding "staff" role and (on the next
-    //   run) resolving both names onto whichever one `listGuildRoles`
-    //   happens to return first — the students role then admin-granted on
-    //   every admins-only channel.
+    //   check now normalizes the same way `resolveRoleId` does (SRV-10
+    //   round 3's own fix at the root — see `docs/DECISIONS.md`), so a
+    //   *new* course can no longer be saved with `adminsRole: "Staff"` and
+    //   `studentsRole: "staff"`; a course saved before that fix landed
+    //   already exists with exactly that shape, though, and without this
+    //   push the second call below would not see the role the first call
+    //   just created, creating a second, colliding "staff" role and (on
+    //   the next run) resolving both names onto whichever one
+    //   `listGuildRoles` happens to return first — the students role then
+    //   admin-granted on every admins-only channel. This file's own
+    //   `adminsRoleId === studentsRoleId` refusal, below, is the other half
+    //   of defending a course already stored that way.
     // - A creation failure is caught only when Discord's own response says
     //   it is permanent (`DiscordRequestError.permanent` — a `403` for a
     //   bot missing Manage Roles, requirement 6). A transient failure (a
@@ -519,6 +525,28 @@ export function createDiscordScaffoldHandler(
       )
     }
 
+    // SRV-10 round 3, must-fix 3: Discord's own `@everyone` role's id
+    // *equals the guild's own id* (`channel-overwrites.ts`'s own doc
+    // comment) — a course naming its admins or students role "@everyone"
+    // (or a course category role legitimately named that in the guild)
+    // resolves straight onto `guildId` the same way any other role name
+    // would, colliding with `denyEveryoneOverwrite(guildId)`'s own entry
+    // below. `dedupeOverwritesById` (its own comment, below) would then
+    // keep the `@everyone` deny and silently drop the admin grant, since
+    // both share `id: guildId` — an admins-only channel created that way
+    // denies everyone and grants nobody, reported `succeeded`, and
+    // unrepairable once created (SRV-8). Refused the same way the aliasing
+    // above is, before either overwrite array is even built.
+    if (adminsRoleId === guildId || studentsRoleId === guildId) {
+      const offending =
+        adminsRoleId === guildId
+          ? { which: 'admins', name: course.adminsRole }
+          : { which: 'students', name: course.studentsRole }
+      throw new Error(
+        `discordServers.scaffold: course "${course.id}" resolves its ${offending.which} role ("${offending.name}") to guild "${guildId}"'s own "@everyone" role — refusing to scaffold, since an overwrite naming "@everyone" would collide with the mandatory @everyone-deny overwrite every category and admins-only channel gets. Point the course's role at a real Discord role, not "@everyone", then retry.`
+      )
+    }
+
     // Discord's own `@everyone` role shares its guild's id (`channel-overwrites.ts`'s
     // own doc comment) — nothing to resolve for it.
     const everyoneOverwrite = denyEveryoneOverwrite(guildId)
@@ -529,12 +557,9 @@ export function createDiscordScaffoldHandler(
     // it comes back `403` — observed in the field, and the reason
     // `allowBotOverwrite` exists.
     const botOverwrite = allowBotOverwrite(botUserId)
-    // `dedupeOverwritesById` (its own comment, above): the refusal just
-    // above means neither array can carry the same role id twice in
-    // practice today, but a body that names one id twice would be a real,
-    // if redundant, artifact regardless — cheap enough to guard
-    // unconditionally rather than trust the refusal to be every future
-    // caller's only line of defense.
+    // `dedupeOverwritesById`, below — narrow protection, not the primary
+    // fix; the two refusals above are what actually keep a duplicate id out
+    // of these arrays today.
     const categoryOverwrites: DiscordPermissionOverwrite[] =
       dedupeOverwritesById([
         everyoneOverwrite,

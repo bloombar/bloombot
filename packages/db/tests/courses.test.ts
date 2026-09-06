@@ -852,6 +852,98 @@ describe('courses repo', () => {
       expect(result.conflict.field).toBe('studentsRole')
     })
 
+    // SRV-10 round 3, must-fix 2: the message used to quote only
+    // `studentsRole`, leaving an instructor looking at two visibly
+    // different strings ("Staff"/"staff") with no explanation of why they
+    // collide. This test fails without the fix: before it, the message
+    // read `Role name "staff" is used for both...`, naming neither the
+    // other value nor the case/whitespace-insensitivity that makes them
+    // the same role to Discord.
+    it('names both role values and explains the case/whitespace-insensitivity when they differ only that way', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          adminsRole: 'Staff',
+          studentsRole: '  staff  ',
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.message).toContain('"Staff"')
+      expect(result.conflict.message).toContain('"  staff  "')
+      expect(result.conflict.message.toLowerCase()).toContain('capitalization')
+    })
+
+    // SRV-10 round 3, must-fix 1: a course already stored with an aliasing
+    // pair (grandfathered — saved before the check above existed, or
+    // written directly the way this test does) must still accept a save
+    // that leaves the pair untouched. This test fails without the fix:
+    // before it, `courses.save` always sending both role fields meant this
+    // update was refused for a field the caller never touched, blocking
+    // every unrelated edit on such a course forever.
+    it('accepts an update that leaves a stored aliasing role pair untouched, changing only an unrelated field', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+      // Grandfathered directly, below the repo layer — the same device
+      // this file's own TEN-9 test uses to reach a state `createCourse`
+      // itself now refuses to produce.
+      testDb.db.$client
+        .prepare(
+          'UPDATE courses SET admins_role = ?, students_role = ? WHERE id = ?'
+        )
+        .run('Staff', 'staff', created.id)
+
+      const result = courses.updateCourse(
+        orgA,
+        created.id,
+        courseInput(projectA.id, {
+          title: 'Web Design (renamed)',
+          adminsRole: 'Staff',
+          studentsRole: 'staff',
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(true)
+      if (!result?.ok) throw new Error('expected the save to go through')
+      expect(result.course.title).toBe('Web Design (renamed)')
+    })
+
+    // The other half of must-fix 1: a save that *introduces* aliasing (or
+    // changes one already-aliasing name to alias with something else) is
+    // still refused in full — untouched-pair leniency must not become
+    // blanket leniency the moment either role field is present in the
+    // input.
+    it('still refuses an update that changes a role name into a new aliasing pair', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      const result = courses.updateCourse(
+        orgA,
+        created.id,
+        courseInput(projectA.id, {
+          adminsRole: 'same-role',
+          studentsRole: 'same-role',
+        }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (!result || result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('studentsRole')
+    })
+
     it('refuses a save with two categories sharing the same name', () => {
       testDb = createTestDatabase()
       const { orgA, projectA } = seedTwoOrganizations(testDb)

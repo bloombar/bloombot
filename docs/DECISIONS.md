@@ -9342,3 +9342,74 @@ guard's condition with `false` and restoring it after); the two existing "report
 `discord-scaffold.test.ts`/`roster-import.test.ts` failed on the old bare-status reason once
 `describeDiscordError` moved to `error.message`, and were updated to assert the richer text
 (`toContain('Manage Roles')`) rather than the old exact string.
+
+**Review round 3 (three must-fixes, on the coordinator's own brief this time).** Round 2's fix — refusing
+the aliasing at the root in `courses.ts` — was right in principle, and independently probed clean on the
+narrower questions (normalization is character-identical between the repo and both handlers across NBSP,
+trailing tab, zero-width space and Unicode case folding; the scaffold refusal throws before any category or
+channel is created; `describeDiscordError`'s new text is safe to render). What the round-2 fix did not
+account for: what an *unconditional* refusal does to a course already stored with an aliasing pair.
+
+1. **A course already stored with aliasing names could no longer be saved at all, for any reason.**
+   `findSelfConflict` ran unconditionally in both `createCourse` and `updateCourse`, and `courses.save`
+   always sends both role fields (`saveInputSchema` requires them; unlike `promptId`/`vectorStoreId`, they
+   are not on the "omitted preserves stored" list) — so an update changing only the title re-submitted the
+   stored aliasing pair and was refused on a field the save never touched. Fixed with `findSelfConflict`
+   gaining a `checkRoles` option (default `true`, so `createCourse` is unchanged): `updateCourse` now
+   computes `rolesChanged` against the row it just read and passes `checkRoles: rolesChanged`, so a save
+   that leaves an existing aliasing pair exactly as stored goes through, while a save that changes either
+   name — including onto a *new* aliasing pair — is checked in full. The category-duplicate half of the
+   same function always runs regardless, since an update can introduce a duplicate category name on its
+   own, independent of the roles. The stored pair is still caught loudly at scaffold time by
+   `discord-scaffold.ts`'s own defense-in-depth refusal (round 2), which is the right place for a
+   grandfathered course's own permissions problem to actually block something.
+2. **The refusal message described the wrong thing.** With `adminsRole: "Staff"`/`studentsRole: "staff"`
+   it quoted only `studentsRole` ("staff"), leaving an instructor looking at two visibly different strings
+   with no explanation of why they collide, and it is an `action_conflict` with no `body.issues` —
+   `apps/web/src/pages/CourseEditor.tsx`'s own `switchToTabForField` only ever reads
+   `caught.body.issues` (built for `action_input_invalid`), never `body.conflict`, so nothing in the panel
+   switches tabs for *any* `CourseNameConflict`, this one included. Given the choice the coordinator
+   offered (give the conflict a field issue, or name the tab in the message), named the tab in the message
+   rather than teaching the action/API layer to turn a `conflict.field` into an `issues` entry — a
+   narrower, self-contained fix inside `courses.ts` alone, and the message is the *only* signal an MCP
+   caller gets regardless of what the panel does with `field`. The message now quotes both values, and
+   states plainly (only when true) that they differ solely in capitalization or whitespace.
+3. **`dedupeOverwritesById` was reachable, and silently dropped the admins grant when it fired.** The
+   round-2 claim that "nothing can produce a duplicate id" was wrong: Discord's own `@everyone` role's id
+   *equals the guild id*, and a course whose `adminsRole` (or `studentsRole`) is literally `"@everyone"`
+   resolves straight onto `guildId` — the aliasing-with-each-other guard does not fire, since the other
+   role is still a distinct id, but that resolved id collides with `denyEveryoneOverwrite(guildId)`'s own
+   entry, and "keep the first occurrence" then drops the *admin grant*, not a redundant duplicate — the
+   overwrite it needed and the overwrite that happened to already be there for an unrelated reason are not
+   interchangeable the way the round-2 docblock assumed. A course resolving either role onto `guildId` is
+   now refused the same way the admins/students aliasing is, before either overwrite array is built.
+   `dedupeOverwritesById` itself is kept — it is fail-closed protection against a duplicate id reaching
+   Discord at all, whose behavior for that shape is undocumented and worse to risk than a filtered array —
+   but its docblock no longer claims the first occurrence is "always" the intended one; it says plainly
+   that in the one case that can reach it (a bypassed refusal), it is not, and explains why the guard stays
+   anyway. The near-duplicate ~20-line restatement immediately before the array-construction call sites was
+   also dropped to a one-line pointer at the function's own docblock (not blocking, taken anyway).
+
+**Also fixed, not a must-fix.** `discord-scaffold.ts`'s own comment claiming `courses.ts`'s uniqueness check
+"compares the two names exactly" was the premise round 2 itself removed — corrected to describe the
+normalized comparison and point at both of this file's own refusals as the defense for a course stored
+before that fix. `packages/actions/src/actions/projects.ts`'s `duplicateProjectAction` carried a comment
+claiming its `courses.createCourse` conflict branch was "unreachable in practice," true only for the
+*cross-course* PROJ-3 check (skipped by `enabled: false`) and never true for `findSelfConflict`'s own
+self-check, which is not guarded by `enabled` at all — a project containing a course grandfathered with an
+aliasing pair (must-fix 1's own exception) fails the whole duplicate the instant that course's copy is
+attempted, exactly the case must-fix 1 does not close for a *create*. Comment corrected, and the thrown
+`ActionConflictError` now prefixes the source course's own title onto `result.conflict.message`, so a
+duplicate spanning several courses names which one caused the refusal rather than only the role that
+collided.
+
+**Verification (round 4).** `npm run lint && npx prettier --check . && npm run typecheck && npm test &&
+npx playwright test` all green: 2510 vitest (5 new — two message-content/untouched-pair/introduces-aliasing
+tests plus one message-content test in `packages/db/tests/courses.test.ts`, one `@everyone`-as-admins-role
+refusal test in `discord-scaffold.test.ts`, one grandfathered-aliasing-duplicate test in
+`packages/actions/tests/project-duplicate.test.ts`), 90 node, 38 Playwright e2e specs. Each fix's own new
+test confirmed red first: the untouched-pair update test failed (`expected false to be true`) with
+`rolesChanged` forced to `true`; the `@everyone`-as-admins-role test resolved `succeeded` with
+`unresolvedRoles: []` and a channel missing its real admin grant (temporarily replacing the new `if` guard's
+condition with `false`); the project-duplicate test's course-name assertion failed against the unprefixed
+message (temporarily reverting the `ActionConflictError` wrap).

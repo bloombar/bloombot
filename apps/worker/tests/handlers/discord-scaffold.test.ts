@@ -1177,6 +1177,42 @@ describe('discordServers.scaffold handler', () => {
     ).toBe(false)
   })
 
+  // SRV-10 round 3, must-fix 3: Discord's own `@everyone` role's id equals
+  // the guild's own id, and `resolveRoleId` resolves a role named
+  // "@everyone" exactly like any other — a course whose admins role is
+  // (mistakenly or deliberately) named "@everyone" resolves `adminsRoleId`
+  // to `guildId`, colliding with `denyEveryoneOverwrite(guildId)`'s own
+  // entry. This test fails without the fix: before it, the admins-only
+  // channel below was created with only the `@everyone` deny and the bot
+  // grant — `dedupeOverwritesById` keeping the first occurrence and
+  // silently dropping the admin grant — reported `succeeded` with
+  // `unresolvedRoles: []`.
+  it("refuses to scaffold when a course's role resolves to the guild's own @everyone role", async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(
+      testDb.db,
+      [{ name: 'Week 1', channels: [{ name: 'staff', adminsOnly: true }] }],
+      { adminsRole: '@everyone' }
+    )
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: seeded.guildId, name: '@everyone' },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    await expect(
+      runScaffold(seeded.organizationId, seeded.courseId)
+    ).rejects.toThrow(
+      /resolves its admins role .* to guild .* own "@everyone" role/
+    )
+
+    // Refused before any category was created — not half-scaffolded with
+    // the dropped grant baked in.
+    expect(
+      discordServer.writeRequests().some((r) => r.path.endsWith('/channels'))
+    ).toBe(false)
+  })
+
   // Finding 4 of the SRV-6..8 rework: an instructor sets `admins_only: true`
   // on a channel students can already read — this run writes nothing to a
   // pre-existing channel's permissions (SRV-8), so the report must say what

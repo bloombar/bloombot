@@ -2295,12 +2295,20 @@ sharing one channel between two students is worse than having none — but the s
 channel is a real person who cannot be answered privately, and the instructor's only remedy is to go
 and edit somebody's email address.
 
-Every row gets a channel. The first claim on a slug keeps the bare name; each subsequent row taking
-the same slug is given a numbered suffix — `ada`, `ada-2`, `ada-3` — assigned in the order the rows
-appear, so a re-import of an unchanged roster produces the same names it did the first time and
-creates nothing new. A suffixed name is matched, created and permissioned exactly like any other
-channel, and the import's report says which rows were suffixed and why, so an instructor can still
-correct the underlying email if they would rather.
+Every row gets a channel, and the name it gets is a function of that row's own email address alone —
+never of where the row happened to sit in the file. A numbered suffix assigned in row order would be
+stable only for a roster that never changes: add a student ahead of a colliding pair, or export the
+same class in a different order, and `ada-2` and `ada-3` swap owners, so the next import hands each
+student the other's channel. Instead, a slug claimed by more than one row disambiguates on the part
+of the address that actually differs — the domain. `ada@school.edu` and `ada@gmail.com` become
+`ada-school` and `ada-gmail`; where the first domain label is shared too, enough of the remaining
+domain is added to tell them apart. The result depends only on the two addresses, so any ordering of
+any roster containing them produces the same two names.
+
+A row whose slug nothing else claims keeps the bare local part, as it always has. The import's report
+says which rows were disambiguated and what they were named, so an instructor can still correct the
+underlying address if they would rather. A disambiguated name is matched, created and permissioned
+exactly like any other channel.
 
 #### ROST-15 An import creates the student categories it needs
 
@@ -2360,3 +2368,25 @@ a student who could not be resolved on an earlier run and can be now is granted 
 absent admins grant or `@everyone` deny is restored — and reported as repaired rather than as created.
 Verification never removes an overwrite the platform did not put there: an instructor who granted a
 teaching assistant access to one student's channel keeps that grant.
+
+#### ROST-17 A student's channel is remembered, not re-derived
+
+An import finds a student's existing channel by recomputing the name it would create and looking for
+that name in the server. This works only while the name a student's address produces never changes —
+and it can change for reasons outside anybody's control: a second student with the same email local
+part joins the class, so the first student's bare `ada` becomes the disambiguated `ada-school`
+(ROST-14); an instructor renames a channel by hand; a roster is exported with a corrected address.
+Each of those makes the next import look for a name nothing has, and create a second channel for a
+student who already has one — in whichever student category has room, so the duplicate need not even
+sit beside the original.
+
+The platform remembers which Discord channel belongs to which person in which course, recorded when
+the channel is created and read back on every later import. A student who already has a channel is
+never given another, whatever their channel is called now, whatever their row's position, and
+whichever category it lives in. An import that finds a remembered channel verifies its permissions
+(ROST-16) and reports it as already present, rather than creating anything.
+
+A channel created before this record existed is adopted the first time an import matches it by name,
+so a course scaffolded by an earlier version does not acquire duplicates on its next import. A
+remembered channel that has since been deleted from the server is recognised as gone and recreated,
+rather than leaving the student with no channel and the platform insisting they have one.

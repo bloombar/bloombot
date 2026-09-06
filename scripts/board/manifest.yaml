@@ -3382,9 +3382,9 @@
     that sharing one channel between two students is worse than having none —
     but the student left without a channel is a real person who cannot be
     answered privately, and the instructor's only remedy is to go and edit
-    somebody's email address. Every row gets a channel. The first claim on a
-    slug keeps the bare name; each subsequent row taking the same slug is given
-    a numbered suffix — ada, ada-2, ada-3…"
+    somebody's email address. Every row gets a channel, and the name it gets is
+    a function of that row's own email address alone — never of where the row
+    happened to sit in the file. A numbered…"
   section: §34 Web Control Panel
   family: ROST
   phase: 23
@@ -3419,6 +3419,23 @@
     reaches their own channel and no other student's, while every instructor
     reaches all of them. A row whose Discord handle could not be resolved still
     gets a channel with the admin grant…
+  section: §34 Web Control Panel
+  family: ROST
+  phase: 23
+  status: Backlog
+  review: false
+- id: ROST-17
+  title: A student's channel is remembered, not re-derived
+  full: "An import finds a student's existing channel by recomputing the name it
+    would create and looking for that name in the server. This works only while
+    the name a student's address produces never changes — and it can change for
+    reasons outside anybody's control: a second student with the same email
+    local part joins the class, so the first student's bare ada becomes the
+    disambiguated ada-school (ROST-14); an instructor renames a channel by hand;
+    a roster is exported with a corrected address. Each of those makes the next
+    import look for a name nothing has, and create a second channel for a
+    student who already has one — in whichever student category has room, so the
+    duplicate need not even sit…"
   section: §34 Web Control Panel
   family: ROST
   phase: 23

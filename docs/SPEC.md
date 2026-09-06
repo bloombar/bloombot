@@ -2295,8 +2295,12 @@ sharing one channel between two students is worse than having none — but the s
 channel is a real person who cannot be answered privately, and the instructor's only remedy is to go
 and edit somebody's email address.
 
-Every row gets a channel, and the name it gets is a function of that row's own email address alone —
-never of where the row happened to sit in the file. A numbered suffix assigned in row order would be
+Every row gets a channel, and the name it gets depends only on the addresses the roster contains —
+never on where the row happened to sit in the file. Two rows never receive the same name: distinct
+addresses produce distinct names, and only a letter-case difference in one address counts as the same
+student. What a name does *not* promise is permanence across imports: a second `ada` joining the class
+disambiguates the first, and until a student's channel is remembered rather than re-derived (ROST-17),
+that is a name the next import will look for and not find. A numbered suffix assigned in row order would be
 stable only for a roster that never changes: add a student ahead of a colliding pair, or export the
 same class in a different order, and `ada-2` and `ada-3` swap owners, so the next import hands each
 student the other's channel. Instead, a slug claimed by more than one row disambiguates on the part
@@ -2365,8 +2369,13 @@ import already created, and for a suffixed name (ROST-14).
 A channel is never handed to a student it does not belong to. Before an existing channel is adopted
 for somebody — granted to them, or reported as already theirs — the platform checks that it is not
 already somebody else's: a channel remembered as another person's (ROST-17), or one whose permissions
-already grant an individual member who is not this student, belongs to that other student and must
-never be granted to a second one. Names can legitimately drift — a student leaves and frees a bare
+already grant an individual who is *another student on this roster*, belongs to that other student and
+must never be granted to a second one. The test is deliberately that narrow. A member grant the
+platform cannot account for — a teaching assistant an instructor added by hand — is not evidence the
+channel belongs to somebody else, and must not evict the student whose channel it is. Nor may a row
+whose own Discord handle failed to resolve be refused its own existing channel: nothing about that
+row identifies a rival owner, so it keeps what it has. Until ROST-17 remembers ownership outright,
+this check is a floor and not a proof, and the cases it cannot see are the reason ROST-17 exists. Names can legitimately drift — a student leaves and frees a bare
 name, an address is corrected, a second `ada` joins and disambiguates the first (ROST-14) — and a
 name-based match alone would then walk one student straight into another's private channel and their
 transcript. Where a match is refused for this reason the import creates the student their own channel

@@ -3405,7 +3405,7 @@
   section: §34 Web Control Panel
   family: ROST
   phase: 23
-  status: Backlog
+  status: In progress
   review: false
 - id: ROST-16
   title: A student's channel is private to them, their instructors, and nobody else
@@ -3422,7 +3422,7 @@
   section: §34 Web Control Panel
   family: ROST
   phase: 23
-  status: Backlog
+  status: In progress
   review: false
 - id: ROST-17
   title: A student's channel is remembered, not re-derived
@@ -3439,7 +3439,7 @@
   section: §34 Web Control Panel
   family: ROST
   phase: 23
-  status: Backlog
+  status: In progress
   review: false
 - id: SRV-10
   title: Scaffolding creates the roles a course names, if they are missing
@@ -3456,7 +3456,7 @@
   section: §34 Web Control Panel
   family: SRV
   phase: 23
-  status: In review
+  status: Done
   review: false
 - id: SRV-11
   title: Two courses cannot claim the same Discord role under different spellings
@@ -3473,5 +3473,5 @@
   section: §34 Web Control Panel
   family: SRV
   phase: 23
-  status: Backlog
+  status: In progress
   review: false

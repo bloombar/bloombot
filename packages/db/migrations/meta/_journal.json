@@ -169,6 +169,13 @@
       "when": 1788641156108,
       "tag": "0023_cute_scarecrow",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1788689490708,
+      "tag": "0024_bouncy_gunslinger",
+      "breakpoints": true
     }
   ]
 }

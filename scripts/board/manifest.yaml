@@ -3382,9 +3382,9 @@
     that sharing one channel between two students is worse than having none —
     but the student left without a channel is a real person who cannot be
     answered privately, and the instructor's only remedy is to go and edit
-    somebody's email address. Every row gets a channel, and the name it gets is
-    a function of that row's own email address alone — never of where the row
-    happened to sit in the file. A numbered…"
+    somebody's email address. Every row gets a channel, and the name it gets
+    depends only on the addresses the roster contains — never on where the row
+    happened to sit in the file. Two rows never…"
   section: §34 Web Control Panel
   family: ROST
   phase: 23

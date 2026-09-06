@@ -16,6 +16,7 @@
  */
 
 import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { useEffect, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Course, Project } from '../src/api/types.js'
@@ -61,14 +62,32 @@ vi.mock('../src/api/client.js', async () => {
 
 // The stub: dirty from the moment it mounts, and no `onRegisterActions`
 // call ever — an unsaved edit this page has no way to reach.
+//
+// `onDirtyChange` is reported from an effect rather than during render.
+// Calling it inline sets state on `CourseEditor` while this component is
+// rendering, which React defers (it warns about exactly this), so
+// `instructionsDirty` was not reliably applied by the time the test
+// clicked a tab — the click then found a clean form, no prompt opened,
+// and the test failed under load while passing in isolation. The effect
+// runs in the commit phase instead, and `reported` below is the test's
+// gate: it renders only once the parent has been told, so waiting for it
+// guarantees the state this test depends on is in place.
 vi.mock('../src/components/CourseInstructions.js', () => ({
   CourseInstructions: ({
     onDirtyChange,
   }: {
     onDirtyChange: (dirty: boolean) => void
   }) => {
-    onDirtyChange(true)
-    return <div data-testid="course-instructions-stub" />
+    const [reported, setReported] = useState(false)
+    useEffect(() => {
+      onDirtyChange(true)
+      setReported(true)
+    }, [onDirtyChange])
+    return (
+      <div data-testid="course-instructions-stub">
+        {reported && <span data-testid="course-instructions-stub-dirty" />}
+      </div>
+    )
   },
 }))
 
@@ -122,7 +141,7 @@ describe('CourseEditor with an unreachable instructions edit (review round 1, mu
         onCancel={vi.fn()}
       />
     )
-    await screen.findByTestId('course-instructions-stub')
+    await screen.findByTestId('course-instructions-stub-dirty')
 
     fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
     await screen.findByRole('dialog', { name: 'Save your changes?' })

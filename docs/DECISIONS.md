@@ -9037,3 +9037,100 @@ journal entry pulled out, green again with them restored.
 this panel already renders for every refusal (WEB-5) still shows it. Transient by nature — the tab only posts
 the stale shape until it reloads once — and no worse than any other field this same schema already refuses
 outright rather than silently drops, so this is left as encountered rather than treated as a gap to close.
+
+## D-83 — `apps/web`: WEB-37/WEB-38 — one control per flag, and a tab switch that asks before abandoning an edit
+
+**One control per flag (WEB-37).** `pages/CourseEditor.tsx`'s General tab no longer renders an immediate
+`Enable`/`Disable` button beside the `Enabled` checkbox. The two controls drove the same flag on two
+different clocks — the checkbox a pending edit applied by the next `courses.save`, the button a
+`courses.enable`/`courses.disable` dispatched on click — and reconciling them needed `confirmedEnabled`, a
+second piece of state whose whole job was keeping the button from reading an edit that had not been saved
+(the WEB-7 rework's own finding 4). Deleting the button deletes that state and the disagreement it existed
+to paper over: `form.enabled` is now an ordinary form field, saved with the rest. `courses.enable` and
+`courses.disable` are untouched and still dispatched from each course's kebab menu on the project page
+(`pages/Courses.tsx`), which keeps WEB-15's own confirmation — the editor's checkbox is reviewed and then
+committed by an explicit save, so the save is the confirmation, while the kebab menu acts on a live course
+with no review step in between.
+
+**A tab switch asks before abandoning an edit (WEB-38).** `goToTabGuarded` wraps the tab controls' own
+`goToTab`: with anything unsaved it asks, with three answers — save and go, discard and go, or stay
+(Cancel and `Escape`). A refused save lands wherever the refusal can be read, never as a
+consequence of the click: `switchToTabForField` decides, not the prompt — a refusal naming a field goes
+to that field's own tab so the inline message is visible (WEB-16), which may be the tab that was
+clicked (`model` and `maxRequestsPerDay` share the AI tab), and a refusal naming no rendered field
+leaves them where they were. Review must-fix 2 caught this file, the SPEC and the docblock all claiming
+the weaker "stays on the tab they were on" while the code did the more useful thing; the docs moved to
+the code, and both paths now have tests (a 409 with no `issues` array exercised neither, which is why
+the original test passed over it).
+Two paths deliberately keep calling `goToTab` directly and never ask: `switchToTabForField`'s own
+auto-switch (asking about the edit it is reporting an error on would be circular), and the `tab`-prop
+re-seed a browser Back/Forward takes (`routing/useRoute.ts` bypasses the unsaved-changes guard for a
+same-screen pop — D-78 / WEB-34 — and nothing is lost, since every tab stays mounted).
+
+Dirtiness is split rather than pooled. `formDirty` (the `form`/`baseline` comparison) and
+`instructionsDirty` stay separate because the prompt's Save has to act on each half through its own
+action — `courses.save` for the form, `courseInstructions.save` for the instructions — and either half
+may be clean while the other is not; `isDirty`, the union, is still what the whole-screen navigation
+guard reads. Reaching an unsaved instructions edit at all needed `components/CourseInstructions.tsx` to
+hand out `{ save, discard }` through a new optional `onRegisterActions` prop: that section owns its own
+text and its own save (D-54), so a dialog belonging to the page has no other way in, and `onDirtyChange`
+alone would let the page ask a question it could not act on either answer to.
+
+**The modal grew a third button rather than a second dialog.** `components/modal/Modal.tsx` gains a
+`choice` kind and `ModalProvider.tsx` a `choose()` resolving `'confirm' | 'alt' | 'cancel'`. A two-button
+confirm cannot distinguish "discard" from "stay here", and collapsing them is wrong for whichever half of
+the users meant the other. Added as one more mode of the single dialog component every confirmation in
+this panel already shares (D-38's own "a second `<dialog>` is the duplication this file exists to
+prevent"), not as a new component: the change is additive apart from one line, `handleCancel`'s `settle`,
+which now treats a `choice` the way it already treated a `confirm` (a meaningful `false`, rather than
+`undefined`).
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck` clean; `npm test` green
+(2488 vitest, 90 node). Nine new cases, each confirmed red against the pre-change code in a throwaway
+worktree: `tests/course-editor.test.tsx` (neither enable/disable button renders and unticking + Save sends
+`enabled: false` through `courses.save`; Cancel keeps both the tab and the edit; Discard resets the form
+and switches; Save saves then switches; a refused save never reaches the clicked tab, landing instead on the refused field's own tab and
+staying dirty; an unsaved
+instructions edit is asked about and saved through its own action; Discard reaches it too) and
+`tests/modal.test.tsx` (each of the three answers resolves as itself, and `Escape` means stay).
+`e2e/course-configuration.spec.ts` drives all three answers against a real browser; the other e2e specs
+that used the removed `Disable` button as their "the save landed" signal now wait on the settings tabs,
+which render on the same condition (`courseId` set).
+
+**Review round 1 (two reviewers, four must-fixes).** The conformance pass found none and independently
+confirmed two claims made when this slice was written — that removing `confirmedEnabled` does not
+reintroduce the WEB-7 finding-4 bug, and that `handleSave`'s new boolean changes no existing caller.
+The correctness pass found four defects by writing probe tests rather than reading, which is why they
+were found at all:
+
+1. **A duplicate `courses.save`.** Nothing consulted `saving`, so clicking `Save course` and then a tab
+   while it was in flight found `baseline` unmoved, `formDirty` still true, and fired a second
+   concurrent save — both racing to set `form`, `baseline` and `onSaved`. A tab click during any save is
+   now ignored, `switchSaving` covers the prompt's own save (including the stretch awaiting the
+   instructions half, where the form's `saving` is still false and the button used to stay live), and
+   `CourseInstructions.handleSave` refuses a second save through `savingRef` — a ref, not state, since
+   the prompt can call it in the same tick as that section's own button.
+2. **A refused save moved the tab** — see above; the documentation was wrong, not the behaviour, and
+   the original test hid it by using a 409 with no `issues` array. Round 2 then found the replacement
+   claim ("never reaches the tab that was clicked") false in the other direction, since two fields
+   share the AI tab; the wording above is the narrow true one, and the lesson — twice now — is that
+   the documentation kept reaching further than the code had earned.
+3. **`instructionsDirty` could survive a successful save.** `refresh` swallows an `ApiError` and returns
+   `undefined`, so a 500 on the follow-up history read left `baseline` behind the text the server had
+   already stored: still "dirty" over a saved edit, prompting again on the next tab click and writing a
+   second identical revision. `handleSave` now reconciles `baseline` to the text it just saved itself,
+   rather than depending on the list coming back; a failed list is surfaced through this section's ordinary
+   load-error path, which renders the generic refusal message rather than one naming the read
+   specifically — the save stands and the section is clean, but the on-screen wording does not itself
+   distinguish a failed history read from a failed save (round 2, honestly narrowed rather than
+   claimed).
+4. **An unreachable instructions section counted as saved.** `undefined` from an absent
+   `instructionsActionsRef` fell through to success. Unreachable today (a visited tab stays mounted) but
+   load-bearing on an invariant nothing asserts, so it now refuses.
+
+Two findings deliberately not fixed, recorded as decisions. A "Save changes" can half-commit —
+instructions written, then the form refused — and no later discard can take that back; the SPEC says so
+and the refusal message says so, rather than pretending the two saves are one transaction. And focus
+after the prompt may land on the old tab button: `goToTab`'s `.focus()` runs before `Modal`'s own
+`dialog.close()` restores focus to the opener, which by then carries `tabIndex={-1}`. jsdom cannot see
+it; `e2e/course-configuration.spec.ts` now asserts it in a real browser.

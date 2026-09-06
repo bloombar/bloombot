@@ -91,7 +91,7 @@ test('the composer stays reachable without scrolling the page once the thread ov
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // WEB-19/FILE-4: instructions are saved through their own versioned
   // action, offered only once the course exists — without at least one

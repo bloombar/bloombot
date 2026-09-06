@@ -1,7 +1,7 @@
 /**
  * WEB-15/WEB-16/WEB-17: the modal primitive (`Modal.tsx` + `useModal()`
- * from `ModalProvider.tsx`) — alert, confirm and prompt, all one dialog
- * markup. `install-button.test.tsx` and `course-editor.test.tsx` cover a
+ * from `ModalProvider.tsx`) — alert, confirm, prompt and choice, all one
+ * dialog markup. `install-button.test.tsx` and `course-editor.test.tsx` cover a
  * real destructive flow through it; this file tests the primitive itself.
  */
 
@@ -66,6 +66,29 @@ function PromptHarness({
       }
     >
       trigger prompt
+    </button>
+  )
+}
+
+/** The three-way question — see `ChooseOptions` in `ModalProvider.tsx`. */
+function ChooseHarness({
+  onResult,
+}: {
+  onResult: (result: 'confirm' | 'alt' | 'cancel') => void
+}) {
+  const { choose } = useModal()
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        void choose({
+          title: 'Save your changes?',
+          confirmLabel: 'Save changes',
+          altLabel: 'Discard changes',
+        }).then(onResult)
+      }
+    >
+      trigger choose
     </button>
   )
 }
@@ -169,6 +192,43 @@ describe('Modal primitive (WEB-15/WEB-16/WEB-17)', () => {
     await waitFor(() =>
       expect(onResult).toHaveBeenCalledWith('Intro to Testing')
     )
+  })
+
+  // Fails before the change: `choose()` did not exist, and `Modal` had no
+  // third button to render — a two-button confirm cannot tell "discard"
+  // from "stay here".
+  it('choose(): offers three answers, and each resolves as itself', async () => {
+    for (const [name, expected] of [
+      ['Save changes', 'confirm'],
+      ['Discard changes', 'alt'],
+      ['Cancel', 'cancel'],
+    ] as const) {
+      const onResult = vi.fn()
+      const { unmount } = render(
+        <ModalProvider>
+          <ChooseHarness onResult={onResult} />
+        </ModalProvider>
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'trigger choose' }))
+      await screen.findByRole('dialog', { name: 'Save your changes?' })
+      fireEvent.click(screen.getByRole('button', { name }))
+      await waitFor(() => expect(onResult).toHaveBeenCalledWith(expected))
+      unmount()
+    }
+  })
+
+  it('choose(): Escape means "stay here", the same answer Cancel gives', async () => {
+    const onResult = vi.fn()
+    render(
+      <ModalProvider>
+        <ChooseHarness onResult={onResult} />
+      </ModalProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'trigger choose' }))
+    const dialog = await screen.findByRole('dialog')
+    // The same jsdom `<dialog>` gap the confirm case below documents.
+    fireEvent(dialog, new Event('cancel', { cancelable: true }))
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('cancel'))
   })
 
   it('Escape cancels a confirm dialog', async () => {

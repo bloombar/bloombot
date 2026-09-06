@@ -76,7 +76,7 @@ test('an owner reads a course transcript, then reads its own access log — a di
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 2. Seed one real message directly — this file's own module comment on
   //    why a live chat round trip is not needed to prove ADMIN-2's own

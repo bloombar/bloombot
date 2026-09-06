@@ -77,7 +77,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 2. WEB-22: before anyone is enrolled, the People panel shows both
   //    empty states. WEB-35: People is its own tab.
@@ -317,7 +317,7 @@ test('clicking a person’s name in the People panel opens their transcript, alr
   await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
 
   // 2. Seed two real enrolments, each with one real message: an active one
   //    and one whose enrolment has since ended — this file's own module

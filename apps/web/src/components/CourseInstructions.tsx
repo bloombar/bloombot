@@ -70,17 +70,38 @@ import { textInputClasses } from './fieldStyles.js'
 import { FormField } from './FormField.js'
 import { useModal } from './modal/ModalProvider.js'
 
+/**
+ * The two things `CourseEditor`'s own per-tab unsaved-changes prompt needs
+ * to be able to do to this section from the outside — see that file's own
+ * `goToTabGuarded`. This section keeps its own text and its own save
+ * (this file's module comment), so "Save changes"/"Discard changes"
+ * answered in a dialog belonging to the page cannot reach that text any
+ * other way; `onDirtyChange` alone would let the page *ask* about an
+ * unsaved instructions edit while being unable to act on either answer.
+ */
+export interface CourseInstructionsActions {
+  /** Saves the pending edit. Resolves `true` when it was written, `false` when the save was refused (the refusal is rendered inline here, as it already is for the section's own Save button). */
+  save: () => Promise<boolean>
+  /** Whether a save is in flight *right now* — read synchronously, so the page's tab prompt can decline to open over a save this section has already started (round 2, finding 5). */
+  isSaving: () => boolean
+  /** Throws the pending edit away, putting the textarea back to the current revision's own text. */
+  discard: () => void
+}
+
 export interface CourseInstructionsProps {
   organizationId: string
   courseId: string
   /** Called on every change to this section's own dirtiness — see this file's own module comment on why `CourseEditor` needs it folded into its one navigation guard rather than this component registering a second one. */
   onDirtyChange: (dirty: boolean) => void
+  /** Called with this section's own save/discard handles whenever they change, and with `null` on unmount — see `CourseInstructionsActions`. */
+  onRegisterActions?: (actions: CourseInstructionsActions | null) => void
 }
 
 export function CourseInstructions({
   organizationId,
   courseId,
   onDirtyChange,
+  onRegisterActions,
 }: CourseInstructionsProps) {
   const [revisions, setRevisions] = useState<
     CourseInstructionRevisionSummary[] | undefined
@@ -112,6 +133,10 @@ export function CourseInstructions({
   // itself decides the textarea should show the server's own value (below).
   const hasPendingEditRef = useRef(false)
 
+  // Review must-fix 1: whether a save is in flight *right now*, readable
+  // without waiting on a render — see `handleSave` below.
+  const savingRef = useRef(false)
+
   const refresh = useCallback(
     // `force`: `handleSave`/`handleRestore` pass `true` — an explicit save
     // or restore must always end with the textarea showing exactly what was
@@ -140,6 +165,10 @@ export function CourseInstructions({
         (caught: unknown) => {
           if (caught instanceof ApiError) setLoadError(caught)
           else throw caught
+          // `undefined`, distinct from a list: this call did *not*
+          // reconcile `text`/`baseline` with the server, and a caller that
+          // needs them reconciled (`handleSave`, below) has to say so
+          // itself rather than assume this ran (review must-fix 3).
           return undefined
         }
       ),
@@ -158,19 +187,78 @@ export function CourseInstructions({
     onDirtyChange(text !== baseline)
   }, [text, baseline, onDirtyChange])
 
-  const handleSave = async () => {
+  // `useCallback` because it is handed *out* of this component through
+  // `onRegisterActions` (below): a new function identity every render would
+  // re-run that registration effect on every keystroke. Returns whether the
+  // save actually landed, so a caller that saves on the way somewhere else
+  // (the course editor's tab prompt) can stay put when it did not.
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    // Review must-fix 1: never a second save while one is in flight. A ref
+    // rather than the `saving` state, for the same reason
+    // `hasPendingEditRef` is one — this function is handed out through
+    // `onRegisterActions` and called from `pages/CourseEditor.tsx`'s own
+    // tab prompt, which may fire in the same tick as this section's own
+    // Save button, before any re-render has made new state visible.
+    if (savingRef.current) return false
+    savingRef.current = true
     setSaveError(undefined)
     setSaving(true)
+    // The text this save is writing, captured before any await — what the
+    // server ends up holding, whatever is typed while it is in flight.
+    const saved = text
     try {
-      await saveCourseInstructions(organizationId, courseId, text)
+      await saveCourseInstructions(organizationId, courseId, saved)
+      // Review must-fix 3: the save landed, so this section is reconciled
+      // with the server *here*, not as a side effect of the history list
+      // coming back. `refresh` swallows its own `ApiError` and returns
+      // `undefined`, so a 500 on the follow-up list used to leave
+      // `baseline` behind the saved text — the section still "dirty" over
+      // an edit already stored, which made the next tab switch prompt
+      // again and write a second, identical revision.
+      setBaseline(saved)
+      if (!hasPendingEditRef.current) setText(saved)
+      // A failed list is a failed *read*: reported inline through
+      // `loadError`, leaving the history stale, while the save itself
+      // stands and this section is already reconciled above. Nothing here
+      // touches `hasPendingEditRef` — clearing it would tell the next
+      // background `refresh` it may overwrite an edit typed during this
+      // round trip, which is the bug that ref exists to prevent (round 2,
+      // non-blocking note).
       await refresh({ force: true })
+      return true
     } catch (caught) {
       if (caught instanceof ApiError) setSaveError(caught)
       else throw caught
+      return false
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
-  }
+  }, [organizationId, courseId, text, refresh])
+
+  // Puts the textarea back to what the server last agreed to. Clearing
+  // `hasPendingEditRef` matters as much as the text itself: a discarded
+  // edit must stop blocking the next background `refresh` from setting the
+  // textarea (this file's own comment on that ref).
+  const handleDiscard = useCallback(() => {
+    setText(baseline)
+    setSaveError(undefined)
+    hasPendingEditRef.current = false
+  }, [baseline])
+
+  useEffect(() => {
+    onRegisterActions?.({
+      save: handleSave,
+      discard: handleDiscard,
+      // Reads the ref, not `saving`, so the answer is current at the
+      // moment it is asked rather than as of the last render.
+      isSaving: () => savingRef.current,
+    })
+    // Unregistered on unmount so the page never holds handles onto a
+    // section that is no longer on screen (the same discipline
+    // `hooks/useUnsavedChangesGuard.ts` follows for its own guard).
+    return () => onRegisterActions?.(null)
+  }, [onRegisterActions, handleSave, handleDiscard])
 
   const handleRestore = async (revision: CourseInstructionRevisionSummary) => {
     setRestoreError(undefined)

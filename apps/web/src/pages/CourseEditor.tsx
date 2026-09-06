@@ -2,8 +2,10 @@
  * WEB-8/WEB-9: a course, defined entirely in the panel — CFG-2 (OpenAI
  * settings), CFG-3 (roles) and CFG-4 (categories and channels), saved
  * through `courses.save` (create when `courseId` is `undefined`, update
- * otherwise), plus `courses.enable`/`courses.disable` once a course exists
- * to enable or disable.
+ * otherwise). Whether a course is enabled is one of those fields, saved
+ * with the rest — this screen no longer carries an immediate
+ * `courses.enable`/`courses.disable` control of its own (`enabledControl`,
+ * below, on why, and `pages/Courses.tsx` for the one that remains).
  *
  * WEB-9: the category and role names are what decides which questions reach
  * this course, so they are shown together, prominently, at the top of the
@@ -91,6 +93,11 @@
  * object every tab already shared. `activeTab` only ever decides which
  * mounted panel is *visible*.
  *
+ * WEB-38: leaving a tab with unsaved settings asks first — save, discard,
+ * or stay put (`goToTabGuarded`, below). Nothing is lost by switching
+ * tabs (every panel stays mounted), so this is about not wandering away
+ * from an edit and forgetting it, not about rescuing state.
+ *
  * A brand-new course (`courseId === undefined`) has none of this — it
  * cannot have join links, a roster import, people, attachments,
  * instructions or websites (they are all already gated on
@@ -113,7 +120,6 @@ import {
   listDiscordServers,
   saveCourse,
 } from '../api/client.js'
-import { disableCourse, enableCourse } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
 import type {
   Course,
@@ -128,6 +134,7 @@ import {
 import { Button } from '../components/Button.js'
 import { CourseAttachments } from '../components/CourseAttachments.js'
 import { CourseInstructions } from '../components/CourseInstructions.js'
+import type { CourseInstructionsActions } from '../components/CourseInstructions.js'
 import { CoursePeople } from '../components/CoursePeople.js'
 import { CourseWebSources } from '../components/CourseWebSources.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
@@ -139,13 +146,7 @@ import { RosterImport } from '../components/RosterImport.js'
 import { ScaffoldButton } from '../components/ScaffoldButton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
-import {
-  AddIcon,
-  DisableIcon,
-  EnableIcon,
-  RemoveFromListIcon,
-  WarningIcon,
-} from '../icons.js'
+import { AddIcon, RemoveFromListIcon, WarningIcon } from '../icons.js'
 
 export interface CourseEditorProps {
   organizationId: string
@@ -408,36 +409,6 @@ export function CourseEditor({
     },
     [onNavigateTab]
   )
-  // Rework round 1, must-fix 6: Left/Right cycle with wraparound (the
-  // WAI-ARIA "tabs (automatic activation)" pattern), Home/End jump to the
-  // first/last tab — attached to the `tablist` itself so focus anywhere in
-  // the row reaches it, not to each individual `tab` button.
-  const handleTabListKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      const ids = COURSE_EDITOR_TAB_IDS
-      const currentIndex = ids.indexOf(activeTabRef.current)
-      let nextIndex: number
-      switch (event.key) {
-        case 'ArrowRight':
-          nextIndex = (currentIndex + 1) % ids.length
-          break
-        case 'ArrowLeft':
-          nextIndex = (currentIndex - 1 + ids.length) % ids.length
-          break
-        case 'Home':
-          nextIndex = 0
-          break
-        case 'End':
-          nextIndex = ids.length - 1
-          break
-        default:
-          return
-      }
-      event.preventDefault()
-      goToTab(ids[nextIndex]!)
-    },
-    [goToTab]
-  )
   const [form, setForm] = useState<FormState>(blankForm())
   // WEB-16: the form's own last agreed-with-the-server state — set
   // alongside `form` in the same three places `form` is ever set *from* a
@@ -453,9 +424,27 @@ export function CourseEditor({
   // `hooks/navigation-guard.tsx` only ever honours one registered guard at
   // a time (that component's own module comment).
   const [instructionsDirty, setInstructionsDirty] = useState(false)
-  const isDirty = useFormDirty(baseline, form) || instructionsDirty
+  // Kept apart from `isDirty` below because the tab prompt has to act on
+  // each half separately: "Save changes" saves the course form through
+  // `courses.save` and the instructions through their own
+  // `courseInstructions.save`, and either half may be clean while the
+  // other is not (`saveDirtyWork`, below).
+  const formDirty = useFormDirty(baseline, form)
+  const isDirty = formDirty || instructionsDirty
   const { confirmDiscard } = useUnsavedChangesGuard(isDirty)
-  const { confirm } = useModal()
+  const { confirm, choose } = useModal()
+  // The handles `components/CourseInstructions.tsx` registers, so the tab
+  // prompt's own Save/Discard can reach an unsaved instructions edit —
+  // that section owns its text and its own save (its module comment), so
+  // there is no other way in. `null` whenever the AI tab has never been
+  // opened (the section is not mounted) or the course is brand new.
+  const instructionsActionsRef = useRef<CourseInstructionsActions | null>(null)
+  const handleRegisterInstructionsActions = useCallback(
+    (actions: CourseInstructionsActions | null) => {
+      instructionsActionsRef.current = actions
+    },
+    []
+  )
   const [loading, setLoading] = useState(courseId !== undefined)
   // Finding 3 (WEB-7 rework): a failed `courses.get` used to clear `loading`
   // and fall through to the same form a real, empty course renders — fillable
@@ -468,17 +457,13 @@ export function CourseEditor({
   const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [saving, setSaving] = useState(false)
-  const [togglingEnabled, setTogglingEnabled] = useState(false)
-  // Finding 4 (WEB-7 rework): the last enabled state `courses.save`,
-  // `courses.enable` or `courses.disable` actually confirmed — separate from
-  // `form.enabled`, the checkbox's own pending edit. Without the split, a
-  // save the API refused (a PROJ-3 collision) left `form.enabled` ticked from
-  // the edit that never took, and the live toggle button read it too — so
-  // the button claimed a never-enabled course was enabled, and clicking it
-  // sent `courses.disable` for a course that had never actually been
-  // enabled. The button below always reads `confirmedEnabled`; only the
-  // checkbox reads `form.enabled`.
-  const [confirmedEnabled, setConfirmedEnabled] = useState(false)
+  // Review must-fix 1: true for the whole of the tab prompt's own "Save
+  // changes" — `saving` alone leaves the `Save course` button live while
+  // `saveDirtyWork` is awaiting the instructions half.
+  const [switchSaving, setSwitchSaving] = useState(false)
+  // True only for the one case that needs saying out loud: the prompt's
+  // "Save changes" wrote the instructions and then the form was refused.
+  const [halfSaved, setHalfSaved] = useState(false)
   // TEN-9 — every binding this organization has ever held (active or
   // removed, `discordServers.list`'s own shape), fetched once per
   // organization. Only the active ones (`activeBindings`, below) decide
@@ -568,7 +553,6 @@ export function CourseEditor({
       setForm(blank)
       setBaseline(blank)
       setLoadError(undefined)
-      setConfirmedEnabled(false)
       setLoading(false)
       return
     }
@@ -580,7 +564,6 @@ export function CourseEditor({
         const loaded = formFromCourse(course)
         setForm(loaded)
         setBaseline(loaded)
-        setConfirmedEnabled(course.enabled)
         setLoading(false)
       },
       (caught: unknown) => {
@@ -616,8 +599,15 @@ export function CourseEditor({
     [goToTab]
   )
 
-  const handleSave = async () => {
+  /**
+   * Saves the course form. Resolves `true` when the save landed and
+   * `false` when it was refused (client-side or by the server) — the
+   * refusal is rendered inline either way, but a caller that saves on the
+   * way somewhere else (`goToTabGuarded`, below) needs to know not to go.
+   */
+  const handleSave = async (): Promise<boolean> => {
     setError(undefined)
+    setHalfSaved(false)
     const maxRequestsPerDay = parseMaxRequestsPerDay(form.maxRequestsPerDay)
     if (!maxRequestsPerDay.ok) {
       // Finding 2 (WEB-7 rework): refuse client-side rather than ever
@@ -638,7 +628,7 @@ export function CourseEditor({
         })
       )
       switchToTabForField('maxRequestsPerDay')
-      return
+      return false
     }
     setSaving(true)
     try {
@@ -692,8 +682,8 @@ export function CourseEditor({
       // agrees with the server again, the same reason `setForm` above is
       // set from `saved` rather than left as whatever was typed.
       setBaseline(savedForm)
-      setConfirmedEnabled(saved.enabled)
       onSaved(saved)
+      return true
     } catch (caught) {
       if (caught instanceof ApiError) {
         setError(caught)
@@ -712,57 +702,160 @@ export function CourseEditor({
         )
         switchToTabForField(mappedIssue?.path[0])
       } else throw caught
+      return false
     } finally {
       setSaving(false)
     }
   }
 
-  const handleToggleEnabled = async () => {
-    if (courseId === undefined) return
-    // WEB-15: disabling a live course is destructive — students stop
-    // being answered the moment this runs — so it confirms first, the
-    // same modal every other destructive control in this panel shares
-    // (`components/modal/`). Enabling is not: nothing is lost by turning a
-    // course back on, so it runs immediately, the same as before.
-    if (confirmedEnabled) {
-      const confirmed = await confirm({
-        title: 'Disable this course?',
-        description:
-          'Students stop being answered here until it is enabled again.',
-        confirmLabel: 'Disable',
-        destructive: true,
-      })
-      if (!confirmed) return
+  /**
+   * Saves whatever is actually unsaved, and reports whether all of it
+   * landed. Instructions first, then the course form: each is its own
+   * action with its own failure (`components/CourseInstructions.tsx`'s own
+   * module comment on why they were never folded into one call), and a
+   * half that is already clean is not re-sent.
+   *
+   * Review must-fix 4: an instructions edit this page cannot reach is a
+   * failure, not a success. `instructionsActionsRef` is `null` only when
+   * that section is not mounted, which cannot happen while
+   * `instructionsDirty` is true (a tab, once visited, stays mounted — this
+   * file's own module comment) — but "cannot happen" is an invariant
+   * nothing here asserts, and reading `undefined` as "saved" would move
+   * the tab while the edit sat unsaved and unreachable. Refusing is the
+   * answer that stays true if the mounting rule ever changes.
+   */
+  const saveDirtyWork = async (): Promise<boolean> => {
+    let instructionsWritten = false
+    if (instructionsDirty) {
+      const actions = instructionsActionsRef.current
+      if (!actions) return false
+      if (!(await actions.save())) return false
+      instructionsWritten = true
     }
+    if (formDirty) {
+      const savedForm = await handleSave()
+      // The two halves are two requests, not one transaction (review
+      // note): the instructions are already stored and no later "Discard"
+      // can take them back, so a refusal of the *form* half says so
+      // rather than leaving someone to assume nothing was written.
+      setHalfSaved(!savedForm && instructionsWritten)
+      return savedForm
+    }
+    return true
+  }
+
+  /** Throws away every unsaved edit on this screen, both halves. */
+  const discardDirtyWork = () => {
+    setForm(baseline)
     setError(undefined)
-    setTogglingEnabled(true)
-    try {
-      // Reads and sets `confirmedEnabled`, not `form.enabled` — the button
-      // acts on the server-confirmed state, not a pending, unsaved edit to
-      // the checkbox above (finding 4 of the WEB-7 rework). A successful
-      // toggle has no pending edit left to disagree with, so both states
-      // move together here.
-      if (confirmedEnabled) {
-        await disableCourse(organizationId, courseId)
-        setConfirmedEnabled(false)
-        setForm((current) => ({ ...current, enabled: false }))
-        // Already persisted (unlike the checkbox above, this button acts
-        // immediately, not on the next Save) — the baseline moves with it,
-        // the same reason `handleSave`'s own success path moves `baseline`
-        // to match what was just saved.
-        setBaseline((current) => ({ ...current, enabled: false }))
-      } else {
-        await enableCourse(organizationId, courseId)
-        setConfirmedEnabled(true)
-        setForm((current) => ({ ...current, enabled: true }))
-        setBaseline((current) => ({ ...current, enabled: true }))
-      }
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setTogglingEnabled(false)
+    // Round 2, finding 4: cleared with the refusal it explains. Left
+    // behind, "your instructions were saved before this was refused"
+    // stayed on screen after a later discard, with no refusal in sight.
+    setHalfSaved(false)
+    instructionsActionsRef.current?.discard()
+  }
+
+  /**
+   * A tab switch a person actually asked for (a click, or the arrow keys),
+   * as opposed to the ones this component makes on its own.
+   *
+   * The five tabs share one form and one `Save course` button, so an edit
+   * made on one tab is never *lost* by looking at another — but "I changed
+   * something and then wandered off" is exactly how an edit ends up
+   * abandoned, so leaving a tab with unsaved settings asks first. Three
+   * answers, not the usual two: save them and carry on, discard them and
+   * carry on, or stay on this tab (Cancel, and `Escape`) — a plain
+   * confirm would have to fold "discard" and "stay here" together, and
+   * either answer is wrong for half the people who meant the other.
+   *
+   * **A refused save lands wherever the refusal can be read** (WEB-38) —
+   * never as a consequence of the click. `switchToTabForField`, not this
+   * function, decides: a refusal naming a field goes to that field's own
+   * tab so the inline message is visible (WEB-16), which may or may not be
+   * the tab that was clicked (`model` and `maxRequestsPerDay` both live on
+   * AI, so a refusal naming either lands on AI whether or not AI is where
+   * the click was headed); a refusal naming no field this form renders
+   * leaves the person exactly where they were. Either way the edit is
+   * still unsaved and still theirs to deal with, and the prompt itself
+   * never carries them onward. Review round 1 found this comment claiming
+   * "stays on the tab they were on"; round 2 found the replacement
+   * ("never reaches the tab that was clicked") false in the other
+   * direction. This is the narrow true statement.
+   *
+   * Review must-fix 1: while a save is in flight — this one's, or the
+   * `Save course` button's — a tab click is ignored rather than opening a
+   * second prompt over a `baseline` that has not moved yet. Clicking Save
+   * course and then a tab used to fire a second, concurrent
+   * `courses.save`, both racing to set `form`, `baseline` and `onSaved`.
+   */
+  const goToTabGuarded = async (next: CourseEditorTab) => {
+    if (next === activeTabRef.current) return
+    // Round 2, finding 5: the instructions section's *own* Save counts as
+    // a save in flight too. Without it the prompt opened, "Save changes"
+    // hit that section's own in-flight guard, and the whole thing closed
+    // having done nothing and said nothing — no duplicate request, but a
+    // silent dead end. Not opening the prompt at all is the honest
+    // version of "a save is already running."
+    if (saving || switchSaving) return
+    if (instructionsActionsRef.current?.isSaving()) return
+    if (!isDirty) {
+      goToTab(next)
+      return
     }
+    const choice = await choose({
+      title: 'Save your changes?',
+      description:
+        'You have changed settings that are not saved yet. Save them, discard them, or stay on this tab.',
+      confirmLabel: 'Save changes',
+      altLabel: 'Discard changes',
+      cancelLabel: 'Cancel',
+    })
+    if (choice === 'cancel') return
+    if (choice === 'confirm') {
+      // `switchSaving` covers the whole of `saveDirtyWork`, including the
+      // stretch where it is awaiting the *instructions* save and the
+      // form's own `saving` is still false — without it the `Save course`
+      // button stayed live through that window (must-fix 1's own mirror).
+      setSwitchSaving(true)
+      let saved: boolean
+      try {
+        saved = await saveDirtyWork()
+      } finally {
+        setSwitchSaving(false)
+      }
+      if (!saved) return
+    } else {
+      discardDirtyWork()
+    }
+    goToTab(next)
+  }
+
+  // Rework round 1, must-fix 6: Left/Right cycle with wraparound (the
+  // WAI-ARIA "tabs (automatic activation)" pattern), Home/End jump to the
+  // first/last tab — attached to the `tablist` itself so focus anywhere in
+  // the row reaches it, not to each individual `tab` button.
+  const handleTabListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const ids = COURSE_EDITOR_TAB_IDS
+    const currentIndex = ids.indexOf(activeTabRef.current)
+    let nextIndex: number
+    switch (event.key) {
+      case 'ArrowRight':
+        nextIndex = (currentIndex + 1) % ids.length
+        break
+      case 'ArrowLeft':
+        nextIndex = (currentIndex - 1 + ids.length) % ids.length
+        break
+      case 'Home':
+        nextIndex = 0
+        break
+      case 'End':
+        nextIndex = ids.length - 1
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    void goToTabGuarded(ids[nextIndex]!)
   }
 
   const updateCategory = (key: string, name: string) => {
@@ -983,8 +1076,25 @@ export function CourseEditor({
     </FormField>
   )
 
+  /**
+   * Whether this course answers students at all — an ordinary field of
+   * this form, saved by the one `Save course` button like every other
+   * field on every other tab.
+   *
+   * There used to be a second control here: an `Enable`/`Disable` button
+   * that dispatched `courses.enable`/`courses.disable` immediately, beside
+   * a checkbox that only took effect on the next save. Two controls for
+   * one flag, disagreeing with each other whenever the checkbox held an
+   * unsaved edit, needed a whole second piece of state
+   * (`confirmedEnabled`) to keep the button honest. The immediate control
+   * still exists where it is actually useful — each course's own kebab
+   * menu on the project page (`pages/Courses.tsx`), which is where someone
+   * shutting a misbehaving course off is already looking, and which keeps
+   * WEB-15's own confirmation before disabling a live course. Here, one
+   * checkbox and one Save is the whole story.
+   */
   const enabledControl = (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-1">
       <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
         <input
           type="checkbox"
@@ -1000,24 +1110,10 @@ export function CourseEditor({
         />
         Enabled
       </label>
-      {courseId !== undefined && (
-        <Button
-          variant={confirmedEnabled ? 'destructive' : 'secondary'}
-          icon={
-            confirmedEnabled ? (
-              <DisableIcon aria-hidden="true" className="size-4" />
-            ) : (
-              <EnableIcon aria-hidden="true" className="size-4" />
-            )
-          }
-          onClick={() => void handleToggleEnabled()}
-          disabled={togglingEnabled}
-        >
-          {/* Reads `confirmedEnabled`, not `form.enabled` — see this
-              component's own comment on that state (finding 4). */}
-          {confirmedEnabled ? 'Disable' : 'Enable'}
-        </Button>
-      )}
+      <p className="text-sm text-neutral-600">
+        Students can only ask this course while it is enabled. Like every other
+        setting here, this takes effect when you save.
+      </p>
     </div>
   )
 
@@ -1331,7 +1427,7 @@ export function CourseEditor({
                 aria-selected={activeTab === courseTab.id}
                 aria-controls={`course-tabpanel-${courseTab.id}`}
                 tabIndex={activeTab === courseTab.id ? 0 : -1}
-                onClick={() => goToTab(courseTab.id)}
+                onClick={() => void goToTabGuarded(courseTab.id)}
                 className={
                   activeTab === courseTab.id
                     ? 'border-b-2 border-neutral-900 px-3 py-2 text-sm font-semibold text-neutral-900'
@@ -1409,6 +1505,7 @@ export function CourseEditor({
                   organizationId={organizationId}
                   courseId={courseId}
                   onDirtyChange={handleInstructionsDirtyChange}
+                  onRegisterActions={handleRegisterInstructionsActions}
                 />
 
                 {/* WEB-18/FILE-1: a course's knowledge files. */}
@@ -1561,6 +1658,12 @@ export function CourseEditor({
       )}
 
       {error && <ErrorMessage error={error} />}
+      {halfSaved && (
+        <p role="status" className="text-sm text-neutral-600">
+          Your instructions were saved before this was refused, and stay saved —
+          discarding now would only discard the settings above.
+        </p>
+      )}
 
       {/* WEB-15/WEB-35: the one primary action this form offers, always
           visible regardless of which tab is showing — an edit made on one
@@ -1569,9 +1672,9 @@ export function CourseEditor({
         <Button
           variant="primary"
           onClick={() => void handleSave()}
-          disabled={saving}
+          disabled={saving || switchSaving}
         >
-          {saving ? 'Saving…' : 'Save course'}
+          {saving || switchSaving ? 'Saving…' : 'Save course'}
         </Button>
       </div>
     </section>

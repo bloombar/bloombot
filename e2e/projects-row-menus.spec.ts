@@ -98,7 +98,7 @@ test('a project is created through the "New project" modal, renamed through its 
   await page.getByLabel('Students role').fill(studentsRole)
   await page.getByLabel('Enabled').check()
   await page.getByRole('button', { name: 'Save course' }).click()
-  await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
   // WEB-35: Instructions is on the AI tab.
   await page.getByRole('tab', { name: 'AI' }).click()
   await page

@@ -21,6 +21,8 @@ import {
 const ROUTES: Route[] = [
   { kind: 'home' },
   { kind: 'account' },
+  { kind: 'privacy' },
+  { kind: 'terms' },
   { kind: 'platform-admin' },
   { kind: 'admin-organizations' },
   { kind: 'admin-organization', organizationId: 'org-1' },

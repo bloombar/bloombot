@@ -58,7 +58,9 @@ import {
   type Ref,
 } from 'react'
 
-import { CloseIcon, HomeIcon, MenuIcon } from '../icons.js'
+import { CloseIcon, MenuIcon } from '../icons.js'
+import { Logo } from './Logo.js'
+import { LEGAL_LINKS } from './legal-links.js'
 import { Button } from './Button.js'
 
 export interface AppShellNavItem {
@@ -119,14 +121,29 @@ export interface AppShellProps {
 function Footer() {
   const year = new Date().getFullYear()
   return (
-    <footer className="fixed inset-x-0 bottom-0 z-10 flex h-footer items-center justify-between border-t border-neutral-200 bg-white px-4 text-sm text-neutral-500">
-      <p>© {year} Bloombot</p>
-      <a
-        href="mailto:support@bloombot.example"
-        className="hover:text-neutral-700 hover:underline"
-      >
-        Support
-      </a>
+    <footer className="fixed inset-x-0 bottom-0 z-10 flex h-footer items-center justify-between gap-4 border-t border-neutral-200 bg-white px-4 text-sm text-neutral-500">
+      <p className="shrink-0">© {year} Bloombot</p>
+      {/* The legal documents, on every page of the panel — Google's OAuth
+          review asks that the privacy policy be findable without hunting, and
+          a drawer nobody opens does not count. Plain `<a href>`s deliberately
+          (`SiteFooter.tsx`'s own comment on why). */}
+      <nav aria-label="Legal" className="flex flex-wrap items-center gap-x-4">
+        {LEGAL_LINKS.map((link) => (
+          <a
+            key={link.href}
+            href={link.href}
+            className="hover:text-neutral-700 hover:underline"
+          >
+            {link.label}
+          </a>
+        ))}
+        <a
+          href="mailto:support@bloombot.example"
+          className="hover:text-neutral-700 hover:underline"
+        >
+          Support
+        </a>
+      </nav>
     </footer>
   )
 }
@@ -250,10 +267,15 @@ export function AppShell({
             icon={<MenuIcon aria-hidden="true" className="size-5" />}
             onClick={openDrawer}
           />
+          {/* The mark doubles as the home control (WEB-14). A brand logo in
+              the top-left that goes home is the convention every user already
+              has, so this is one control doing both jobs rather than a logo
+              sitting inertly beside a house icon. `aria-label` still says
+              "Home": what it *does* is what a screen reader should hear. */}
           <Button
             variant="ghost"
             aria-label="Home"
-            icon={<HomeIcon aria-hidden="true" className="size-5" />}
+            icon={<Logo className="size-6" />}
             onClick={onHome}
           />
           {/* WEB-30: the acting organization's name, in the space the nav
@@ -334,6 +356,22 @@ export function AppShell({
                   </button>
                 ))}
               </div>
+            ))}
+          </nav>
+          {/* The same two documents the footer lists, for anyone navigating
+              by the drawer rather than reading to the bottom of a page. */}
+          <nav
+            aria-label="Legal"
+            className="flex flex-col gap-1 border-t border-neutral-200 p-2"
+          >
+            {LEGAL_LINKS.map((link) => (
+              <a
+                key={link.href}
+                href={link.href}
+                className="rounded-md px-3 py-2 text-left text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                {link.label}
+              </a>
             ))}
           </nav>
           {/* WEB-29: sign-out sits at the drawer's foot, not the header —

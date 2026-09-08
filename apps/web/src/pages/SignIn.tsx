@@ -4,6 +4,13 @@
  * the link itself (opened later, `pages/RedeemLink.tsx`) redeem a session;
  * the Google path hands the ID token straight to `/auth/google` and keeps
  * nothing afterward.
+ *
+ * **Both paths are gated on accepting the published documents.** There is no
+ * separate sign-up screen in this panel — signing in for the first time is how
+ * an account comes into being — so this is the only place agreement can be
+ * asked for, and it has to gate the Google button as much as the email form.
+ * The gate is a disabled control plus `aria-disabled`, not a silent no-op:
+ * a button that looks live and does nothing is worse than one that says why.
  */
 
 import { useState } from 'react'
@@ -14,6 +21,7 @@ import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
+import { LEGAL_LINKS } from '../components/legal-links.js'
 
 export interface SignInProps {
   /** `import.meta.env.VITE_GOOGLE_CLIENT_ID` by default — a prop so a test can supply, explicitly withhold (`undefined`, the "not configured" case), or omit it without stubbing Vite's env. */
@@ -33,6 +41,11 @@ export function SignIn({
   const [linkRequested, setLinkRequested] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
+  // Deliberately not persisted anywhere: the checkbox records that this
+  // person was shown the documents and agreed before an account existed, and
+  // re-asking on a later sign-in from a new device is the honest behaviour
+  // when the acceptance itself is not stored server-side.
+  const [accepted, setAccepted] = useState(false)
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -50,7 +63,7 @@ export function SignIn({
   }
 
   const handleGoogle = async () => {
-    if (!googleClientId) return
+    if (!googleClientId || !accepted) return
     setError(undefined)
     try {
       const google = await loadGoogleIdentityServices()
@@ -106,13 +119,48 @@ export function SignIn({
             className={textInputClasses}
           />
         </FormField>
+        {/* Signing in for the first time creates the account, so agreement
+            is asked for here rather than on a sign-up screen that does not
+            exist. Inside the form so the browser's own required-field
+            handling refuses submission before any request is made. */}
+        <label className="flex items-start gap-2 text-sm text-neutral-700">
+          <input
+            type="checkbox"
+            required
+            checked={accepted}
+            onChange={(event) => setAccepted(event.target.checked)}
+            data-testid="accept-legal"
+            className="mt-0.5 size-4 rounded border-neutral-300"
+          />
+          <span>
+            I agree to the{' '}
+            {LEGAL_LINKS.map((link, index) => (
+              <span key={link.href}>
+                {index > 0 && ' and the '}
+                <a
+                  href={link.href}
+                  className="text-brand-600 underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {link.label.toLowerCase()}
+                </a>
+              </span>
+            ))}
+            .
+          </span>
+        </label>
         {/* WEB-15: the one primary action on this screen. */}
         <Button variant="primary" type="submit" disabled={submitting}>
           {submitting ? 'Sending…' : 'Email me a sign-in link'}
         </Button>
       </form>
       {googleClientId ? (
-        <Button variant="secondary" onClick={() => void handleGoogle()}>
+        <Button
+          variant="secondary"
+          disabled={!accepted}
+          onClick={() => void handleGoogle()}
+        >
           Sign in with Google
         </Button>
       ) : (

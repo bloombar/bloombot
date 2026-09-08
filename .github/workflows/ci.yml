@@ -187,6 +187,15 @@ jobs:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          # Set this repository variable to any non-empty value on a droplet
+          # that has finished the cutover and no longer runs the legacy Python
+          # bot; the deploy then passes `PM2_APP=` (empty) and deploy.sh skips
+          # the bot, its dependency install and its interpreter probe. A flag
+          # rather than passing the process name through directly, because an
+          # unset repository variable and one set to the empty string are
+          # indistinguishable here — both arrive as "" — and those two cases
+          # need opposite behaviour from deploy.sh's own PM2_APP default.
+          DEPLOY_SKIP_PYTHON_BOT: ${{ vars.DEPLOY_SKIP_PYTHON_BOT }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
@@ -198,6 +207,11 @@ jobs:
           # droplet's checkout, so the deploy logic is always the version from
           # the commit being deployed and never rewrites itself mid-run.
           remote="bash -s -- $TARGET_SHA"
+          if [ -n "$DEPLOY_SKIP_PYTHON_BOT" ]; then
+            # An explicitly empty PM2_APP — deploy.sh reads that as "this
+            # droplet has no legacy Python bot" and leaves it alone.
+            remote="PM2_APP= $remote"
+          fi
           if [ -n "$DEPLOY_PATH" ]; then
             remote="APP_DIR='$DEPLOY_PATH' $remote"
           fi

@@ -21,23 +21,31 @@ update.
 - [README.md](../README.md)'s own "Running on a server with pm2" and "Continuous deployment"
   sections — the pm2 and CI mechanics this document's own steps rely on.
 
-> ## Read this first: there is no production email transport yet
+> ## Read this first: `apps/api` will not start in production without SMTP
 >
-> Signing in to the control panel is by emailed link (`packages/auth`) or Google. **This
-> codebase ships no real `EmailSender` implementation** — `packages/auth/src/email.ts`'s own
-> module comment says so directly ("this package ships the interface and a recording fake for
-> tests, never a real mail transport... a later slice's adapter package"), and
+> Signing in to the control panel is by emailed link (`packages/auth`) or Google. The mail
+> transport now exists — `@bloombot/mail` (AUTH-5, D-47) — so this **is** a configuration gap
+> you close by naming an SMTP host, unlike earlier revisions of this document.
+>
+> What has not changed is the consequence of leaving it unset:
 > `apps/api/src/logging-email-sender.ts#buildEmailSender` **refuses to start `apps/api` at all
-> in `NODE_ENV=production`** rather than pretend to send anything. This is not a configuration
-> gap this document can close by naming an SMTP host — nothing in the codebase reads one. Until
-> a real `EmailSender` adapter is built (a scoped slice of its own; do not improvise one just
-> to get a deploy working — see this document's own §7), `apps/api` will not start with
-> `NODE_ENV=production` set at all — **not just email sign-in, every route this process
-> serves**, including Google sign-in (§4.3): `buildEmailSender` is evaluated in `apps/api/src/index.ts`'s
-> own `main()` before `buildApp`/`server.listen` ever run, so the whole process refuses to come
-> up, not merely the email path within it. Discord answering (`apps/bot`) is unaffected — it is
-> a separate process with no dependency on `apps/api`. Report this rather than route around it
-> if you hit it; it is tracked as **AUTH-5**.
+> in `NODE_ENV=production`** rather than pretend to send anything, and it is evaluated in
+> `main()` before `buildApp`/`server.listen` ever run — so the whole process refuses to come up,
+> **not just email sign-in but every route it serves**, including Google sign-in (§4.3). The
+> error names the missing variable directly:
+>
+> ```text
+> apps/api: no real mail transport is configured. MAIL_SMTP_HOST and MAIL_FROM
+> must both be set to send real mail (see env.example)
+> ```
+>
+> `MAIL_SMTP_HOST` and `MAIL_FROM` are the two it insists on; `MAIL_SMTP_USER` and
+> `MAIL_SMTP_PASSWORD` are needed whenever the relay authenticates, which in practice is
+> always. `MAIL_FILE` is refused outright under `NODE_ENV=production` whether set or not. See
+> §4.4 for the whole procedure, including how to test the credential without guessing.
+>
+> Discord answering (`apps/bot`) is unaffected — a separate process with no dependency on
+> `apps/api`.
 
 ---
 
@@ -251,10 +259,8 @@ half-configured state to worry about.
    calling origin and hands the browser an ID token directly — there is no redirect step, so
    **no Authorized redirect URI is needed** for this flow.
 4. You will also be asked to configure the **OAuth consent screen** once, for the whole Google
-   Cloud project — internal or external depending on whether every signer-in is inside your own
-   Google Workspace; external needs nothing beyond the app name and support email for this
-   platform's own use of it (only `openid`/basic profile scopes are requested — no Google data
-   beyond identity is ever read).
+   Cloud project. This is the step that decides whether *anyone* can sign in or only a
+   hand-listed few, so it is worth doing deliberately — see §4.3.1 below.
 5. Copy the **Client ID** (not the client secret — this flow needs none) into
    `GOOGLE_CLIENT_ID` in `.env`.
 6. **Also set it as `VITE_GOOGLE_CLIENT_ID`, for the browser build — a second, separate
@@ -282,10 +288,114 @@ half-configured state to worry about.
    `apps/web/.env.production` — set it once, here, and it survives every future deploy without
    needing to be repeated, the same way `.env` itself does for every other process.
 
-### 4.4 Email — see the callout at the top of this document
+#### 4.3.1 The OAuth consent screen: testing, then public
 
-There is nothing to configure here yet. Come back to this section once a real `EmailSender`
-adapter exists.
+The consent screen is what decides whether every student can sign in with Google or only a
+short hand-maintained list can. It is configured once per Google Cloud project, under **APIs &
+Services → OAuth consent screen** (recent consoles present the same thing as **Google Auth
+Platform**).
+
+**User type.** **Internal** restricts sign-in to accounts inside the Google Workspace that owns
+the Cloud project, and is only offered when the project belongs to a Workspace organization —
+if your students are `@your-university.edu` accounts *and* the project lives in that
+university's Workspace, this is the simplest correct answer and skips everything below. A
+project on a personal Google account has no Internal option; choose **External**.
+
+**Scopes.** Add exactly `openid`, `.../auth/userinfo.email` and `.../auth/userinfo.profile`.
+This platform reads nothing else — no Drive, no Calendar, no Gmail. All three are
+**non-sensitive** scopes, which is what makes the rest of this section short.
+
+**Publishing status is the part that catches people.** A newly created External consent screen
+starts in **Testing**, and in Testing:
+
+- only accounts listed under **Test users** can sign in at all — everyone else is refused with
+  "access blocked", *not* a message that suggests the app simply needs publishing;
+- that list is capped at **100 users**, so it does not scale to a class even if you were
+  willing to maintain it by hand.
+
+To let anyone sign in, open the consent screen and press **Publish app**, moving it to **In
+production**.
+
+**This does not require Google's verification review.** Verification is required for
+*sensitive* and *restricted* scopes; an app requesting only identity scopes may publish
+straight away ([Google's own wording][oauth-verification]: "If your app utilizes only
+non-sensitive scopes, it is not mandatory for your app to complete the app verification
+process"). You may still choose to submit for **brand verification** if you want a custom logo
+on the consent screen — cosmetic, and not needed for sign-in to work.
+
+[oauth-verification]: https://support.google.com/cloud/answer/13463073
+
+**Confirming it actually worked**, rather than assuming: open the panel in a browser signed
+into a Google account that is *not* on the test-user list, and press the Google button. In
+Testing you get Google's "access blocked" screen; once published you get the ordinary account
+chooser. That is the whole difference, and it is the only check that distinguishes the two
+states from outside the console.
+
+**If the button does nothing at all** — no popup, no error — the cause is almost never the
+consent screen. It is `VITE_GOOGLE_CLIENT_ID` being unset or stale in the *built* bundle:
+`handleGoogle` returns early and the browser never sends a request, so nothing appears in any
+server log. Rebuild the panel (step 7 above) after setting it.
+
+### 4.4 Email (SMTP) — required, or `apps/api` does not start
+
+Unlike Google above, this one is not optional: the emailed sign-in link is the only sign-in
+path that always works, and `apps/api` refuses to start in production without a transport
+configured. See the callout at the top of this document for the exact error.
+
+You need a mailbox the platform can send *as*. Any SMTP relay works; the natural choice is one
+on the domain the panel is served from, so the domain's existing SPF record already authorises
+it and sign-in mail is not spam-filed.
+
+```bash
+MAIL_SMTP_HOST=mail.example.edu
+MAIL_SMTP_PORT=587                       # 465 is implicit TLS; anything else is STARTTLS
+MAIL_SMTP_USER=bloombot@example.edu
+MAIL_SMTP_PASSWORD=<the mailbox password>
+MAIL_FROM=Bloombot <bloombot@example.edu>
+```
+
+**`MAIL_FROM` should match `MAIL_SMTP_USER`.** Many relays reject, or silently spam-file, a
+message whose `From` is an address the authenticated user does not own — and the only symptom
+is sign-in mail nobody receives. The display-name form above and a bare address are both
+accepted; a bare `Bloombot` with no address at all is rejected at startup by `env.ts`'s own
+`z.email()` check on whichever half is the address.
+
+**`MAIL_FILE` must stay empty.** It is the development-only file sink and is refused outright
+under `NODE_ENV=production`, set or not.
+
+**Test the credential before blaming the app.** A 535 from the relay and a bug in this platform
+look identical from the outside — one failed sign-in and a `500`. Prove the credential
+independently, from the droplet, with the interpreter that is already installed:
+
+```bash
+python3 - <<'PY'
+import smtplib, ssl
+host, port, user, password = 'mail.example.edu', 587, 'bloombot@example.edu', '...'
+s = smtplib.SMTP(host, port, timeout=20)
+s.starttls(context=ssl.create_default_context())
+s.login(user, password)
+print('AUTH OK')
+s.quit()
+PY
+```
+
+If that prints `AUTH OK` and the platform still fails with `code=EAUTH ... responseCode=535`,
+the process is holding a stale environment — see the `--update-env` warning in §7.
+
+A private-CA or self-signed relay additionally needs `NODE_EXTRA_CA_CERTS` pointed at its PEM
+when starting the processes; it is a Node runtime variable, not one `packages/config` reads.
+
+**Confirming it works end to end**, which is the only check that proves anything:
+
+```bash
+curl -sS -X POST https://<your domain>/auth/request-link \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: https://<your domain>' \
+  -d '{"email":"you@example.edu"}' -w '\nHTTP %{http_code}\n'
+```
+
+`HTTP 204` and a line reading `apps/mail: sent` in `logs/api.log` mean a real message left the
+box. A `500` puts the relay's own refusal in that same log, with the SMTP code.
 
 ## 5. nginx: one public origin for the panel and the API
 
@@ -736,10 +846,35 @@ process individually, and rolls all of them back together if any fails its healt
 read that script's own header comment for the full sequence, and `docs/DECISIONS.md`'s D-40
 for why it is built the way it is.
 
-**Building the missing `EmailSender` adapter is not something this document, or
-`scripts/deploy.sh`, can route around** — it is application code this deployment depends on
-and does not have. Scope it as its own slice before relying on this deployment for real sign-
-ins.
+Two settings this document's own deployment needed, both repository variables on the
+`production` environment:
+
+- **`DEPLOY_SKIP_PYTHON_BOT`** — set it to any non-empty value once the droplet has finished
+  the cutover and no longer runs `response_bot.py`. It makes the deploy pass `PM2_APP=`, and
+  `scripts/deploy.sh` then leaves the Python bot, its dependency install and its interpreter
+  probe alone. **This is not cosmetic.** pm2 still remembers a *stopped* `bloombot` from before
+  the cutover, so without it every deploy issues `pm2 reload bloombot` and starts the retired
+  bot again — putting a second answering process back onto the database the cutover just moved
+  off, with no error anywhere.
+- **`BUILD_HEAP_MB`** — `scripts/deploy.sh` sets this itself to `1536` on a host with under
+  2 GB of RAM, so a small droplet needs nothing. It is listed here because the failure it
+  prevents is otherwise baffling: V8 sizes its old-space from total system memory, so on a 1 GB
+  box `tsc --build` dies with `Ineffective mark-compacts near heap limit` and the deploy rolls
+  itself back. **Adding swap does not help** — the ceiling is V8's own, not the kernel's.
+
+### Changing a variable in `.env` after the first deploy
+
+Editing `.env` is not enough on its own. pm2 keeps the environment a process was *started*
+with, so a process already running carries the old value until it is explicitly told otherwise:
+
+```bash
+pm2 restart api bot worker mcp --update-env
+```
+
+Without `--update-env` the edit appears to have been applied — the file on disk is right, the
+restart succeeds, and the process goes on using the previous value. This is worth knowing
+before debugging a credential that is demonstrably correct in `.env` and demonstrably rejected
+by the service it authenticates to.
 
 ## 8. Backups, log rotation, and the post-deploy checklist
 

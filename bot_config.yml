@@ -1,3 +1,32 @@
+# ============================================================================
+# LEGACY — this file configured the retired Python bot (`response_bot.py`).
+#
+# No running process reads it any more. The platform keeps every setting below
+# in its own database instead, per course, editable from the control panel:
+# `courses.model`, `.promptId`, `.instructions`, `.vectorStoreId` and
+# `.maxRequestsPerDay` in packages/db/src/schema.ts. Editing this file changes
+# nothing about how the platform answers a student.
+#
+# DO NOT DELETE IT YET — merging the legacy database needs it, even if you
+# never intend to carry a single course setting forward. `npm run
+# legacy:import` takes it as a required argument:
+#
+#   npm run legacy:import --workspace packages/legacy-import -- \
+#     <path-to-snapshot.db> <path-to-bot_config.yml>
+#
+# It is not optional scaffolding there. MIG-2 derives the organization's own
+# id from `server.name` below, and matches each course by its title within
+# that organization (packages/legacy-import/src/import-config.ts) — so this
+# file is what the imported conversations, messages and people actually
+# attach to. Import with a different `server.name` and the same snapshot
+# lands in a *different* organization; import with course titles that do not
+# match and the conversations have no course to belong to.
+#
+# The shape it must match is packages/schemas/src/legacy-yaml.ts. Once the
+# database has been merged and the result verified in the panel, this file
+# has no remaining purpose and can go — see docs/CUTOVER.md.
+# ============================================================================
+
 server:
   name: 'Knowledge Kitchen'
   courses:

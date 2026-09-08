@@ -44,13 +44,22 @@ const pricingTableSchema = z.object({
 })
 
 /**
- * Approximate, publicly listed OpenAI Responses API rates as of this
- * writing (gpt-4o: $2.50 / $10.00 per million input/output tokens;
- * gpt-4o-mini: $0.15 / $0.60) — `AI-4`'s own default model and the smaller
- * model courses sometimes pin to. `defaultRate` reuses `gpt-4o`'s own rate:
- * the platform's own default model (`@bloombot/openai`'s `DEFAULT_MODEL`)
- * is what an unnamed model is likeliest to actually be billed at, closer to
- * the truth than an arbitrary round number would be.
+ * Publicly listed OpenAI standard-processing rates, checked against
+ * https://developers.openai.com/api/docs/pricing on 2026-09-08. Per million
+ * input/output tokens: gpt-4o $2.50 / $10.00, gpt-4o-mini $0.15 / $0.60,
+ * gpt-4.1 $2.00 / $8.00, gpt-4.1-mini $0.40 / $1.60, gpt-5 $1.25 / $10.00,
+ * gpt-5-mini $0.25 / $2.00.
+ *
+ * These are a starting point, not a promise the platform keeps them current
+ * — an operator overrides `MODEL_PRICING_JSON` (`env.ts`) the moment a
+ * provider's pricing changes, without a code change or a redeploy. Batch,
+ * flex and cached-input rates are all cheaper than the figures above, so a
+ * cost recorded here is an upper bound on what was actually billed.
+ *
+ * `defaultRate` reuses `gpt-4o`'s own rate: the platform's own default model
+ * (`@bloombot/openai`'s `DEFAULT_MODEL`) is what an unnamed model is
+ * likeliest to actually be billed at, closer to the truth than an arbitrary
+ * round number would be.
  */
 const DEFAULT_PRICING: PricingTable = {
   rates: {
@@ -61,6 +70,24 @@ const DEFAULT_PRICING: PricingTable = {
     'gpt-4o-mini': {
       inputMicrosPerMillionTokens: 150_000,
       outputMicrosPerMillionTokens: 600_000,
+    },
+    // Pinned per-course in bot_config.yml, so priced explicitly rather than
+    // left to fall through to `defaultRate`.
+    'gpt-4.1': {
+      inputMicrosPerMillionTokens: 2_000_000,
+      outputMicrosPerMillionTokens: 8_000_000,
+    },
+    'gpt-4.1-mini': {
+      inputMicrosPerMillionTokens: 400_000,
+      outputMicrosPerMillionTokens: 1_600_000,
+    },
+    'gpt-5': {
+      inputMicrosPerMillionTokens: 1_250_000,
+      outputMicrosPerMillionTokens: 10_000_000,
+    },
+    'gpt-5-mini': {
+      inputMicrosPerMillionTokens: 250_000,
+      outputMicrosPerMillionTokens: 2_000_000,
     },
   },
   defaultRate: {

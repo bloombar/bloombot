@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { DEFAULT_PRICING_JSON, getModelPricingTable } from '@bloombot/config'
+
 import {
   buildResponsesRequestBody,
   DEFAULT_MODEL,
@@ -166,8 +168,26 @@ describe('buildResponsesRequestBody (MDL-9/FILE-6): web search only when the cou
 })
 
 describe('DEFAULT_MODEL (AI-4)', () => {
-  it('is gpt-4o, the platform default when a course has never configured its own model', () => {
-    expect(DEFAULT_MODEL).toBe('gpt-4o')
+  it('is gpt-4.1, the platform default when a course has never configured its own model', () => {
+    expect(DEFAULT_MODEL).toBe('gpt-4.1')
+  })
+
+  // The reason the default moved off gpt-4o, pinned so a future change back
+  // to a costlier model is a red build rather than a quiet billing increase:
+  // whatever the default is, the pricing table must price it, and it must not
+  // cost more than the gpt-4o it replaced.
+  it('is priced by the default pricing table, at no more than gpt-4o cost', () => {
+    const table = getModelPricingTable(DEFAULT_PRICING_JSON)
+    const rate = table.rates[DEFAULT_MODEL]
+    expect(rate).toBeDefined()
+
+    const gpt4o = table.rates['gpt-4o']!
+    expect(rate!.inputMicrosPerMillionTokens).toBeLessThanOrEqual(
+      gpt4o.inputMicrosPerMillionTokens
+    )
+    expect(rate!.outputMicrosPerMillionTokens).toBeLessThanOrEqual(
+      gpt4o.outputMicrosPerMillionTokens
+    )
   })
 })
 

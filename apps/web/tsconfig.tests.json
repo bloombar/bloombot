@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "_comment": "apps/web's own test project — split out of the root tsconfig.tests.json (rather than folded into its shared Node-only settings) because these tests render JSX and touch the DOM: the `lib`/`jsx`/`types` overrides below would be wrong for every other package's plain-Node test suite.",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../../.tsbuild/apps-web-tests",
+    "emitDeclarationOnly": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"]
+  },
+  "include": ["tests/**/*.ts", "tests/**/*.tsx"],
+  "references": [{ "path": "./tsconfig.app.json" }]
+}

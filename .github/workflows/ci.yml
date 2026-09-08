@@ -70,8 +70,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Run tests
         run: npm test
+
+      - name: Check the coverage floor over the data access layer (QA-4)
+        run: npm run test:coverage
+
+      # QA-7: "at least one test drives a real browser against a real front
+      # end, a real API and a real database" — cheap-fix 8 of the WEB-1..6
+      # rework. Without this step CI never ran `npm run e2e` at all, so
+      # QA-7 held only when somebody remembered to run it locally.
+      # `--with-deps` installs the OS libraries the browser binary itself
+      # needs on the runner image, not merely the binary.
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the end-to-end test (QA-7)
+        run: npm run e2e
 
       - name: Check the board manifest is up to date with the SPEC
         # derive is deterministic: if re-running it changes manifest.yaml, the
@@ -81,7 +105,7 @@ jobs:
           git diff --exit-code scripts/board/manifest.yaml
 
   shellcheck:
-    name: Deploy script lint
+    name: Shell script lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -89,6 +113,12 @@ jobs:
       # shellcheck ships with the GitHub runner image — no action to install.
       - name: Lint scripts/deploy.sh
         run: shellcheck scripts/deploy.sh
+
+      # The agent guardrail hooks are the only thing standing between an agent
+      # and the live student database or a committed secret, so they are linted
+      # like the deploy script rather than treated as local tooling.
+      - name: Lint .claude/hooks
+        run: shellcheck .claude/hooks/*.sh
 
   deploy:
     name: Deploy to droplet
@@ -157,6 +187,15 @@ jobs:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          # Set this repository variable to any non-empty value on a droplet
+          # that has finished the cutover and no longer runs the legacy Python
+          # bot; the deploy then passes `PM2_APP=` (empty) and deploy.sh skips
+          # the bot, its dependency install and its interpreter probe. A flag
+          # rather than passing the process name through directly, because an
+          # unset repository variable and one set to the empty string are
+          # indistinguishable here — both arrive as "" — and those two cases
+          # need opposite behaviour from deploy.sh's own PM2_APP default.
+          DEPLOY_SKIP_PYTHON_BOT: ${{ vars.DEPLOY_SKIP_PYTHON_BOT }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
@@ -168,6 +207,11 @@ jobs:
           # droplet's checkout, so the deploy logic is always the version from
           # the commit being deployed and never rewrites itself mid-run.
           remote="bash -s -- $TARGET_SHA"
+          if [ -n "$DEPLOY_SKIP_PYTHON_BOT" ]; then
+            # An explicitly empty PM2_APP — deploy.sh reads that as "this
+            # droplet has no legacy Python bot" and leaves it alone.
+            remote="PM2_APP= $remote"
+          fi
           if [ -n "$DEPLOY_PATH" ]; then
             remote="APP_DIR='$DEPLOY_PATH' $remote"
           fi

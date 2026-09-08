@@ -1,0 +1,893 @@
+/**
+ * Repository for `jobs` (JOB-1..3) — the background queue's data layer.
+ * Every atomicity claim here is checked against the real, throwaway
+ * database `createTestDatabase` opens under `tmp/`, never a return value
+ * alone.
+ */
+
+import { randomUUID } from 'node:crypto'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import {
+  closeDatabase,
+  courses,
+  jobs,
+  openDatabase,
+  organizations,
+  projects,
+  type Database,
+} from '@bloombot/db'
+
+import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
+
+let testDb: TestDatabase
+
+afterEach(() => {
+  testDb.cleanup()
+})
+
+/** Seeds two organizations, each with one enabled course — enough to prove JOB-1's cross-tenant payload claim. */
+function seedTwoOrganizationsWithCourses(testDatabase: TestDatabase) {
+  const orgA = randomUUID()
+  const orgB = randomUUID()
+  organizations.createOrganization(
+    orgA,
+    { name: 'Org A', isPersonal: false },
+    testDatabase.db
+  )
+  organizations.createOrganization(
+    orgB,
+    { name: 'Org B', isPersonal: false },
+    testDatabase.db
+  )
+  const projectA = projects.createProject(
+    orgA,
+    { name: 'Fall 2026' },
+    testDatabase.db
+  )
+  const projectB = projects.createProject(
+    orgB,
+    { name: 'Fall 2026' },
+    testDatabase.db
+  )
+  const courseA = courses.createCourse(
+    orgA,
+    {
+      projectId: projectA.id,
+      title: 'Course A',
+      enabled: true,
+      adminsRole: 'admins-ca',
+      studentsRole: 'students-ca',
+      categories: [],
+    },
+    testDatabase.db
+  )
+  const courseB = courses.createCourse(
+    orgB,
+    {
+      projectId: projectB.id,
+      title: 'Course B',
+      enabled: true,
+      adminsRole: 'admins-cb',
+      studentsRole: 'students-cb',
+      categories: [],
+    },
+    testDatabase.db
+  )
+  if (!courseA.ok || !courseB.ok) {
+    throw new Error('expected both seeded courses to save cleanly')
+  }
+  return { orgA, orgB, courseA: courseA.course, courseB: courseB.course }
+}
+
+describe('enqueueJob (JOB-1)', () => {
+  it('creates a pending, unclaimed job carrying the organization it belongs to', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    const job = jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: { hello: 'world' }, maxAttempts: 5 },
+      testDb.db
+    )
+
+    expect(job.organizationId).toBe(orgA)
+    expect(job.status).toBe('pending')
+    expect(job.attempts).toBe(0)
+    expect(job.maxAttempts).toBe(5)
+    expect(job.claimedBy).toBeNull()
+    expect(job.claimExpiresAt).toBeNull()
+    // `payload` is only ever `null` on a terminal row (JOB-6) —
+    // `enqueueJob` always populates it, so the assertion below is safe.
+    expect(JSON.parse(job.payload!)).toEqual({ hello: 'world' })
+  })
+
+  // JOB-1's own worked example: a job carries its organization, and a
+  // handler cannot reach another organization's data through the payload —
+  // a payload naming another tenant's record is refused by the repo layer
+  // as usual, the same as every other scoped read.
+  it("a payload naming another organization's record is refused the same way any other cross-tenant read is", () => {
+    testDb = createTestDatabase()
+    const { orgA, courseB } = seedTwoOrganizationsWithCourses(testDb)
+
+    // Org A's job, whose payload names Org B's own course — this is
+    // ordinary caller error (a bug, or an attempt to reach across tenants),
+    // not something enqueueJob can see, since a payload is opaque to it
+    // (JOB-1).
+    const job = jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: { courseId: courseB.id }, maxAttempts: 5 },
+      testDb.db
+    )
+    // `payload` is only ever `null` on a terminal row (JOB-6) —
+    // `enqueueJob` always populates it, so the assertion below is safe.
+    const payload = JSON.parse(job.payload!) as { courseId: string }
+
+    // The handler this job would run reads its own organization off the
+    // claimed row (JOB-1's discipline: never trust an id inside a payload
+    // alone) and reaches the payload's courseId through the same
+    // organization-scoped function every other caller uses.
+    const resolved = courses.getCourse(
+      job.organizationId,
+      payload.courseId,
+      testDb.db
+    )
+
+    expect(resolved).toBeUndefined()
+  })
+
+  // JOB-6 rework note — before `payload` became nullable, `undefined` was
+  // refused by the column's own `NOT NULL` constraint at insert time; that
+  // safety net is gone now that a terminal row's own `null` payload is
+  // normal, so `enqueueJob` refuses it explicitly instead of silently
+  // inserting a job that looks, at claim time, exactly like one this
+  // slice's own retention write already cleared.
+  it('refuses an undefined payload rather than silently inserting a job with none', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    expect(() =>
+      jobs.enqueueJob(
+        orgA,
+        { kind: 'noop', payload: undefined, maxAttempts: 3 },
+        testDb.db
+      )
+    ).toThrow(/payload must not be undefined/)
+  })
+})
+
+describe('claimNextJob (JOB-3): the race', () => {
+  it('two connections claiming the same eligible job concurrently yield exactly one winner, and the loser gets nothing rather than an error', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'send-welcome-email', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    // A second real connection to the same file — better-sqlite3's own
+    // calls are synchronous, so nothing can interleave *within* either
+    // connection's own claim below; both run to completion against the
+    // real database, through the real exported function, one after the
+    // other. The genuinely concurrent case — a second connection whose own
+    // read happened before the first connection's write committed — is
+    // covered by the lease test below and by `discord-servers.test.ts`'s
+    // own `stubSecondReadAsStale` device for the same class of race; this
+    // test proves the more basic invariant a stub cannot: calling the real
+    // claim twice for the one eligible row never grants it twice, and the
+    // loser gets `undefined`, not a thrown error.
+    const db2 = openDatabase(testDb.path)
+    try {
+      const winner = jobs.claimNextJob(
+        ['send-welcome-email'],
+        { owner: 'worker-1', leaseMs: 60_000 },
+        testDb.db
+      )
+      const loser = jobs.claimNextJob(
+        ['send-welcome-email'],
+        { owner: 'worker-2', leaseMs: 60_000 },
+        db2
+      )
+
+      expect(winner).toMatchObject({ status: 'running', claimedBy: 'worker-1' })
+      expect(loser).toBeUndefined()
+    } finally {
+      closeDatabase(db2)
+    }
+  })
+
+  // The genuinely concurrent case: connection 2's own read happened before
+  // connection 1's write committed, so it still believes the job is
+  // pending. Reproduced the same way `discord-servers.test.ts` reproduces
+  // it for TEN-3 — better-sqlite3 is synchronous, so nothing else can run
+  // between one connection's own read and its own write; stubbing the
+  // second connection's read is how a single-threaded test reaches the
+  // exact window a genuinely concurrent worker can land in.
+  it("a claim whose own read is stale loses the race — the write's own WHERE decides it, not the read", async () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    const seeded = jobs.enqueueJob(
+      orgA,
+      { kind: 'send-welcome-email', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const db2 = openDatabase(testDb.path)
+    try {
+      // Connection 2's own `select` is stubbed to still see the job as
+      // pending — as it would have, had it looked before connection 1's
+      // claim below committed.
+      const { vi } = await import('vitest')
+      const realSelect = db2.select.bind(db2)
+      let selectCallCount = 0
+      vi.spyOn(db2, 'select').mockImplementation((...args: unknown[]) => {
+        selectCallCount += 1
+        if (selectCallCount === 1) {
+          return {
+            from: () => ({
+              where: () => ({
+                orderBy: () => ({
+                  limit: () => ({ get: () => ({ id: seeded.id }) }),
+                }),
+              }),
+            }),
+          } as never
+        }
+        return (realSelect as (...a: unknown[]) => unknown)(...args) as never
+      })
+
+      const winner = jobs.claimNextJob(
+        ['send-welcome-email'],
+        { owner: 'worker-1', leaseMs: 60_000 },
+        testDb.db
+      )
+      expect(winner).toMatchObject({ status: 'running', claimedBy: 'worker-1' })
+
+      // Connection 2 attempts the real UPDATE for the same candidate id it
+      // believes is still pending; the row is genuinely already running
+      // under worker-1's claim by now, so the UPDATE's own WHERE refuses it.
+      const loser = jobs.claimNextJob(
+        ['send-welcome-email'],
+        { owner: 'worker-2', leaseMs: 60_000 },
+        db2
+      )
+      expect(loser).toBeUndefined()
+
+      // Untouched: still worker-1's claim.
+      const row = jobs.getJob(orgA, seeded.id, testDb.db)
+      expect(row?.claimedBy).toBe('worker-1')
+    } finally {
+      closeDatabase(db2)
+    }
+  })
+})
+
+describe('claimNextJob (JOB-3): the lease', () => {
+  it('a job whose claim has expired is re-claimable', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    const seeded = jobs.enqueueJob(
+      orgA,
+      { kind: 'send-welcome-email', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    // A 0ms lease is already expired by the time the next claim runs.
+    const first = jobs.claimNextJob(
+      ['send-welcome-email'],
+      { owner: 'worker-1', leaseMs: -5 },
+      testDb.db
+    )
+    expect(first).toMatchObject({ status: 'running', claimedBy: 'worker-1' })
+
+    const second = jobs.claimNextJob(
+      ['send-welcome-email'],
+      { owner: 'worker-2', leaseMs: 60_000 },
+      testDb.db
+    )
+
+    expect(second).toMatchObject({
+      id: seeded.id,
+      status: 'running',
+      claimedBy: 'worker-2',
+    })
+  })
+
+  it('a job whose claim is still live is not re-claimable', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'send-welcome-email', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const first = jobs.claimNextJob(
+      ['send-welcome-email'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    expect(first).toMatchObject({ status: 'running', claimedBy: 'worker-1' })
+
+    const second = jobs.claimNextJob(
+      ['send-welcome-email'],
+      { owner: 'worker-2', leaseMs: 60_000 },
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+  })
+
+  it('never claims a job whose kind the caller has no handler for', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'send-welcome-email', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+
+    const claimed = jobs.claimNextJob(
+      ['import-roster'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+
+    expect(claimed).toBeUndefined()
+  })
+})
+
+describe('completing and failing a claimed job', () => {
+  it('completeJob marks a claimed job succeeded and releases the claim', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const completed = jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db
+    )
+
+    expect(completed).toMatchObject({
+      status: 'succeeded',
+      claimedBy: null,
+      claimExpiresAt: null,
+    })
+  })
+
+  // SRV-6..8: what a scaffold handler's report round-trips through — opaque
+  // JSON, the same discipline `payload` already holds itself to.
+  it('completeJob stores a handler result as JSON, readable back through getJob', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const completed = jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { created: ['general'], alreadyPresent: [] }
+    )
+
+    expect(completed?.result).toEqual(
+      JSON.stringify({ created: ['general'], alreadyPresent: [] })
+    )
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(JSON.parse(row?.result ?? 'null')).toEqual({
+      created: ['general'],
+      alreadyPresent: [],
+    })
+  })
+
+  // A handler that resolves with nothing (the common case for most jobs)
+  // leaves `result` `null` rather than the literal string `"undefined"`.
+  it('completeJob leaves result null when no result is given', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const completed = jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db
+    )
+
+    expect(completed?.result).toBeNull()
+  })
+
+  // The exact hazard `OwnedClaim` exists to close: a claim that has since
+  // been superseded (its lease expired and someone else reclaimed the row)
+  // must not be able to complete or fail the *new* claim out from under it.
+  it('completeJob refuses a claim that has since been superseded by a reclaim', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const firstClaim = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-1', leaseMs: -5 }, // already-expired lease
+      testDb.db
+    )
+    if (!firstClaim) throw new Error('expected a claim')
+
+    // worker-2 reclaims the same row once worker-1's lease has lapsed.
+    const secondClaim = jobs.claimNextJob(
+      ['noop'],
+      { owner: 'worker-2', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!secondClaim) throw new Error('expected a reclaim')
+
+    // worker-1's own, now-stale claim tries to complete the job it no
+    // longer owns.
+    const result = jobs.completeJob(
+      orgA,
+      firstClaim.id,
+      { owner: 'worker-1', claimExpiresAt: firstClaim.claimExpiresAt! },
+      testDb.db
+    )
+
+    expect(result).toBeUndefined()
+    // Untouched: still running under worker-2's claim.
+    const row = jobs.getJob(orgA, firstClaim.id, testDb.db)
+    expect(row).toMatchObject({ status: 'running', claimedBy: 'worker-2' })
+  })
+
+  // JOB-2: retried with growing delay, stops after its bound, and its
+  // terminal row still carries the reason it stopped — asserted against the
+  // database, not a return value.
+  it('rescheduleJobForRetry returns a job to pending, due later, with the failure reason recorded', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'flaky', payload: {}, maxAttempts: 3 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['flaky'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    const nextAttemptAt = Date.now() + 1000
+    jobs.rescheduleJobForRetry(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      { reason: 'upstream timed out', nextAttemptAt },
+      testDb.db
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row).toMatchObject({
+      status: 'pending',
+      claimedBy: null,
+      claimExpiresAt: null,
+      lastError: 'upstream timed out',
+      nextAttemptAt,
+    })
+  })
+
+  it('markJobFailed stops a job in a terminal, visible failed state carrying its reason', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      { kind: 'flaky', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['flaky'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    // Still on the table, never deleted, never silently dropped (JOB-2).
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row).toMatchObject({
+      status: 'failed',
+      claimedBy: null,
+      claimExpiresAt: null,
+      lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+})
+
+// JOB-6: a job that has reached a terminal state stops carrying the
+// personal data it was given — proved directly against the database, the
+// same "assert against the database, not a return value" discipline this
+// file's own module comment already holds every other claim here to.
+describe('JOB-6: payload retention', () => {
+  it('completeJob clears payload in the same write that records success, while its result stays readable', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db,
+      { peopleCreated: 1 }
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('succeeded')
+    expect(row?.payload).toBeNull()
+    // The outcome is not what this slice clears — a report is still readable.
+    expect(JSON.parse(row?.result ?? 'null')).toEqual({ peopleCreated: 1 })
+  })
+
+  it('markJobFailed clears payload in the same write that records a permanent failure', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('failed')
+    expect(row?.payload).toBeNull()
+    // The reason it stopped is not what this slice clears.
+    expect(row?.lastError).toBe('exhausted attempts: upstream timed out')
+  })
+
+  // The regression that matters most (this slice's own brief): a job that
+  // failed but will be retried must keep its payload — JOB-2's retry and
+  // JOB-3's once-only execution across a worker restart both re-read it.
+  it('rescheduleJobForRetry leaves payload untouched — the next attempt still needs it', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1', csvText: 'Ada,ada@example.edu' },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+
+    jobs.rescheduleJobForRetry(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      { reason: 'upstream timed out', nextAttemptAt: Date.now() + 1000 },
+      testDb.db
+    )
+
+    const row = jobs.getJob(orgA, claimed.id, testDb.db)
+    expect(row?.status).toBe('pending')
+    expect(JSON.parse(row?.payload ?? 'null')).toEqual({
+      courseId: 'course-1',
+      csvText: 'Ada,ada@example.edu',
+    })
+  })
+})
+
+describe('getJob and countQueuedJobs', () => {
+  it('getJob refuses a job belonging to another organization', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizationsWithCourses(testDb)
+    const job = jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 1 },
+      testDb.db
+    )
+
+    expect(jobs.getJob(orgB, job.id, testDb.db)).toBeUndefined()
+  })
+
+  it('countQueuedJobs counts pending and running jobs across every organization, not succeeded or failed ones', () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizationsWithCourses(testDb)
+
+    jobs.enqueueJob(orgA, { kind: 'a', payload: {}, maxAttempts: 1 }, testDb.db)
+    jobs.enqueueJob(orgB, { kind: 'b', payload: {}, maxAttempts: 1 }, testDb.db)
+    const claimed = jobs.claimNextJob(
+      ['a'],
+      { owner: 'worker-1', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.completeJob(
+      orgA,
+      claimed.id,
+      { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+      testDb.db
+    )
+
+    // One completed (excluded) and one still pending (included).
+    expect(jobs.countQueuedJobs(testDb.db)).toBe(1)
+  })
+})
+
+// JOB-2: a job that keeps failing is visible, and stays visible past the
+// browser session that dispatched it — proved directly against the
+// database, the same "assert against the database, not a return value"
+// discipline this file's own module comment already holds every other
+// claim here to.
+describe('listJobsForOrganization (JOB-2)', () => {
+  it("lists the caller's own organization's jobs, not another organization's", () => {
+    testDb = createTestDatabase()
+    const { orgA, orgB } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(orgA, { kind: 'a', payload: {}, maxAttempts: 1 }, testDb.db)
+    jobs.enqueueJob(orgB, { kind: 'b', payload: {}, maxAttempts: 1 }, testDb.db)
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?.kind).toBe('a')
+  })
+
+  // This is JOB-2's own defect, proved at the repo layer: a job that
+  // exhausted its attempts is never deleted (`markJobFailed` never removes
+  // the row), and this listing is what actually surfaces it — with the
+  // reason it stopped and how many attempts it took, not merely "it is
+  // still in the table somewhere."
+  it('a permanently failed job appears with its own error and attempt count', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    jobs.enqueueJob(
+      orgA,
+      {
+        kind: 'roster.import',
+        payload: { courseId: 'course-1' },
+        maxAttempts: 1,
+      },
+      testDb.db
+    )
+    const claimed = jobs.claimNextJob(
+      ['roster.import'],
+      { owner: 'e2e-worker', leaseMs: 60_000 },
+      testDb.db
+    )
+    if (!claimed) throw new Error('expected a claim')
+    jobs.markJobFailed(
+      orgA,
+      claimed.id,
+      { owner: 'e2e-worker', claimExpiresAt: claimed.claimExpiresAt! },
+      'exhausted attempts: upstream timed out',
+      testDb.db
+    )
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      lastError: 'exhausted attempts: upstream timed out',
+    })
+  })
+
+  // Newest *activity* first, not newest *created* first — a job that was
+  // enqueued first but updated most recently (a retry, a completion) sorts
+  // above one enqueued after it but never touched since.
+  //
+  // Fake timers so the three writes below land in different milliseconds —
+  // without this, `updatedAt` (and `createdAt`, its own tiebreaker) can tie
+  // on a fast machine, and which row `listJobsForOrganization` returns first
+  // among ties is not guaranteed (the same caveat
+  // `membership-invitations.test.ts`'s own "lists invitations newest first"
+  // case already documents, and the same fix). A flaky run of this exact
+  // test (`AssertionError: expected 'dd06e749-…' to be 'f307bce5-…'`) is
+  // what found the gap — this file's own module comment already holds every
+  // claim here to "assert against the database", and an assertion that only
+  // sometimes holds against the real database is not that.
+  it('orders by most recently updated, not by creation order', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    vi.useFakeTimers()
+    let older: jobs.Job
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+      older = jobs.enqueueJob(
+        orgA,
+        { kind: 'older', payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.001Z'))
+      jobs.enqueueJob(
+        orgA,
+        { kind: 'newer', payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+
+      // Touch the older job after the newer one was created — its own
+      // `updatedAt` now leads.
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.002Z'))
+      const claimed = jobs.claimNextJob(
+        ['older'],
+        { owner: 'worker-1', leaseMs: 60_000 },
+        testDb.db
+      )
+      if (!claimed) throw new Error('expected a claim')
+      jobs.completeJob(
+        orgA,
+        claimed.id,
+        { owner: 'worker-1', claimExpiresAt: claimed.claimExpiresAt! },
+        testDb.db
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const result = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(result[0]?.id).toBe(older.id)
+  })
+
+  // A genuine tie, not merely an unlucky one — a batch enqueue issues
+  // several `enqueueJob` calls back to back, and with the clock frozen here
+  // every one of them shares the same `updatedAt` *and* `createdAt`. `id`
+  // ascending is the third tiebreaker this repository adds for exactly this
+  // (this file's own doc comment on `listJobsForOrganization`) — proved by
+  // calling the listing twice against the same, untouched rows and checking
+  // the order does not move between calls, which is the actual symptom an
+  // unstable tie produces on a screen a caller polls (`pages/Jobs.tsx`'s own
+  // "Refresh").
+  it('a genuine tie on updatedAt and createdAt still orders deterministically, by id', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+
+    vi.useFakeTimers()
+    let seeded: jobs.Job[]
+    try {
+      vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'))
+      seeded = [
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'a', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'b', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+        jobs.enqueueJob(
+          orgA,
+          { kind: 'c', payload: {}, maxAttempts: 1 },
+          testDb.db
+        ),
+      ]
+    } finally {
+      vi.useRealTimers()
+    }
+    // Every row above shares the same `updatedAt`/`createdAt` — the tie
+    // this test exists to prove is real, not merely asserted.
+    expect(new Set(seeded.map((job) => job.updatedAt)).size).toBe(1)
+    expect(new Set(seeded.map((job) => job.createdAt)).size).toBe(1)
+
+    const expectedOrder = [...seeded].sort((a, b) => (a.id < b.id ? -1 : 1))
+    const first = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+    const second = jobs.listJobsForOrganization(orgA, 50, testDb.db)
+
+    expect(first.map((job) => job.id)).toEqual(expectedOrder.map((j) => j.id))
+    expect(second.map((job) => job.id)).toEqual(first.map((job) => job.id))
+  })
+
+  it('is bounded by limit', () => {
+    testDb = createTestDatabase()
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    for (let i = 0; i < 5; i++) {
+      jobs.enqueueJob(
+        orgA,
+        { kind: `k${i}`, payload: {}, maxAttempts: 1 },
+        testDb.db
+      )
+    }
+
+    expect(jobs.listJobsForOrganization(orgA, 3, testDb.db)).toHaveLength(3)
+  })
+})
+
+// Confirms this file's own type import compiles and is exercised — a plain
+// smoke test so `Database` staying imported for typing below is not flagged
+// as unused if every other test above only ever passes `testDb.db` through.
+describe('type sanity', () => {
+  it('Job/Database types line up with the schema this file exercises', () => {
+    testDb = createTestDatabase()
+    const db: Database = testDb.db
+    const { orgA } = seedTwoOrganizationsWithCourses(testDb)
+    const job = jobs.enqueueJob(
+      orgA,
+      { kind: 'noop', payload: {}, maxAttempts: 1 },
+      db
+    )
+    expect(job.kind).toBe('noop')
+  })
+})

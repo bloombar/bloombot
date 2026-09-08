@@ -1,0 +1,359 @@
+/**
+ * ADMIN-4/ADMIN-5: `pages/Admin.tsx` — organizations, usage and health, and
+ * the confirmed, audited tenant deletion. ADMIN-4's own boundary (never a
+ * course, a student or a message) is proven at the HTTP layer
+ * (`apps/api/tests/routes/admin.test.ts`) — this file proves the panel's
+ * own confirmation is real: a mismatched name refuses, and the deletion is
+ * a typed-name prompt, not a plain confirm a stray click could pass
+ * (WEB-15).
+ *
+ * WEB-33 — `Admin` now takes `route`/`navigate` (which of the console's own
+ * screens is current), the identical shape `tests/shell.test.tsx`'s own
+ * `renderShell` already gives `Shell`: `renderAdmin`, below, mounts `Admin`
+ * behind a tiny stateful wrapper standing in for `App.tsx`'s own
+ * `useRoute()`, so every existing "click something, assert what renders"
+ * test in this file keeps working with a real, in-test `navigate` rather
+ * than a route this component can no longer take as a bare prop.
+ */
+
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+
+import { ApiError } from '../src/api/client.js'
+import { Admin } from '../src/pages/Admin.js'
+import type { AdminRoute, Route } from '../src/routing/route.js'
+import { isAdminRoute } from '../src/routing/route.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
+
+/** Mirrors `tests/shell.test.tsx`'s own `renderShell` — defaults to `'admin-organizations'`, the console's own landing screen once `'platform-admin'` itself resolves and replaces (`Admin.tsx`'s own module comment). */
+function renderAdmin({
+  route = { kind: 'admin-organizations' },
+  onBack = vi.fn(),
+}: { route?: AdminRoute; onBack?: () => void } = {}) {
+  function Harness() {
+    const [currentRoute, setCurrentRoute] = useState<AdminRoute>(route)
+    const navigate = (next: Route) => {
+      // `Admin` only ever constructs an `AdminRoute` itself — mirrors
+      // `App.tsx`'s own guard (`isAdminRoute`) rather than assuming it.
+      if (isAdminRoute(next)) setCurrentRoute(next)
+    }
+    return <Admin route={currentRoute} navigate={navigate} onBack={onBack} />
+  }
+  return renderWithModal(<Harness />)
+}
+
+const {
+  fetchAdminOrganizations,
+  fetchDeletionPreview,
+  fetchTenantDeletions,
+  deleteTenant,
+} = vi.hoisted(() => ({
+  fetchAdminOrganizations: vi.fn(),
+  fetchDeletionPreview: vi.fn(),
+  fetchTenantDeletions: vi.fn(),
+  deleteTenant: vi.fn(),
+}))
+
+vi.mock('../src/api/client.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/api/client.js')>(
+    '../src/api/client.js'
+  )
+  return {
+    ...actual,
+    fetchAdminOrganizations,
+    fetchDeletionPreview,
+    fetchTenantDeletions,
+    deleteTenant,
+  }
+})
+
+afterEach(() => {
+  vi.resetAllMocks()
+})
+
+// Every test in this file exercises `fetchAdminOrganizations`; ADMIN-5's own
+// audit trail (`fetchTenantDeletions`) is a second, independent read the
+// same screen also fires on mount — defaulted to an empty list here so a
+// test that does not care about deletion history does not have to mock it
+// itself, the same "a test overrides only the one field its own scenario
+// needs" convention `build-test-app.ts`'s own module comment states for a
+// different helper.
+beforeEach(() => {
+  fetchTenantDeletions.mockResolvedValue([])
+})
+
+const PLATFORM_HEALTH = {
+  bot: { reachable: true },
+  worker: { reachable: true },
+  api: { reachable: true },
+}
+
+const PREVIEW = {
+  organizationId: 'org-1',
+  organizationName: 'A Real Tenant',
+  courses: 2,
+  people: 5,
+  conversations: 3,
+  messages: 10,
+  enrolments: 5,
+  discordServerBindings: 1,
+  courseAttachments: 0,
+  queuedJobs: 0,
+}
+
+describe('Admin (ADMIN-4)', () => {
+  it('lists organizations with their usage', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 1_500_000,
+          estimatedCostMicros: 0,
+          callCount: 3,
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+
+    renderAdmin()
+
+    expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
+    expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
+  })
+
+  // Also-fix of the ADMIN-1..5 rework: this screen's own module comment
+  // claimed every read went through `fetchTenantDeletions`, but nothing
+  // ever called it — dead code masquerading as a documented one.
+  //
+  // WEB-33: the deletion history now lives at its own address
+  // (`'admin-deletions'`) rather than inline on the organizations list —
+  // reached here by clicking through, the same way a real navigation would.
+  it('shows ADMIN-5’s own deletion history, once fetched', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchTenantDeletions.mockResolvedValue([
+      {
+        id: 'deletion-1',
+        organizationId: 'org-1',
+        organizationName: 'A Departed Tenant',
+        deletedByAccountId: 'account-1',
+        summary: '{}',
+        deletedAt: Date.now(),
+      },
+    ])
+
+    renderAdmin()
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Deletion history' })
+    )
+
+    expect(await screen.findByText('A Departed Tenant')).toBeInTheDocument()
+  })
+
+  it('a non-administrator sees the refusal in words, not a blank screen', async () => {
+    fetchAdminOrganizations.mockRejectedValue(
+      new ApiError(403, { error: 'not_platform_administrator' })
+    )
+
+    renderAdmin()
+
+    expect(
+      await screen.findByText(/platform-administrator access/i)
+    ).toBeInTheDocument()
+    // Review finding: the split into three screens dropped the `!error &&`
+    // guard around the placeholder, so the refusal was shown *and* a
+    // permanent "Loading…" underneath it — a screen claiming to still be
+    // fetching something it has already been refused.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  // The same finding on each of the two screens the split created — a
+  // failed read must not leave either of them spinning forever.
+  it.each([
+    [
+      'admin-organization',
+      { kind: 'admin-organization', organizationId: 'org-1' },
+    ],
+    ['admin-deletions', { kind: 'admin-deletions' }],
+  ] as const)(
+    'the %s screen shows the refusal rather than a permanent "Loading…"',
+    async (_name, route) => {
+      fetchAdminOrganizations.mockRejectedValue(
+        new ApiError(403, { error: 'not_platform_administrator' })
+      )
+      fetchTenantDeletions.mockRejectedValue(
+        new ApiError(403, { error: 'not_platform_administrator' })
+      )
+
+      renderAdmin({ route })
+
+      expect(
+        await screen.findByText(/platform-administrator access/i)
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    }
+  )
+})
+
+describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
+  it('previews what will be deleted, then requires the organization’s own name typed exactly', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchDeletionPreview.mockResolvedValue(PREVIEW)
+
+    renderAdmin()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    // ADMIN-5: "names exactly what will be deleted before it happens" — the
+    // preview's own counts are read into the confirmation itself.
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('2 course(s)')
+    expect(dialog).toHaveTextContent('5 student record(s)')
+
+    // Typing the wrong name keeps the dialog open and never calls through.
+    const field = within(dialog).getByLabelText('Organization name')
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    expect(
+      await screen.findByText('Type the name exactly to confirm.')
+    ).toBeInTheDocument()
+    expect(deleteTenant).not.toHaveBeenCalled()
+
+    // The exact name proceeds.
+    fireEvent.change(field, { target: { value: 'A Real Tenant' } })
+    deleteTenant.mockResolvedValue({ deleted: true })
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(deleteTenant).toHaveBeenCalledWith('org-1', 'A Real Tenant')
+    )
+  })
+
+  it('a mismatched name server-side (e.g. a race with a rename) surfaces as a refusal, not a silent no-op', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchDeletionPreview.mockResolvedValue(PREVIEW)
+    deleteTenant.mockRejectedValue(
+      new ApiError(409, { error: 'confirmation_name_mismatch' })
+    )
+
+    renderAdmin()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Organization name'), {
+      target: { value: 'A Real Tenant' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/did not match/i)
+  })
+})
+
+describe('Admin — WEB-33’s own screens', () => {
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 1_500_000,
+          estimatedCostMicros: 0,
+          callCount: 3,
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  // Review finding — a delete started from the organization's *own*
+  // address left the operator on that address, which the refreshed read no
+  // longer matches: a successful deletion rendered "Not found".
+  it('a deletion started from an organization’s own screen returns to the list, not a not-found page', async () => {
+    fetchDeletionPreview.mockResolvedValue(PREVIEW)
+    deleteTenant.mockResolvedValue(undefined)
+    fetchTenantDeletions.mockResolvedValue([])
+
+    renderAdmin({
+      route: { kind: 'admin-organization', organizationId: 'org-1' },
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Organization name'), {
+      target: { value: 'A Real Tenant' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(deleteTenant).toHaveBeenCalledWith('org-1', 'A Real Tenant')
+    })
+    expect(await screen.findByTestId('admin-organizations')).toBeInTheDocument()
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+  })
+
+  // `'platform-admin'` itself is never rendered past its own effect —
+  // it resolves to `'admin-organizations'` and replaces, mirroring
+  // `App.tsx`'s own `'home'` resolution (`Admin.tsx`'s own module comment).
+  it('resolves the console’s own entry point to the organizations list', async () => {
+    renderAdmin({ route: { kind: 'platform-admin' } })
+
+    expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
+  })
+
+  it('opens an organization’s own detail screen by name, and back returns to the list', async () => {
+    renderAdmin()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'A Real Tenant' })
+    )
+
+    expect(
+      await screen.findByTestId('admin-org-detail-org-1')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '← Organizations' }))
+
+    expect(await screen.findByTestId('admin-organizations')).toBeInTheDocument()
+  })
+
+  // WEB-33: an address naming an organization that does not exist gets the
+  // same not-found treatment the rest of the panel gives, not an empty
+  // screen — proven here by asking for a screen the fetched list has no
+  // matching entry for at all.
+  it('an organization id absent from the fetched list renders not-found', async () => {
+    renderAdmin({
+      route: { kind: 'admin-organization', organizationId: 'no-such-org' },
+    })
+
+    expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+})

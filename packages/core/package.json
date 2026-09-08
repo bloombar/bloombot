@@ -1,0 +1,31 @@
+{
+  "name": "@bloombot/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The surface-agnostic answering pipeline: routing, the daily allowance and the model port (CORE-1..6).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@bloombot/db": "*",
+    "@bloombot/jobs": "*",
+    "@bloombot/logger": "*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^13.0.3"
+  }
+}

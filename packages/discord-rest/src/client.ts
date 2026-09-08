@@ -1,0 +1,956 @@
+/**
+ * `DiscordRestClient` (TEN-4, SRV-6) — the port the install flow and, this
+ * slice, server scaffolding depend on, and `createDiscordRestClient`, the
+ * real implementation behind it. TEN-4's own three calls — exchange an
+ * authorization code for a user access token, read that user's own guild
+ * list (to check the `MANAGE_GUILD`/owner bit — `permissions.ts`), and read
+ * the bot's own guild list (to confirm the bot the exchange just installed
+ * is actually a member of the guild being claimed) — plus SRV-6's four: list
+ * a guild's channels and roles, and create a category or a channel. Every
+ * request's base URL comes from `CONFIG.DISCORD_API_BASE`/
+ * `CONFIG.DISCORD_OAUTH_BASE` (or an explicit override, for a test) — never a
+ * literal in this file, the same `packages/openai`'s own `client.ts` holds
+ * itself to (QA-2), proven here by `tests/no-vendor-hostname.test.ts`.
+ *
+ * `listGuildMembers` (ROST-10/ROST-11) is this file's one addition since
+ * SRV-6..8: it reads a guild's member list, so a roster-import job
+ * (`apps/worker/src/handlers/roster-import.ts`) can resolve a roster row's
+ * self-reported Discord handle to the real member — and, when it resolves,
+ * the real snowflake — the same lookup `discord_manager.py`'s own
+ * `get_user_id` performs today (matching a member's username or display
+ * name, case-insensitively). It is read-only, the same shape
+ * `listGuildChannels`/`listGuildRoles` already are, and does not weaken
+ * SRV-8's structural "never delete or edit": nothing about a member's own
+ * roles or nickname is written by this call or any caller of it.
+ *
+ * SRV-8's "never delete" is made structural here, not merely by convention:
+ * this interface has no method that edits or removes a category or channel
+ * at all — a category or channel this client creates cannot later be
+ * renamed or deleted through it, whatever a handler built on top of it might
+ * otherwise want to do. `apps/worker/src/handlers/discord-scaffold.ts` is
+ * this slice's only caller of the four guild-write calls below, and it is
+ * refused the means to delete anything by this file, not merely asked
+ * nicely not to.
+ *
+ * `grantChannelMemberAccess` (rework finding 5 of the ROST-9..12 rework) is
+ * this file's one deliberate exception, added for `roster-import.ts`'s own
+ * ROST-5: a student who joins the Discord server *after* their channel was
+ * created (the common case — ROST-3's own workflow is channels ahead of
+ * arrival) must still end up with read/send access on it once they do,
+ * which needs *some* write to a channel this client did not just create.
+ * The exception is deliberately as narrow as Discord's own API allows it to
+ * be: `PUT /channels/{id}/permissions/{overwriteId}` sets exactly one
+ * target's own `allow`/`deny` bits and nothing else about the channel —
+ * not its name, not its parent category, not any other target's own
+ * overwrite. It cannot rename, move, archive or delete a channel or
+ * category, so SRV-8's own guarantee (a channel or category's *shape and
+ * existence*, once created, are never rewritten or removed through this
+ * client) is unbroken; what SRV-8 never covered in the first place is *who
+ * can read* a channel already granted to admins, and that is exactly the
+ * one thing this method now can, narrowly, change. See `docs/DECISIONS.md`
+ * for the fuller reasoning, including why the alternative (refusing ROST-5
+ * outright) was rejected.
+ *
+ * `createGuildRole` (SRV-10) is this file's other guild-write call: a
+ * course names an admins role and a students role, and a name the guild
+ * lacks is created rather than left for every channel overwrite naming it
+ * to silently omit the grant. `POST /guilds/{id}/roles` with `permissions:
+ * '0'` — the role exists only to be named in a channel overwrite, never to
+ * carry any of Discord's own server-wide powers, so nothing about it asks
+ * for one. `discord-scaffold.ts` and `roster-import.ts` are this method's
+ * only callers, and neither this client nor either of them ever renames or
+ * edits a role it (or anyone else) already created — SRV-8's "never
+ * delete or edit" extended to roles the same way it already covers
+ * categories and channels.
+ */
+
+import { CONFIG } from '@bloombot/config'
+
+import {
+  allowBotOverwrite,
+  allowMemberOverwrite,
+} from './channel-overwrites.js'
+import type { DiscordPermissionOverwrite } from './channel-overwrites.js'
+import {
+  getJson,
+  postForm,
+  postJson,
+  putJson,
+  type RequestOptions,
+} from './http.js'
+import type { DiscordGuildSummary } from './permissions.js'
+
+/** What a successful token exchange returns. */
+export interface DiscordOAuthToken {
+  accessToken: string
+  tokenType: string
+  scope: string
+  expiresIn: number
+}
+
+/**
+ * A short, human-readable cause for the statuses an operator actually meets,
+ * appended to `DiscordRequestError`'s message.
+ *
+ * Deliberately built from the status alone and never from Discord's response
+ * body: the body can carry an OAuth authorization code, which is why this
+ * class keeps it non-enumerable in the first place. A bare "failed with
+ * status 403" told an operator nothing about what to change; this says what
+ * to look at without repeating anything Discord echoed back.
+ */
+function explainDiscordStatus(status: number): string {
+  switch (status) {
+    case 401:
+      return ' — the bot token was rejected. Check BOT_TOKEN, and that the token was not reset in the developer portal.'
+    case 403:
+      return ' — Discord refused this on permissions. Either the bot is missing a permission the action needs (scaffolding needs Manage Channels and Manage Roles), or a channel or category overwrite denies the bot itself, or the role it is trying to manage sits above the bot in the guild role order.'
+    case 404:
+      return ' — Discord has no such guild, channel, role or member. It may have been deleted, or the bot may not be in that server.'
+    case 429:
+      return ' — rate limited. This one clears on its own and is retried.'
+    default:
+      return ''
+  }
+}
+
+/** Thrown when Discord answers a call with a non-2xx status — callers decide how to treat it (TEN-4's callback refuses the whole install the same way it refuses an unknown state); this file adds no interpretation of its own. */
+export class DiscordRequestError extends Error {
+  readonly status: number
+  readonly body: unknown
+
+  /**
+   * Whether retrying could ever succeed.
+   *
+   * A `403` means a permission the bot does not have; a `404` means something
+   * that is not there; a `400` means a request Discord will reject the same
+   * way every time. Retrying those is not resilience, it is four more
+   * identical failures and a log nobody can read — which is exactly what a
+   * scaffold run did in the field when a category locked the bot out.
+   *
+   * `429` is the exception: rate limiting is the one 4xx that genuinely
+   * clears on its own. Everything 5xx stays retryable.
+   */
+  readonly permanent: boolean
+
+  constructor(status: number, body: unknown) {
+    super(
+      `Discord request failed with status ${status}${explainDiscordStatus(status)}`
+    )
+    this.name = 'DiscordRequestError'
+    this.status = status
+    this.permanent = status >= 400 && status < 500 && status !== 429
+    // `body` (an OAuth `error`/`error_description` pair, typically) is
+    // deliberately not interpolated into `message` — the caller that wants
+    // it can read `.body`, but a log line built from `.message` alone must
+    // never end up carrying whatever Discord echoed back, which on a token
+    // exchange failure can include the authorization code itself.
+    //
+    // Finding 5 of the TEN-4..6 rework: keeping `body` out of `message`
+    // was not enough — pino's default `err` serializer
+    // (`errorMiddleware`'s `logger.error({ err: error }, ...)`) copies an
+    // error's own *enumerable* properties, `body` included, straight into
+    // the log line regardless of what `message` says. `Object.defineProperty`
+    // with `enumerable: false` is what actually keeps it out: `error.body`
+    // still reads normally for the one caller that is supposed to see it
+    // (`routes/discord-servers.ts`'s own token-exchange `catch`), but
+    // `JSON.stringify`, `pino.stdSerializers.err`, and anything else that
+    // walks an object's own enumerable keys skips it.
+    Object.defineProperty(this, 'body', {
+      value: body,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
+}
+
+/**
+ * A human-readable reason for a failed Discord write — every failure report
+ * in `apps/worker`'s two handlers (`discord-scaffold.ts`'s `unresolvedRoles`,
+ * `roster-import.ts`'s `unresolvedRoles`/`channelsFailed`/
+ * `channelAccessGrantFailed`) uses this, rather than each duplicating its
+ * own copy the way `resolveRoleId`/`normalizeName` are deliberately
+ * duplicated across those two files (their own module comments explain why
+ * — an app does not share *handler* logic across files via a package it
+ * does not own). A parameterless error formatter is not handler logic; it
+ * belongs beside `DiscordRequestError` itself, the one type it actually
+ * reads.
+ *
+ * SRV-10's own rework: this used to return only
+ * `` `Discord responded with status ${error.status}` ``, which could not
+ * tell a bot missing Manage Roles apart from a role sitting above the bot
+ * in the guild's role order — both `403`s. `DiscordRequestError.message`
+ * already carries `explainDiscordStatus`'s own human text (which names
+ * exactly those causes) and, by that class's own constructor, never
+ * carries `.body` — so it is exactly as safe to surface as the bare status
+ * was, and strictly more useful.
+ */
+export function describeDiscordError(error: unknown): string {
+  if (error instanceof DiscordRequestError) {
+    return error.message
+  }
+  return error instanceof Error ? error.message : 'an unknown error'
+}
+
+/**
+ * SRV-10: a course role name (`adminsRole`/`studentsRole`) a handler tried
+ * to create because the guild had nothing matching it, and Discord refused
+ * on a permanent error — `reason` is `describeDiscordError`'s own
+ * human-readable cause. Shared between `discord-scaffold.ts` (which
+ * resolves/creates both role names) and `roster-import.ts` (which resolves
+ * only `adminsRole`) rather than duplicated: unlike the two files' own
+ * `resolveOrCreateRole` logic, a plain two-field type carries no behaviour
+ * to diverge, so there is nothing here for either file to own separately.
+ */
+export interface UnresolvedRoleEntry {
+  role: string
+  reason: string
+}
+
+/** A category or text channel, as SRV-6's guild-write calls read and return it — Discord's own channel object, narrowed to the fields a scaffold run matches and creates by (`type`, `name`, `parentId`), tolerant of fields this package does not read. */
+export interface DiscordChannel {
+  id: string
+  /** Discord's own channel-type enum — `4` (`GUILD_CATEGORY`) or `0` (`GUILD_TEXT`) are the only two this package ever creates or reads meaningfully; see `CHANNEL_TYPE_CATEGORY`/`CHANNEL_TYPE_TEXT` below. */
+  type: number
+  name: string
+  /** The owning category's id, or `null` for a category itself (or an uncategorized channel, which SRV-6 never creates). */
+  parentId: string | null
+  /**
+   * Finding 4 of the SRV-6..8 rework: this row's own permission overwrites,
+   * as Discord's channel object actually carries them — `[]` when the field
+   * is missing or unusable, not merely when Discord sent an empty list, so a
+   * caller cannot tell "no overwrites" from "the response didn't say"
+   * without also checking for that itself. `apps/worker`'s scaffold handler
+   * reads this for a category or channel `listGuildChannels` already found
+   * (`already_present`) to report what its privacy actually is, since
+   * `SRV-8`'s structural no-edit means this package never sends a write for
+   * one of those. Optional so an in-memory `DiscordRestClient` fake that
+   * predates this field (`apps/api/tests/helpers/fake-discord-rest-client.ts`,
+   * which never calls SRV-6's guild-write endpoints at all) keeps satisfying
+   * this interface without also having to fabricate one.
+   */
+  permissionOverwrites?: DiscordPermissionOverwrite[]
+}
+
+/** A guild role, as `listGuildRoles` returns it — enough for `apps/worker`'s scaffold handler to resolve a course's `adminsRole`/`studentsRole` names to the ids `denyEveryoneOverwrite`/`allowRoleOverwrite` (`channel-overwrites.ts`) need. */
+export interface DiscordRole {
+  id: string
+  name: string
+}
+
+/**
+ * The authenticated user's own identity (LINK-7) — `GET /users/@me`,
+ * `Authorization: Bearer <accessToken>`. Narrowed to the two fields
+ * `packages/auth`'s `person-link.ts` needs: `id` is the real snowflake
+ * Discord's OAuth just proved (the value `completeDiscordPersonLink` binds
+ * an identity to), `username` is only ever shown back to the person
+ * connecting, never persisted.
+ */
+export interface DiscordIdentifiedUser {
+  id: string
+  username: string
+}
+
+/**
+ * A guild member, as `listGuildMembers` returns it (ROST-10/ROST-11) —
+ * `id` is the member's real snowflake (Discord's `user.id`), `username` is
+ * their account name (`user.username`), and `displayName` is the name a
+ * roster's `Discord` column is most likely to actually contain: a guild
+ * nickname (`nick`) when the member has set one, falling back to their
+ * global display name (`user.global_name`), and finally their username —
+ * the same fallback chain discord.py's own `Member.display_name` property
+ * uses, which is why `discord_manager.py`'s `get_user_id` matches against
+ * it (`match_display_names=True`) as well as the bare username.
+ */
+export interface DiscordGuildMember {
+  id: string
+  username: string
+  displayName: string
+}
+
+export interface DiscordRestClient {
+  /**
+   * Exchange an authorization code for a user access token (RFC 6749 §4.1.3,
+   * with PKCE's `code_verifier` — RFC 7636 §4.5). The token this returns is
+   * used immediately by the caller and then discarded (TEN-4: "nothing needs
+   * it, and storing it is a liability") — this client itself never persists
+   * or logs it either.
+   */
+  exchangeAuthorizationCode(input: {
+    code: string
+    redirectUri: string
+    codeVerifier: string
+  }): Promise<DiscordOAuthToken>
+
+  /** The authenticated user's own guilds — `Authorization: Bearer <accessToken>`. Each entry's `owner`/`permissions` is what TEN-4's admin check reads (`permissions.ts#administersGuild`). */
+  getUserGuilds(userAccessToken: string): Promise<DiscordGuildSummary[]>
+
+  /** The authenticated user's own identity (LINK-7) — `GET /users/@me`. Used by the person-link connect flow to learn the real snowflake Discord's own OAuth just proved; never used by the install flow, which only ever needs the guild list above. */
+  getCurrentUser(userAccessToken: string): Promise<DiscordIdentifiedUser>
+
+  /** The bot's own guilds — `Authorization: Bot <botToken>`. Used to confirm the bot is actually a member of the guild an install is being claimed for, not merely that the installing user administers it. */
+  getBotGuilds(botToken: string): Promise<DiscordGuildSummary[]>
+
+  /** Every category and channel currently in a guild (SRV-6) — `apps/worker`'s scaffold handler matches a course's declared categories/channels against this list by name before creating anything. `Authorization: Bot <botToken>` — guild management is bot-only, unlike the OAuth-scoped calls above. */
+  listGuildChannels(
+    botToken: string,
+    guildId: string
+  ): Promise<DiscordChannel[]>
+
+  /** Every role in a guild (SRV-2) — resolves a course's `adminsRole`/`studentsRole` names to ids. A name that resolves to nothing is the caller's to report (SRV-2's "skipped rather than treated as fatal"), not this method's — it simply omits what it does not find, the same as the real endpoint. */
+  /**
+   * The bot's own user id, from `/users/@me`.
+   *
+   * Scaffolding needs it to grant itself an overwrite on a category it is
+   * about to close to `@everyone` — see `allowBotOverwrite`. Asked of Discord
+   * rather than read from configuration: a bot user's id equals its
+   * application id today, but an operator who mistypes `BOT_APP_ID` would
+   * otherwise get a category the bot silently cannot write in.
+   */
+  /**
+   * Grant the bot itself view/send/manage on one channel or category.
+   *
+   * Repair, not routine setup: a category created before `allowBotOverwrite`
+   * existed denies `@everyone` and names the bot nowhere, so the bot cannot
+   * create channels inside a category it made itself. Adopting that category
+   * on a later run has to fix it or fail the same way forever.
+   *
+   * Writes only the bot's own entry — `PUT /channels/{id}/permissions/{id}`
+   * replaces one target's overwrite and leaves every other untouched, so a
+   * course's own admins/students grants and its `@everyone` denial survive.
+   */
+  grantBotChannelAccess(
+    botToken: string,
+    channelId: string,
+    botUserId: string
+  ): Promise<void>
+  getBotUserId(botToken: string): Promise<string>
+  listGuildRoles(botToken: string, guildId: string): Promise<DiscordRole[]>
+
+  /** Every member of a guild (ROST-10/ROST-11) — `apps/worker`'s roster-import handler matches a roster row's self-reported `Discord` handle against this list (username or display name, case-insensitively), the same lookup `discord_manager.py`'s own `get_user_id` performs. A handle matching nobody here is the caller's to report (ROST-12), not this method's. */
+  listGuildMembers(
+    botToken: string,
+    guildId: string
+  ): Promise<DiscordGuildMember[]>
+
+  /**
+   * Create a category (SRV-1, SRV-2) with `permissionOverwrites` applied at
+   * creation — `discord_manager.py`'s own create-then-`category.edit(
+   * overwrites=...)` two-step, done here in the one call Discord's create
+   * endpoint already supports. See this file's own module comment for why
+   * SRV-8's "never delete" needs no guard here: there is no companion method
+   * that edits or removes a category this (or any previous) call created.
+   */
+  createGuildCategory(
+    botToken: string,
+    guildId: string,
+    input: { name: string; permissionOverwrites: DiscordPermissionOverwrite[] }
+  ): Promise<DiscordChannel>
+
+  /**
+   * Create a text channel inside a category (SRV-3, SRV-4). `permissionOverwrites`
+   * omitted (the common case) lets the channel inherit its category's — Discord's
+   * own permission cascade computes that from the category alone, so a
+   * channel with no overwrites of its own is not a distinct case this client
+   * has to construct. Supplied only for an admin-only channel (SRV-3), whose
+   * own overwrite must differ from its category's.
+   */
+  createGuildChannel(
+    botToken: string,
+    guildId: string,
+    input: {
+      name: string
+      parentId: string
+      permissionOverwrites?: DiscordPermissionOverwrite[]
+    }
+  ): Promise<DiscordChannel>
+
+  /**
+   * Grant one guild member read/send access on a channel that already
+   * exists (ROST-5, rework finding 5) — `PUT
+   * /channels/{channelId}/permissions/{memberId}`, Discord's own "Edit
+   * Channel Permissions" call, scoped here to exactly a member overwrite
+   * (`channel-overwrites.ts`'s own `allowMemberOverwrite` bits, `type: 1`):
+   * no `name`, no `parentId`, nothing that could rename, move or otherwise
+   * touch the channel itself. This file's own module comment has the fuller
+   * reasoning for why this one write does not reopen SRV-8's "never delete
+   * or edit a category or channel". `roster-import.ts` is this package's
+   * only caller: a re-import that finds a student's channel already
+   * present, and can now resolve a handle it could not at creation time,
+   * uses this to repair the one thing "never delete or edit" left
+   * permanently broken for a student who joined the server late.
+   */
+  grantChannelMemberAccess(
+    botToken: string,
+    channelId: string,
+    memberId: string
+  ): Promise<void>
+
+  /**
+   * ROST-15's own addition: write one already-built overwrite verbatim to a
+   * channel or category that already exists — `PUT
+   * /channels/{channelId}/permissions/{overwrite.id}`, the identical
+   * single-target call `grantBotChannelAccess`/`grantChannelMemberAccess`
+   * above already make, generalized to whichever overwrite the caller has
+   * already decided it needs rather than one this client builds for it.
+   * Still exactly SRV-8's one deliberate exception (this file's own module
+   * comment): it replaces one target's own `allow`/`deny` and nothing else
+   * about the channel — no `name`, no `parentId`, nothing that could rename,
+   * move or delete it.
+   *
+   * `roster-import.ts` is this method's only caller today: repairing a
+   * pre-existing student category's `@everyone` denial or admins-role grant
+   * when this run adopts one it did not create itself (ROST-15) — a
+   * category `discordServers.scaffold`'s own SRV-9 repair never sees, since
+   * it is never declared in `course.categories` at all.
+   */
+  putChannelPermissionOverwrite(
+    botToken: string,
+    channelId: string,
+    overwrite: DiscordPermissionOverwrite
+  ): Promise<void>
+
+  /**
+   * Create a role (SRV-10) — `POST /guilds/{guildId}/roles`, sent with
+   * `permissions: '0'` so the created role carries none of Discord's own
+   * server-wide powers; it exists only to be named in a channel overwrite
+   * `discord-scaffold.ts`/`roster-import.ts` build. Neither `name` nor
+   * anything else about it is ever changed again through this client — the
+   * same "never delete or edit" this file's own module comment already
+   * holds `createGuildCategory`/`createGuildChannel` to.
+   */
+  createGuildRole(
+    botToken: string,
+    guildId: string,
+    input: { name: string }
+  ): Promise<DiscordRole>
+}
+
+export interface CreateDiscordRestClientOptions {
+  /** The Discord application id — Discord's "client id" and "application id" are the same value. */
+  clientId: string
+  /** The Discord application's OAuth client secret. Never logged, never defaulted — a missing value is the caller's mistake to surface, not this adapter's to guess at. */
+  clientSecret: string
+  /** Defaults to `CONFIG.DISCORD_API_BASE` (QA-2) — read here, at construction, not at module load (PLAT-5). */
+  apiBase?: string
+  /** Defaults to `CONFIG.DISCORD_OAUTH_BASE`. */
+  oauthBase?: string
+  /** Defaults to 10s. */
+  timeoutMs?: number
+  /** Defaults to the global `fetch` — overridable so a test can point every call at a loopback fake. */
+  fetchFn?: typeof fetch
+}
+
+const DEFAULT_TIMEOUT_MS = 10_000
+
+// Finding 3 of the TEN-4..6 rework: Discord's own `/users/@me/guilds`
+// endpoint (whether read with a `Bearer` or a `Bot` token) returns one page
+// at a time — up to `limit` entries, `200` being both Discord's own default
+// and its own maximum — sorted ascending by id, paged forward with an
+// `after=<last id seen>` cursor. Reading only the first page meant an
+// install into any guild past the 200th the caller (or the bot) belongs to
+// was refused exactly the way "you do not administer this server" is
+// refused — silently, and permanently, since nothing about that guild ever
+// changes to make a retry succeed.
+const GUILD_LIST_PAGE_LIMIT = 200
+// A page bound, not a guild-count bound: this is "how many round trips
+// `getGuilds` will make before giving up and returning what it has",
+// generous enough that no real account or bot approaches it (50 pages *
+// 200 = 10,000 guilds) while still keeping a misbehaving upstream — one
+// that, say, never stops returning full pages — from turning a single call
+// into an unbounded loop.
+const GUILD_LIST_MAX_PAGES = 50
+
+// `GET /guilds/{id}/members` (ROST-10/ROST-11) is paged the same way
+// `/users/@me/guilds` is — ascending by id, `after=<last id seen>` — but
+// Discord's own limit and maximum for this endpoint is `1000`, not `200`.
+// The same reasoning as `GUILD_LIST_PAGE_LIMIT`/`GUILD_LIST_MAX_PAGES`
+// above applies to the two constants below: a page bound generous enough
+// that no real course's guild approaches it (100 pages * 1000 = 100,000
+// members), not a per-course member-count bound.
+const GUILD_MEMBER_PAGE_LIMIT = 1000
+const GUILD_MEMBER_MAX_PAGES = 100
+
+// Discord's own channel-type enum (API v10) — the two values SRV-6 ever
+// creates. `createGuildCategory`/`createGuildChannel` send exactly one of
+// these, never a caller-supplied type: this package creates a course's
+// declared structure, not an arbitrary channel.
+const CHANNEL_TYPE_GUILD_TEXT = 0
+const CHANNEL_TYPE_GUILD_CATEGORY = 4
+
+function stripTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+/** Parse a token-exchange success body into `DiscordOAuthToken`'s camelCase shape — Discord's own JSON uses snake_case. */
+function parseOAuthToken(body: unknown): DiscordOAuthToken {
+  const payload = body as {
+    access_token?: unknown
+    token_type?: unknown
+    scope?: unknown
+    expires_in?: unknown
+  }
+  if (
+    typeof payload.access_token !== 'string' ||
+    typeof payload.token_type !== 'string'
+  ) {
+    throw new Error(
+      'Discord token exchange returned a 2xx response with no usable access token'
+    )
+  }
+  return {
+    accessToken: payload.access_token,
+    tokenType: payload.token_type,
+    scope: typeof payload.scope === 'string' ? payload.scope : '',
+    expiresIn: typeof payload.expires_in === 'number' ? payload.expires_in : 0,
+  }
+}
+
+/** Parse a `GET /users/@me` success body (LINK-7) — tolerant of every field this package does not read (avatar, discriminator, …). */
+function parseIdentifiedUser(body: unknown): DiscordIdentifiedUser {
+  const payload = body as { id?: unknown; username?: unknown }
+  if (typeof payload.id !== 'string' || typeof payload.username !== 'string') {
+    throw new Error(
+      'Discord /users/@me returned a 2xx response with no usable user'
+    )
+  }
+  return { id: payload.id, username: payload.username }
+}
+
+/** Parse a guild-list success body — an array of guild summaries, tolerant of fields this package does not read. */
+function parseGuildList(body: unknown): DiscordGuildSummary[] {
+  if (!Array.isArray(body)) {
+    throw new Error(
+      'Discord guild list returned a 2xx response with no usable JSON array'
+    )
+  }
+  return body as DiscordGuildSummary[]
+}
+
+/**
+ * Parse one overwrite entry out of a channel's own `permission_overwrites` —
+ * tolerant of a malformed or missing entry (dropped, not thrown on): this is
+ * read-side, best-effort data for a report (finding 4 of the SRV-6..8
+ * rework), not a value this package's own writes depend on being exact.
+ */
+function parsePermissionOverwrite(
+  entry: unknown
+): DiscordPermissionOverwrite | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const payload = entry as {
+    id?: unknown
+    type?: unknown
+    allow?: unknown
+    deny?: unknown
+  }
+  if (typeof payload.id !== 'string') return undefined
+  return {
+    id: payload.id,
+    type: payload.type === 1 ? 1 : 0,
+    allow: typeof payload.allow === 'string' ? payload.allow : '0',
+    deny: typeof payload.deny === 'string' ? payload.deny : '0',
+  }
+}
+
+/** `[]` for a missing or non-array `permission_overwrites` — see `DiscordChannel.permissionOverwrites`'s own doc comment for why that is indistinguishable from "really has none" on purpose. */
+function parsePermissionOverwrites(
+  value: unknown
+): DiscordPermissionOverwrite[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(parsePermissionOverwrite)
+    .filter((entry): entry is DiscordPermissionOverwrite => entry !== undefined)
+}
+
+/** Parse one Discord channel object — snake_case `parent_id` into this package's own camelCase `parentId`, tolerant of every other field Discord sends and this package does not read. */
+function parseChannel(body: unknown): DiscordChannel {
+  const payload = body as {
+    id?: unknown
+    type?: unknown
+    name?: unknown
+    parent_id?: unknown
+    permission_overwrites?: unknown
+  }
+  if (
+    typeof payload.id !== 'string' ||
+    typeof payload.type !== 'number' ||
+    typeof payload.name !== 'string'
+  ) {
+    throw new Error(
+      'Discord channel response returned a 2xx response with no usable channel'
+    )
+  }
+  return {
+    id: payload.id,
+    type: payload.type,
+    name: payload.name,
+    parentId: typeof payload.parent_id === 'string' ? payload.parent_id : null,
+    permissionOverwrites: parsePermissionOverwrites(
+      payload.permission_overwrites
+    ),
+  }
+}
+
+/** Parse a channel-list success body (`GET /guilds/{id}/channels`) — every category and channel in a guild, in the shape `parseChannel` gives one. */
+function parseChannelList(body: unknown): DiscordChannel[] {
+  if (!Array.isArray(body)) {
+    throw new Error(
+      'Discord channel list returned a 2xx response with no usable JSON array'
+    )
+  }
+  return body.map(parseChannel)
+}
+
+/** Parse a role-list success body (`GET /guilds/{id}/roles`) — tolerant of fields this package does not read (colour, permissions, position, ...). */
+function parseRoleList(body: unknown): DiscordRole[] {
+  if (!Array.isArray(body)) {
+    throw new Error(
+      'Discord role list returned a 2xx response with no usable JSON array'
+    )
+  }
+  return body as DiscordRole[]
+}
+
+/** Parse a `POST /guilds/{id}/roles` success body (SRV-10) — narrowed to the `id`/`name` a caller needs to name this role in a later channel overwrite, tolerant of every other field Discord sends (colour, permissions, position, ...). */
+function parseRole(body: unknown): DiscordRole {
+  const payload = body as { id?: unknown; name?: unknown }
+  if (typeof payload.id !== 'string' || typeof payload.name !== 'string') {
+    throw new Error(
+      'Discord role creation returned a 2xx response with no usable role'
+    )
+  }
+  return { id: payload.id, name: payload.name }
+}
+
+/** Parse one guild-member entry (`GET /guilds/{id}/members`) — Discord nests the account itself under `user`, and a member's own nickname (`nick`) and the account's `global_name` are both optional, so `displayName`'s own fallback chain (this file's own `DiscordGuildMember` doc comment) is resolved here, once, rather than by every caller. Tolerant of a malformed entry (dropped, not thrown on) — the same "best-effort data for a report" treatment `parsePermissionOverwrite` gives a channel's own overwrites. */
+function parseGuildMember(entry: unknown): DiscordGuildMember | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const payload = entry as { user?: unknown; nick?: unknown }
+  if (typeof payload.user !== 'object' || payload.user === null)
+    return undefined
+  const user = payload.user as {
+    id?: unknown
+    username?: unknown
+    global_name?: unknown
+  }
+  if (typeof user.id !== 'string' || typeof user.username !== 'string') {
+    return undefined
+  }
+  const nick = typeof payload.nick === 'string' ? payload.nick : undefined
+  const globalName =
+    typeof user.global_name === 'string' ? user.global_name : undefined
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: nick ?? globalName ?? user.username,
+  }
+}
+
+/** Parse a guild-member-list success body — `[]` for anything not shaped as Discord's own array of member objects, and drops (never throws on) any individual entry `parseGuildMember` cannot make sense of. */
+function parseGuildMemberList(body: unknown): DiscordGuildMember[] {
+  if (!Array.isArray(body)) return []
+  return body
+    .map(parseGuildMember)
+    .filter((member): member is DiscordGuildMember => member !== undefined)
+}
+
+/** Build a `DiscordRestClient` backed by the real Discord API (or a loopback fake standing in for it, via `apiBase`/`oauthBase`/`fetchFn`). */
+export function createDiscordRestClient(
+  options: CreateDiscordRestClientOptions
+): DiscordRestClient {
+  const apiBase = stripTrailingSlashes(
+    options.apiBase ?? CONFIG.DISCORD_API_BASE
+  )
+  const oauthBase = stripTrailingSlashes(
+    options.oauthBase ?? CONFIG.DISCORD_OAUTH_BASE
+  )
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const fetchFn = options.fetchFn ?? fetch
+  const requestOptions: RequestOptions = { fetchFn, timeoutMs }
+
+  /**
+   * Read every page of `/users/@me/guilds` (finding 3 of the TEN-4..6
+   * rework) — the module comment above `GUILD_LIST_PAGE_LIMIT` explains
+   * why a single page is not enough. Stops the moment a page comes back
+   * shorter than the limit (Discord's own signal that it was the last one)
+   * rather than always making `GUILD_LIST_MAX_PAGES` requests.
+   */
+  async function getGuilds(
+    authorization: string
+  ): Promise<DiscordGuildSummary[]> {
+    const guilds: DiscordGuildSummary[] = []
+    let after: string | undefined
+    for (let page = 0; page < GUILD_LIST_MAX_PAGES; page++) {
+      const query = new URLSearchParams({
+        limit: String(GUILD_LIST_PAGE_LIMIT),
+      })
+      if (after) query.set('after', after)
+      const response = await getJson(
+        `${apiBase}/users/@me/guilds?${query.toString()}`,
+        authorization,
+        requestOptions
+      )
+      if (!response.ok)
+        throw new DiscordRequestError(response.status, response.body)
+      const pageGuilds = parseGuildList(response.body)
+      guilds.push(...pageGuilds)
+      if (pageGuilds.length < GUILD_LIST_PAGE_LIMIT) break
+      after = pageGuilds[pageGuilds.length - 1]?.id
+      // No `id` to page from — nothing left to ask for, however this page
+      // came to be exactly `GUILD_LIST_PAGE_LIMIT` long.
+      if (!after) break
+    }
+    return guilds
+  }
+
+  return {
+    async exchangeAuthorizationCode(input): Promise<DiscordOAuthToken> {
+      const response = await postForm(
+        `${oauthBase}/token`,
+        {
+          grant_type: 'authorization_code',
+          client_id: options.clientId,
+          client_secret: options.clientSecret,
+          code: input.code,
+          redirect_uri: input.redirectUri,
+          code_verifier: input.codeVerifier,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseOAuthToken(response.body)
+    },
+
+    getUserGuilds: (userAccessToken) => getGuilds(`Bearer ${userAccessToken}`),
+    getBotGuilds: (botToken) => getGuilds(`Bot ${botToken}`),
+
+    async getCurrentUser(userAccessToken): Promise<DiscordIdentifiedUser> {
+      const response = await getJson(
+        `${apiBase}/users/@me`,
+        `Bearer ${userAccessToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseIdentifiedUser(response.body)
+    },
+
+    async listGuildChannels(botToken, guildId): Promise<DiscordChannel[]> {
+      const response = await getJson(
+        `${apiBase}/guilds/${guildId}/channels`,
+        `Bot ${botToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseChannelList(response.body)
+    },
+
+    async getBotUserId(botToken): Promise<string> {
+      const response = await getJson(
+        `${apiBase}/users/@me`,
+        `Bot ${botToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      const id = (response.body as { id?: unknown } | null)?.id
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new Error(
+          'Discord returned no id for the bot user — /users/@me answered without one'
+        )
+      }
+      return id
+    },
+
+    async listGuildRoles(botToken, guildId): Promise<DiscordRole[]> {
+      const response = await getJson(
+        `${apiBase}/guilds/${guildId}/roles`,
+        `Bot ${botToken}`,
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseRoleList(response.body)
+    },
+
+    async listGuildMembers(botToken, guildId): Promise<DiscordGuildMember[]> {
+      const members: DiscordGuildMember[] = []
+      let after: string | undefined
+      for (let page = 0; page < GUILD_MEMBER_MAX_PAGES; page++) {
+        const query = new URLSearchParams({
+          limit: String(GUILD_MEMBER_PAGE_LIMIT),
+        })
+        if (after) query.set('after', after)
+        const response = await getJson(
+          `${apiBase}/guilds/${guildId}/members?${query.toString()}`,
+          `Bot ${botToken}`,
+          requestOptions
+        )
+        if (!response.ok) {
+          throw new DiscordRequestError(response.status, response.body)
+        }
+        // Rework finding 9: `parseGuildMemberList` drops (never throws on) a
+        // malformed entry — the right behavior for the *list* this method
+        // returns, but comparing that already-filtered length against
+        // `GUILD_MEMBER_PAGE_LIMIT` was the wrong question: one bad entry on
+        // an otherwise-full page made it read as a short page, and
+        // pagination stopped a page early — a 1200-member guild with one
+        // malformed entry on its first page returned 999 members, not 1200,
+        // with nothing in the result saying so. `rawPageLength` is the page
+        // Discord actually sent, before this package's own filtering; that,
+        // not the parsed count, is what decides whether another page might
+        // still be waiting.
+        const rawPageLength = Array.isArray(response.body)
+          ? response.body.length
+          : 0
+        const pageMembers = parseGuildMemberList(response.body)
+        members.push(...pageMembers)
+        if (rawPageLength < GUILD_MEMBER_PAGE_LIMIT) break
+        after = pageMembers[pageMembers.length - 1]?.id
+        // No `id` to page from — nothing left to ask for, however this page
+        // came to be exactly `GUILD_MEMBER_PAGE_LIMIT` long.
+        if (!after) break
+      }
+      return members
+    },
+
+    async createGuildCategory(
+      botToken,
+      guildId,
+      input
+    ): Promise<DiscordChannel> {
+      const response = await postJson(
+        `${apiBase}/guilds/${guildId}/channels`,
+        `Bot ${botToken}`,
+        {
+          name: input.name,
+          type: CHANNEL_TYPE_GUILD_CATEGORY,
+          permission_overwrites: input.permissionOverwrites,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseChannel(response.body)
+    },
+
+    async createGuildChannel(
+      botToken,
+      guildId,
+      input
+    ): Promise<DiscordChannel> {
+      const response = await postJson(
+        `${apiBase}/guilds/${guildId}/channels`,
+        `Bot ${botToken}`,
+        {
+          name: input.name,
+          type: CHANNEL_TYPE_GUILD_TEXT,
+          parent_id: input.parentId,
+          // Omitted entirely, not sent as `[]`, when the caller supplies
+          // none — the channel then inherits its category's overwrites
+          // through Discord's own permission cascade (this interface's own
+          // `createGuildChannel` doc comment), which an explicit empty array
+          // achieves the same way, but omitting it keeps the request body
+          // matching exactly what the caller actually asked for.
+          ...(input.permissionOverwrites
+            ? { permission_overwrites: input.permissionOverwrites }
+            : {}),
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseChannel(response.body)
+    },
+
+    async grantBotChannelAccess(botToken, channelId, botUserId): Promise<void> {
+      const overwrite = allowBotOverwrite(botUserId)
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${botUserId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+    },
+
+    async grantChannelMemberAccess(
+      botToken,
+      channelId,
+      memberId
+    ): Promise<void> {
+      // The exact same bits a channel is created with (`createGuildChannel`'s
+      // own `allowMemberOverwrite(member.id)` call in `roster-import.ts`) —
+      // this method grants nothing wider than a channel already gets at
+      // creation time, only later, for a member who was not yet resolvable
+      // then.
+      const overwrite = allowMemberOverwrite(memberId)
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${memberId}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+    },
+
+    async putChannelPermissionOverwrite(
+      botToken,
+      channelId,
+      overwrite
+    ): Promise<void> {
+      const response = await putJson(
+        `${apiBase}/channels/${channelId}/permissions/${overwrite.id}`,
+        `Bot ${botToken}`,
+        {
+          type: overwrite.type,
+          allow: overwrite.allow,
+          deny: overwrite.deny,
+        },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+    },
+
+    async createGuildRole(botToken, guildId, input): Promise<DiscordRole> {
+      const response = await postJson(
+        `${apiBase}/guilds/${guildId}/roles`,
+        `Bot ${botToken}`,
+        // `permissions: '0'` (SRV-10): this role is created only to be named
+        // in a channel overwrite, never to grant any of Discord's own
+        // server-wide powers — an empty bitfield says so explicitly rather
+        // than relying on whatever Discord's own create-role default happens
+        // to be.
+        { name: input.name, permissions: '0' },
+        requestOptions
+      )
+      if (!response.ok) {
+        throw new DiscordRequestError(response.status, response.body)
+      }
+      return parseRole(response.body)
+    },
+  }
+}

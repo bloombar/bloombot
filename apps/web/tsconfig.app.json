@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    // Composite projects need somewhere to emit declarations (PLAT-1's own
+    // "each package is a composite project" convention), but nothing in
+    // this repo ever imports apps/web's compiled output the way another
+    // package imports, say, packages/db's — the browser bundle is built by
+    // Vite (`vite build`, into `dist/`), not by tsc. Emitting tsc's own
+    // output into the shared `.tsbuild/` directory (the same place
+    // tsconfig.tests.json emits to) keeps it out of `dist/`, so `tsc
+    // --build`'s declaration files never collide with, and are never
+    // mistaken for, Vite's actual build.
+    "outDir": "../../.tsbuild/apps-web",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    // Browser code, not Node: `import.meta.env` (Vite's own env types)
+    // rather than `process`/`Buffer`/etc.
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "references": [{ "path": "../../packages/schemas" }]
+}

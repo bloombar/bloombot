@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Solution file. It compiles nothing itself; `tsc --build` walks these references in dependency order (PLAT-1).",
+  "files": [],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/schemas" },
+    { "path": "./packages/db" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/mail" },
+    { "path": "./packages/legacy-import" },
+    { "path": "./packages/core" },
+    { "path": "./packages/openai" },
+    { "path": "./packages/discord" },
+    { "path": "./packages/discord-rest" },
+    { "path": "./packages/actions" },
+    { "path": "./packages/jobs" },
+    { "path": "./apps/bot" },
+    { "path": "./apps/api" },
+    { "path": "./apps/mcp" },
+    { "path": "./apps/web" },
+    { "path": "./apps/worker" },
+    { "path": "./tsconfig.tests.json" }
+  ]
+}

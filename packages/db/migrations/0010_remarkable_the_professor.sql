@@ -1,0 +1,1 @@
+CREATE INDEX `enrolments_person_id_idx` ON `enrolments` (`person_id`,`organization_id`);

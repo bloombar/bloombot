@@ -28,24 +28,283 @@ notebook (`ANLY`), deployment and logging (`OPS`), and the spec/board tooling (`
 
 **In scope:** claimed implicitly — every SPEC id not listed under a later phase.
 
-## Phase 1 — Continuous deployment
+## Phase 1 — Defect fixes & test coverage
 
-Everything the shipped baseline needed in order to change safely: the six defects found
-while writing the initial SPEC, the automated test suite and CI that would have caught
-them, and the deployment loop that carries a green commit to the droplet. Each defect is
-specified as the behavior that must hold, in the section of the SPEC that owns it, rather
-than in a separate "bugs" section that would rot as the fixes land.
+Six defects found while writing the initial SPEC, plus the automated test suite and CI
+that would have caught them. Each defect is specified as the behavior that must hold, in
+the section of the SPEC that owns it, rather than in a separate "bugs" section that would
+rot as the fixes land.
 
-CI proves a commit is good; deployment ships it. Together they close the loop so a merge
-to `master` updates the droplet automatically, with the deployed commit visible on both
-ends and an automatic rollback when the bot fails to come back up. This is also the phase
-that holds the work still to come — new requirements land on the `**In scope:**` line
-below in the same pull request that adds them to the SPEC.
-
-**In scope:** BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6, OPS-7
+**In scope:** BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6
 
 ### Current status
 
-- Done: every Phase 0 requirement — the shipped baseline; BOT-11/12, DSC-7, ROST-7/8,
-  DATA-6, OPS-6, OPS-7.
-- Outstanding: none — new work is added here as it enters the SPEC.
+- Done: every Phase 0 requirement — the shipped baseline — and every defect in this
+  phase: BOT-11/12, DSC-7, ROST-7/8, DATA-6, OPS-6, all shipped to `master`.
+- Outstanding: none here. Phase 2 shipped as well; the JavaScript migration, phases 3
+  onward, is in flight on `feat/PLAT-1-multi-surface-platform`.
+
+## Phase 2 — Continuous deployment
+
+CI proves a commit is good; nothing yet ships it. This phase closes the loop so a merge to
+`master` updates the droplet automatically, with the deployed commit visible on both ends
+and an automatic rollback when the bot fails to come back up.
+
+**In scope:** OPS-7
+
+## Phase 3 — Monorepo & data layer
+
+The JavaScript migration starts by building the ground everything else stands on: npm
+workspaces, the shared zod contract, the tenant-scoped data layer, and a real migration
+tool. Production is untouched — it keeps running the Python bot, and the legacy import
+runs against a copy of the live database rather than the database itself.
+
+**In scope:** PLAT-1/2/5, QA-1..6, TEN-1..3, PROJ-1..3, BOARD-4, PPL-1..3, CONV-1..3, MIG-1..4
+
+## Phase 4 — Conversation core & Discord surface
+
+The bot is rewritten in TypeScript and cut over. This is the highest-risk work in the
+programme and the only component already serving real students, so it happens before any
+web work rather than after: the behaviour it must preserve is easiest to verify while it
+is still the only thing running. Requirement ids land with this phase's SPEC sections.
+
+PLAT-3/4 move here from phase 3: a single gateway connection and the four-process
+topology are properties this phase's own `apps/bot` is what actually satisfies them, not
+the monorepo scaffold phase 3 built before any process existed to connect at all.
+
+**In scope:** CORE-1..6, MDL-1..7, SURF-1..7, PLAT-3/4
+
+## Phase 5 — API, action layer & authentication
+
+The action layer lands with the API rather than after it. Retrofitting declared
+authorization underneath routes that already exist means rewriting every route twice.
+
+**In scope:** ACT-1..6, AUTH-1..4, API-1..6
+
+## Phase 6 — Web shell & server registration
+
+Sign-in, the control panel shell, and the Discord installation flow end to end.
+
+**In scope:** TEN-4..6, WEB-1..6, QA-7
+
+## Phase 7 — Projects & course configuration
+
+The point at which the product exists: a second tenant creates a project, defines a course
+in it, and the bot answers in their server without anyone editing a file in this
+repository.
+
+**In scope:** PROJ-4, PROJ-5, TEN-7, TEN-8, WEB-7, WEB-8, WEB-9, QA-8
+
+## Phase 8 — Job runner, throttling & server scaffolding
+
+Background jobs, and the foreground admission layer that stops thirty students at the
+start of a lecture becoming thirty concurrent model calls.
+
+**In scope:** JOB-1..5, SRV-6..9
+
+SRV-9 was found in use, not in review: scaffolding grants itself access to the categories it
+creates and to categories it adopts, but an instructor's own channels inside those categories
+keep whatever overwrites they had, so the bot stays locked out of exactly the channels a course
+was already using.
+
+## Phase 9 — Roster import & student channels
+
+**In scope:** ROST-9..12
+
+## Phase 10 — Knowledge files & instructions
+
+**In scope:** FILE-1..5, WEB-18, MDL-8, WEB-19
+
+WEB-19 is the third instance of the same shape in this phase, found while building the second:
+the versioned-instruction actions were built and reviewed, and the panel never called them.
+
+WEB-18 and MDL-8 were found in use, after the phase closed. FILE-1..5's backend, actions and
+provider round trip were all built and reviewed, and no screen was ever scoped to reach them — the
+same capability-without-a-surface shape as LINK-10. MDL-8 came out of the same look: a course with
+a stored prompt id silently ignores its own instructions, so FILE-4's versioning is dead there and
+nothing tells the instructor.
+
+## Phase 11 — Cost ledger, usage caps & monitoring
+
+**In scope:** COST-1..6
+
+## Phase 12 — Web student chat surface
+
+The surface that makes the platform more than a Discord bot: a student asks in a browser
+and gets the same course, the same conversation and the same allowance they would in
+Discord. That is why the identity rules land here rather than being invented per surface.
+
+Connecting is part of this phase, not a follow-up: LINK-1 declines anybody the platform
+cannot attribute to a connected account, so the gate and the way through it have to ship
+together. A build that has the gate and no connect surface answers nobody.
+
+**In scope:** PPL-4/5, WEB-10..17, LINK-1..10, ENRL-1..6, CONV-4
+
+CONV-4 was found by a reviewer chasing an end-to-end test flake to its cause rather than
+retrying it away: `answerQuestion` catches a failed `appendMessage` and continues, so under the
+write contention four processes sharing one SQLite file actually produce, a student can be
+answered while the record of it is dropped.
+
+LINK-10 was found by reviewing LINK-6..9 rather than planned: connecting creates a *person*, and
+the panel's switcher is built from *memberships*, so the browser half of the payoff does not
+land until the two are reconciled. It is scoped separately because it is a read-surface change —
+a new "organizations I am connected into" concept — rather than anything to do with proving an
+identity.
+
+## Phase 13 — MCP server & agent access
+
+**In scope:** MCP-1..5
+
+## Phase 14 — Admin console, transcripts, audit & export
+
+**In scope:** ADMIN-1..5
+
+## Phase 15 — Production hardening
+
+**In scope:** OPS-8..14, AUTH-5
+
+AUTH-5 lands here rather than with the rest of authentication because it was found here:
+production hardening is what surfaced that `apps/api` cannot start under `NODE_ENV=production`
+at all, since the only mail transport is a development stand-in that is refused there. A
+deployment nobody can sign in to is not a deployment.
+
+## Phase 16 — Course admission surfaces
+
+Every way into a course exists in the action layer and nowhere else: a join link can be
+created and revoked but never redeemed, a roster can be imported only by dispatching an
+action by hand, and the enrolment relation admits students while quietly leaving the
+instructors and assistants who ask the same course through the same channels out of it. This
+phase makes admission something a person can actually do — issue a link, hand it out, redeem
+it as yourself, upload a roster with its format stated on the screen — and makes asking a
+course you are taught through enough to be enrolled in it, whichever role carried you there.
+
+**In scope:** ENRL-7/8/9, WEB-20/21/22
+
+## Phase 17 — Retention, reliability and the last admission gap
+
+Three things Phase 16 surfaced without fixing. A roster import leaves the whole class list —
+names, emails, Discord handles — sitting in the `jobs` table for the life of the database, and
+readable back over the API; that is the data the protected-paths rule exists to guard, kept in the
+one place nothing guards. The end-to-end suite fails intermittently under its own parallelism, so
+it has to be re-run until it passes, which is not a gate. And a join link's expiry can be set by
+the action but by no screen, leaving WEB-20's "when each expires" column permanently reading "No
+expiry".
+
+**In scope:** JOB-6, QA-9, WEB-23, MCP-6
+
+## Audit — surfaces that were never built
+
+Dated 2026-09-03. An audit traced every registered action and every exported repo function to the
+surfaces that reach them. It found five capabilities complete in the action layer, marked Done, and
+reachable by no user — the same failure LINK-10, WEB-18 and WEB-19 each turned out to be, one layer
+further out. The board said 233 of 233 and was wrong.
+
+These requirements are **reopened, not re-specified**: each one's existing SPEC text already
+promises what was never built, so they keep their original phase and their status returns to
+outstanding until the surface exists.
+
+- **TEN-8, WEB-4** — the panel derives Discord install state from a prop set only by an OAuth
+  callback in the same browser session, so a reload offers "Install" for a server already bound.
+  That is the sentence TEN-8 was written to make true, and `discordServers.list` exists to serve it.
+- **COST-3** — `setSpendingCap` has no caller, so every organization's cap is `NULL` forever and
+  `hasReachedSpendingCap` can never fire. The enforcement half is real. (`spendingCapMicros`'s own
+  `NULL` default is correct, not part of this defect — a rework review agreed it is the tri-state "no
+  cap at all" `hasReachedSpendingCap` already documents, and inventing a nonzero default would change
+  behaviour for every existing organization; see `docs/DECISIONS.md` D-66. An earlier version of this
+  entry named the missing default as outstanding alongside the missing caller, which was not correct.)
+- **COST-4** — the platform-administrator view exists; the instructor's own view of their courses'
+  spend and the students near their limits does not.
+- **ENRL-5** — an owner has no way to add a second instructor or a teaching assistant. The MCP
+  surface omits `memberships.grant` deliberately and correctly; the web omission is unreasoned.
+  Building the surface exposed a second layer: `memberships.grant` only ever changes an *existing*
+  membership, and nothing in production creates the first one, so ENRL-10 was written to carry the
+  invitation the requirement actually needs.
+- **ADMIN-2** — the transcript-access audit trail is written and has no read path.
+- **JOB-2** — a job that exhausted its attempts in an earlier session is visible to nobody, because
+  nothing lists jobs at all.
+
+## Phase 18 — Inviting a colleague
+
+Building ENRL-5's surface exposed the layer beneath it. `memberships.grant` changes the role of
+someone who already holds a membership, and nothing in production ever creates that first one — so
+an owner can reassign among people already present and still cannot add anybody. The restriction is
+deliberate: refusing an address it cannot find is what stops the action becoming an oracle for which
+email addresses have accounts here. An invitation keeps that closed while making the requirement
+true.
+
+**In scope:** ENRL-10, ENRL-11, CORE-7, CORE-8, WEB-24, WEB-25, AUTH-6, ENRL-12
+
+## Phase 19 — The panel a person actually navigates
+
+A pass over the control panel's own navigation and list screens, plus the one data-model gap
+that pass turned up.
+
+The list screens grew an action per row per feature until a project row carried an Archive
+button, a Restore button, a free-text field and a Duplicate button, and the project's own
+name was the least prominent thing in it. Creating a project meant a form permanently
+parked above the list for something done twice a year. The navigation existed twice — a
+header row at `md` and above, a drawer below it — so the two had to agree, and the drawer
+was unreachable on the desktop screens instructors actually use. The header's trailing edge
+spent its width on the sentence "Acting in Foo Barstein (owner)", which is inert whenever
+there is one organization and, worse, means an account that later joins a second has no way
+to discover the choice exists at all.
+
+The data-model gap: `discord_server_bindings` has been many-servers-to-one-organization
+since TEN-3, and TEN-8 lists them in the plural, but every consumer resolves "the
+organization's binding" and refuses when there is more than one
+(`getActiveDiscordServerBindingForOrganization`'s own comment concedes this). A second
+install was recorded and then ignored. TEN-9 closes it by having a course name the server it
+routes in — which is what PROJ-3 already assumed when it scoped course-name uniqueness "in
+that server".
+
+**In scope:** WEB-26, WEB-27, WEB-28, WEB-29, WEB-30, PROJ-6, TEN-9
+
+## Phase 20 — Websites as course knowledge
+
+FILE-1 made a course's knowledge the files an instructor uploads, and MDL-3 grounds every
+answer in them. Plenty of a course's material is never a file, though: the department's
+syllabus page, the library guide, the documentation the course is taught against. Today an
+instructor's only option is to save a page as a PDF and upload it, which goes stale the
+moment the site changes.
+
+The provider's Responses API can restrict web search to a list of domains, which is exactly
+the shape of "the sites this course is taught from". A course keeps a list of them beside its
+files, the adapter turns that list into a domain-restricted `web_search` tool, and a course
+that names none is answered exactly as it is today — no tool, no unrestricted search.
+
+**In scope:** FILE-6, MDL-9, WEB-31
+
+## Phase 21 — Addressable screens
+
+The panel has never had URLs. `App.tsx` reads `window.location.pathname` once for the handful of
+entry points a browser can land on cold — a sign-in token, an OAuth callback, a join link — and
+every other screen is component state: which tab the shell is on, which view `ProjectsPanel` is
+showing, which course `Chat` has selected. The address bar says `/` throughout.
+
+That was a defensible call while the panel was two screens. It is not now: an instructor cannot
+bookmark a course, cannot send a colleague a link to the one they are asking about, and loses their
+place on every reload. Back and forward do nothing, or worse, leave the panel entirely.
+
+This phase gives every screen a canonical, organization-scoped address, drives the shell from the
+address rather than from component state, and makes history, reload and a pasted link all agree.
+
+**In scope:** WEB-32, WEB-33, WEB-34
+
+## Phase 22 — Course settings, organised
+
+The course settings screen has accumulated every surface a course owns — roles, model, instructions,
+knowledge files, websites, categories, roster, people — as one form scrolled top to bottom. Phase 21
+gave every screen an address; this phase gives the biggest screen an internal structure worth
+addressing, and closes the gap between seeing a person’s name and reading what they asked.
+
+**In scope:** WEB-35, WEB-36, ROST-13, WEB-37, WEB-38
+
+## Phase 23 — A roster import that finishes the job
+
+Importing a roster does most of the work and then stops short of the parts that need a Discord server
+prepared by hand: categories that must already exist, roles that must already be named, and a channel
+name collision that leaves one student with nothing. This phase makes an import self-sufficient — it
+creates the categories and roles it needs, gives every student a channel, and proves the permissions
+on those channels are what a private channel actually requires.
+
+**In scope:** ROST-14, ROST-15, ROST-16, ROST-17, SRV-10, SRV-11

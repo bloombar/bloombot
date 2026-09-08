@@ -34,19 +34,45 @@
 #
 # Environment overrides (all optional):
 #   APP_DIR          checkout to deploy       (default $HOME/discord-channel-manager)
-#   PM2_APP           pm2 process name for the Python bot (default bloombot)
+#   PM2_APP          pm2 process name for the Python bot (default bloombot).
+#                    Set it EMPTY (PM2_APP=) on a droplet that has finished the
+#                    cutover: the Python bot, its dependency install and its
+#                    interpreter check are then all skipped.
 #   PM2_INTERPRETER  python the bot runs under (default: the pipenv virtualenv's
 #                    python if this checkout has one, else python3)
 #   GIT_REMOTE       remote to fetch from     (default origin)
 #   HEALTH_WAIT      seconds to watch a process after reload (default 15)
+#   BUILD_HEAP_MB    V8 old-space ceiling for the two builds, in MB (default:
+#                    1536 on a host with under 2 GB of RAM, else V8's own)
 
 set -euo pipefail
 
 TARGET_SHA="${1:-}"
 APP_DIR="${APP_DIR:-$HOME/discord-channel-manager}"
-PM2_APP="${PM2_APP:-bloombot}"
+# The legacy Python bot's own pm2 process. Set `PM2_APP=` (empty) on a
+# droplet that has finished the cutover and no longer runs it: an empty value
+# means "there is no Python bot here", and `reload_everything` skips it
+# entirely. Without that escape hatch a cut-over droplet is worse off than a
+# missing process would suggest — pm2 still remembers a *stopped* `bloombot`
+# from before the cutover, so `pm2 reload` would start the retired bot again
+# on every deploy, putting a second answering process back on the same
+# database that docs/CUTOVER.md just moved off it.
+PM2_APP="${PM2_APP-bloombot}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 HEALTH_WAIT="${HEALTH_WAIT:-15}"
+# Heap ceiling for the two builds below, in MB. V8 sizes its old-space from
+# total system memory, and on a 1 GB droplet it settles around 480 MB — far
+# under what `tsc --build` needs across this workspace, so the build dies with
+# "Ineffective mark-compacts near heap limit" and the deploy rolls back. Swap
+# does not help: the cap is V8's own, not the kernel's. Default to 1536 MB on
+# a box with less than 2 GB of RAM, and leave V8's own default alone on a
+# larger one, where it is already generous. Override with BUILD_HEAP_MB.
+if [ -z "${BUILD_HEAP_MB:-}" ] && [ -r /proc/meminfo ]; then
+  total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+  if [ -n "$total_kb" ] && [ "$total_kb" -lt 2097152 ]; then
+    BUILD_HEAP_MB=1536
+  fi
+fi
 
 # OPS-8 — the four PLAT-4 processes plus OPS-12's own monitor, in the exact
 # names `ecosystem.config.cjs` gives them. Reloaded and health-checked
@@ -57,6 +83,17 @@ NODE_APPS=(api bot worker mcp ops-monitor)
 # can poll — `ops-monitor` is the watcher, not something watched the same way
 # (its own module comment: it has no HTTP surface of its own).
 HEALTH_CHECKED_APPS=(api bot worker mcp)
+# Every process this deploy supervises, in reload order: the legacy Python bot
+# first when this droplet still has one, then OPS-8's Node processes. Derived
+# once here so the reload loop, the restart-count snapshot, the health check
+# and the rollback's own confirmation all agree on the list — an empty PM2_APP
+# must drop out of all four, and a `for name in "$PM2_APP" ...` in any one of
+# them would instead iterate an empty string and report `""` as unhealthy.
+SUPERVISED_APPS=()
+if [ -n "$PM2_APP" ]; then
+  SUPERVISED_APPS+=("$PM2_APP")
+fi
+SUPERVISED_APPS+=("${NODE_APPS[@]}")
 
 log() { printf '==> %s\n' "$*"; }
 fail() {
@@ -183,6 +220,22 @@ pm2_knows_app() { pm2_field "$1" status >/dev/null 2>&1; }
 # the result was some processes already reloaded onto the new commit and
 # others not, `pm2 save` never reached, and the operator-visible output was
 # one pm2 error line with no indication anything needed to be rolled back.
+# Runs `npm run build` under BUILD_HEAP_MB's own heap ceiling when one
+# applies, so both build call sites (the forward path and the rollback path)
+# get it without either having to remember. Any arguments are passed straight
+# through, which is what the control-panel build's `--workspace apps/web`
+# needs. NODE_OPTIONS is set only for this call rather than exported once at
+# the top of the script: it must not reach the long-lived pm2 processes
+# started further down, which have no need of a raised ceiling and every
+# reason not to inherit a build-time flag.
+npm_build() {
+  if [ -n "${BUILD_HEAP_MB:-}" ]; then
+    NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=$BUILD_HEAP_MB" npm run build "$@"
+  else
+    npm run build "$@"
+  fi
+}
+
 start_or_reload() {
   local name="$1"
   if pm2_knows_app "$name"; then
@@ -211,8 +264,9 @@ start_or_reload() {
 # restart.
 reload_everything() {
   local failed=()
-  start_or_reload "$PM2_APP" || failed+=("$PM2_APP")
-  for name in "${NODE_APPS[@]}"; do
+  # SUPERVISED_APPS already omits the Python bot on a cut-over droplet — see
+  # its own comment at the top of this script.
+  for name in "${SUPERVISED_APPS[@]}"; do
     start_or_reload "$name" || failed+=("$name")
   done
   if [ ${#failed[@]} -gt 0 ]; then
@@ -276,7 +330,7 @@ does and does not mean for whatever is currently running."
     fi
   fi
   log "rebuilding the TypeScript workspace for the previous commit"
-  if ! npm run build; then
+  if ! npm_build; then
     fail "CRITICAL: reset the checkout back to ${PREV_SHA:0:8} but the
 TypeScript workspace failed to rebuild at that commit. If any Node process
 had already been reloaded onto the broken deploy before this rollback ran,
@@ -295,7 +349,7 @@ build works on its own."
   # serving whichever panel the *failed* deploy last built, silently
   # mismatched against whatever API/bot/worker/mcp were just rolled back to.
   log "rebuilding the control panel for the previous commit"
-  if ! npm run build --workspace apps/web; then
+  if ! npm_build --workspace apps/web; then
     fail "CRITICAL: reset the checkout and the Node workspace back to
 ${PREV_SHA:0:8} but the control panel itself failed to rebuild. nginx is
 still serving whichever build the failed deploy last produced — mismatched
@@ -354,7 +408,7 @@ confirm_rolled_back_online() {
   sleep "$wait_s"
   local still_broken=()
   local name status
-  for name in "$PM2_APP" "${NODE_APPS[@]}"; do
+  for name in "${SUPERVISED_APPS[@]}"; do
     status="$(pm2_field "$name" status || true)"
     [ "$status" = "online" ] || still_broken+=("$name (${status:-unknown})")
   done
@@ -373,7 +427,12 @@ needs a human to look, not a re-run of this script."
 log "deploying ${PREV_SHA:0:8} -> ${TARGET_SHA:0:8} in $APP_DIR"
 git reset --hard "$TARGET_SHA"
 
-if [ "$DEPS_CHANGED" = true ]; then
+if [ -z "$PM2_APP" ]; then
+  # No Python bot on this droplet (see PM2_APP's own comment): installing its
+  # dependencies and probing its interpreter would both fail the deploy over a
+  # process that is deliberately not here any more.
+  log "PM2_APP is empty; skipping the Python bot's dependencies and interpreter check"
+elif [ "$DEPS_CHANGED" = true ]; then
   log "python dependency files changed"
   if ! install_deps; then
     restore_previous_checkout
@@ -388,6 +447,7 @@ fi
 # restarting anything. If the environment probe above installed into a different
 # environment than pm2 runs, this catches it while the old process is still
 # happily serving.
+if [ -n "$PM2_APP" ]; then
 log "checking the bot's python ($PM2_INTERPRETER) can import its dependencies"
 if ! "$PM2_INTERPRETER" - <<'PY'; then
 import importlib.util
@@ -405,6 +465,7 @@ would crash on start. Nothing was restarted and the checkout was put back.
 Install the dependencies into that environment, or set PM2_INTERPRETER to the
 python the bot actually runs under."
 fi
+fi
 
 if [ "$NODE_DEPS_CHANGED" = true ]; then
   log "node dependency files changed"
@@ -421,7 +482,7 @@ fi
 # setting), so this is cheap even when nothing changed — unlike the
 # dependency installs above, it is never gated on a diff.
 log "building the TypeScript workspace"
-if ! npm run build; then
+if ! npm_build; then
   restore_previous_checkout
   fail "the TypeScript workspace failed to build at ${TARGET_SHA:0:8}. Nothing
 was restarted and the checkout was put back."
@@ -434,7 +495,7 @@ fi
 # that skipped this would leave nginx serving a stale panel indefinitely
 # while every pm2 app happily reloaded onto the new commit.
 log "building the control panel"
-if ! npm run build --workspace apps/web; then
+if ! npm_build --workspace apps/web; then
   restore_previous_checkout
   fail "the control panel failed to build at ${TARGET_SHA:0:8}. Nothing was
 restarted and the checkout was put back."
@@ -479,9 +540,8 @@ fi
 # given the Python bot — restarting five processes at once and then checking
 # each is faster than watching each in turn, and pm2's own restart_time is
 # per-app regardless of when the others were reloaded.
-restarts_before_bot="$(pm2_field "$PM2_APP" restart_time || true)"
 declare -A restarts_before
-for name in "${NODE_APPS[@]}"; do
+for name in "${SUPERVISED_APPS[@]}"; do
   restarts_before["$name"]="$(pm2_field "$name" restart_time || true)"
 done
 
@@ -489,8 +549,7 @@ log "watching every process for ${HEALTH_WAIT}s"
 sleep "$HEALTH_WAIT"
 
 UNHEALTHY=()
-check_pm2_health "$PM2_APP" "$restarts_before_bot" || UNHEALTHY+=("$PM2_APP")
-for name in "${NODE_APPS[@]}"; do
+for name in "${SUPERVISED_APPS[@]}"; do
   check_pm2_health "$name" "${restarts_before[$name]}" || UNHEALTHY+=("$name")
 done
 

@@ -26,6 +26,7 @@ import {
   writeFileSync,
   chmodSync,
   rmSync,
+  readFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -263,6 +264,11 @@ if [ "$1" = "run" ] && [ "$2" = "build" ] && [ "\${3:-}" = "--workspace" ] && [ 
   touch "${buildMarker}"
   echo "[fake npm] simulated apps/web build failure (test scenario, once)" >&2
   exit 1
+fi
+# Records the NODE_OPTIONS each build actually ran under, so a test can assert
+# the heap ceiling reached the build rather than only that the script chose one.
+if [ "$1" = "run" ] && [ "$2" = "build" ] && [ -n "\${NPM_BUILD_ENV_LOG:-}" ]; then
+  printf '%s\\n' "\${NODE_OPTIONS:-<unset>}" >> "\$NPM_BUILD_ENV_LOG"
 fi
 exit 0
 `
@@ -620,4 +626,83 @@ test('deploy.sh: pm2 itself being unreachable is treated as every process unheal
   // CRITICAL path, or the reload-failure one — the process must not exit 0
   // and must not print the healthy "deployed ... online" message.
   assert.doesNotMatch(output, /deployed .* — every process is online/)
+})
+
+// A cut-over droplet (docs/CUTOVER.md) no longer runs the legacy Python bot,
+// but pm2 still remembers it — stopped — from before the cutover. The old
+// unconditional `start_or_reload "$PM2_APP"` therefore did not quietly no-op
+// there: it *restarted the retired bot* on every deploy, putting a second
+// answering process back onto the database the cutover had just moved off.
+// `PM2_APP=` is the escape hatch, and this pins that it reaches every place
+// the Python side is touched, not only the reload loop.
+test('deploy.sh: an empty PM2_APP skips the legacy Python bot entirely rather than resurrecting it', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo({ changePythonDeps: true })
+  const result = await runDeploy(checkoutDir, target, { PM2_APP: '' })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /deployed .* — every process is online/)
+  assert.match(result.stdout, /PM2_APP is empty/)
+
+  // The strong assertion: pm2 was never asked to start or reload the bot, so
+  // it never entered pm2's own process list. Checking the state the stub
+  // actually keeps, rather than trusting a log line.
+  const apps = JSON.parse(readFileSync(result.pm2State, 'utf8'))
+  const names = apps.map((app) => app.name)
+  assert.ok(
+    !names.includes('bloombot'),
+    `the retired Python bot was started anyway: ${names.join(', ')}`
+  )
+  // The four Node processes and the monitor still deployed normally.
+  for (const expected of ['api', 'bot', 'worker', 'mcp', 'ops-monitor']) {
+    assert.ok(names.includes(expected), `${expected} was not started`)
+  }
+  // Python dependency files changed in this repo, and the install must still
+  // have been skipped — the bot they belong to is not here to need them.
+  assert.doesNotMatch(result.stdout, /python dependency files changed/)
+})
+
+// V8 sizes its old-space from total system memory, so on the 1 GB droplet
+// this platform actually deploys to, `tsc --build` across this workspace dies
+// with "Ineffective mark-compacts near heap limit" and takes the whole deploy
+// down with it. Swap does not help — the ceiling is V8's own. This pins that
+// the ceiling reaches BOTH builds (the workspace and the control panel),
+// since a flag on only one of them still fails the deploy.
+test('deploy.sh: BUILD_HEAP_MB raises the V8 heap ceiling for every build', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const envLog = join(base, `build-env-${Date.now()}.log`)
+  const result = await runDeploy(checkoutDir, target, {
+    BUILD_HEAP_MB: '1536',
+    NPM_BUILD_ENV_LOG: envLog,
+  })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const lines = readFileSync(envLog, 'utf8').trim().split('\n')
+  assert.equal(
+    lines.length,
+    2,
+    `expected two builds, saw: ${lines.join(' | ')}`
+  )
+  for (const line of lines) {
+    assert.match(line, /--max-old-space-size=1536/)
+  }
+})
+
+// The flag must not leak past the builds into the long-lived pm2 processes:
+// with no ceiling configured, the builds run under V8's own default, which is
+// correct on a host with memory to spare.
+test('deploy.sh: no BUILD_HEAP_MB means the builds run under V8 own default', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const envLog = join(base, `build-env-none-${Date.now()}.log`)
+  const result = await runDeploy(checkoutDir, target, {
+    BUILD_HEAP_MB: '',
+    NPM_BUILD_ENV_LOG: envLog,
+  })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  for (const line of readFileSync(envLog, 'utf8').trim().split('\n')) {
+    assert.doesNotMatch(line, /--max-old-space-size/)
+  }
 })

@@ -1,0 +1,16 @@
+-- JOB-6: a job that has already finished stops carrying the personal data
+-- (`roster.import`'s own payload is an entire roster CSV — names, emails,
+-- Discord handles) it was given as input. `repos/jobs.ts`'s own
+-- `completeJob`/`markJobFailed` now clear `payload` going forward, in the
+-- same write that records a job's terminal state, but every row that
+-- reached `succeeded` or `failed` before this migration ran still has its
+-- original payload sitting in the table. This backfills that gap once.
+--
+-- Scope, exactly: only `payload`, only on rows already in one of the two
+-- terminal statuses (`succeeded`, `failed`). Never touches `pending` or
+-- `running` rows — JOB-2's retry and JOB-3's once-only execution across a
+-- worker restart both still need a non-terminal job's own payload for its
+-- next attempt, and this statement's own WHERE clause is the only thing
+-- standing between "retention cleanup" and "breaking every job in flight
+-- when this migration happens to run."
+UPDATE `jobs` SET `payload` = NULL WHERE `status` IN ('succeeded', 'failed');

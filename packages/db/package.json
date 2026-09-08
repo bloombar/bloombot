@@ -1,0 +1,35 @@
+{
+  "name": "@bloombot/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lazily-opened SQLite data layer, migrations and tenant-scoped repositories (TEN-1, TEN-2, TEN-3).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "npm run build && node dist/run-migrate.js"
+  },
+  "dependencies": {
+    "@bloombot/config": "*",
+    "@bloombot/logger": "*",
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.10"
+  }
+}

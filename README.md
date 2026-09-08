@@ -264,6 +264,16 @@ ids key the issues, so an existing id must never be renamed or renumbered.
 
 [pm2](https://pm2.keymetrics.io/) keeps `response_bot.py` running in the background, restarts it on crash, and survives server reboots.
 
+`ecosystem.config.cjs` also names the TypeScript platform's own processes — the API, the
+bot, the worker, the MCP server and the alerting monitor (OPS-8, OPS-12) — supervised the
+same way, each restarted independently. The commands below still work for the Python bot
+alone; see [docs/CUTOVER.md](docs/CUTOVER.md) for bringing up the whole platform, rehearsing
+the legacy import, and retiring the Python bot deliberately. For a full production
+deployment from an empty server, including nginx, TLS, the Discord/OpenAI/Google Cloud setup
+and every environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — and
+[docs/DEPLOY_APP_PLATFORM.md](docs/DEPLOY_APP_PLATFORM.md) for why DigitalOcean's App
+Platform is not (yet) a fit for this platform's single-SQLite-file architecture.
+
 ### Install pm2
 
 ```bash
@@ -324,19 +334,36 @@ it passes, connects to the droplet over SSH and updates it to that exact commit
 2. **Updates the checkout** to the deployed commit with `git fetch` + `git reset --hard`.
    Untracked files are never touched: `.env`, `data/*.db` and `logs/` come through
    unchanged, and `git clean` is deliberately never run.
-3. **Installs dependencies only if they changed** — that is, if `Pipfile.lock` or
-   `requirements.txt` differ between the old and new commit. It uses pipenv if the droplet
-   has a pipenv virtualenv, and pip otherwise.
+3. **Installs dependencies only if they changed** — Python's `Pipfile.lock`/
+   `requirements.txt` and Node's `package-lock.json` are each diffed independently against
+   the old commit. Python uses pipenv if the droplet has a pipenv virtualenv, and pip
+   otherwise; Node uses `npm ci`.
 4. **Checks the interpreter pm2 uses can import the bot's dependencies** *before*
    restarting, so a broken environment fails while the old process is still serving.
-5. **Reloads pm2** (`pm2 reload bloombot --update-env`, or `pm2 start ecosystem.config.cjs`
-   the first time), then `pm2 save`.
-6. **Watches the process for 15 seconds.** If it is not `online`, or pm2 had to restart it
-   again in that window — a crash loop — the deploy **rolls back** to the previous commit,
-   restarts it, and fails the workflow run.
+5. **Builds the TypeScript workspace and the control panel** (`npm run build`, then
+   `npm run build --workspace apps/web` — the panel is PLAT-4's own static build, and a
+   separate step; the first command does not produce it) and **applies the platform's
+   database migration exactly once** (OPS-8) — before any of the four Node processes below
+   starts, rather than by whichever one of them wins the race the way each of their own
+   `main()` calling `runMigrations` at startup otherwise would.
+6. **Reloads every supervised process individually** — the Python bot, then the API, the
+   bot, the worker, the MCP server and OPS-12's alerting monitor (`pm2 reload <name>
+   --update-env`, or `pm2 start ecosystem.config.cjs --only <name>` the first time) — then
+   `pm2 save` once.
+7. **Watches every process for 15 seconds.** A process pm2 reports as anything but `online`,
+   or one it has had to restart again in that window — a crash loop — counts as unhealthy;
+   so does a `4xx`/`5xx` (or unreachable) `/health` response from the API, the bot, the
+   worker or the MCP server (`scripts/health-check.mjs`), which catches a process that pm2
+   still sees as running but whose database or gateway is not actually working (COST-5's
+   running-vs-working distinction). Any of those failing **rolls every process back** to the
+   previous commit and fails the workflow run.
 
-`migrate.py` is never run by a deploy: it drops and recreates tables. Run schema changes by
-hand.
+`migrate.py` (the Python system's own destructive migration, which drops and recreates
+tables) is never run by a deploy — schema changes there are made by hand. The TypeScript
+migration in step 5 is a different thing: additive, per-file and idempotent
+(`packages/db/src/migrate.ts`), which is what makes running it on every deploy safe. A
+rollback does not attempt to undo it — see [docs/CUTOVER.md](docs/CUTOVER.md)'s own
+"rollback does not un-migrate" note.
 
 ### One-time setup
 
@@ -405,5 +432,6 @@ ssh $DEPLOY_USER@$DEPLOY_HOST 'bash -s -- <commit-sha>' < scripts/deploy.sh
 
 ```bash
 ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git rev-parse HEAD'
-ssh $DEPLOY_USER@$DEPLOY_HOST 'pm2 status && pm2 logs bloombot --lines 50 --nostream'
+ssh $DEPLOY_USER@$DEPLOY_HOST 'pm2 status'
+ssh $DEPLOY_USER@$DEPLOY_HOST 'curl -s 127.0.0.1:3000/health && curl -s 127.0.0.1:3001/health && curl -s 127.0.0.1:3002/health && curl -s 127.0.0.1:3003/health'
 ```

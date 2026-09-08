@@ -2,7 +2,15 @@
 
 ## Testing
 
-Before finalizing major changes to code, do thorough 100% code coverage unit tests, integration tests. For changes that affect both front- and back-end, add e2e tests using Playwright with live front- and back-ends with live test db to ensure correct functionality. All passing passing tests should be reproducible during regression testing as we develop new code.
+New behaviour needs a test that **fails without the change** — a test that passes before the code is written
+is not a test of that code. Unit and integration tests throughout; for changes spanning front- and back-end,
+Playwright e2e against live front- and back-ends with a live test database. All passing tests must stay
+reproducible as regression tests.
+
+Coverage is enforced as a floor on the logic that matters — `packages/core`, `packages/actions`,
+`packages/db/repos` — rather than a blanket percentage across the whole tree (see `docs/DECISIONS.md`).
+
+Never point a test suite at `data/data.db`; test databases live under `tmp/`.
 
 ## Code conventions
 
@@ -16,7 +24,8 @@ Leave comments explaining any large block of complicated code. Include function-
 
 ### Check for staleness
 
-Always check for stale branches and PRs before starting new tasks.
+Always check for stale branches and PRs before starting a new task — run the `stale-check` skill. An open PR
+touching your files means coordinate, not proceed.
 
 ### Workflow
 
@@ -33,7 +42,58 @@ The project-board sync (`scripts/board`) parses docs/SPEC.md, so keep these form
 Changes are tracked on the GitHub project board and follow a branch → PR flow so the board automation works (details: `docs/CONTRIBUTING.md`, `docs/PROJECT_BOARD.md`). Follow this **by default**:
 
 - **Do not commit code changes directly to the default branch.** Create a feature branch named `feat/<REQ-ID>-<slug>` (e.g. `feat/AUTH-3-email-verification`; use a short descriptive slug when no requirement id applies). **Exception:** documentation (Markdown and anything under `docs/`), `.env.example` files, and project tooling under `scripts/` may be committed directly to the default branch without a PR.
-- **Open a pull request** whose description includes `Closes #N` — `N` is the board issue's number — so the card links and advances to Done on merge. Commit and push only when asked, and run the pre-PR checks first (`npm run lint && npm run format:check && npm run typecheck && npm test`).
+- **Open a pull request** whose description includes `Closes #N` — `N` is the board issue's number, one line per requirement the PR satisfies — so the change and the requirement stay linked. Check the number first: board issues are not numbered in family order, and a wrong one closes somebody else's requirement. Commit and push only when asked, and run the pre-PR checks first (`npm run lint && npm run format:check && npm run typecheck && npm test`).
+- **Move the card yourself (BOARD-4).** `Closes #N` fires only on a merge to the **default branch**, and slice branches target `feat/PLAT-1-multi-surface-platform`, so no card ever moves on its own. Run `npm run board:status -- "In progress" <ids>` when a slice starts, `-- "In review" <ids>` when its PR opens, and `-- Done <ids>` when it merges, and commit the manifest change the script makes.
 - **Do not hand-create board issues.** The board is generated from the SPEC via `npm run board:derive` then `npm run board:sync` (see docs/PROJECT_BOARD.md).
 
 If asked to use a different workflow (e.g. commit straight to the default branch), **remind the user that it diverges from this flow and confirm before proceeding** — then honor the confirmed request.
+
+## Protected paths
+
+**IMPORTANT:** `data/*.db`, `.env*`, `logs/*.log` and `results/*.csv` hold real student names, emails and
+conversation transcripts, or live credentials on a public repository. A `PreToolUse` hook
+(`.claude/hooks/guard-paths.sh`, tested in `npm test`) blocks writes to them. A block is a signal to stop and
+report — never route around it.
+
+## Agent workflow
+
+Implementation runs as a supervisor/developer split: `.claude/agents/developer-agent.md` implements a scoped
+slice against a brief, `.claude/agents/spec-reviewer.md` reviews the diff in fresh context, and the agent
+doing the work is never the one grading it. The brief template and definition of done are in the
+`phase-handoff` skill. The plan being built is summarised in `docs/SPEC.md` and `docs/ROADMAP.md`; decisions
+made along the way are in `docs/DECISIONS.md`.
+
+## One writer in the working tree at a time
+
+Agents share the repository's working directory. They cannot see each other's uncommitted edits,
+and `git` has no idea two of them exist — so two agents writing at once produce a broken tree, a
+`tsc` that fails for reasons neither caused, and commits that sweep up work nobody meant to include.
+This has happened repeatedly and cost real time; it is not a hypothetical.
+
+**The supervisor:**
+
+- Runs **one writing agent at a time** against the working tree. Reviewers are read-only and may run
+  in parallel with anything, but they must work in a temporary `git worktree`, never the main tree.
+- Runs two writing agents concurrently only with `isolation: "worktree"`, which gives each its own
+  checkout. Without it, serialise — waiting is cheaper than untangling.
+- Does **not** edit or commit the tree while a writing agent is running, including documentation and
+  board files. A `git status` an agent cannot explain is a `git status` it has to stop and ask about.
+
+**Every agent, before committing:**
+
+- Run `git status` first. **Stage only the files you touched, by path.** Never `git add -A`, `git add .`
+  or `git commit -a` — those are how another agent's half-finished work ends up in your commit.
+- If `git status` shows files you did not touch, **stop and report before doing anything about them**.
+  Do not commit them, do not revert them, do not "clean up". Reporting an irreversible action after
+  taking it is not reporting. Uncommitted content is not recoverable from git, and it may be the
+  user's own work-in-progress rather than another agent's — an agent reverted ~300 lines of the
+  user's real deployment notes this way, and only a truncated copy survived in a transcript.
+  Discarding content nobody assigned you is never your call to make.
+- **`docs/DEPLOY_DROPLET.md` is the user's own working document.** Do not edit or revert it.
+- If a check fails in a file outside your slice, say so and stop rather than fixing it. A failure you
+  did not cause is information the supervisor needs, not a chore to absorb.
+- Re-measure your own baselines after your final pull. Numbers in a brief go stale the moment another
+  slice lands, and a report built on them is wrong in a way nobody can see.
+
+`git checkout -- <file>`, `git stash` and `git restore` discard uncommitted work irreversibly —
+including work you cannot see because another agent has not committed it yet. Commit early instead.

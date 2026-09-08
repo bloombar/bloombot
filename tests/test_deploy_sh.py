@@ -27,17 +27,29 @@ PM2_STUB = """#!/usr/bin/env bash
 echo "$*" >> "$PM2_CALLS"
 case "${1:-}" in
   jlist)
-    if [ -f "$PM2_REGISTERED" ]; then
-      n=$(cat "$PM2_COUNTER" 2>/dev/null || echo 0)
-      printf '%s' "$((n + ${PM2_RESTART_STEP:-0}))" > "$PM2_COUNTER"
-      printf '[{"name":"bloombot","pm2_env":{"status":"%s","restart_time":%s}}]\\n' \\
-        "${PM2_STATUS:-online}" "$n"
-    else
-      printf '[]\\n'
-    fi
+    # Which apps pm2 knows is per-app, not global: `start --only X` teaches it
+    # exactly one. Modelling it as a single flag made a first deploy look like
+    # it reloaded five apps it had never heard of. PM2_STATUS and the restart
+    # counter apply to every known app, which keeps the crash-loop tests
+    # meaning what they always did.
+    n=$(cat "$PM2_COUNTER" 2>/dev/null || echo 0)
+    printf '%s' "$((n + ${PM2_RESTART_STEP:-0}))" > "$PM2_COUNTER"
+    sep=''
+    printf '['
+    while read -r app; do
+      [ -n "$app" ] || continue
+      printf '%s{"name":"%s","pm2_env":{"status":"%s","restart_time":%s}}' \\
+        "$sep" "$app" "${PM2_STATUS:-online}" "$n"
+      sep=','
+    done < <(cat "$PM2_REGISTERED" 2>/dev/null)
+    printf ']\\n'
     ;;
   start)
-    : > "$PM2_REGISTERED"
+    # `pm2 start ecosystem.config.cjs --only <name>`
+    for arg in "$@"; do
+      case "$prev" in --only) echo "$arg" >> "$PM2_REGISTERED" ;; esac
+      prev="$arg"
+    done
     ;;
 esac
 exit 0
@@ -55,6 +67,31 @@ if [ "${1:-}" = "--venv" ]; then
   exit 1
 fi
 exit 0
+"""
+
+# The platform's own half of the deploy. This suite predates it — `deploy.sh`
+# used to touch nothing but the Python bot — so without these stubs every test
+# here fails on `npm ci` looking for a package.json the fake droplet never had.
+# Recording their arguments also lets a test assert the panel is rebuilt, which
+# is a real bug this deploy script shipped once: nginx served a stale panel
+# against a freshly reloaded API.
+NPM_STUB = """#!/usr/bin/env bash
+echo "$*" >> "$NPM_CALLS"
+exit "${FAKE_NPM_EXIT:-0}"
+"""
+
+# `node` has two very different jobs in this script, and a stub that treats
+# them alike breaks the suite in a way that looks like a deploy failure:
+# `pm2_field` pipes `pm2 jlist` through `node -e` to parse it, so stubbing
+# every invocation makes every app's status read "unknown" and rolls back a
+# perfectly good deploy. Only the migration run (a script path) is stubbed;
+# `-e` is handed to the real interpreter.
+NODE_STUB = """#!/usr/bin/env bash
+if [ "${1:-}" = "-e" ]; then
+  exec "$REAL_NODE" "$@"
+fi
+echo "$*" >> "$NODE_CALLS"
+exit "${FAKE_NODE_EXIT:-0}"
 """
 
 # Stands in for the interpreter pm2 runs the bot with. `-m pip ...` always
@@ -96,6 +133,12 @@ def world(tmp_path):
     (upstream / "requirements.txt").write_text("discord==2.7.1\n", encoding="utf-8")
     (upstream / "Pipfile.lock").write_text('{"_meta": {}}\n', encoding="utf-8")
     (upstream / "ecosystem.config.cjs").write_text("module.exports = {};\n", encoding="utf-8")
+    # The real droplet is an npm workspace as well as a Python checkout, and
+    # `deploy.sh` now builds it; without this the script aborts before it ever
+    # reaches the part these tests are about.
+    (upstream / "package.json").write_text(
+        '{"name": "bloombot", "private": true}\n', encoding="utf-8"
+    )
     (upstream / "response_bot.py").write_text("print('v1')\n", encoding="utf-8")
     _git(upstream, "add", "-A")
     _git(upstream, "commit", "-qm", "first")
@@ -130,6 +173,8 @@ def world(tmp_path):
     _write_stub(bin_dir / "pm2", PM2_STUB)
     _write_stub(bin_dir / "pipenv", PIPENV_STUB)
     _write_stub(bin_dir / "python3", PYTHON_STUB)
+    _write_stub(bin_dir / "npm", NPM_STUB)
+    _write_stub(bin_dir / "node", NODE_STUB)
 
     # A directory shaped like a pipenv virtualenv, so the script's "is there a
     # virtualenv here?" probe — which requires an executable bin/python — can
@@ -153,7 +198,10 @@ def world(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     registered = state / "registered"
-    registered.touch()  # pm2 already knows the app, as on a live droplet
+    # pm2 already knows every supervised app, as on a live droplet.
+    registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
 
     env = {
         "PATH": path,
@@ -169,6 +217,9 @@ def world(tmp_path):
         "PM2_STATUS": "online",
         "PIPENV_CALLS": str(state / "pipenv.log"),
         "PYTHON_CALLS": str(state / "python.log"),
+        "NPM_CALLS": str(state / "npm.log"),
+        "NODE_CALLS": str(state / "node.log"),
+        "REAL_NODE": shutil.which("node") or "node",
         "FAKE_PIPENV_VENV": "0",
         "FAKE_VENV": str(fake_venv),
         "FAKE_PY_EXIT": "0",
@@ -378,5 +429,10 @@ def test_first_deploy_starts_the_app_from_the_ecosystem_config(world):
 
     assert result.returncode == 0, result.stderr
     pm2 = world.calls("pm2")
-    assert "start ecosystem.config.cjs" in pm2
+    # `--only <name>`, one app at a time: bootstrapping a fresh droplet must
+    # not start every app in the file at once, since some may not have their
+    # credentials configured yet.
+    assert any(
+        call.startswith("start ecosystem.config.cjs --only ") for call in pm2
+    ), pm2
     assert not any(call.startswith("reload") for call in pm2)

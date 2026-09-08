@@ -1,0 +1,32 @@
+{
+  "name": "@bloombot/mail",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The SMTP mail adapter behind @bloombot/auth's EmailSender port (AUTH-5) — the only package that knows nodemailer exists.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@bloombot/auth": "*",
+    "@bloombot/logger": "*",
+    "nodemailer": "^9.1.1"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1",
+    "@types/smtp-server": "^3.5.13",
+    "smtp-server": "^3.19.6"
+  }
+}

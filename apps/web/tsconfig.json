@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Solution file for apps/web, the same shape the repo root's own tsconfig.json takes (PLAT-1): it compiles nothing itself, it only walks its two sub-projects in dependency order — the browser app (tsconfig.app.json) and the Node-side Vite config (tsconfig.node.json), which need different `lib`/`types` and cannot share one tsc invocation. `composite: true` because, unlike the root solution file, this one is itself referenced (from the root tsconfig.json and tsconfig.tests.json) — a referenced project must be composite whether or not it has any files of its own.",
+  "compilerOptions": { "composite": true },
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}

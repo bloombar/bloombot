@@ -12,8 +12,17 @@
 /** AI-4/`response_bot.py:328` — every request is bounded at the same 2048 tokens the running bot uses. */
 export const MAX_OUTPUT_TOKENS = 2048
 
-/** AI-4 — the platform default when a course has never configured its own model. */
-export const DEFAULT_MODEL = 'gpt-4o'
+/**
+ * AI-4 — the platform default when a course has never configured its own model.
+ *
+ * `gpt-4.1` rather than `gpt-4o`: on the same non-reasoning architecture it is
+ * both newer and strictly cheaper ($2.00 / $8.00 per million input/output
+ * tokens against gpt-4o's $2.50 / $10.00, see packages/config/src/pricing.ts),
+ * so a course that never picks a model is no longer billed a premium for an
+ * older one. It also matches what the courses running today already pin in
+ * bot_config.yml, which makes the default and the live configuration agree.
+ */
+export const DEFAULT_MODEL = 'gpt-4.1'
 
 /** What one Responses API call needs, already resolved from the port and the conversation the adapter is using for it. */
 export interface BuildResponsesRequestInput {

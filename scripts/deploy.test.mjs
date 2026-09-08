@@ -268,7 +268,7 @@ fi
 # Records the NODE_OPTIONS each build actually ran under, so a test can assert
 # the heap ceiling reached the build rather than only that the script chose one.
 if [ "$1" = "run" ] && [ "$2" = "build" ] && [ -n "\${NPM_BUILD_ENV_LOG:-}" ]; then
-  printf '%s\\n' "\${NODE_OPTIONS:-<unset>}" >> "\$NPM_BUILD_ENV_LOG"
+  printf '%s\\n' "\${NODE_OPTIONS:-<unset>}" >> "$NPM_BUILD_ENV_LOG"
 fi
 exit 0
 `

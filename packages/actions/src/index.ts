@@ -30,6 +30,7 @@ export {
   listCoursesAction,
   listDiscordServersAction,
   listProjectsAction,
+  MAX_COURSE_ATTACHMENTS_TOTAL_BYTES,
   organizationUsageAction,
   removeDiscordServerAction,
   saveCourseAction,

@@ -24,6 +24,18 @@
  * A file the caller will not accept is refused here, with a reason, rather
  * than sent and refused by the server — `FormField`'s per-field error is what
  * WEB-16 asks for, and a silent no-op is the worst of the three.
+ *
+ * FILE-7: `multiple` is opt-in and additive. Every existing caller
+ * (`RosterImport.tsx`, `CourseImportDialog.tsx`) passes neither `multiple`
+ * nor `onFilesChosen`, and keeps taking exactly one file through
+ * `onFileChosen` exactly as before — `<input multiple>` stays off, and a
+ * drop or a pick still yields a single `File`. Only `CourseAttachments.tsx`
+ * sets `multiple`, which turns the picker's own `multiple` attribute on and
+ * routes every dropped or chosen file through the same per-file `maxBytes`/
+ * `validate` checks `consider` already runs for one, collected into a
+ * single `onFilesChosen(files)` call rather than one `onFileChosen` call
+ * per file — the caller decides how to queue several files, not this
+ * component.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -40,11 +52,15 @@ export interface FileDropZoneProps {
   accept?: string
   /** Largest file this caller will take, in bytes. */
   maxBytes?: number
-  /** The file currently chosen, if any — the caller owns that state. */
+  /** The file currently chosen, if any — the caller owns that state. Single-file mode only (`multiple` is off); a multi-file caller queues its own selections and never passes this. */
   selectedFile?: File | undefined
-  /** Called with a file that passed `maxBytes` and `validate`. */
-  onFileChosen: (file: File) => void
-  /** Extra caller rules: return a sentence to refuse, or undefined to accept. */
+  /** Called with a file that passed `maxBytes` and `validate`. Required in single-file mode; unused (and safely omittable) once `multiple` is on. */
+  onFileChosen?: (file: File) => void
+  /** Turns on `<input multiple>` and routes every dropped/chosen file to `onFilesChosen` instead of `onFileChosen` — off by default, so every existing single-file caller is unaffected. */
+  multiple?: boolean
+  /** Called with every dropped/chosen file that passed `maxBytes` and `validate`, when `multiple` is on. */
+  onFilesChosen?: (files: File[]) => void
+  /** Extra caller rules: return a sentence to refuse, or undefined to accept. Applied per file in `multiple` mode. */
   validate?: (file: File) => string | undefined
   /** Closes every route in, while an upload is in flight. */
   disabled?: boolean
@@ -64,6 +80,8 @@ export function FileDropZone({
   maxBytes,
   selectedFile,
   onFileChosen,
+  multiple = false,
+  onFilesChosen,
   validate,
   disabled = false,
 }: FileDropZoneProps): ReactElement {
@@ -82,21 +100,40 @@ export function FileDropZone({
     }
   }, [])
 
+  /** One file's own `maxBytes`/`validate` check — a sentence to refuse it, or `undefined` to accept. Shared by both the single- and multi-file paths so the rule is checked identically either way. */
+  const checkFile = (file: File): string | undefined => {
+    if (maxBytes !== undefined && file.size > maxBytes) {
+      return `That file is ${describeSize(file.size)}. The limit is ${describeSize(maxBytes)}.`
+    }
+    return validate?.(file)
+  }
+
   const consider = (file: File | undefined): void => {
     if (!file) return
-    if (maxBytes !== undefined && file.size > maxBytes) {
-      setRejection(
-        `That file is ${describeSize(file.size)}. The limit is ${describeSize(maxBytes)}.`
-      )
-      return
-    }
-    const refusal = validate?.(file)
+    const refusal = checkFile(file)
     if (refusal) {
       setRejection(refusal)
       return
     }
     setRejection(undefined)
-    onFileChosen(file)
+    onFileChosen?.(file)
+  }
+
+  /** FILE-7's multi-file path: every file dropped/chosen is checked, the ones that pass are handed to the caller in one `onFilesChosen` call, and the first rejection (if any) is what the zone shows — a caller queuing several files still hears about a file it cannot take, without one dialog per rejection. */
+  const considerMany = (files: File[]): void => {
+    if (files.length === 0) return
+    const accepted: File[] = []
+    let firstRejection: string | undefined
+    for (const file of files) {
+      const refusal = checkFile(file)
+      if (refusal) {
+        firstRejection ??= refusal
+        continue
+      }
+      accepted.push(file)
+    }
+    setRejection(firstRejection)
+    if (accepted.length > 0) onFilesChosen?.(accepted)
   }
 
   const handleDrop = (event: DragEvent<HTMLButtonElement>): void => {
@@ -104,7 +141,10 @@ export function FileDropZone({
     dragDepth.current = 0
     setDragging(false)
     if (disabled) return
-    consider(event.dataTransfer?.files?.[0])
+    const files = event.dataTransfer?.files
+    if (!files) return
+    if (multiple) considerMany(Array.from(files))
+    else consider(files[0])
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -130,7 +170,11 @@ export function FileDropZone({
         <button
           type="button"
           disabled={disabled}
-          aria-label={`${label} — drop a file here, or activate to browse`}
+          aria-label={
+            multiple
+              ? `${label} — drop files here, or activate to browse`
+              : `${label} — drop a file here, or activate to browse`
+          }
           data-dragging={dragging ? 'true' : undefined}
           onClick={() => inputRef.current?.click()}
           onKeyDown={handleKeyDown}
@@ -155,10 +199,18 @@ export function FileDropZone({
           ].join(' ')}
         >
           <span className="text-base font-medium">
-            {selectedFile ? selectedFile.name : 'Drop a file here'}
+            {multiple
+              ? 'Drop files here'
+              : selectedFile
+                ? selectedFile.name
+                : 'Drop a file here'}
           </span>
           <span className="text-sm">
-            {selectedFile ? 'Drop another to replace it' : 'or click to browse'}
+            {multiple
+              ? 'or click to browse'
+              : selectedFile
+                ? 'Drop another to replace it'
+                : 'or click to browse'}
           </span>
         </button>
       </FormField>
@@ -166,13 +218,30 @@ export function FileDropZone({
         ref={inputRef}
         type="file"
         accept={accept}
+        multiple={multiple}
         disabled={disabled}
         aria-hidden="true"
         tabIndex={-1}
         className="sr-only"
-        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-          consider(event.target.files?.[0])
-        }
+        onChange={(event: ChangeEvent<HTMLInputElement>) => {
+          const files = event.target.files
+          if (!files) return
+          if (multiple) {
+            considerMany(Array.from(files))
+            // A native file input keeps its previous selection until a new
+            // pick replaces it — no browser `change` event fires for
+            // choosing the exact same set of files twice in a row, which
+            // would silently block an instructor picking the same file
+            // again on a second pass (this file's own module comment: an
+            // instructor picking readings in two passes is the normal
+            // case). Only cleared in `multiple` mode — the single-file path
+            // below is unchanged, `selectedFile` is what drives what this
+            // button shows there.
+            event.target.value = ''
+          } else {
+            consider(files[0])
+          }
+        }}
       />
     </div>
   )

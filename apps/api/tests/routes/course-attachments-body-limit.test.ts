@@ -107,7 +107,11 @@ describe("FILE-1 — courseAttachments.attach's own raised body limit", () => {
     // Comfortably over `ACTION_JSON_BODY_LIMIT_BYTES` — content, not a
     // real base64 encoding (a malformed value never reaches this check;
     // body-parser refuses on raw byte size alone, before anything reads
-    // the body as JSON).
+    // the body as JSON). FILE-7 raised the limit to 136 MiB, so this now
+    // builds a ~137 MB string — the existing technique has no cheaper way
+    // to prove body-parser's own byte-size refusal, so the cost stays (a
+    // few hundred ms, not the base64 encoding a real 100 MiB file would
+    // cost).
     const oversizedContent = 'a'.repeat(
       ACTION_JSON_BODY_LIMIT_BYTES + 1024 * 1024
     )

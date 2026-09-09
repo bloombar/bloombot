@@ -110,6 +110,7 @@ export {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
   listCourseAttachmentsAction,
+  MAX_COURSE_ATTACHMENTS_TOTAL_BYTES,
 } from './course-attachments.js'
 export {
   listCourseInstructionRevisionsAction,

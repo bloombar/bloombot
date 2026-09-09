@@ -1,5 +1,6 @@
 /**
- * Actions over `packages/db`'s `course-attachments` repo (FILE-1..3, FILE-5).
+ * Actions over `packages/db`'s `course-attachments` repo (FILE-1..3,
+ * FILE-5, FILE-7).
  *
  * `courseAttachments.attach` is the one action in this package built by a
  * factory (`createAttachCourseAttachmentAction`) rather than exported as a
@@ -38,6 +39,7 @@ import {
 } from '@bloombot/db'
 import { z } from 'zod'
 
+import { ActionConflictError } from '../errors.js'
 import type { Action } from '../types.js'
 
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -59,6 +61,27 @@ const DETACH_JOB_KIND = 'courseAttachments.detach'
 // `SCAFFOLD_MAX_ATTEMPTS`): room for a transient provider failure to clear
 // on retry, without a stuck job lingering indefinitely.
 const ATTACHMENT_JOB_MAX_ATTEMPTS = 5
+
+/**
+ * FILE-7: a course's attachments, all of them added together, may total at
+ * most 100 MiB — replacing the per-file ceiling this package used to have
+ * none of (that lived only in `apps/api/src/routes/actions.ts`'s own
+ * `MAX_COURSE_ATTACHMENT_BYTES`, which FILE-7 deletes). This is the
+ * authoritative cap: it lives here, next to `totalSizeBytesForCourse`
+ * (`@bloombot/db`'s own repo), because this is the one place that can see
+ * every attachment a course already has before deciding whether one more
+ * fits. `apps/web`'s own client-side pre-check is a courtesy that reads
+ * this same number — see that file's own comment for why duplicating it
+ * there is not the same mistake as inventing a second 100 MiB.
+ */
+export const MAX_COURSE_ATTACHMENTS_TOTAL_BYTES = 100 * 1024 * 1024
+
+/** `MAX_COURSE_ATTACHMENTS_TOTAL_BYTES`'s own refusal message, shared so the wording (and the MB math) is computed once rather than reimplemented at each throw site. */
+function overBudgetMessage(existingBytes: number): string {
+  const usedMb = Math.round(existingBytes / (1024 * 1024))
+  const totalMb = Math.round(MAX_COURSE_ATTACHMENTS_TOTAL_BYTES / (1024 * 1024))
+  return `That file would put this course over its ${totalMb} MB total. ${usedMb} MB of ${totalMb} MB is already used.`
+}
 
 const attachInputSchema = z.object({
   courseId: z.string().min(1),
@@ -109,6 +132,32 @@ export function createAttachCourseAttachmentAction(
     },
     execute: async ({ organizationId, input, entity, db }) => {
       const bytes = Buffer.from(input.contentBase64, 'base64')
+
+      // FILE-7 — the budget check runs before anything is written: a
+      // `totalSizeBytesForCourse` read (a SQL `sum`, `@bloombot/db`'s own
+      // repo) that counts every row this course already has, `pending`
+      // included — a pending row's bytes are already on disk (FILE-5's own
+      // `attachmentStorage.write` runs before the row exists at all), so a
+      // pending upload not yet confirmed by the provider still counts
+      // against the total it is already spending. Refusing here, before
+      // `attachmentStorage.write` and before `createPendingAttachment`,
+      // means a refused attach leaves nothing behind on disk or in the
+      // table — the opposite of writing first and having to clean up after
+      // a refusal discovered too late.
+      const existingBytes = courseAttachments.totalSizeBytesForCourse(
+        organizationId,
+        entity.id,
+        db
+      )
+      if (
+        existingBytes + bytes.byteLength >
+        MAX_COURSE_ATTACHMENTS_TOTAL_BYTES
+      ) {
+        throw new ActionConflictError({
+          message: overBudgetMessage(existingBytes),
+        })
+      }
+
       const attachmentId = crypto.randomUUID()
 
       // FILE-5 — the bytes land under this attachment's own id before the

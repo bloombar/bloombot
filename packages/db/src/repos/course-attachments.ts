@@ -12,7 +12,7 @@
  * `@bloombot/openai`) — this file only ever reads or writes the row.
  */
 
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sum } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import { courseAttachments, type AttachmentStatus } from '../schema.js'
@@ -193,6 +193,38 @@ export function deleteAttachment(
     )
     .run()
   return result.changes > 0
+}
+
+/**
+ * FILE-7 — the bytes a course's own attachments already account for, in
+ * total, so `courseAttachments.attach`'s 100 MiB budget can be checked
+ * against a real number rather than a JS `reduce` over every row (the same
+ * "let SQL do the summing" precedent `cost-ledger.ts#getOrganizationSpentMicros`
+ * already sets for a cumulative total, not a per-row scan the caller has to
+ * remember to re-run correctly). Counts a `pending` row exactly the same as
+ * a `ready` one — its `sizeBytes` is already spent on disk (`FILE-5`'s own
+ * `AttachmentStorage.write`, which runs before the row exists at all), so
+ * filtering by status here would let an instructor's own in-flight uploads
+ * hide from the budget they are already consuming. `0` for a course with no
+ * attachments, the same "no rows summed" `null`-to-`0` coercion `sum()`
+ * already needs everywhere else in this package.
+ */
+export function totalSizeBytesForCourse(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): number {
+  const row = db
+    .select({ total: sum(courseAttachments.sizeBytes) })
+    .from(courseAttachments)
+    .where(
+      and(
+        eq(courseAttachments.courseId, courseId),
+        eq(courseAttachments.organizationId, organizationId)
+      )
+    )
+    .get()
+  return Number(row?.total ?? 0)
 }
 
 export type { AttachmentStatus }

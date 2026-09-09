@@ -26,9 +26,14 @@ import {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
   listCourseAttachmentsAction,
+  MAX_COURSE_ATTACHMENTS_TOTAL_BYTES,
 } from '../src/actions/course-attachments.js'
 import { dispatch } from '../src/dispatch.js'
-import { ActionInputError, ActionRefusedError } from '../src/errors.js'
+import {
+  ActionConflictError,
+  ActionInputError,
+  ActionRefusedError,
+} from '../src/errors.js'
 import { seedOrganization } from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
@@ -177,6 +182,191 @@ describe('courseAttachments.attach (FILE-1)', () => {
         { organizationId: otherOrganizationId, db: testDb.db }
       )
     ).rejects.toBeInstanceOf(ActionRefusedError)
+  })
+})
+
+describe('courseAttachments.attach — FILE-7 per-course budget', () => {
+  /** Every subdirectory `AttachmentStorage` has actually written for this organization — `[]` when nothing has been written yet (no directory exists at all). */
+  async function writtenAttachmentDirs(
+    rootDir: string,
+    organizationId: string
+  ): Promise<string[]> {
+    try {
+      const { readdir } = await import('node:fs/promises')
+      return await readdir(join(rootDir, organizationId))
+    } catch {
+      return []
+    }
+  }
+
+  it('succeeds at exactly the budget', async () => {
+    testDb = createTestDatabase()
+    const storage = freshStorage()
+    const organizationId = seedOrganization(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+
+    // An existing pending attachment that already accounts for all but the
+    // last 10 bytes of the budget — no real bytes need to be on disk for
+    // it, since `totalSizeBytesForCourse` sums the row, not the filesystem.
+    courseAttachments.createPendingAttachment(
+      organizationId,
+      {
+        courseId,
+        filename: 'existing.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: MAX_COURSE_ATTACHMENTS_TOTAL_BYTES - 10,
+      },
+      testDb.db
+    )
+
+    const action = createAttachCourseAttachmentAction(storage)
+    const result = await dispatch(
+      action,
+      {
+        courseId,
+        filename: 'last-bit.pdf',
+        contentType: 'application/pdf',
+        // Exactly 10 raw bytes — the course lands exactly at the budget,
+        // not a byte over it.
+        contentBase64: Buffer.from('0123456789').toString('base64'),
+      },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(result.attachmentId).toEqual(expect.any(String))
+    expect(
+      courseAttachments.totalSizeBytesForCourse(
+        organizationId,
+        courseId,
+        testDb.db
+      )
+    ).toBe(MAX_COURSE_ATTACHMENTS_TOTAL_BYTES)
+  })
+
+  it('refuses an attach that would exceed the budget, writing no storage bytes and no row', async () => {
+    testDb = createTestDatabase()
+    const storage = freshStorage()
+    const organizationId = seedOrganization(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+
+    courseAttachments.createPendingAttachment(
+      organizationId,
+      {
+        courseId,
+        filename: 'existing.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: MAX_COURSE_ATTACHMENTS_TOTAL_BYTES - 5,
+      },
+      testDb.db
+    )
+
+    const rowsBefore = courseAttachments.listAttachmentsForCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    ).length
+    const dirsBefore = await writtenAttachmentDirs(storageDir, organizationId)
+
+    const action = createAttachCourseAttachmentAction(storage)
+    await expect(
+      dispatch(
+        action,
+        {
+          courseId,
+          filename: 'one-too-many.pdf',
+          contentType: 'application/pdf',
+          // 6 raw bytes — one over the budget's own last 5.
+          contentBase64: Buffer.from('012345').toString('base64'),
+        },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toBeInstanceOf(ActionConflictError)
+
+    // Refused before anything was written — the row count and the
+    // storage directory are both untouched.
+    const rowsAfter = courseAttachments.listAttachmentsForCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    ).length
+    expect(rowsAfter).toBe(rowsBefore)
+    expect(await writtenAttachmentDirs(storageDir, organizationId)).toEqual(
+      dirsBefore
+    )
+  })
+
+  it('refuses with a message naming the budget and what is already used', async () => {
+    testDb = createTestDatabase()
+    const storage = freshStorage()
+    const organizationId = seedOrganization(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+
+    courseAttachments.createPendingAttachment(
+      organizationId,
+      {
+        courseId,
+        filename: 'existing.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: MAX_COURSE_ATTACHMENTS_TOTAL_BYTES,
+      },
+      testDb.db
+    )
+
+    const action = createAttachCourseAttachmentAction(storage)
+    let caught: unknown
+    try {
+      await dispatch(
+        action,
+        {
+          courseId,
+          filename: 'too-much.pdf',
+          contentType: 'application/pdf',
+          contentBase64: Buffer.from('x').toString('base64'),
+        },
+        { organizationId, db: testDb.db }
+      )
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(ActionConflictError)
+    expect((caught as ActionConflictError).message).toBe(
+      'That file would put this course over its 100 MB total. 100 MB of 100 MB is already used.'
+    )
+  })
+
+  it('counts a pending row toward the total exactly the same as a ready one', async () => {
+    testDb = createTestDatabase()
+    const storage = freshStorage()
+    const organizationId = seedOrganization(testDb.db)
+    const courseId = seedCourse(organizationId, testDb.db)
+
+    // Still `pending` — never marked `ready` — but its bytes are already
+    // spent (FILE-5's own "the bytes land before the row does"), so it must
+    // count against the budget exactly as a `ready` row would.
+    courseAttachments.createPendingAttachment(
+      organizationId,
+      {
+        courseId,
+        filename: 'still-pending.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: MAX_COURSE_ATTACHMENTS_TOTAL_BYTES,
+      },
+      testDb.db
+    )
+
+    const action = createAttachCourseAttachmentAction(storage)
+    await expect(
+      dispatch(
+        action,
+        {
+          courseId,
+          filename: 'anything.pdf',
+          contentType: 'application/pdf',
+          contentBase64: Buffer.from('x').toString('base64'),
+        },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toBeInstanceOf(ActionConflictError)
   })
 })
 

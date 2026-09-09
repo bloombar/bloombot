@@ -144,7 +144,7 @@ describe('accepting the documents before an account exists', () => {
     render(<SignIn onSignedIn={vi.fn()} googleClientId="client-id.test" />)
 
     expect(
-      screen.getByRole('button', { name: 'Sign in with Google' })
+      screen.getByRole('button', { name: 'Continue with Google' })
     ).toBeDisabled()
   })
 
@@ -154,7 +154,7 @@ describe('accepting the documents before an account exists', () => {
     fireEvent.click(screen.getByTestId('accept-legal'))
 
     expect(
-      screen.getByRole('button', { name: 'Sign in with Google' })
+      screen.getByRole('button', { name: 'Continue with Google' })
     ).toBeEnabled()
   })
 })

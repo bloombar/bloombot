@@ -7,10 +7,15 @@
  * `PENDING_CONNECT_ORG_KEY`, unaffected by the AUTH-6 rework; the rest of
  * that flow is `discord-callback.test.tsx`'s own scenario) and an assistant
  * token, previewed before it is ever redeemed (LINK-6).
+ *
+ * LINK-7 (polish slice): the Discord status line — read from
+ * `getPersonLinkStatus` on every mount, so it is durable across visits
+ * rather than a flag threaded through the one post-OAuth navigation — and
+ * the branding this screen now shows in both states.
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { AccountSummary } from '../src/api/types.js'
@@ -21,11 +26,13 @@ const {
   previewMcpPersonLink,
   confirmMcpPersonLink,
   requestSignInLink,
+  getPersonLinkStatus,
 } = vi.hoisted(() => ({
   beginDiscordPersonLink: vi.fn(),
   previewMcpPersonLink: vi.fn(),
   confirmMcpPersonLink: vi.fn(),
   requestSignInLink: vi.fn(),
+  getPersonLinkStatus: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -38,6 +45,7 @@ vi.mock('../src/api/client.js', async () => {
     previewMcpPersonLink,
     confirmMcpPersonLink,
     requestSignInLink,
+    getPersonLinkStatus,
   }
 })
 
@@ -53,6 +61,12 @@ const ACCOUNT: AccountSummary = {
   ],
   connectedOrganizations: [],
 }
+
+// Default for every signed-in test — not connected — since most of them are
+// not exercising LINK-7's own status line; tests that are override it.
+beforeEach(() => {
+  getPersonLinkStatus.mockResolvedValue({ discord: { connected: false } })
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -121,7 +135,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     render(
       <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Discord' }))
+    // LINK-7 — the button only appears once the status fetch (mocked "not
+    // connected" by this file's own `beforeEach`) resolves; `findByRole`
+    // waits for it rather than assuming it is already there.
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Connect Discord' })
+    )
 
     await waitFor(() => expect(assign).toHaveBeenCalled())
     expect(beginDiscordPersonLink).toHaveBeenCalledWith('org-1')
@@ -129,6 +148,52 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     // module comment: a same-tab redirect to Discord and back) — AUTH-6
     // only retired its *other* former job, surviving a sign-in redemption.
     expect(sessionStorage.getItem(PENDING_CONNECT_ORG_KEY)).toBe('org-1')
+  })
+
+  // Fails without the change: before LINK-7's own status read existed,
+  // this screen always rendered the button, even for a caller whose
+  // Discord identity is already connected — there was no server-sourced
+  // signal to show anything else.
+  it('renders the connected status in place of the button once the server reports Discord connected', async () => {
+    getPersonLinkStatus.mockResolvedValue({
+      discord: { connected: true, username: 'a-student' },
+    })
+
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(await screen.findByText(/a-student/)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Connect Discord' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders the button, not a connected status, while Discord is not connected', async () => {
+    getPersonLinkStatus.mockResolvedValue({ discord: { connected: false } })
+
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Connect Discord' })
+    ).toBeInTheDocument()
+  })
+
+  // This paragraph was removed at the user's own request — nothing
+  // replaces it.
+  it('does not render the removed "Sends you to Discord..." paragraph', async () => {
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    await screen.findByRole('button', { name: 'Connect Discord' })
+    expect(
+      screen.queryByText(
+        "Sends you to Discord's own sign-in screen, then back here to confirm."
+      )
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -182,5 +247,34 @@ describe('Connect — signed in — an assistant (LINK-6/8)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+
+  it('explains what connecting an assistant is for, naming ChatGPT and Claude', () => {
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(screen.getByText(/ChatGPT/)).toBeInTheDocument()
+    expect(screen.getByText(/Claude/)).toBeInTheDocument()
+  })
+})
+
+describe('Connect — branding', () => {
+  it('renders the logo and the Bloombot wordmark signed out', () => {
+    render(
+      <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
+    )
+
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+    expect(screen.getByText('Bloombot')).toBeInTheDocument()
+  })
+
+  it('renders the logo and the Bloombot wordmark signed in', () => {
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+    expect(screen.getByText('Bloombot')).toBeInTheDocument()
   })
 })

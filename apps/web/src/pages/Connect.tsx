@@ -22,21 +22,38 @@
  * offers two independent things to connect — Discord (LINK-7) and an
  * assistant (LINK-8) — neither of which spends anything until its own
  * preview screen is confirmed.
+ *
+ * LINK-7 (polish slice): once Discord is actually connected, this screen
+ * shows a status line in place of the "Connect Discord" button — read from
+ * `GET .../person-link/status` (`routes/person-link.ts`) on every mount,
+ * not from a flag `App.tsx` passes through after its own post-OAuth
+ * navigation. Durability is the point: `App.tsx`'s own `onConnected`
+ * already lands the browser back on this exact URL once, right after
+ * confirming, but a *later*, unrelated visit needs to show the same
+ * "connected" state, which only the server can answer. LINK-6/8's "connect
+ * an assistant" section also gets a line of plain-language context here —
+ * what it is actually for, not merely a form asking for a token.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import {
   beginDiscordPersonLink,
   confirmMcpPersonLink,
+  getPersonLinkStatus,
   previewMcpPersonLink,
   ApiError,
 } from '../api/client.js'
-import type { AccountSummary, PersonLinkPreview } from '../api/types.js'
+import type {
+  AccountSummary,
+  PersonLinkPreview,
+  PersonLinkStatusResponse,
+} from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
+import { Logo } from '../components/Logo.js'
 import { describePersonLinkOutcome } from '../person-link-outcome.js'
 import { SignIn } from './SignIn.js'
 
@@ -149,19 +166,62 @@ function McpConnectForm({ organizationId }: { organizationId: string }) {
   )
 }
 
+/** LINK-7: the logo and wordmark this page shows above everything else, signed in or out — `pages/Home.tsx`'s own header markup (around its line 85), reused rather than reinvented. */
+function BrandHeader() {
+  return (
+    <header className="flex flex-col items-center text-center">
+      <Logo className="size-16" title="Bloombot" />
+      <p className="mt-4 text-2xl font-semibold text-neutral-900">Bloombot</p>
+    </header>
+  )
+}
+
 export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
+  const [discordStatus, setDiscordStatus] = useState<
+    PersonLinkStatusResponse['discord'] | undefined
+  >(undefined)
+  const [statusError, setStatusError] = useState<ApiError | undefined>(
+    undefined
+  )
+
+  // LINK-7: fetched fresh on every mount this screen reaches signed in —
+  // `cancelled` guards against setting state from a response that resolves
+  // after this component has already unmounted (a fast navigation away),
+  // the same device `pages/Courses.tsx#refresh` uses for its own
+  // out-of-order guard, simplified here since there is only ever one
+  // in-flight request for a given mount.
+  useEffect(() => {
+    if (!account) return
+    let cancelled = false
+    getPersonLinkStatus(organizationId).then(
+      (response) => {
+        if (!cancelled) setDiscordStatus(response.discord)
+      },
+      (caught: unknown) => {
+        if (cancelled) return
+        if (caught instanceof ApiError) setStatusError(caught)
+        else throw caught
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [account, organizationId])
 
   if (!account) {
     // AUTH-6 — `destination` is what carries this page's own address
     // through the sign-in round trip now; see this file's own module
     // comment for why that replaced a `sessionStorage` marker set here.
     return (
-      <SignIn
-        onSignedIn={onSignedIn}
-        destination={`/connect/${organizationId}`}
-      />
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+        <BrandHeader />
+        <SignIn
+          onSignedIn={onSignedIn}
+          destination={`/connect/${organizationId}`}
+        />
+      </div>
     )
   }
 
@@ -185,6 +245,8 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
 
   return (
     <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+      <BrandHeader />
+
       <div className="flex flex-col gap-2">
         <h1 className="text-page-title font-semibold text-neutral-900">
           Connect your account
@@ -199,23 +261,40 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
         <h2 className="text-sm font-semibold text-neutral-900">
           Connect Discord
         </h2>
-        <p className="text-sm text-neutral-700">
-          Sends you to Discord's own sign-in screen, then back here to confirm.
-        </p>
-        <Button
-          variant="primary"
-          onClick={() => void handleConnectDiscord()}
-          disabled={starting}
-        >
-          {starting ? 'Starting…' : 'Connect Discord'}
-        </Button>
+        {discordStatus === undefined ? (
+          // LINK-7 — a quiet loading state while `getPersonLinkStatus`
+          // resolves, the same `role="status"` device `pages/Courses.tsx`
+          // already uses: never flash the button only to replace it with
+          // the connected line a moment later.
+          <p role="status" className="text-sm text-neutral-500">
+            Loading…
+          </p>
+        ) : discordStatus.connected ? (
+          <p className="text-sm text-neutral-700">
+            Discord connected
+            {discordStatus.username ? ` as ${discordStatus.username}` : ''}.
+          </p>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => void handleConnectDiscord()}
+            disabled={starting}
+          >
+            {starting ? 'Starting…' : 'Connect Discord'}
+          </Button>
+        )}
         {error && <ErrorMessage error={error} />}
+        {statusError && <ErrorMessage error={statusError} />}
       </div>
 
       <div className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold text-neutral-900">
           Connect an assistant
         </h2>
+        <p className="text-sm text-neutral-700">
+          This connects ChatGPT, Claude and other AI assistants, so you can chat
+          with Bloombot from inside those apps.
+        </p>
         <McpConnectForm organizationId={organizationId} />
       </div>
     </div>

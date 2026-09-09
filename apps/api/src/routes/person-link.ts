@@ -579,6 +579,56 @@ export function buildPersonLinkRouter(
     res.status(200).json({ connected: true })
   })
 
+  /**
+   * LINK-7: durable connect status for the panel's own connect screen
+   * (`apps/web/src/pages/Connect.tsx`) — read-only, answered from the
+   * database rather than a transient flag threaded through `App.tsx`'s own
+   * post-OAuth navigation, so a *later* visit to the same URL still shows
+   * "connected" (this file's own module comment on why `App.tsx` never
+   * needs to change for that). `people.resolveIdentity` is the same
+   * read-only lookup `resolveOrCreateBareDiscordSurvivor` and `/mcp/preview`
+   * already use to find the caller's own connected person; `404
+   * organization_not_found` matches `/discord/begin`'s own handling for an
+   * unknown organization, and a signed-in account with no person here at
+   * all (never began a connect) reports `discord: { connected: false }`
+   * rather than a 404 of its own — there is nothing wrong with the request,
+   * only nothing yet to report. `person_identities` (this file's schema,
+   * `packages/db/src/schema.ts`) has no username column — `externalId` is
+   * the Discord snowflake, not a display name — so `username` is simply
+   * omitted rather than invented; the brief for this slice is explicit that
+   * this is not a migration to add.
+   */
+  router.get<{ organizationId: string }>('/status', (req, res) => {
+    const organizationId = req.params.organizationId
+    const accountId = requireAccountId(req)
+    if (!accountId) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!organizationExists(organizationId, deps.db)) {
+      res.status(404).json({ error: 'organization_not_found' })
+      return
+    }
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: accountId },
+      deps.db
+    )
+    if (!person) {
+      res.status(200).json({ discord: { connected: false } })
+      return
+    }
+    const discordIdentity = people.getPersonIdentity(
+      organizationId,
+      person.id,
+      'discord',
+      deps.db
+    )
+    res
+      .status(200)
+      .json({ discord: { connected: discordIdentity !== undefined } })
+  })
+
   /** LINK-6/8: preview what redeeming an MCP-issued token would do — non-consuming, so a person can still change their mind (`previewMcpPersonLink` spends nothing), and no `people` write at all unless the token actually names this organization (`peekMcpPersonLink`, this file's own module comment). */
   router.post<{ organizationId: string }>('/mcp/preview', (req, res) => {
     const organizationId = req.params.organizationId

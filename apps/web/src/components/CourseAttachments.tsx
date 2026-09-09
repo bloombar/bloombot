@@ -22,7 +22,11 @@
  * this app's own precedent for "a background job queued with no worker
  * running to claim it must read differently from a hang," and this
  * component follows the same shape: poll, and once something has sat
- * unresolved past a threshold, say so by name (`npm run worker:dev`).
+ * unresolved past a threshold, say so — copy that works for a student on
+ * production and a developer on a dev machine alike (FILE-8: the previous
+ * copy named `npm run worker:dev` by name, which read as nonsense advice on
+ * production, the only place this screen's own stuck-job message could
+ * possibly be seen by someone who cannot run it).
  * *What* it polls differs deliberately, though: `ScaffoldButton` tracks one
  * job id it already knows (from the single action it just dispatched) and
  * polls `jobs.get`. A course's knowledge files are a *list*, most of which
@@ -434,9 +438,15 @@ export function CourseAttachments({
                         </p>
                       )}
                     {stillQueued && (
+                      // FILE-8 — this used to name `npm run worker:dev`,
+                      // dev-only advice that is the only thing this screen
+                      // says on production when a job is stuck there too.
+                      // This copy works for both audiences: it says what is
+                      // true either way (the file is still being processed,
+                      // and it is taking longer than expected) without
+                      // assuming a dev machine.
                       <p role="status" className="text-sm text-warning-600">
-                        Still queued — make sure the background worker (
-                        <code>npm run worker:dev</code>) is running.
+                        Still processing — this is taking longer than expected.
                       </p>
                     )}
                   </div>

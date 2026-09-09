@@ -1,12 +1,13 @@
 /**
- * FILE-1..3 — the OpenAI calls `apps/worker`'s knowledge-file handler makes:
- * upload a file, create a vector store for a course that has none yet,
- * attach an uploaded file to one, and undo both a detach. The same call
- * shape `client.ts`/`conversations.ts` already use — `postJson` for every
- * JSON call (`http.ts`, widened in this slice to carry a `method` too), and
- * failures classified the same way (`errors.ts`) so a transient failure
- * (a timeout, a rate limit, a 5xx) is a caller's decision to retry, never
- * this file's own.
+ * FILE-1..3, FILE-8 — the OpenAI calls `apps/worker`'s knowledge-file
+ * handler makes: upload a file, create a vector store for a course that has
+ * none yet, attach an uploaded file to one (polling until it settles —
+ * FILE-8, see `attachFileToVectorStore`'s own doc comment), and undo both a
+ * detach. The same call shape `client.ts`/`conversations.ts` already use —
+ * `postJson` for every JSON call (`http.ts`, widened to carry a `method`,
+ * now `'POST' | 'DELETE' | 'GET'`), and failures classified the same way
+ * (`errors.ts`) so a transient failure (a timeout, a rate limit, a 5xx) is a
+ * caller's decision to retry, never this file's own.
  *
  * `uploadFile` is the one exception: OpenAI's `POST /files` takes
  * `multipart/form-data`, not JSON, so it builds its own request with the
@@ -118,21 +119,62 @@ export async function createVectorStore(
 export type AttachFileToVectorStoreResult =
   { status: 'completed' } | { status: 'failed'; reason: string }
 
+/** The shape both `POST /vector_stores/{id}/files` and its own poll (`GET` on the same path plus `/{file_id}`) return. */
+interface VectorStoreFileStatusBody {
+  status?: unknown
+  last_error?: { message?: unknown }
+}
+
+/** `body.status` read into the one shape this adapter cares about — `undefined` for anything it does not recognise, so an unexpected shape polls again rather than misreading it as one of the two terminal states. */
+function readStatus(body: VectorStoreFileStatusBody | undefined): unknown {
+  return body?.status
+}
+
+function attachResultFromBody(
+  body: VectorStoreFileStatusBody | undefined
+): AttachFileToVectorStoreResult | undefined {
+  if (readStatus(body) === 'completed') return { status: 'completed' }
+  if (readStatus(body) === 'failed') {
+    const reason =
+      typeof body?.last_error?.message === 'string'
+        ? body.last_error.message
+        : 'OpenAI rejected this file for reasons it did not explain'
+    return { status: 'failed', reason }
+  }
+  return undefined
+}
+
 /**
- * Attach an already-uploaded file to a vector store (FILE-1). OpenAI's own
- * API processes this asynchronously in general (`status` can come back
- * `in_progress`); this adapter treats anything other than an immediate
- * `completed` or `failed` as a transient `server_error` (MDL-5's own
- * retryable class) — `apps/worker`'s job queue is what actually supplies
- * the retry, exactly the way an ordinary transient HTTP failure already
- * does for every other call in this package, so this file adds no polling
- * loop of its own.
+ * Attach an already-uploaded file to a vector store (FILE-1/FILE-8).
+ *
+ * `POST /vector_stores/{id}/files` is asynchronous *by design* — it
+ * essentially never returns `completed` synchronously; a success response
+ * is `in_progress`, and the provider does the actual chunking and embedding
+ * afterwards. Treating `in_progress` as a transient failure (this
+ * function's own history, see `docs/DECISIONS.md`) means the call already
+ * succeeded and the caller's retry attaches the same file again — five
+ * times on a production run, each one an orphaned attempt the provider had
+ * already accepted.
+ *
+ * So this function polls itself, rather than leaving that to `apps/worker`'s
+ * own job queue: `GET /vector_stores/{id}/files/{file_id}` until `status` is
+ * `completed` or `failed`, bounded by `maxWaitMs` (default 120s — comfortably
+ * inside the worker's own `JOB_HANDLER_TIMEOUT_MS`, 240s in production) at
+ * `pollIntervalMs` apart (default 2s). If the deadline passes still
+ * `in_progress`, *that* is when this throws a retryable `server_error` — a
+ * retry is genuinely the right move at that point, and (with
+ * `apps/worker/src/handlers/course-attachments.ts`'s own providerFileId
+ * guard) it resumes rather than re-uploading.
  */
 export async function attachFileToVectorStore(
   options: PostJsonOptions,
   vectorStoreId: string,
-  fileId: string
+  fileId: string,
+  poll: { maxWaitMs?: number; pollIntervalMs?: number } = {}
 ): Promise<AttachFileToVectorStoreResult> {
+  const maxWaitMs = poll.maxWaitMs ?? 120_000
+  const pollIntervalMs = poll.pollIntervalMs ?? 2_000
+
   const response = await postJson(
     `/vector_stores/${vectorStoreId}/files`,
     { file_id: fileId },
@@ -141,23 +183,45 @@ export async function attachFileToVectorStore(
   if (!response.ok) {
     throw classifyHttpError(response.status, response.body)
   }
-  const body = response.body as
-    { status?: unknown; last_error?: { message?: unknown } } | undefined
-  if (body?.status === 'completed') return { status: 'completed' }
-  if (body?.status === 'failed') {
-    const reason =
-      typeof body.last_error?.message === 'string'
-        ? body.last_error.message
-        : 'OpenAI rejected this file for reasons it did not explain'
-    return { status: 'failed', reason }
+  const immediate = attachResultFromBody(
+    response.body as VectorStoreFileStatusBody | undefined
+  )
+  if (immediate) return immediate
+
+  // Still `in_progress` (or a shape this adapter does not recognise) right
+  // after the create call — the ordinary case (see this function's own doc
+  // comment). Poll the file's own status until it settles or the budget
+  // runs out. The number of polls is derived from `maxWaitMs`/
+  // `pollIntervalMs` up front, rather than compared against a wall-clock
+  // deadline each time round — an explicit, finite bound a test can assert
+  // the exact call count of, with no dependence on how fast the machine
+  // running it happens to be.
+  const maxPolls = Math.max(1, Math.ceil(maxWaitMs / pollIntervalMs))
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    await sleep(pollIntervalMs)
+
+    const pollResponse = await postJson(
+      `/vector_stores/${vectorStoreId}/files/${fileId}`,
+      undefined,
+      { ...options, method: 'GET' }
+    )
+    if (!pollResponse.ok) {
+      throw classifyHttpError(pollResponse.status, pollResponse.body)
+    }
+    const settled = attachResultFromBody(
+      pollResponse.body as VectorStoreFileStatusBody | undefined
+    )
+    if (settled) return settled
   }
-  // Still `in_progress` (or a shape this adapter does not recognise) —
-  // worth a retry, the same as any other transient failure (see this
-  // function's own doc comment).
+
   throw new ModelRequestError(
     'server_error',
-    `OpenAI vector_stores.files.create did not complete synchronously (status: ${String(body?.status)})`
+    `OpenAI is still processing this file (vector_stores.files, status: in_progress) after ${maxWaitMs}ms of polling — the file was already accepted, so a retry resumes rather than re-uploading it`
   )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** Remove a file from a vector store (FILE-3) — what actually stops it grounding answers; the file object itself is a separate call (`deleteFile`, below). */

@@ -9,10 +9,12 @@
  *
  * Each endpoint's response is programmable per test via `respondToConversations`/
  * `respondToResponses`/`respondToFiles`/`respondToVectorStoreCreate`/
- * `respondToVectorStoreFileAttach`/`respondToVectorStoreFileDelete`/
- * `respondToFileDelete` — a queue of one-shot responders, falling back to a
- * fixed default once the queue is empty, so a test can script "500 then
- * 200" (MDL-5) without the fake growing test-specific branches of its own.
+ * `respondToVectorStoreFileAttach`/`respondToVectorStoreFileAttachPoll`/
+ * `respondToVectorStoreFileDelete`/`respondToFileDelete` — a queue of
+ * one-shot responders, falling back to a fixed default once the queue is
+ * empty, so a test can script "500 then 200" (MDL-5), or FILE-8's own
+ * "in_progress, then completed on a later poll", without the fake growing
+ * test-specific branches of its own.
  *
  * `POST /files` is the one endpoint whose request body is not JSON — the
  * real API takes `multipart/form-data`, so this fake parses it with the
@@ -79,6 +81,12 @@ const DEFAULT_VECTOR_STORE_FILE_ATTACH_RESPONSE: FakeResponse = {
   body: { status: 'completed' },
 }
 
+/** FILE-8 — the default answer to a poll (`GET /vector_stores/:id/files/:fileId`) when a test never queues one; `completed` so a test only has to script the polls it actually cares about. */
+const DEFAULT_VECTOR_STORE_FILE_ATTACH_POLL_RESPONSE: FakeResponse = {
+  status: 200,
+  body: { status: 'completed' },
+}
+
 const DEFAULT_DELETE_RESPONSE: FakeResponse = {
   status: 200,
   body: { deleted: true },
@@ -126,6 +134,7 @@ export class FakeOpenAiServer {
   private filesQueue: Responder[] = []
   private vectorStoreCreateQueue: Responder[] = []
   private vectorStoreFileAttachQueue: Responder[] = []
+  private vectorStoreFileAttachPollQueue: Responder[] = []
   private vectorStoreFileDeleteQueue: Responder[] = []
   private fileDeleteQueue: Responder[] = []
 
@@ -190,6 +199,11 @@ export class FakeOpenAiServer {
     this.vectorStoreFileAttachQueue.push(toResponder(response))
   }
 
+  /** Queue one response for the next `GET /vector_stores/:id/files/:fileId` — `attachFileToVectorStore`'s own poll (FILE-8). */
+  respondToVectorStoreFileAttachPoll(response: FakeResponse | Responder): void {
+    this.vectorStoreFileAttachPollQueue.push(toResponder(response))
+  }
+
   /** Queue one response for the next `DELETE /vector_stores/:id/files/:fileId` (FILE-3). */
   respondToVectorStoreFileDelete(response: FakeResponse | Responder): void {
     this.vectorStoreFileDeleteQueue.push(toResponder(response))
@@ -233,6 +247,16 @@ export class FakeOpenAiServer {
           m === 'DELETE' && /^\/vector_stores\/[^/]+\/files\/[^/]+$/.test(p),
         queue: this.vectorStoreFileDeleteQueue,
         default: DEFAULT_DELETE_RESPONSE,
+      },
+      {
+        // FILE-8 — `attachFileToVectorStore`'s own poll, the same path as
+        // the `DELETE` above but a `GET`, so both are matched by method
+        // first.
+        method: 'GET',
+        test: (m, p) =>
+          m === 'GET' && /^\/vector_stores\/[^/]+\/files\/[^/]+$/.test(p),
+        queue: this.vectorStoreFileAttachPollQueue,
+        default: DEFAULT_VECTOR_STORE_FILE_ATTACH_POLL_RESPONSE,
       },
       {
         method: 'POST',

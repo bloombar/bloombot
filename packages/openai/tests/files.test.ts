@@ -169,15 +169,134 @@ describe('files.ts (FILE-1..3)', () => {
       ).rejects.toBeInstanceOf(ModelRequestError)
     })
 
-    it('treats a still-processing status as a retryable server error', async () => {
+    // FILE-8: the regression that shipped to production — the real API
+    // returns `in_progress` on *success*, not as an error. Polling until it
+    // settles is the fix; treating this as an immediate failure (the old
+    // behaviour) is exactly what re-attached an already-attached file five
+    // times over.
+    it('FILE-8: an attach that returns in_progress and then completed on a later poll resolves completed, without ever throwing', async () => {
       server.respondToVectorStoreFileAttach({
         status: 200,
         body: { status: 'in_progress' },
       })
+      server.respondToVectorStoreFileAttachPoll({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      server.respondToVectorStoreFileAttachPoll({
+        status: 200,
+        body: { status: 'completed' },
+      })
+
+      const result = await attachFileToVectorStore(options, 'vs_1', 'file_1', {
+        maxWaitMs: 100,
+        pollIntervalMs: 5,
+      })
+
+      expect(result).toEqual({ status: 'completed' })
+      const polls = server.requests.filter(
+        (r) =>
+          r.method === 'GET' && r.path === '/vector_stores/vs_1/files/file_1'
+      )
+      expect(polls).toHaveLength(2)
+    })
+
+    // FILE-8: the same asynchronous path, but the provider eventually
+    // rejects the file rather than finishing it — the provider's own
+    // rejection reason still comes through, from the poll rather than the
+    // original create call.
+    it('FILE-8: in_progress then failed on a later poll resolves failed with the providers own reason', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      server.respondToVectorStoreFileAttachPoll({
+        status: 200,
+        body: {
+          status: 'failed',
+          last_error: { message: 'unsupported file format' },
+        },
+      })
+
+      const result = await attachFileToVectorStore(options, 'vs_1', 'file_1', {
+        maxWaitMs: 100,
+        pollIntervalMs: 5,
+      })
+
+      expect(result).toEqual({
+        status: 'failed',
+        reason: 'unsupported file format',
+      })
+    })
+
+    // FILE-8: an immediate `completed` (rare, but the API's own docs do not
+    // rule it out) must resolve without ever reaching the poll endpoint —
+    // there is nothing left to wait for.
+    it('FILE-8: an immediate completed resolves without any polling call', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'completed' },
+      })
+
+      const result = await attachFileToVectorStore(options, 'vs_1', 'file_1', {
+        maxWaitMs: 100,
+        pollIntervalMs: 5,
+      })
+
+      expect(result).toEqual({ status: 'completed' })
+      expect(server.requests.filter((r) => r.method === 'GET')).toHaveLength(0)
+    })
+
+    // FILE-8: the polling budget is explicit and finite — still
+    // `in_progress` at the deadline is a retryable error, not an unbounded
+    // loop. `maxWaitMs`/`pollIntervalMs` are both driven by the test, so
+    // this never actually waits 120s.
+    it('FILE-8: still in_progress at the deadline throws a retryable error, with a bounded number of polls', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      // Every poll (there is no queued default `completed`) keeps reporting
+      // `in_progress` — the fake's own default would otherwise settle it.
+      for (let i = 0; i < 10; i++) {
+        server.respondToVectorStoreFileAttachPoll({
+          status: 200,
+          body: { status: 'in_progress' },
+        })
+      }
 
       await expect(
-        attachFileToVectorStore(options, 'vs_1', 'file_1')
-      ).rejects.toMatchObject({ kind: 'server_error', retryable: true })
+        attachFileToVectorStore(options, 'vs_1', 'file_1', {
+          maxWaitMs: 40,
+          pollIntervalMs: 10,
+        })
+      ).rejects.toMatchObject({
+        kind: 'server_error',
+        retryable: true,
+        message: expect.stringContaining('still processing'),
+      })
+
+      const polls = server.requests.filter((r) => r.method === 'GET')
+      // ceil(40 / 10) = 4 — bounded, not unbounded.
+      expect(polls).toHaveLength(4)
+    })
+
+    // FILE-8: a poll itself can fail transiently (a timeout, a rate limit,
+    // a 5xx) — classified through `errors.ts` exactly like every other call
+    // in this package, not swallowed as "still in progress".
+    it('FILE-8: a non-2xx on a poll is classified through errors.ts the same as any other call', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      server.respondToVectorStoreFileAttachPoll({ status: 500, body: {} })
+
+      await expect(
+        attachFileToVectorStore(options, 'vs_1', 'file_1', {
+          maxWaitMs: 100,
+          pollIntervalMs: 5,
+        })
+      ).rejects.toBeInstanceOf(ModelRequestError)
     })
   })
 

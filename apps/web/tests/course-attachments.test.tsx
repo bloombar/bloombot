@@ -376,7 +376,7 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     expect(screen.getByText('No files attached yet.')).toBeInTheDocument()
   })
 
-  it('a pending attachment stuck past the hint threshold says the worker might not be running', async () => {
+  it('a pending attachment stuck past the hint threshold says it is still processing', async () => {
     listCourseAttachments.mockResolvedValue([attachment({ status: 'pending' })])
 
     renderWithModal(
@@ -389,14 +389,10 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     )
     await screen.findByText('Pending…')
 
-    expect(
-      screen.queryByText(/make sure the background worker/)
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Still processing/)).not.toBeInTheDocument()
 
     await waitFor(() =>
-      expect(
-        screen.getByText(/make sure the background worker/)
-      ).toBeInTheDocument()
+      expect(screen.getByText(/Still processing/)).toBeInTheDocument()
     )
   })
 
@@ -417,9 +413,7 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     await screen.findByText('Ready — grounding answers.')
 
     await new Promise((resolve) => setTimeout(resolve, 250))
-    expect(
-      screen.queryByText(/make sure the background worker/)
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Still processing/)).not.toBeInTheDocument()
   })
 
   // FILE-7 — the regression that matters: clicking the delete icon
@@ -457,7 +451,7 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     ).toBeInTheDocument()
   })
 
-  it('a detach stuck past the hint threshold (still present) also says the worker might not be running', async () => {
+  it('a detach stuck past the hint threshold (still present) also says it is still processing', async () => {
     listCourseAttachments.mockResolvedValue([
       attachment({ status: 'ready', filename: 'syllabus.pdf' }),
     ])
@@ -477,9 +471,7 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     await screen.findByText('Removing…')
 
     await waitFor(() =>
-      expect(
-        screen.getByText(/make sure the background worker/)
-      ).toBeInTheDocument()
+      expect(screen.getByText(/Still processing/)).toBeInTheDocument()
     )
     // Still there — the row itself never disappears in this scenario
     // (`listCourseAttachments` keeps returning it), which is exactly the

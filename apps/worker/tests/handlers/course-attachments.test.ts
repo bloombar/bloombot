@@ -206,6 +206,128 @@ describe('courseAttachments.attach handler', () => {
     expect(course?.vectorStoreId).toBe('vs_hand_typed')
   })
 
+  // FILE-8: a retry of an attachment that already has a `providerFileId`
+  // (a previous attempt's upload succeeded, then a later step failed
+  // transiently) must not upload the same bytes again.
+  it('FILE-8: a retry of an attachment that already has a providerFileId does not call uploadFile, and reuses the recorded id', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+    await storage.write(seeded.organizationId, 'att-12', Buffer.from('x'))
+    const attachment = courseAttachments.createPendingAttachment(
+      seeded.organizationId,
+      {
+        id: 'att-12',
+        courseId: seeded.courseId,
+        filename: 'a.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+      },
+      testDb.db
+    )
+    // Simulates the state a real retry finds: an earlier attempt's upload
+    // already succeeded and was recorded, before this job's own later step
+    // (attaching to the vector store) failed transiently and got retried.
+    courseAttachments.recordProviderFileId(
+      seeded.organizationId,
+      attachment.id,
+      'file_already_uploaded',
+      testDb.db
+    )
+    openaiServer.respondToVectorStoreCreate({
+      status: 200,
+      body: { id: 'vs_12' },
+    })
+    openaiServer.respondToVectorStoreFileAttach({
+      status: 200,
+      body: { status: 'completed' },
+    })
+
+    const handler = createAttachCourseAttachmentHandler({
+      openaiHttpOptions,
+      attachmentStorage: storage,
+    })
+    const report = await handler(
+      { attachmentId: attachment.id },
+      {
+        organizationId: seeded.organizationId,
+        jobId: randomUUID(),
+        attempts: 2,
+        maxAttempts: 3,
+        db: testDb.db,
+        logger: createFakeLogger(),
+      }
+    )
+
+    expect(report).toEqual({
+      attachmentId: attachment.id,
+      status: 'ready',
+      providerFileId: 'file_already_uploaded',
+    })
+    // No `POST /files` at all — the recorded id was reused, not re-uploaded.
+    expect(
+      openaiServer.requests.filter(
+        (r) => r.method === 'POST' && r.path === '/files'
+      )
+    ).toHaveLength(0)
+    expect(
+      openaiServer.requests.some((r) => r.path === '/vector_stores/vs_12/files')
+    ).toBe(true)
+  })
+
+  // The other half of the same finding: an attachment with no recorded id
+  // yet (the ordinary first attempt) still uploads exactly once.
+  it('FILE-8: an attachment with no providerFileId still uploads exactly once', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+    await storage.write(seeded.organizationId, 'att-13', Buffer.from('x'))
+    const attachment = courseAttachments.createPendingAttachment(
+      seeded.organizationId,
+      {
+        id: 'att-13',
+        courseId: seeded.courseId,
+        filename: 'a.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+      },
+      testDb.db
+    )
+    openaiServer.respondToFiles({ status: 200, body: { id: 'file_13' } })
+    openaiServer.respondToVectorStoreCreate({
+      status: 200,
+      body: { id: 'vs_13' },
+    })
+    openaiServer.respondToVectorStoreFileAttach({
+      status: 200,
+      body: { status: 'completed' },
+    })
+
+    const handler = createAttachCourseAttachmentHandler({
+      openaiHttpOptions,
+      attachmentStorage: storage,
+    })
+    const report = await handler(
+      { attachmentId: attachment.id },
+      {
+        organizationId: seeded.organizationId,
+        jobId: randomUUID(),
+        attempts: 1,
+        db: testDb.db,
+        logger: createFakeLogger(),
+      }
+    )
+
+    expect(report).toEqual({
+      attachmentId: attachment.id,
+      status: 'ready',
+      providerFileId: 'file_13',
+    })
+    expect(
+      openaiServer.requests.filter(
+        (r) => r.method === 'POST' && r.path === '/files'
+      )
+    ).toHaveLength(1)
+  })
+
   // FILE-2: a provider rejection leaves the attachment failed with the
   // reason, and the course is never left looking configured.
   it('FILE-2: a provider rejection leaves the attachment failed with the reason, and the course is not left looking configured', async () => {

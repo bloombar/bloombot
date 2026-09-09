@@ -10791,3 +10791,44 @@ leads with. Caught by this slice's own e2e/integration tests (`packages/db/tests
 `apps/api/tests/routes/person-link.test.ts`), not anticipated from the brief's own file list — `mergePeople`
 is outside `docs/SPEC.md`'s named files for this slice, but the intent mechanism does not actually work
 without it.
+
+---
+
+## D-96 — `packages/openai`: FILE-8 — `POST /vector_stores/{id}/files` is asynchronous, so the adapter polls
+
+**Problem.** Every knowledge-file upload on the live droplet failed five times and gave up. The worker log
+was hundreds of copies of one line: `OpenAI vector_stores.files.create did not complete synchronously
+(status: in_progress)`, `"attempts":5,"maxAttempts":5`. `attachFileToVectorStore`'s own doc comment stated,
+as settled reasoning, that anything other than an immediate `completed` or `failed` was a transient
+`server_error` for `apps/worker`'s job queue to retry. That premise is wrong about the API:
+`POST /vector_stores/{id}/files` is asynchronous *by design* — it returns `status: "in_progress"` on
+*success*, and essentially never returns `completed` synchronously; the provider does the chunking and
+embedding afterwards. The call succeeded, this adapter called it a transient failure, the queue retried an
+operation that had already worked, and after five attempts `markAttachmentFailed` recorded a defeat that
+never happened — the file was often actually attached and searchable, several times over.
+
+**Choice: the adapter polls itself, not the queue.** `attachFileToVectorStore` now polls
+`GET /vector_stores/{id}/files/{file_id}` until `status` is `completed` or `failed`, bounded by an explicit
+`maxWaitMs` (default 120s) and `pollIntervalMs` (default 2s) — comfortably inside `apps/worker`'s own
+`JOB_HANDLER_TIMEOUT_MS` (240s in production). Only once that budget is exhausted while still `in_progress`
+does this throw a retryable `server_error` — at that point a retry genuinely is the right thing, and (see
+the next choice) it resumes rather than restarts. **Do not reintroduce "let the queue retry it" for this
+endpoint** — that reasoning is what shipped this outage, and the "asynchronous by design" premise is not
+going to stop being true.
+
+**Choice: a retry must resume, not re-upload.** `apps/worker/src/handlers/course-attachments.ts`'s step 2
+(`uploadFile`) used to sit inside the retried block with no check for an id already recorded, so each of
+the five attempts uploaded the same bytes again — up to five orphaned OpenAI file objects per attachment on
+the droplet. The handler now reads `attachment.providerFileId` first and skips the upload when it is already
+set, reusing that id — the row already carries it, recorded the instant the first upload succeeds.
+
+**Choice: `postJson` widened to `'GET'`, not a second fetch path.** The poll reaches the same
+abort/timeout/JSON-parse machinery every other call in this package already uses (`http.ts`), rather than a
+bespoke poll loop reimplementing that discipline — a `GET` sends no body (the runtime's own `fetch` rejects
+one on a `GET`/`HEAD`), forced explicitly rather than relying on `JSON.stringify(undefined)`.
+
+**Choice: the panel's stuck-job copy dropped its dev-only advice.** `apps/web/src/components/CourseAttachments.tsx`
+told a stuck user to run `npm run worker:dev` — the only thing the panel said when a job was stuck, on
+production too, where that command means nothing. Replaced with copy that reads true for both audiences
+("still processing… taking longer than expected"), with no behaviour change to the threshold, the
+`role="status"` region, or `stillQueuedIds`.

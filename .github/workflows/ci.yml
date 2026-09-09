@@ -193,6 +193,8 @@ jobs:
           # exactly one attempt with no retry is a failed deploy that looks
           # like a code problem. Empty means 22, ssh's own default.
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          # Required — the checkout on the droplet, absolute. See the check
+          # below for why this has no fallback.
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           # Set this repository variable to any non-empty value on a droplet
           # that has finished the cutover and no longer runs the legacy Python
@@ -209,18 +211,28 @@ jobs:
             echo "::error::repository variables DEPLOY_HOST and DEPLOY_USER must be set"
             exit 1
           fi
+          # Required, not optional with a fallback. It used to be optional, and
+          # deploy.sh's own default — $HOME/discord-channel-manager, the legacy
+          # Python bot's checkout — is the wrong directory on every droplet that
+          # has moved past the cutover, and does not exist at all once that
+          # checkout is deleted. The first real deploy of this platform ran
+          # against that default and reset the *legacy* checkout to the platform
+          # commit before failing and rolling back. Deploying somewhere
+          # unintended is far worse than not deploying, so a missing value is
+          # now a fast, explicit failure.
+          if [ -z "$DEPLOY_PATH" ]; then
+            echo "::error::repository variable DEPLOY_PATH must be set to the checkout on the droplet (e.g. /home/amos/bloombot-platform)"
+            exit 1
+          fi
 
           # scripts/deploy.sh is piped in over stdin rather than run from the
           # droplet's checkout, so the deploy logic is always the version from
           # the commit being deployed and never rewrites itself mid-run.
-          remote="bash -s -- $TARGET_SHA"
+          remote="APP_DIR='$DEPLOY_PATH' bash -s -- $TARGET_SHA"
           if [ -n "$DEPLOY_SKIP_PYTHON_BOT" ]; then
             # An explicitly empty PM2_APP — deploy.sh reads that as "this
             # droplet has no legacy Python bot" and leaves it alone.
             remote="PM2_APP= $remote"
-          fi
-          if [ -n "$DEPLOY_PATH" ]; then
-            remote="APP_DIR='$DEPLOY_PATH' $remote"
           fi
 
           port_args=()

@@ -10569,3 +10569,70 @@ configured" regression test above, confirmed red first against the pre-fix `Home
 `tests/static-documents.test.tsx`'s deletion-path test was rewritten for the reworded text), 40 Playwright
 e2e specs (one more than the previous round's own count — `e2e/course-export-import.spec.ts`, merged in from
 the base branch, unrelated to this rework).
+
+## D-93 — `scripts/check-discord-oauth.mjs`: TEN-4 — collapsing "is the redirect URI actually registered" from a browser comparison into one command
+
+**Problem.** Production fails at Discord's own consent screen with `Invalid OAuth2 redirect_uri`. Prior
+research (D-90 and the round of investigation that followed it) ruled out every code-side cause with
+citations: the `bot` scope imposes no special redirect rule; a malformed PKCE challenge fails with
+`invalid_request`, not this error; the permissions integer is valid; `applications.commands` and
+`integration_type=0` are expected additions Discord's own client appends; a scope problem surfaces as
+`invalid_scope`; and `GET /api/v9/oauth2/authorize` authenticates before it validates, so the 400 is only
+reachable from a logged-in browser and cannot be reproduced anonymously. What remains is entirely
+Developer-Portal state: the exact string this deployment sends is not registered on the application it
+sends it to — either absent, near-missing (a stray slash, `http` vs `https`, `www.` vs apex, path casing),
+unsaved behind the portal's own "Save Changes" banner, or registered on a different application than
+`BOT_APP_ID` names in production. Nothing in this repository can fix Portal state; what was missing was a
+fast way to tell *which* of those cases applies, instead of an operator comparing two strings by eye across
+a browser tab and a `.env` file.
+
+**Choice.** A new, dependency-free script, `scripts/check-discord-oauth.mjs` (`npm run check:discord`), the
+same shape as `scripts/health-check.mjs`: no import from the workspace's own TypeScript packages, so it
+runs on the droplet without a build. It reads `BOT_APP_ID`/`BOT_TOKEN`/`PUBLIC_APP_URL`, derives the
+redirect URI the same way `apps/api/src/index.ts` does, calls `GET /applications/@me` with the bot's own
+token to print which application it actually belongs to (ruling in or out "the token names a different app
+than the portal edit"), and — when the response carries a `redirect_uris` list — classifies the comparison
+with a pure, heavily-tested function (`classifyRedirectMismatch`) that names the *specific* near miss
+(trailing slash, scheme, `www.` vs apex, path case) rather than reporting a bare mismatch. Percent-encoding
+differences and host-case differences are treated as matches (Discord decodes the former and treats hosts
+case-insensitively before matching, same as every browser); path-case differences are not, since paths are
+case-sensitive.
+
+**Why a script, not a startup check in `apps/api`.** A failing startup probe would make the whole API
+refuse to boot over a misconfiguration that only affects one flow (installing the bot on a new Discord
+server) — every other feature of the platform works fine with a broken redirect URI, so refusing to start
+over it is a worse failure mode than the one it prevents. It would also cost a real network round-trip to
+Discord on every single process restart, for a value that only changes when an operator edits the portal by
+hand. An operational script, run on demand when the symptom actually appears, has neither cost.
+
+**Why `redirect_uris` is treated as optional, not required.** Discord's schema documents the field, but the
+documented `GET /applications/@me` response does not reliably include it — the script has no way to force
+Discord to return something it may simply omit. Treating an absent/null list as a hard failure would make
+this script cry "broken" on a healthy deployment whose only problem is that this particular endpoint
+doesn't echo the list back. Instead, an absent list is a distinct, non-failing outcome (`kind: 'empty'` is
+different — that means Discord returned a list, and it is empty) — "could not verify," exit 0, with the
+exact string to paste into `https://discord.com/developers/applications/<BOT_APP_ID>/oauth2` printed so the
+operator still has everything they need to check it by hand.
+
+**What this does and does not do.** It does: tell an operator, in one command, whether the redirect URI a
+running deployment will actually send is registered on the Discord application it will actually send it
+to, and name the exact difference when it is not. It does not, and cannot: fix Developer Portal state. If
+production's actual cause is a missing or malformed entry under application `1328738160850632825`'s OAuth2
+→ Redirects, an operator still has to add or correct it there by hand — no code change in this repository
+can do that for them.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test`, plus
+`node scripts/check-discord-oauth.mjs` run against a deliberately bogus environment to confirm the
+missing-credential and failed-call paths degrade to a readable line rather than a stack trace. New: 19 cases
+in `scripts/check-discord-oauth.test.mjs` (`readRequiredEnv` reporting every missing variable at once;
+`stripTrailingSlashes` pinned against `@bloombot/config`'s own transform; `deriveRedirectUri`;
+`classifyRedirectMismatch` covering exact match, a trailing slash on either side, `http` vs `https`, `www.`
+vs apex, host case as a match-with-warning, path case as a real mismatch, percent-encoding as a match, a
+completely unrelated URI as absent rather than a near miss, an empty list, and a near miss named correctly
+among several registered entries; `fetchApplication` covering a 200, a failed call, and a network failure,
+all against a stubbed `fetch` — no real Discord call is ever made in the test). All confirmed red first,
+against a module that did not exist yet (`ERR_MODULE_NOT_FOUND`), and again mid-implementation for the host
+-case case specifically: the WHATWG `URL` parser lowercases `.host` per spec, so the first pass compared
+already-lowercased hosts and could never see a literal case difference, misclassifying that case as
+`absent`; fixed by extracting the raw host substring from the original string with a regex before Discord's
+own case-insensitivity rule is applied.

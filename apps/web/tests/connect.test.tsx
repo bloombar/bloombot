@@ -153,17 +153,21 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
   // Fails without the change: before LINK-7's own status read existed,
   // this screen always rendered the button, even for a caller whose
   // Discord identity is already connected — there was no server-sourced
-  // signal to show anything else.
+  // signal to show anything else. No `username` here (cheap-fix 3, review
+  // finding): `person_identities` has no username column
+  // (`routes/person-link.ts`'s own doc comment on `GET /status`), so this
+  // is the shape the real API actually sends, not a fixture it can never
+  // produce.
   it('renders the connected status in place of the button once the server reports Discord connected', async () => {
     getPersonLinkStatus.mockResolvedValue({
-      discord: { connected: true, username: 'a-student' },
+      discord: { connected: true },
     })
 
     render(
       <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
     )
 
-    expect(await screen.findByText(/a-student/)).toBeInTheDocument()
+    expect(await screen.findByText('Discord connected.')).toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Connect Discord' })
     ).not.toBeInTheDocument()
@@ -194,6 +198,66 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
         "Sends you to Discord's own sign-in screen, then back here to confirm."
       )
     ).not.toBeInTheDocument()
+  })
+
+  // Fails without the change: before must-fix 1's own fix, an
+  // ApiError-rejected status fetch left discordStatus undefined forever —
+  // the ternary's "Loading..." branch never fell through to the button, so
+  // this screen's whole primary action stayed unreachable until a manual
+  // reload. A network blip, a 500, or an expired-session 401 (all
+  // normalised to ApiError by api/client.ts) must instead fail open to the
+  // button, with the error still shown.
+  it('a failed status fetch fails open to the button, with the error shown', async () => {
+    getPersonLinkStatus.mockRejectedValue(
+      new ApiError(500, { error: 'internal_error' })
+    )
+
+    render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Connect Discord' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  // Fails without the change: before must-fix 2's own fix, switching
+  // organizationId on this same component instance (what App.tsx's own
+  // fixed-position render, with no key, actually does) left the previous
+  // organization's own "connected" state on screen until the new
+  // organization's response happened to land, rather than resetting to
+  // loading immediately.
+  it('resets to loading when organizationId changes, rather than showing the previous organization own stale status', async () => {
+    getPersonLinkStatus.mockResolvedValueOnce({
+      discord: { connected: true },
+    })
+
+    const { rerender } = render(
+      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+    await screen.findByText('Discord connected.')
+
+    let resolveSecond:
+      ((value: { discord: { connected: boolean } }) => void) | undefined
+    getPersonLinkStatus.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSecond = resolve
+        })
+    )
+
+    rerender(
+      <Connect organizationId="org-2" account={ACCOUNT} onSignedIn={vi.fn()} />
+    )
+
+    expect(screen.queryByText('Discord connected.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Loading')
+
+    resolveSecond?.({ discord: { connected: false } })
+    expect(
+      await screen.findByRole('button', { name: 'Connect Discord' })
+    ).toBeInTheDocument()
   })
 })
 

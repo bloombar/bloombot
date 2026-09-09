@@ -33,6 +33,12 @@
  * "connected" state, which only the server can answer. LINK-6/8's "connect
  * an assistant" section also gets a line of plain-language context here —
  * what it is actually for, not merely a form asking for a token.
+ *
+ * A failed status fetch fails open — the button, not a permanently "loading"
+ * screen — and resets to "loading" again whenever `organizationId` changes,
+ * since `App.tsx` reuses this same component instance across organizations
+ * rather than remounting it (both review findings; see this file's own
+ * effect for the fuller reasoning).
  */
 
 import { useEffect, useState } from 'react'
@@ -186,14 +192,24 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
     undefined
   )
 
-  // LINK-7: fetched fresh on every mount this screen reaches signed in —
-  // `cancelled` guards against setting state from a response that resolves
-  // after this component has already unmounted (a fast navigation away),
-  // the same device `pages/Courses.tsx#refresh` uses for its own
-  // out-of-order guard, simplified here since there is only ever one
-  // in-flight request for a given mount.
+  // LINK-7: fetched fresh on every mount this screen reaches signed in, and
+  // again whenever `organizationId` itself changes — `App.tsx` renders this
+  // component at a fixed position with no `key`, so moving between
+  // `/connect/orgA` and `/connect/orgB` re-renders the *same* instance
+  // rather than mounting a new one. Both `discordStatus` and `statusError`
+  // are reset to "loading" at the top of the effect, before the new fetch
+  // even starts: without that reset, orgA's own stale "connected"/error
+  // state would keep rendering under orgB's own heading until orgB's
+  // response happened to land (review finding, must-fix 2). `cancelled`
+  // guards the async callbacks themselves — against a response for a
+  // superseded `organizationId` (or an unmount) landing after either has
+  // already moved on — the same device `pages/Courses.tsx#refresh` uses for
+  // its own out-of-order guard, simplified here since there is only ever
+  // one in-flight request for a given mount/organization.
   useEffect(() => {
     if (!account) return
+    setDiscordStatus(undefined)
+    setStatusError(undefined)
     let cancelled = false
     getPersonLinkStatus(organizationId).then(
       (response) => {
@@ -201,8 +217,19 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
       },
       (caught: unknown) => {
         if (cancelled) return
-        if (caught instanceof ApiError) setStatusError(caught)
-        else throw caught
+        if (caught instanceof ApiError) {
+          setStatusError(caught)
+          // must-fix 1 (review finding): a failed status fetch must not
+          // leave this screen stuck in its "Loading…" branch forever — any
+          // transient failure (a network blip, a 500, an expired-session
+          // 401, all normalised to `ApiError` by `api/client.ts`) would
+          // otherwise permanently hide "Connect Discord", this screen's
+          // whole point, until a manual reload. Failing open to "not
+          // connected" restores the pre-LINK-7 behaviour (the button always
+          // rendered, and an error surfaced on click) while still showing
+          // the error here rather than swallowing it.
+          setDiscordStatus({ connected: false })
+        } else throw caught
       }
     )
     return () => {

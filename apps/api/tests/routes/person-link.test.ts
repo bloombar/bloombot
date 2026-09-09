@@ -314,19 +314,17 @@ describe('POST /organizations/:organizationId/person-link/discord/begin', () => 
  * relying on a one-time flag `App.tsx` passes through right after the
  * OAuth round trip. Fails without the route: every request here 404s on an
  * unmodified router (no `/status` handler registered at all).
+ *
+ * Review finding (cheap-fix 4) — a "refuses a signed-out caller" case
+ * dropped from here: the router-level `router.use` guard 401s a signed-out
+ * request on *any* path, registered or not, so that case alone cannot tell
+ * "this route exists and is guarded" apart from "this route does not exist
+ * at all" — it stayed green against an unmodified router and carried no
+ * real weight. The four cases below already require the route to exist
+ * (each needs a *signed-in* caller to reach past the guard and hit
+ * `/status` itself), so they are what actually pins this route in.
  */
 describe('GET /organizations/:organizationId/person-link/status', () => {
-  it('refuses a signed-out caller', async () => {
-    testDb = createTestDatabase()
-    const app = await buildTestApp(testDb.db)
-
-    const response = await request(app).get(
-      '/organizations/some-org/person-link/status'
-    )
-
-    expect(response.status).toBe(401)
-  })
-
   it('refuses a nonexistent organization — 404, matching /discord/begin', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)

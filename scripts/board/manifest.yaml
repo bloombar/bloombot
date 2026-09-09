@@ -2144,6 +2144,20 @@
   phase: 10
   status: Done
   review: false
+- id: FILE-8
+  title: Attaching a file to the provider's vector store is asynchronous, and a
+    retry resumes
+  full: "The provider's own attach call is accepted, then processed in the
+    background — an immediate in_progress is success, not a failure to retry.
+    The platform polls until the file settles, bounded by an explicit budget,
+    and only a retry that outlives that budget is treated as worth another
+    attempt. A retry never re-uploads a file the provider already has: the id it
+    was given the first time is reused."
+  section: §23 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
 - id: MDL-8
   title: Instructions are how a course is configured; a stored prompt id is only
     inherited

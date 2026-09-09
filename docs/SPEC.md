@@ -1388,6 +1388,13 @@ where the platform can see every file a course already has, not in the browser g
 server would allow. Removing a file is a single click, with no confirmation first — the undo is that
 the instructor re-uploads.
 
+#### FILE-8 Attaching a file to the provider's vector store is asynchronous, and a retry resumes
+
+The provider's own attach call is accepted, then processed in the background — an immediate
+`in_progress` is success, not a failure to retry. The platform polls until the file settles, bounded
+by an explicit budget, and only a retry that outlives that budget is treated as worth another attempt.
+A retry never re-uploads a file the provider already has: the id it was given the first time is reused.
+
 ### 24. Cost Ledger, Caps & Monitoring
 
 #### COST-1 Every model call is recorded with what it cost

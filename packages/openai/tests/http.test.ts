@@ -135,3 +135,65 @@ describe('postJson (finding 7 of the MDL-1 rework): a trailing slash on baseUrl 
     expect(receivedPath).toBe('/responses')
   })
 })
+
+// FILE-8 — `attachFileToVectorStore`'s own poll reaches this same function
+// with `method: 'GET'`. Before this slice `postJson` only ever sent
+// `'POST' | 'DELETE'`, and a `GET` carrying a body is something the
+// runtime's own `fetch` rejects outright — this asserts both that no body
+// is sent, and that the same timeout/classification path still applies.
+describe('postJson (FILE-8): a GET sends no body and reaches the same timeout/classification path', () => {
+  let server: Server
+
+  afterEach(async () => {
+    await close(server)
+  })
+
+  it('sends no request body on a GET', async () => {
+    let receivedBody: string | undefined
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        receivedBody = Buffer.concat(chunks).toString('utf8')
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ status: 'completed' }))
+      })
+    })
+    const baseUrl = await listen(server)
+
+    const result = await postJson(
+      '/vector_stores/vs_1/files/file_1',
+      undefined,
+      {
+        fetchFn: fetch,
+        baseUrl,
+        apiKey: 'test-key',
+        timeoutMs: 1000,
+        method: 'GET',
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(receivedBody).toBe('')
+  })
+
+  it('a GET still times out and classifies the same as any other call', async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.write('{"status": "in_progress"')
+      // Never `res.end()` — the same stalling-body shape finding 2 already
+      // covers for a POST.
+    })
+    const baseUrl = await listen(server)
+
+    await expect(
+      postJson('/vector_stores/vs_1/files/file_1', undefined, {
+        fetchFn: fetch,
+        baseUrl,
+        apiKey: 'test-key',
+        timeoutMs: 200,
+        method: 'GET',
+      })
+    ).rejects.toThrow(/did not complete within/)
+  })
+})

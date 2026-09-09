@@ -259,7 +259,7 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
   // complete — `courseJoinLinks.revoke` could report success while one more
   // person joined anyway.
   //
-  // D-90 changed what this test actually exercises — see this file's own
+  // D-91 changed what this test actually exercises — see this file's own
   // identical note on `redeemJoinLinkForWebAccount`'s mirror of this test,
   // below, for the full mechanism: `redeemJoinLink` now opens `BEGIN
   // IMMEDIATE`, so `secondConnection`'s revoke below (nested on this
@@ -310,7 +310,7 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
     try {
       courseJoinLinks.redeemJoinLink('hash-1', person.id, Date.now(), testDb.db)
     } catch {
-      // D-90: this now always throws — `secondConnection`'s nested revoke
+      // D-91: this now always throws — `secondConnection`'s nested revoke
       // (inside the spy) blocks on `writeTransaction`'s own held lock until
       // its 100ms `busy_timeout` gives up, at which point that thrown
       // `SQLITE_BUSY` propagates out through the spy and rolls the whole
@@ -329,7 +329,7 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
         testDb.db
       )
     ).toBeUndefined()
-    // D-90: the racing revoke above can no longer land — `writeTransaction`
+    // D-91: the racing revoke above can no longer land — `writeTransaction`
     // holds the write lock for this whole transaction, so the nested
     // `secondConnection` write above always loses and never commits. Nobody
     // was admitted either way (asserted above), which is the atomicity
@@ -1003,7 +1003,7 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
   // `createPerson`), so `redeemJoinLink`'s own `getPerson`-spy device does
   // not transfer here.
   //
-  // D-90 changed what this test actually exercises. `redeemJoinLinkForWebAccount`
+  // D-91 changed what this test actually exercises. `redeemJoinLinkForWebAccount`
   // now opens `BEGIN IMMEDIATE` (`writeTransaction`), so it holds the write
   // lock for the whole of this transaction, not only from its first write —
   // `secondConnection`'s revoke below, nested on the very call stack this
@@ -1063,7 +1063,7 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
         testDb.db
       )
     } catch {
-      // D-90: this now always throws — `secondConnection`'s nested revoke
+      // D-91: this now always throws — `secondConnection`'s nested revoke
       // (inside the spy) blocks on `writeTransaction`'s own held lock until
       // its 100ms `busy_timeout` gives up, at which point that thrown
       // `SQLITE_BUSY` propagates out through the spy and rolls the whole
@@ -1089,14 +1089,14 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
             testDb.db
           )
     ).toBeUndefined()
-    // D-90: the racing revoke above can no longer land — `writeTransaction`
+    // D-91: the racing revoke above can no longer land — `writeTransaction`
     // holds the write lock for this whole transaction, so the nested
     // `secondConnection` write above always loses and never commits. No
     // membership was granted either way (asserted above), which is the
     // atomicity property this test exists to pin down; a genuinely separate
     // process racing this transaction (not a nested call on the same one)
     // would instead simply wait for it via `busy_timeout` and then succeed,
-    // exactly `packages/db/tests/client.test.ts`'s own D-90 tests.
+    // exactly `packages/db/tests/client.test.ts`'s own D-91 tests.
     expect(
       courseJoinLinks.getJoinLink(organizationId, link.id, testDb.db)
     ).toMatchObject({ revokedAt: null })

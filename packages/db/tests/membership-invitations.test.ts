@@ -500,7 +500,7 @@ describe('membership-invitations repo (ENRL-10)', () => {
   // What this test actually pins down is the assertion below, which holds
   // either way: no membership was granted.
   //
-  // D-90 changed what this test actually exercises — see
+  // D-91 changed what this test actually exercises — see
   // `course-join-links.test.ts`'s own identical note on its mirror of this
   // test for the full mechanism: `redeemMembershipInvitation` now opens
   // `BEGIN IMMEDIATE`, so `secondConnection`'s revoke below (nested on this
@@ -557,7 +557,7 @@ describe('membership-invitations repo (ENRL-10)', () => {
         testDb.db
       )
     } catch {
-      // D-90: this now always throws — `secondConnection`'s nested revoke
+      // D-91: this now always throws — `secondConnection`'s nested revoke
       // (inside the spy) blocks on `writeTransaction`'s own held lock until
       // its 100ms `busy_timeout` gives up, at which point that thrown
       // `SQLITE_BUSY` propagates out through the spy and rolls the whole
@@ -572,7 +572,7 @@ describe('membership-invitations repo (ENRL-10)', () => {
     expect(
       memberships.getMembership(organizationId, accountId, testDb.db)
     ).toBeUndefined()
-    // D-90: the racing revoke above can no longer land — `writeTransaction`
+    // D-91: the racing revoke above can no longer land — `writeTransaction`
     // holds the write lock for this whole transaction, so the nested
     // `secondConnection` write above always loses and never commits. No
     // membership was granted either way (asserted above), which is the

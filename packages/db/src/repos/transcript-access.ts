@@ -76,10 +76,10 @@ export interface ReadCourseTranscriptResult {
  * before doing anything with it" order `cost-ledger.ts#recordCostLedgerEntry`
  * already follows.
  *
- * D-90 finding: the course/person checks and the transcript scan below
+ * D-91 finding: the course/person checks and the transcript scan below
  * are deliberately plain reads against `db`, *not* run inside the
  * `writeTransaction` that follows — only the audit row's own
- * read-max-then-insert is. Before D-90, all of this ran inside one
+ * read-max-then-insert is. Before D-91, all of this ran inside one
  * `db.transaction(...)`; that transaction was deferred, so the scan below
  * (an unbounded `.all()` over every message a large course has ever
  * exchanged, potentially the slowest thing this function does) ran under
@@ -95,7 +95,7 @@ export interface ReadCourseTranscriptResult {
  * only ever held for two small, indexed statements, never for the scan.
  *
  * This does give up one guarantee the old single deferred transaction had
- * "for free": before D-90, `course`, the transcript scan and the audit
+ * "for free": before D-91, `course`, the transcript scan and the audit
  * insert all read from one consistent snapshot, so a course or person
  * deleted *between* this function's checks and its audit write would have
  * failed the whole thing atomically (`SQLITE_BUSY_SNAPSHOT`, D-49's own
@@ -152,7 +152,7 @@ export function readCourseTranscript(
   ].filter((condition) => condition !== undefined)
 
   // The potentially large read this function's own module comment (and the
-  // D-90 note above) calls out — deliberately run before the write
+  // D-91 note above) calls out — deliberately run before the write
   // transaction below opens, not inside it.
   const rows = db
     .select({

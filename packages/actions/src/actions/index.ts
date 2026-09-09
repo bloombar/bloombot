@@ -29,6 +29,7 @@ import {
   listCoursesAction,
   saveCourseAction,
 } from './courses.js'
+import { exportCourseAction, importCourseAction } from './course-portability.js'
 import {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
@@ -98,6 +99,13 @@ export {
   listCoursesAction,
   saveCourseAction,
 } from './courses.js'
+export {
+  courseExportFilename,
+  exportCourseAction,
+  importCourseAction,
+  type ExportCourseOutput,
+  type ImportCourseOutput,
+} from './course-portability.js'
 export {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
@@ -228,6 +236,8 @@ export function createPlatformRegistry(options?: {
   registry.register(disableCourseAction)
   registry.register(listCoursesAction)
   registry.register(getCourseAction)
+  registry.register(exportCourseAction)
+  registry.register(importCourseAction)
   registry.register(removeDiscordServerAction)
   registry.register(listDiscordServersAction)
   registry.register(scaffoldDiscordServerAction)

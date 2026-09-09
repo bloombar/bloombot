@@ -2429,3 +2429,99 @@ Two courses in the same organization and server cannot claim the same role name 
 that Discord would treat as one role. A pair already stored that way keeps working and can still be
 edited, the same grandfathering SRV-10's own check applies, and the refusal names the other course
 and the role, so an instructor knows which two things collide.
+
+### 35. Course Portability
+
+#### PORT-1 A course exports to a single portable file
+
+A course's configuration is trapped in the database that holds it. It can be copied inside its own
+organization when its whole project is duplicated (PROJ-4), and it can be imported from the legacy
+YAML (MIG-2), which reads a file format nothing writes. There is no way to hand one course to a
+colleague, move it to another organization, or keep its shape in version control beside the materials
+it teaches.
+
+A course exports to one text file: its title, the admins and students role names, the answering
+settings (model, instructions, conversation scope, daily request limit), the Discord categories and
+channels in their declared order, and the course's websites. The file is YAML and carries a format
+version as its first field. It is written from the same nested shape the course repository already
+reads and writes, so a course exported and re-imported unchanged produces the course it came from
+rather than an approximation of it.
+
+#### PORT-2 An export carries configuration, never people
+
+An export file is a configuration document and must be safe to email, commit, or attach to a support
+ticket. It therefore carries nothing about a person: no roster, no enrolment, no conversation, no
+transcript, no join link, and no member of the organization that produced it. The same rule excludes
+the organization's own audit and cost records.
+
+This is not a filter applied on the way out; the exporter reads only the course's own configuration.
+A future column holding anything about a person is excluded by that boundary rather than by being
+remembered.
+
+#### PORT-3 An export names what it could not carry
+
+Three of a course's settings are references to state living outside the platform or outside the
+organization: its OpenAI vector store and stored prompt, its knowledge-file attachments, and the
+Discord server it routes in. None of them survives a move to another organization — the vector store
+and prompt belong to the exporting account's provider, the attachments are uploaded objects this
+platform has no business re-uploading on a course's behalf (the reasoning PROJ-4 already applies to
+duplication), and a server binding names a row the destination organization does not have.
+
+The export records that each of these existed without pretending to carry it: it states which of the
+three the course had, and how many attachments, without the identifiers. An import surfaces that list
+as work still to do, so a course arriving without its knowledge files says so on the screen rather
+than answering students from an empty vector store.
+
+#### PORT-4 A course is imported into a project the caller chooses
+
+An import reads a PORT-1 file and writes the course through the same repository the control panel
+writes through, as MIG-2's importer does — an imported course obeys PROJ-3's collision rules and
+TEN-2's scoping exactly as a course created by hand. The destination project is named by the caller,
+in an organization the caller is allowed to write to. Nothing in the file chooses the destination:
+the ids it came from are not read and new ones are generated, so a file exported from one
+organization is not privileged over a file typed by hand.
+
+#### PORT-5 An imported course's title never collides with one already there
+
+Importing a course into a project that already has a course of that title is the ordinary case, not
+an error — it is how an instructor keeps a copy beside the original. A title already used by another
+course in the destination project is given the lowest numeric suffix that is free: `Intro to CS`
+imported beside itself becomes `Intro to CS 2`, and again `Intro to CS 3`. The suffix counts what is
+in the project, so a gap left by a deleted or renamed course is filled rather than skipped, and the
+import reports the title it actually used.
+
+Only the title is adjusted. Role and category names are carried verbatim, which PROJ-3 permits
+because an imported course arrives disabled (PORT-6) — inventing new role names would produce a
+course that routes nothing and matches no role in the server.
+
+#### PORT-6 An imported course arrives disabled
+
+Every imported course is created disabled, whatever the file says its source was, for the reason
+PROJ-4's duplicate is: an import into the organization it came from carries the same category and
+role names as the original, which is the collision PROJ-3 exists to refuse. Arriving disabled means
+an import can never leave an organization in a state a save would have been refused for, and the
+import says so rather than leaving an instructor to discover it when nothing routes.
+
+#### PORT-7 An import is reported, not assumed
+
+An import reports the course it created, the title it was given (PORT-5), that it is disabled
+(PORT-6), and what could not be carried (PORT-3). A file that does not parse, does not match the
+format, or carries a version this build does not read is refused whole — before anything is written —
+naming what was wrong with it rather than half-importing. A refusal the repository raises, such as a
+PROJ-3 collision, is reported the way `courses.save` already reports one.
+
+#### PORT-8 Export and import are actions like any other
+
+Both run through the action layer with a policy, as PROJ-5 requires of everything the panel does, so
+a caller cannot export a course they would not have been allowed to open, and the audit index covers
+an export the same way it covers a write. An export's contents are the organization's configuration;
+reading it is a read of that organization.
+
+#### WEB-39 A course is exported and imported from the panel
+
+A course's settings offer **Export**, downloading the PORT-1 file named after the course. A project's
+row menu (WEB-26) offers **Import**, which opens a modal holding one large drop zone: a file can be
+dropped onto it or the zone can be clicked to choose one. The modal names the project being imported
+into and says that imported courses arrive disabled before the import runs, not after. On success it
+shows the PORT-7 report — the title the course was given, and anything the file could not carry — and
+the course appears in that project's list. A refused file leaves the modal open with the reason.

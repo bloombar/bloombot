@@ -35,6 +35,7 @@ import {
 import { ApiError } from '../api/client.js'
 import type { Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
+import { CourseImportDialog } from '../components/CourseImportDialog.js'
 import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
@@ -44,6 +45,7 @@ import {
   ArchiveIcon,
   DuplicateIcon,
   EditIcon,
+  ImportIcon,
   RestoreIcon,
 } from '../icons.js'
 
@@ -91,6 +93,12 @@ export function Projects({
     undefined
   )
   const [busyProjectId, setBusyProjectId] = useState<string | undefined>(
+    undefined
+  )
+  // WEB-39 — which project's Import dialog is open, or none. The project
+  // itself rather than its id, since the dialog names it on screen and this
+  // is the only place that already has the row it was opened from.
+  const [importingInto, setImportingInto] = useState<Project | undefined>(
     undefined
   )
   const { prompt, confirm } = useModal()
@@ -278,6 +286,23 @@ export function Projects({
         Show archived
       </label>
 
+      {importingInto && (
+        <CourseImportDialog
+          open={true}
+          organizationId={organizationId}
+          project={importingInto}
+          onClose={() => setImportingInto(undefined)}
+          // A course imported into a project this screen does not itself
+          // list the courses of still deserves a line saying it happened —
+          // the same notice slot the duplicate already writes into, rather
+          // than a second one grown beside it.
+          onImported={(result) =>
+            setDuplicateNotice(
+              `Imported "${result.title}" into "${importingInto.name}", disabled — open the project to enable it.`
+            )
+          }
+        />
+      )}
       {duplicateNotice && (
         <p
           role="status"
@@ -321,6 +346,12 @@ export function Projects({
                 label: 'Duplicate',
                 icon: <DuplicateIcon aria-hidden="true" className="size-4" />,
                 onSelect: () => void handleDuplicate(project),
+              },
+              {
+                key: 'import',
+                label: 'Import',
+                icon: <ImportIcon aria-hidden="true" className="size-4" />,
+                onSelect: () => setImportingInto(project),
               },
               {
                 key: 'rename',

@@ -21,7 +21,8 @@ export const REPO = 'bloombar/bloombot'
 // docs/ROADMAP.md. Adding a phase to the roadmap means adding it here too, so
 // sync.mjs creates its milestone.
 export const PHASES = [
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  22, 23, 24,
 ]
 export const MILESTONE_TITLE = {
   0: 'Phase 0 — Shipped baseline',
@@ -49,6 +50,7 @@ export const MILESTONE_TITLE = {
   21: 'Phase 21 — Addressable screens',
   22: 'Phase 22 — Course settings, organised',
   23: 'Phase 23 — A roster import that finishes the job',
+  24: 'Phase 24 — Courses that can leave the instance',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}
@@ -221,6 +223,11 @@ export const FAMILY_LABEL = {
     name: 'area:quality',
     color: '2ea043',
     description: 'Tests, types & developer tooling',
+  },
+  PORT: {
+    name: 'area:portability',
+    color: '8a63d2',
+    description: 'Exporting and importing course & project configuration',
   },
 }
 export const familyLabel = (family) =>

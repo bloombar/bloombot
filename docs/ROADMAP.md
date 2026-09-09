@@ -308,3 +308,14 @@ creates the categories and roles it needs, gives every student a channel, and pr
 on those channels are what a private channel actually requires.
 
 **In scope:** ROST-14, ROST-15, ROST-16, ROST-17, SRV-10, SRV-11
+
+## Phase 24 — Courses that can leave the instance
+
+A course's configuration is trapped in the database that holds it. It can be copied when its whole
+project is duplicated (PROJ-4) and it can be imported from the legacy YAML (MIG-2), but there is no
+way to hand a course to a colleague, move it to another organization, or keep its shape in version
+control beside the materials it teaches. This phase gives a course's configuration a file format, an
+export that writes it, and an import that reads it back into a chosen project — carrying settings and
+structure, never students.
+
+**In scope:** PORT-1, PORT-2, PORT-3, PORT-4, PORT-5, PORT-6, PORT-7, PORT-8, WEB-39

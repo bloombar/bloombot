@@ -52,6 +52,7 @@ import { ImportIcon } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { FileDropZone } from './FileDropZone.js'
+import { fileToText } from './file-text.js'
 import { FormField } from './FormField.js'
 
 export interface RosterImportProps {
@@ -80,31 +81,6 @@ function isRosterImportReport(value: unknown): value is RosterImportReport {
     value !== null &&
     Array.isArray((value as { parseErrors?: unknown }).parseErrors)
   )
-}
-
-/**
- * A browser `File`'s text, via `FileReader#readAsText` — the same device
- * `CourseAttachments.tsx`'s own `fileToBase64` uses for the identical
- * reason (`FileReader` is universally supported; `Blob#text()` is not, in
- * every environment this bundle runs or is tested in), just reading text
- * instead of a base64 data URL since `roster.import`'s own `csvText` field
- * wants the CSV's raw characters, not an encoding of its bytes.
- */
-function fileToText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      if (typeof result !== 'string') {
-        reject(new Error('FileReader did not return text'))
-        return
-      }
-      resolve(result)
-    }
-    reader.onerror = () =>
-      reject(reader.error ?? new Error('could not read the selected file'))
-    reader.readAsText(file)
-  })
 }
 
 export function RosterImport({

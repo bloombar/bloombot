@@ -238,6 +238,36 @@ export interface Course extends CourseSummary {
 }
 
 /**
+ * PORT-3 — what a course export could not bring with it, as
+ * `courses.export`/`courses.import` both report it. Booleans and a count,
+ * never an identifier: a vector store id or a Discord snowflake means
+ * nothing in the organization a file is going to, so the format records only
+ * that the course had one.
+ */
+export interface CourseExportNotCarried {
+  vectorStore: boolean
+  storedPrompt: boolean
+  attachments: number
+  discordServer: boolean
+}
+
+/** PORT-1 — `courses.export`'s own result: the file's name and its text, which this app turns into a download. */
+export interface CourseExportResult {
+  filename: string
+  content: string
+  notCarried: CourseExportNotCarried
+}
+
+/** PORT-7 — `courses.import`'s own report: the course, the title it was actually given (PORT-5), that it is disabled (PORT-6), and what the file could not carry. */
+export interface ImportCourseResult {
+  course: Course
+  title: string
+  titleChanged: boolean
+  disabled: true
+  notCarried: CourseExportNotCarried
+}
+
+/**
  * FILE-4/WEB-19 — one revision of a course's instructions, as
  * `courseInstructions.list` returns it, newest first: what
  * `components/CourseInstructions.tsx`'s own history list reads, and what a

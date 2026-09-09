@@ -22,6 +22,7 @@
   "dependencies": {
     "@bloombot/db": "*",
     "@bloombot/schemas": "*",
+    "yaml": "^2.5.0",
     "zod": "^4.5.4"
   }
 }

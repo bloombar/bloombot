@@ -791,6 +791,53 @@ export function listCourses(
 }
 
 /**
+ * PORT-5: the title an imported course should actually be given in
+ * `projectId` — `title` itself when nothing there is using it, otherwise
+ * `title` with the lowest free numeric suffix appended (`Intro to CS` →
+ * `Intro to CS 2` → `Intro to CS 3`).
+ *
+ * Importing a course into a project that already holds one of that name is
+ * the ordinary case, not an error: it is how an instructor keeps a copy
+ * beside the original. Nothing in the schema forbids two courses sharing a
+ * title (PROJ-3 constrains role and category names, never titles), so this is
+ * not a constraint being satisfied — it is a list of courses staying legible
+ * to the person reading it.
+ *
+ * Two details are deliberate. The comparison is case- and
+ * whitespace-insensitive, so `intro to cs` counts as the same title already
+ * taken rather than producing two rows a reader cannot tell apart. And the
+ * search takes the *lowest* free suffix rather than one past the highest, so
+ * deleting `Intro to CS 2` and importing again refills that gap instead of
+ * jumping to `4` — the numbers describe what is in the project now, not how
+ * many imports have ever run.
+ */
+export function nextAvailableCourseTitle(
+  organizationId: string,
+  projectId: string,
+  title: string,
+  db: Executor
+): string {
+  const normalize = (value: string): string =>
+    value.trim().replace(/\s+/g, ' ').toLowerCase()
+  const taken = new Set(
+    listCourses(organizationId, db, { projectId }).map((course) =>
+      normalize(course.title)
+    )
+  )
+  const base = title.trim()
+  if (!taken.has(normalize(base))) return base
+  // Bounded by the number of courses already in the project plus one: with
+  // `n` titles taken, at most `n` of the candidates below can be, so a free
+  // one is always found before the loop runs out.
+  for (let suffix = 2; suffix <= taken.size + 2; suffix += 1) {
+    const candidate = `${base} ${suffix}`
+    if (!taken.has(normalize(candidate))) return candidate
+  }
+  // Unreachable by the bound above, guarded rather than assumed.
+  return `${base} ${taken.size + 2}`
+}
+
+/**
  * The projection `routeMessage` (`@bloombot/core`'s `routing.ts`) actually
  * reads for one course — everything `RoutableCourse` needs, plus `title` for
  * the one place a title is needed after routing decides a course.

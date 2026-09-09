@@ -16,14 +16,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { disableCourse, enableCourse, listCourses } from '../api/client.js'
+import {
+  disableCourse,
+  downloadTextFile,
+  enableCourse,
+  exportCourse,
+  listCourses,
+} from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
-import { AddIcon, ChatIcon, DisableIcon, EnableIcon } from '../icons.js'
+import {
+  AddIcon,
+  ChatIcon,
+  DisableIcon,
+  DownloadIcon,
+  EnableIcon,
+} from '../icons.js'
 
 export interface CoursesScreenProps {
   organizationId: string
@@ -109,6 +121,25 @@ export function Courses({
     }
   }
 
+  /**
+   * WEB-39/PORT-1 — export this course's configuration and hand the file to
+   * the browser. The action returns the file's text (PORT-8: an export is an
+   * action like any other, not a download route), so the saving happens here.
+   */
+  const handleExport = async (course: CourseSummary) => {
+    setError(undefined)
+    setBusyCourseId(course.id)
+    try {
+      const result = await exportCourse(organizationId, course.id)
+      downloadTextFile(result.filename, result.content)
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setBusyCourseId(undefined)
+    }
+  }
+
   return (
     <section
       aria-label="Courses"
@@ -153,6 +184,12 @@ export function Courses({
             // this replaces used to carry only while the course was
             // enabled.
             const items: KebabMenuItem[] = [
+              {
+                key: 'export',
+                label: 'Export',
+                icon: <DownloadIcon aria-hidden="true" className="size-4" />,
+                onSelect: () => void handleExport(course),
+              },
               {
                 key: 'toggle',
                 label: course.enabled ? 'Disable' : 'Enable',

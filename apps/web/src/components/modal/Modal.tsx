@@ -60,6 +60,21 @@ export interface ModalProps {
   altLabel?: string
   /** `kind: 'choice'` only — activated by the `altLabel` button. */
   onAlt?: () => void
+  /**
+   * Arbitrary content between the description and the buttons — the one
+   * escape hatch this component offers, for a dialog whose middle is not a
+   * sentence and not a text field (WEB-39's own course import, whose middle
+   * is a file drop zone and, afterwards, the report of what arrived).
+   *
+   * Rendered in a `<div>`, not the description's `<p>`: a drop zone is a
+   * button and a paragraph may not contain one. A caller using this owns the
+   * content's own state and renders `<Modal>` itself rather than going
+   * through `ModalProvider`'s promise API, which has nowhere to put state
+   * that outlives a single answer.
+   */
+  body?: ReactNode
+  /** Disables the confirm button — a dialog whose body is not yet filled in has nothing to confirm. Initial focus moves off it while it is disabled. */
+  confirmDisabled?: boolean
   /** `kind: 'prompt'` only. */
   promptLabel?: string
   promptValue?: string
@@ -78,6 +93,8 @@ export function Modal({
   confirmLabel,
   cancelLabel,
   destructive = false,
+  body,
+  confirmDisabled = false,
   altLabel,
   onAlt,
   promptLabel,
@@ -106,11 +123,16 @@ export function Modal({
       // the field regardless, but is pinned explicitly rather than relied
       // on so a later reorder of this markup cannot silently change it.
       if (kind === 'prompt') promptRef.current?.focus()
-      else if (destructive) cancelRef.current?.focus()
+      else if (destructive || confirmDisabled) cancelRef.current?.focus()
       else confirmRef.current?.focus()
     } else if (!open && dialog.open) {
       dialog.close()
     }
+    // `confirmDisabled` is deliberately not a dependency: it changes as the
+    // dialog is filled in (a file chosen, then cleared), and re-running this
+    // effect then would yank focus back to Cancel mid-interaction. It is read
+    // only at the moment the dialog opens, which is the only moment initial
+    // focus means anything.
   }, [open, kind, destructive])
 
   const id = useId()
@@ -124,7 +146,7 @@ export function Modal({
       aria-modal="true"
       aria-labelledby={titleId}
       {...(descriptionId ? { 'aria-describedby': descriptionId } : {})}
-      className="w-full max-w-sm rounded-lg border border-neutral-200 p-0 shadow-xl backdrop:bg-neutral-900/40"
+      className={`w-full ${body === undefined ? 'max-w-sm' : 'max-w-lg'} rounded-lg border border-neutral-200 p-0 shadow-xl backdrop:bg-neutral-900/40`}
       // WEB-17: `Escape` — the native dialog's own `cancel` event — closes
       // a cancellable dialog. An alert has no `cancelLabel`/`onCancel`
       // distinct from acknowledging it, so `Escape` there resolves the
@@ -157,6 +179,9 @@ export function Modal({
           <p id={descriptionId} className="text-sm text-neutral-600">
             {description}
           </p>
+        )}
+        {body !== undefined && (
+          <div className="flex flex-col gap-3">{body}</div>
         )}
         {kind === 'prompt' && (
           <label className="flex flex-col gap-1 text-sm font-medium text-neutral-800">
@@ -202,6 +227,7 @@ export function Modal({
             ref={confirmRef}
             type="submit"
             variant={destructive ? 'destructive' : 'primary'}
+            disabled={confirmDisabled}
           >
             {confirmLabel}
           </Button>

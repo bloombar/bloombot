@@ -11,7 +11,7 @@
  * pages that never change between requests. Rendering them once, at build
  * time, into static files nginx already knows how to serve gives a crawler
  * identical markup with none of that operational surface. Recorded as
- * `docs/DECISIONS.md` D-91.
+ * `docs/DECISIONS.md` D-92.
  *
  * **How it renders `apps/web`'s own components under Node.** `closeBundle`
  * fires after the outer (browser-targeted) build has finished writing

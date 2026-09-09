@@ -11,7 +11,7 @@
  * `beforeAll` (which already runs one real `vite build` for WEB-6) rather
  * than a second one here.
  *
- * See `docs/DECISIONS.md` D-91 for why this is build-time prerendering
+ * See `docs/DECISIONS.md` D-92 for why this is build-time prerendering
  * (static HTML, written once at build time) rather than a runtime SSR
  * server.
  */

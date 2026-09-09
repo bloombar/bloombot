@@ -1854,7 +1854,9 @@ in order, rather than truncated or dropped by the platform.
 Each outcome the answering core can return has a rendering: an answer, an answer carrying
 the day's-last notice, a refusal when the allowance is spent, an apology when the model
 fails, and — for a course configured to answer nothing, or a message that matches no
-course — a log line naming the cause rather than a silent drop the instructor cannot see.
+course — a log line naming the cause rather than a silent drop the instructor cannot see. SURF-8
+qualifies this for the not-configured outcome: that one also gets a reply in the channel, not just the
+log line.
 
 #### SURF-7 The process starts, reports its health, and stops cleanly
 
@@ -1862,6 +1864,31 @@ The bot exposes a health endpoint that reports whether the gateway is connected,
 supervisor can tell "running" from "connected". On shutdown it closes the gateway and the
 database rather than leaving the socket to time out, and it refuses to start on an
 environment that does not validate.
+
+#### SURF-8 A course that answers nothing says so, rather than saying nothing
+
+SURF-6 settled that every outcome reaches the student *or* the log. For one outcome that split has
+turned out to be wrong in practice: a course with neither a prompt nor instructions configured drops
+the message with a log line and no reply at all. The reasoning was that a course configured to answer
+nothing is an instructor's problem rather than a student's, and a public channel is the wrong place to
+discuss it — sound as far as it goes, but it makes the failure invisible to the one person who can fix
+it. An instructor testing their own newly created course sees the bot ignore them, with nothing to
+distinguish "not configured" from "not running", "not mentioned properly", "not routed to this
+course", or "not bound to this server". The only way to tell them apart is to read the process log on
+the server, which is not a diagnostic step the platform can ask of anybody.
+
+A message that routes to a course the platform cannot answer for gets one plain line saying so, in the
+channel it was asked in. It names the situation and nothing else: no configuration detail, no course
+internals, no instruction to a student who cannot act on it — the same discipline LINK-2 already
+applies to what may be said in a public course channel. The log line SURF-6 requires stays exactly as
+it is; this adds a reply beside it rather than replacing it.
+
+Nothing else changes. No model call is made and no allowance is spent, the same as every other refusal
+that reaches a student (ENRL-6's own, ENRL-14's own, LINK-1's own invitation). A message matching *no*
+course still says nothing at all — there is no course whose instructor could be addressed, and a bot
+that answers every unrouted mention in a busy server is noise. A disabled course also stays silent: it
+has been deliberately turned off, and announcing itself in the channel it was turned off in is the
+opposite of what disabling it asked for.
 
 ### 33. HTTP API
 

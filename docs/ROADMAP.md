@@ -329,3 +329,12 @@ independent settings — whether asking it enrols the asker, and whether it answ
 not enrolled — and the intent record that lets "message the bot, then connect" admit somebody.
 
 **In scope:** ENRL-13, ENRL-14
+
+## Phase 26 — A course that answers nothing says so
+
+An instructor who creates a course and asks it a question before configuring a prompt gets silence:
+the message is dropped with a log line nobody outside the server can read, indistinguishable from a
+bot that is down, a mention that did not register, or a message that routed somewhere else. This
+phase gives that one outcome a reply.
+
+**In scope:** SURF-8

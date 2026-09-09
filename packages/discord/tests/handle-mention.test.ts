@@ -1262,19 +1262,75 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
     expect(reply.sent[1]).toMatch(/reached the maximum number of responses/)
   })
 
-  it('logs and stays silent for a course configured to answer nothing', async () => {
+  // SURF-8 — fails without the change: before this, `not-configured` logged
+  // and returned with `reply.sent` empty, the same as `course-disabled`. An
+  // instructor testing their own newly created course saw only silence,
+  // indistinguishable from the bot being down. No model call is made and no
+  // allowance is spent — the same "costs nothing" proof the ENRL-14 tests
+  // above already run for their own refusal.
+  it('replies once, in the channel, for a course configured to answer nothing (SURF-8)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { instructions: null, promptId: null }
+    )
+    const { deps, model, reply, logger } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'not-configured' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toBe('This course has not been configured yet.')
+    expect(logger.infoCalls.length).toBeGreaterThan(0)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        person.id,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+  })
+
+  // SURF-8 cheap-fix (review round 1) — fails without the change: before
+  // the log line was written first, a rejecting reply (no Send Messages
+  // permission, a Discord 5xx — the failure this outcome is most exposed
+  // to, on exactly the misconfigured server SURF-8 exists for) threw out of
+  // `sendReply` before `logger.info` ever ran, so the SURF-6 log line for
+  // this outcome vanished along with the reply. Ordering the log first
+  // means the outcome is still on record even when the reply itself fails.
+  it('logs "not-configured" before attempting the reply, so the log line survives a reply that rejects', async () => {
     testDb = createTestDatabase()
     const { guildId } = seedBoundServerWithCourse(testDb.db, {
       instructions: null,
       promptId: null,
     })
-    const { deps, reply, logger } = makeDeps(testDb)
+    const rejectingReply = {
+      reply: async () => {
+        throw new Error('missing permission to send messages in this channel')
+      },
+    }
+    const { deps, logger } = makeDeps(testDb, { reply: rejectingReply })
 
-    const result = await handleMention(inboundMention({ guildId }), deps)
+    await expect(
+      handleMention(inboundMention({ guildId }), deps)
+    ).rejects.toThrow(/missing permission/)
 
-    expect(result).toEqual({ kind: 'not-configured' })
-    expect(reply.sent).toHaveLength(0)
     expect(logger.infoCalls.length).toBeGreaterThan(0)
+    expect(
+      logger.infoCalls.some(
+        (call) => (call[0] as { kind?: string }).kind === 'not-configured'
+      )
+    ).toBe(true)
   })
 
   // `answerQuestion`'s own `course-disabled` result exists for a caller that
@@ -1283,7 +1339,11 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
   // adapter"). `routeMessage` drops a disabled course before it can ever
   // match, so a disabled course reaches `handleMention` as `unrouted`, not
   // `course-disabled` — asserted here so that stays true rather than
-  // assumed.
+  // assumed. This is the test that actually covers the user-visible
+  // "disabled stays silent" behaviour end-to-end; the `case 'course-disabled'`
+  // arm SURF-8 split out in the switch above exists only for exhaustiveness
+  // — it is unreachable through `handleMention`, and this test would still
+  // pass if that arm were deleted entirely.
   it('routes around a disabled course entirely — it never reaches answerQuestion at all', async () => {
     testDb = createTestDatabase()
     const { guildId } = seedBoundServerWithCourse(testDb.db, { enabled: false })

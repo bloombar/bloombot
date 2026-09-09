@@ -61,7 +61,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('a signed-in account holds a conversation with an enrolled course, rendered as sanitized Markdown (WEB-10)', async ({
   page,
@@ -76,12 +76,7 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   // 1. Sign in, then define and enable a course through the panel alone —
   //    the same two steps `course-configuration.spec.ts` drives, reused
   //    here rather than duplicated as a fixture.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

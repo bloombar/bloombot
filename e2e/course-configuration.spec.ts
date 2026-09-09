@@ -65,7 +65,7 @@ import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
 import { FakeModelClient } from './support/fake-model-client.js'
 import { FakeReplyPort } from './support/fake-reply-port.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('a project and course defined entirely in the panel route and answer a matching message (QA-8)', async ({
   page,
@@ -82,12 +82,7 @@ test('a project and course defined entirely in the panel route and answer a matc
 
   // 1. Sign in — the same emailed-link flow `auth-flow.spec.ts` exercises,
   //    which also creates this account's own personal organization (TEN-1).
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Create a project (WEB-7/PROJ-1), through the panel alone.
@@ -266,12 +261,7 @@ test("a course's settings tabs are real addresses — switching, reloading and s
   const suffix = randomUUID().slice(0, 8)
   const email = `web35-${suffix}@example.edu`
 
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // A course seeded directly against the database — this test is about the

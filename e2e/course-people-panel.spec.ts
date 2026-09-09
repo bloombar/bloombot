@@ -41,7 +41,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { completeSignIn, signIn } from './support/sign-in.js'
 
 test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL-9)', async ({
   page,
@@ -55,12 +55,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
 
   // 1. Sign in and define a course — the same panel-only path
   //    `join-links-panel.spec.ts` already establishes.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -101,15 +96,7 @@ test('ending, then reinstating, an enrolment from the People panel (WEB-22, ENRL
   try {
     const studentPage = await studentContext.newPage()
     await studentPage.goto(joinUrl)
-    await studentPage.getByLabel('Email').fill(studentEmail)
-    await studentPage
-      .getByRole('button', { name: 'Email me a sign-in link' })
-      .click()
-    await expect(studentPage.getByTestId('link-requested')).toContainText(
-      studentEmail
-    )
-    const studentToken = await readSignInToken(studentEmail)
-    await studentPage.goto(`/sign-in/${studentToken}`)
+    await completeSignIn(studentPage, studentEmail)
     await expect(
       studentPage.getByTestId('organization-switcher')
     ).toContainText('(connected)')
@@ -296,12 +283,7 @@ test('clicking a person’s name in the People panel opens their transcript, alr
   const endedStudentName = `Bob ${suffix}`
 
   // 1. Sign in and define an enabled course.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

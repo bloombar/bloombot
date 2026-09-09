@@ -846,8 +846,36 @@ process individually, and rolls all of them back together if any fails its healt
 read that script's own header comment for the full sequence, and `docs/DECISIONS.md`'s D-40
 for why it is built the way it is.
 
-Two settings this document's own deployment needed, both repository variables on the
-`production` environment:
+### What this deployment actually uses
+
+Recorded because every one of these was got wrong once, and the failures were not
+self-explanatory. All live on the `production` environment (repository → Settings →
+Environments → `production`), not on the repository at large — that is what keeps a pull
+request from a fork from ever reaching the deploy key.
+
+| name | kind | value here |
+| --- | --- | --- |
+| `DEPLOY_SSH_KEY` | secret | the private half of `bloombot_deploy`, `BEGIN`/`END` lines included |
+| `DEPLOY_HOST` | variable | the droplet's reserved IP |
+| `DEPLOY_USER` | variable | `amos` |
+| `DEPLOY_PATH` | variable | `/home/amos/bloombot-platform` |
+| `DEPLOY_PORT` | variable | `2222` |
+| `DEPLOY_SKIP_PYTHON_BOT` | variable | `1` |
+| `DEPLOY_KNOWN_HOSTS` | variable | `[<reserved ip>]:2222 ssh-ed25519 AAAA…` |
+
+**`DEPLOY_PATH` is required and has no fallback.** It used to default to
+`$HOME/discord-channel-manager`, the legacy Python bot's checkout. The first automatic
+deploy of this platform ran against that default: it reset the *legacy* checkout to the
+platform commit, failed to build there (that commit has no `build` script, and that
+checkout's own `.env` carries `LOG_LEVEL=INFO`, which the platform's schema rejects), and
+rolled back. Nothing was lost, but nothing was deployed either, and the error named
+neither the path nor the variable. The workflow now refuses to start without it.
+
+**`DEPLOY_KNOWN_HOSTS` must carry the port.** ssh's bracketed form —
+`[<host>]:2222 ssh-ed25519 AAAA…` — is what matches a connection to a non-default port. A
+bare `host key` line pins nothing for port 2222 and every deploy fails verification.
+
+Two more settings, both repository variables on the same environment:
 
 - **`DEPLOY_SKIP_PYTHON_BOT`** — set it to any non-empty value once the droplet has finished
   the cutover and no longer runs `response_bot.py`. It makes the deploy pass `PM2_APP=`, and

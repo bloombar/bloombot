@@ -68,6 +68,10 @@ import { NotFound } from './pages/NotFound.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
+import { Home } from './pages/Home.js'
+import { StaticDocument } from './pages/StaticDocument.js'
+import { privacyDocument } from './content/privacy.js'
+import { termsDocument } from './content/terms.js'
 import {
   buildPath,
   isAdminRoute,
@@ -277,6 +281,17 @@ export function App() {
     },
     [navigate, refreshSession]
   )
+
+  // Before every session-dependent branch below, deliberately: these two are
+  // published documents, and one that only a signed-in account can read is not
+  // published at all. They render identically whether or not anyone is signed
+  // in, and neither reads the session.
+  if (route.kind === 'privacy') {
+    return <StaticDocument document={privacyDocument} testId="privacy-page" />
+  }
+  if (route.kind === 'terms') {
+    return <StaticDocument document={termsDocument} testId="terms-page" />
+  }
 
   if (route.kind === 'sign-in') {
     return <RedeemLink token={route.token} onRedeemed={returnToShell} />
@@ -505,6 +520,19 @@ export function App() {
     route.kind === 'home' || route.kind === 'not-found'
       ? undefined
       : buildPath(route)
+
+  // A signed-out visitor to `/` gets the home page, which describes the
+  // service and summarises the privacy terms before offering the same sign-in
+  // form. Google's OAuth verification refuses a homepage that is only a login
+  // screen (`pages/Home.tsx`'s own module comment) — and a visitor who has
+  // never heard of this service deserves better than a bare email field too.
+  // Every *other* signed-out address still goes straight to `SignIn`, since
+  // those visitors followed a link to somewhere specific and carry a
+  // destination with them.
+  if (route.kind === 'home') {
+    return <Home onSignedIn={refreshSession} />
+  }
+
   return (
     <SignIn
       onSignedIn={refreshSession}

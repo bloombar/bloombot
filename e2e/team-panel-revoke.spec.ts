@@ -30,7 +30,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test("an owner revokes a colleague's membership from the Team panel, and the row disappears (ENRL-11)", async ({
   page,
@@ -41,12 +41,7 @@ test("an owner revokes a colleague's membership from the Team panel, and the row
   const colleagueDisplayName = `Colleague ${suffix}`
 
   // 1. Sign in as the owner.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Seed a second account, an instructor, directly into the owner's own

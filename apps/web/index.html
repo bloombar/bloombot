@@ -3,7 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bloombot control panel</title>
+    <title>Bloombot</title>
+    <!-- Google's OAuth homepage requirement asks that the page identify the
+         app and say what it does; this is the machine-readable half of that,
+         and pages/Home.tsx is the half a person reads. -->
+    <meta
+      name="description"
+      content="Bloombot answers students' course questions on Discord and on the web, using material their instructor supplies."
+    />
+    <meta name="theme-color" content="#4f46e5" />
+    <!-- An SVG favicon is what a current browser uses; favicon-32.png is the
+         fallback for those that will not take one. -->
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
   </head>
   <body>
     <div id="root"></div>

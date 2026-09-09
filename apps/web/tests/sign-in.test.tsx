@@ -31,6 +31,9 @@ describe('SignIn (WEB-2)', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'student@example.edu' },
     })
+    // The consent checkbox gates both sign-in paths (`pages/SignIn.tsx`);
+    // without ticking it the form will not submit at all.
+    fireEvent.click(screen.getByTestId('accept-legal'))
     fireEvent.click(
       screen.getByRole('button', { name: 'Email me a sign-in link' })
     )
@@ -56,6 +59,9 @@ describe('SignIn (WEB-2)', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'student@example.edu' },
     })
+    // The consent checkbox gates both sign-in paths (`pages/SignIn.tsx`);
+    // without ticking it the form will not submit at all.
+    fireEvent.click(screen.getByTestId('accept-legal'))
     fireEvent.click(
       screen.getByRole('button', { name: 'Email me a sign-in link' })
     )
@@ -71,17 +77,39 @@ describe('SignIn (WEB-2)', () => {
   it('with no Google client id configured, shows no Google button', () => {
     render(<SignIn googleClientId={undefined} onSignedIn={vi.fn()} />)
     expect(
-      screen.queryByRole('button', { name: 'Sign in with Google' })
+      screen.queryByRole('button', { name: 'Continue with Google' })
     ).not.toBeInTheDocument()
     expect(
       screen.getByText(/Google sign-in is not configured/)
     ).toBeInTheDocument()
   })
 
-  it('with a Google client id configured, shows the Google button', () => {
+  // The bug this pins: `googleClientId` used to be a default parameter, and a
+  // default fires for an explicit `undefined` as well as an omitted prop — so
+  // the documented way to say "not configured" silently read
+  // VITE_GOOGLE_CLIENT_ID instead. It passed for anyone whose local env did
+  // not set that variable, and failed for anyone whose did, which is a test
+  // whose result depends on the developer running it.
+  it('treats an explicit undefined as not configured, whatever the build-time env holds', () => {
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'set-in-the-environment.test')
+    try {
+      render(<SignIn googleClientId={undefined} onSignedIn={vi.fn()} />)
+      expect(
+        screen.queryByRole('button', { name: 'Continue with Google' })
+      ).not.toBeInTheDocument()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // Google renders its own button into this slot once its script loads, so
+  // there is no button in the DOM to assert on here — the slot's presence is
+  // what this app controls, and the script itself is deliberately never
+  // fetched in a test (QA-2).
+  it('with a Google client id configured and the documents accepted, offers Google its slot', () => {
     render(<SignIn googleClientId="test-client-id" onSignedIn={vi.fn()} />)
-    expect(
-      screen.getByRole('button', { name: 'Sign in with Google' })
-    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('accept-legal'))
+
+    expect(screen.getByTestId('google-button-slot')).toBeInTheDocument()
   })
 })

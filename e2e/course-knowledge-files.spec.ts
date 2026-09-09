@@ -74,7 +74,7 @@ import {
 import { E2E_ATTACHMENT_STORAGE_DIR, E2E_DATABASE_PATH } from './support/env.js'
 import { FakeOpenAiFilesServer } from './support/fake-openai-files-server.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
 
@@ -164,12 +164,7 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
   try {
     // 1. Sign in, create a project and a course — the same panel-only path
     //    `course-configuration.spec.ts` already proves for CFG-2..4.
-    await page.goto('/')
-    await page.getByLabel('Email').fill(email)
-    await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-    await expect(page.getByTestId('link-requested')).toContainText(email)
-    const token = await readSignInToken(email)
-    await page.goto(`/sign-in/${token}`)
+    await signIn(page, email)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
     await navigateTo(page, 'Projects')

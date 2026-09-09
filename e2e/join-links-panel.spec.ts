@@ -48,7 +48,7 @@ import {
 
 import { E2E_DATABASE_PATH, E2E_PUBLIC_APP_URL } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { completeSignIn, requestSignInLink, signIn } from './support/sign-in.js'
 
 test('an owner issues and copies a join link; a real visitor redeems it; revoking stops new admission without un-enrolling them (WEB-20, ENRL-4)', async ({
   page,
@@ -70,12 +70,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
 
   // 1. Sign in and define a course — the same panel-only path
   //    `course-configuration.spec.ts` already proves for CFG-2..4.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -133,15 +128,7 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
     await expect(
       studentPage.getByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeVisible()
-    await studentPage.getByLabel('Email').fill(studentEmail)
-    await studentPage
-      .getByRole('button', { name: 'Email me a sign-in link' })
-      .click()
-    await expect(studentPage.getByTestId('link-requested')).toContainText(
-      studentEmail
-    )
-    const studentToken = await readSignInToken(studentEmail)
-    await studentPage.goto(`/sign-in/${studentToken}`)
+    await completeSignIn(studentPage, studentEmail)
     await expect(studentPage.getByTestId('organization-switcher')).toBeVisible()
     // Landed in the instructor's own organization, connected (LINK-10), and
     // reaching the enrolled course — the same shape `join-link.spec.ts`
@@ -233,14 +220,10 @@ test('an owner issues and copies a join link; a real visitor redeems it; revokin
   try {
     const secondVisitorPage = await secondVisitorContext.newPage()
     await secondVisitorPage.goto(joinUrl)
-    await secondVisitorPage
-      .getByLabel('Email')
-      .fill(`too-late-${suffix}@example.edu`)
-    await secondVisitorPage
-      .getByRole('button', { name: 'Email me a sign-in link' })
-      .click()
-    await expect(secondVisitorPage.getByTestId('link-requested')).toBeVisible()
-    const tooLateToken = await readSignInToken(`too-late-${suffix}@example.edu`)
+    const tooLateToken = await requestSignInLink(
+      secondVisitorPage,
+      `too-late-${suffix}@example.edu`
+    )
     await secondVisitorPage.goto(`/sign-in/${tooLateToken}`)
     await expect(secondVisitorPage.getByRole('alert')).toContainText(
       'That join link is no longer valid. Ask for a new one.'
@@ -267,12 +250,7 @@ test('an owner chooses an expiry when issuing a join link, and it is what gets p
   const courseTitle = `Web23 Course — ${suffix}`
   const weekMs = 7 * 24 * 60 * 60 * 1000
 
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -371,12 +349,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
   const projectName = `ENRL-12 — ${suffix}`
   const courseTitle = `ENRL-12 Course — ${suffix}`
 
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')
@@ -436,15 +409,7 @@ test('an owner issues a join link, closes the tab that showed it, then reveals i
     await expect(
       studentPage.getByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeVisible()
-    await studentPage.getByLabel('Email').fill(studentEmail)
-    await studentPage
-      .getByRole('button', { name: 'Email me a sign-in link' })
-      .click()
-    await expect(studentPage.getByTestId('link-requested')).toContainText(
-      studentEmail
-    )
-    const studentToken = await readSignInToken(studentEmail)
-    await studentPage.goto(`/sign-in/${studentToken}`)
+    await completeSignIn(studentPage, studentEmail)
     await expect(
       studentPage.getByTestId('organization-switcher')
     ).toContainText('(connected)')

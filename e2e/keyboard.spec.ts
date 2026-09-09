@@ -29,7 +29,7 @@ import { randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and restores focus, confirming discards and navigates (WEB-16, WEB-17)', async ({
   page,
@@ -38,12 +38,7 @@ test('unsaved-changes modal: opens on a guarded navigation, Escape cancels and r
   const email = `web17-${suffix}@example.edu`
   const projectName = `Fall 2026 — ${suffix}`
 
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await page.getByRole('button', { name: 'Open navigation menu' }).click()

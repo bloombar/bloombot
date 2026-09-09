@@ -35,7 +35,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('an owner grants the instructor role to a second account from the Team panel, and sees it listed (ENRL-5)', async ({
   page,
@@ -47,12 +47,7 @@ test('an owner grants the instructor role to a second account from the Team pane
 
   // 1. Sign in as the owner — the same panel-only path every other spec in
   //    this suite establishes.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Seed a second account, an assistant, directly into the owner's own

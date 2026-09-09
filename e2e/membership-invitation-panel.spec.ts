@@ -41,7 +41,7 @@ import {
 
 import { E2E_DATABASE_PATH, E2E_PUBLIC_APP_URL } from './support/env.js'
 import { navigateTo, openDrawer } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { requestSignInLink, signIn } from './support/sign-in.js'
 
 test('an owner invites a colleague with no prior membership; a real second account redeems it and the role appears on the team screen (ENRL-10)', async ({
   page,
@@ -59,12 +59,7 @@ test('an owner invites a colleague with no prior membership; a real second accou
 
   // 1. Sign in as the owner — the same panel-only path every other spec in
   //    this suite establishes.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   let organizationId: string
@@ -135,14 +130,10 @@ test('an owner invites a colleague with no prior membership; a real second accou
     await expect(
       colleaguePage.getByRole('heading', { name: 'Sign in to Bloombot' })
     ).toBeVisible()
-    await colleaguePage.getByLabel('Email').fill(colleagueEmail)
-    await colleaguePage
-      .getByRole('button', { name: 'Email me a sign-in link' })
-      .click()
-    await expect(colleaguePage.getByTestId('link-requested')).toContainText(
+    const colleagueToken = await requestSignInLink(
+      colleaguePage,
       colleagueEmail
     )
-    const colleagueToken = await readSignInToken(colleagueEmail)
     // Redeeming the sign-in link returns the browser to this same
     // invitation (`App.tsx`'s own `PENDING_INVITATION_KEY` handling,
     // `pages/Invitation.tsx`) — which redeems automatically and lands on
@@ -293,10 +284,7 @@ test('a sign-in that completes in a different browsing context than the one that
   // link — exactly as far as a visitor gets before switching to their mail
   // client.
   await page.goto(`/invitations/${secret}`)
-  await page.getByLabel('Email').fill(colleagueEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(colleagueEmail)
-  const token = await readSignInToken(colleagueEmail)
+  const token = await requestSignInLink(page, colleagueEmail)
 
   // Tab B: a genuinely different browsing context — a fresh `Page` in the
   // same `BrowserContext`, sharing cookies (irrelevant here: neither tab has

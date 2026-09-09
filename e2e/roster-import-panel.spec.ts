@@ -66,7 +66,7 @@ import { createRosterImportHandler } from '../apps/worker/src/handlers/roster-im
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { FakeDiscordGuildServer } from './support/fake-discord-guild-server.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 const RETRY_POLICY: RetryPolicy = { baseDelayMs: 1000, backoffFactor: 2 }
 
@@ -133,12 +133,7 @@ test('an instructor imports a roster through the panel; an unparseable row is re
     //    `course-configuration.spec.ts` already proves for CFG-2..4, with
     //    one numbered student category (CFG-4) for the roster's own
     //    channels to land in.
-    await page.goto('/')
-    await page.getByLabel('Email').fill(email)
-    await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-    await expect(page.getByTestId('link-requested')).toContainText(email)
-    const token = await readSignInToken(email)
-    await page.goto(`/sign-in/${token}`)
+    await signIn(page, email)
     await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
     await navigateTo(page, 'Projects')

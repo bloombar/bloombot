@@ -44,7 +44,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('an owner adds a website (typed as a URL), sees it reduced to its domain, a duplicate is refused, and removing one takes effect (FILE-6, WEB-31)', async ({
   page,
@@ -56,12 +56,7 @@ test('an owner adds a website (typed as a URL), sees it reduced to its domain, a
 
   // 1. Sign in and define a course — the same panel-only path
   //    `course-configuration.spec.ts` already proves for CFG-2..4.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

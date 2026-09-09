@@ -33,19 +33,14 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 /** Signs a fresh account in through the real emailed-link flow (TEN-1: this is what creates its own personal organization). */
 async function signInFreshAccount(
   page: import('@playwright/test').Page,
   email: string
 ): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 }
 

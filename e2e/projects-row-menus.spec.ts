@@ -24,7 +24,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('a project is created through the "New project" modal, renamed through its kebab menu, and a course row\'s Chat button opens a real chat for that course (WEB-26, WEB-27, WEB-28, PROJ-6)', async ({
   page,
@@ -37,12 +37,7 @@ test('a project is created through the "New project" modal, renamed through its 
   const studentsRole = `students-${suffix}`
   const adminsRole = `admins-${suffix}`
 
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 1. WEB-27: "New project" is a primary button beside the heading, and

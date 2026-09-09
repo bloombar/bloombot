@@ -51,7 +51,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 /**
  * A course in `organizationId`, with an active enrolment admitting a
@@ -140,12 +140,7 @@ test('a student connected into an institution the account does not administer re
 
   // 2. Sign in — a brand-new account, own personal organization only, no
   //    relationship at all yet to the institution's organization.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 3. The real merge, built from the same repository functions

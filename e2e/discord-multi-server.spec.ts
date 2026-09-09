@@ -43,7 +43,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('an organization with two active Discord bindings lists both, and a course assigned to one of them is recorded against that one, not the other (TEN-9)', async ({
   page,
@@ -58,12 +58,7 @@ test('an organization with two active Discord bindings lists both, and a course 
   // 1. Sign in — the same emailed-link flow every other panel spec in this
   //    suite uses, which also creates this account's own personal
   //    organization (TEN-1).
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   // 2. Bind *two* Discord servers directly, bypassing the browser entirely

@@ -36,7 +36,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test("an owner sets, then clears, their organization's spending cap — and 0 is distinct from cleared (COST-3)", async ({
   page,
@@ -46,12 +46,7 @@ test("an owner sets, then clears, their organization's spending cap — and 0 is
 
   // 1. Sign in — a fresh account's own personal organization (TEN-1), the
   //    owner of it by definition.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const token = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   const organizationId = (): string => {

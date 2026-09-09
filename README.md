@@ -374,8 +374,12 @@ into the repository's GitHub variables:
 ```bash
 export DEPLOY_HOST=<droplet ip or hostname>
 export DEPLOY_USER=<the unix user the bot runs as>
-export DEPLOY_PATH=/home/$DEPLOY_USER/discord-channel-manager
+export DEPLOY_PATH=<absolute path to the checkout on the droplet>
+export DEPLOY_PORT=22   # only if sshd listens somewhere else
 ```
+
+`DEPLOY_PATH` is **required**, and pointing it at the wrong directory is the one
+mistake here with real consequences — see the warning below the table.
 
 On your machine, create a deploy key and register it with the droplet:
 
@@ -384,8 +388,11 @@ ssh-keygen -t ed25519 -f bloombot_deploy -C "github-actions-bloombot" -N ""
 ssh-copy-id -i bloombot_deploy.pub $DEPLOY_USER@$DEPLOY_HOST
 
 # The droplet's host keys, for DEPLOY_KNOWN_HOSTS. 2>/dev/null drops the `#`
-# banner lines, leaving just the three key lines to paste — all of them.
-ssh-keyscan -t rsa,ecdsa,ed25519 $DEPLOY_HOST 2>/dev/null
+# banner lines, leaving just the key lines to paste — all of them. Pass -p
+# when sshd is not on 22: the output then uses ssh's own bracketed form,
+# `[host]:port ssh-ed25519 ...`, and the port must be in the pinned value or
+# every deploy fails host verification.
+ssh-keyscan -p ${DEPLOY_PORT:-22} -t rsa,ecdsa,ed25519 $DEPLOY_HOST 2>/dev/null
 ```
 
 `ssh-keyscan` trusts whatever answers on port 22, so confirm the keys are really the
@@ -398,11 +405,32 @@ Then in the repository's GitHub settings:
 
 | Where | Name | Value |
 | --- | --- | --- |
-| Variables | `DEPLOY_HOST` | the droplet's IP or hostname |
-| Variables | `DEPLOY_USER` | the unix user the bot runs as |
-| Variables | `DEPLOY_PATH` | the checkout's absolute path, if it is not `$HOME/discord-channel-manager` |
-| Environment `production` → secrets | `DEPLOY_SSH_KEY` | contents of `bloombot_deploy` (the private key) |
+| Environment `production` → secrets | `DEPLOY_SSH_KEY` | contents of `bloombot_deploy` (the private key), including its `BEGIN`/`END` lines |
+| Environment `production` → variables | `DEPLOY_HOST` | the droplet's IP or hostname |
+| Environment `production` → variables | `DEPLOY_USER` | the unix user the platform runs as |
+| Environment `production` → variables | `DEPLOY_PATH` | **required** — the checkout's absolute path on the droplet |
+| Environment `production` → variables | `DEPLOY_PORT` | the SSH port, if sshd is not on 22. Omit for 22. |
+| Environment `production` → variables | `DEPLOY_SKIP_PYTHON_BOT` | any non-empty value once the droplet no longer runs the legacy Python bot |
 | Environment `production` → variables | `DEPLOY_KNOWN_HOSTS` | the `ssh-keyscan` output — a variable, not a secret: host keys are public, and an unmasked value keeps a fingerprint mismatch readable in the log |
+
+Three of these are easy to get subtly wrong, and each has been got wrong once already:
+
+- **`DEPLOY_PATH` has no default any more, deliberately.** It used to fall back to
+  `$HOME/discord-channel-manager` — the legacy Python bot's checkout. On a droplet past the
+  cutover that is the wrong project, and once that checkout is deleted it does not exist at
+  all. The first real deploy of this platform ran against that fallback, reset the *legacy*
+  checkout to the platform commit, failed to build there, and rolled back. Deploying
+  somewhere unintended is worse than not deploying, so the job now fails immediately with a
+  message naming the variable.
+- **`DEPLOY_KNOWN_HOSTS` must match the port.** For a non-default port the entry has to be
+  ssh's bracketed form — `[192.0.2.1]:2222 ssh-ed25519 AAAA…`. A bare `host key` line does
+  not match a connection to another port, and the deploy dies at host verification.
+- **`DEPLOY_SKIP_PYTHON_BOT` must be non-empty** on a cut-over droplet. pm2 still remembers
+  the stopped `bloombot` process, so without it every deploy issues `pm2 reload bloombot`
+  and starts the retired bot again — a second answering process on the platform's own
+  database, with no error anywhere. It is a flag rather than the process name because an
+  unset repository variable and one set to the empty string both arrive as `""`, and those
+  two cases need opposite behaviour.
 
 The host key is pinned through `DEPLOY_KNOWN_HOSTS` rather than trusted on first sight. The
 secrets belong to the `production` environment, and the deploy job only runs on pushes to
@@ -413,7 +441,7 @@ into an approval click.
 Finally, confirm the droplet's checkout is clean and points at this repo:
 
 ```bash
-ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git remote -v && git status --porcelain'
+ssh -p ${DEPLOY_PORT:-22} $DEPLOY_USER@$DEPLOY_HOST "cd $DEPLOY_PATH && git remote -v && git status --porcelain"
 ```
 
 ### Rolling back
@@ -425,13 +453,14 @@ the same health check guards it.
 To deploy or roll back without GitHub, pipe the script in yourself:
 
 ```bash
-ssh $DEPLOY_USER@$DEPLOY_HOST 'bash -s -- <commit-sha>' < scripts/deploy.sh
+ssh -p ${DEPLOY_PORT:-22} $DEPLOY_USER@$DEPLOY_HOST \
+  "APP_DIR='$DEPLOY_PATH' PM2_APP= bash -s -- <commit-sha>" < scripts/deploy.sh
 ```
 
 ### Checking a deploy
 
 ```bash
-ssh $DEPLOY_USER@$DEPLOY_HOST 'cd $DEPLOY_PATH && git rev-parse HEAD'
-ssh $DEPLOY_USER@$DEPLOY_HOST 'pm2 status'
-ssh $DEPLOY_USER@$DEPLOY_HOST 'curl -s 127.0.0.1:3000/health && curl -s 127.0.0.1:3001/health && curl -s 127.0.0.1:3002/health && curl -s 127.0.0.1:3003/health'
+ssh -p ${DEPLOY_PORT:-22} $DEPLOY_USER@$DEPLOY_HOST "cd $DEPLOY_PATH && git rev-parse HEAD"
+ssh -p ${DEPLOY_PORT:-22} $DEPLOY_USER@$DEPLOY_HOST 'pm2 status'
+ssh -p ${DEPLOY_PORT:-22} $DEPLOY_USER@$DEPLOY_HOST 'curl -s 127.0.0.1:3000/health && curl -s 127.0.0.1:3001/health && curl -s 127.0.0.1:3002/health && curl -s 127.0.0.1:3003/health'
 ```

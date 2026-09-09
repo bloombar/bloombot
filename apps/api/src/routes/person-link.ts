@@ -188,7 +188,13 @@ import {
   previewMcpPersonLink,
   type PersonLinkPreview,
 } from '@bloombot/auth'
-import { memberships, organizations, people, type Database } from '@bloombot/db'
+import {
+  memberships,
+  organizations,
+  people,
+  selfEnrolment,
+  type Database,
+} from '@bloombot/db'
 import {
   buildDiscordAuthorizationUrl,
   DiscordRequestError,
@@ -370,13 +376,28 @@ function attachWithoutMembershipIsForbidden(
  * behind. The same attach-or-merge shape `@bloombot/auth`'s own
  * `connectOrMerge` already uses, composed here from the same two exported
  * primitives rather than duplicated as a new one.
+ *
+ * **Returns the id that actually survives — not always `survivorId`
+ * (must-fix 2, review round 1).** `people.ts#mergePeople`'s own signature
+ * is `(organizationId, survivorPersonId, loserPersonId, db)`, and the merge
+ * branch here calls it as `mergePeople(organizationId, existingOwner.id,
+ * survivorId, db)` — `existingOwner`, the account's *already-registered*
+ * `web` identity, is kept, and `survivorId` (this function's own parameter
+ * — the Discord-proved survivor the caller has been carrying) is the one
+ * merged away. A caller that went on using `survivorId` after this ran
+ * would be reading and writing against a tombstoned id the instant this
+ * branch fired — exactly what `redeemSelfEnrolmentIntentsSafely` did before
+ * this fix, silently finding no intents to redeem for a person who had just
+ * been merged out from under it. Every caller of this function must use
+ * its return value for anything downstream, not its own `survivorId`
+ * argument.
  */
 function attachWebIdentityOrMerge(
   organizationId: string,
   survivorId: string,
   accountId: string,
   db: Database
-): void {
+): string {
   const identity = { surface: 'web' as const, externalId: accountId }
   const attached = people.connectIdentity(
     organizationId,
@@ -384,10 +405,43 @@ function attachWebIdentityOrMerge(
     identity,
     db
   )
-  if (attached) return
+  if (attached) return survivorId
   const existingOwner = people.resolveIdentity(organizationId, identity, db)
-  if (!existingOwner || existingOwner.id === survivorId) return
+  if (!existingOwner || existingOwner.id === survivorId) return survivorId
   people.mergePeople(organizationId, existingOwner.id, survivorId, db)
+  return existingOwner.id
+}
+
+/**
+ * ENRL-13: redeem whatever unredeemed self-enrolment intents `personId`
+ * holds, now that connecting has just proved LINK-1's own gate for real —
+ * the SPEC's own words are "connecting ... is what admits them." Called
+ * from both `/discord/confirm` and `/mcp/confirm`, below: both routes are
+ * connecting, and neither is more "the real one" than the other.
+ *
+ * A failure here must not fail the connect itself — logged, not thrown, the
+ * same "does not block the reply" treatment `@bloombot/discord`'s
+ * `handle-mention.ts` already gives a failed enrolment write of its own. A
+ * student who connects successfully is connected either way. Each intent is
+ * redeemed in its own transaction (`repos/self-enrolment.ts`'s own doc
+ * comment), so a failure partway through this sweep leaves whichever
+ * intents had not yet been reached still unredeemed — tried again the next
+ * time this function runs for the same person, rather than lost.
+ */
+function redeemSelfEnrolmentIntentsSafely(
+  organizationId: string,
+  personId: string,
+  db: Database,
+  logger: Logger
+): void {
+  try {
+    selfEnrolment.redeemSelfEnrolmentIntents(organizationId, personId, db)
+  } catch (error) {
+    logger.error(
+      { err: error, organizationId, personId },
+      'apps/api: failed to redeem a self-enrolment intent on connect'
+    )
+  }
 }
 
 export function buildPersonLinkRouter(
@@ -570,11 +624,23 @@ export function buildPersonLinkRouter(
     // Only now — Discord's own OAuth has genuinely proved this identity,
     // and `connectIdentity` has already set `connectedAt` for that real
     // reason — give the survivor the account's own `web` identity too.
-    attachWebIdentityOrMerge(
+    // must-fix 2, review round 1 — redeem against the id that actually
+    // survives `attachWebIdentityOrMerge`, not `pending.survivorPersonId`
+    // itself: that function's own merge fallback can tombstone it (its own
+    // doc comment has the exact shape).
+    const finalPersonId = attachWebIdentityOrMerge(
       organizationId,
       pending.survivorPersonId,
       accountId,
       deps.db
+    )
+    // ENRL-13 — connecting is what admits a self-enrolment intent; see this
+    // file's own `redeemSelfEnrolmentIntentsSafely` doc comment.
+    redeemSelfEnrolmentIntentsSafely(
+      organizationId,
+      finalPersonId,
+      deps.db,
+      deps.logger
     )
     res.status(200).json({ connected: true })
   })
@@ -725,6 +791,14 @@ export function buildPersonLinkRouter(
       res.status(404).json({ error: 'person_link_not_found' })
       return
     }
+    // ENRL-13 — same as `/discord/confirm`, above: connecting is what
+    // admits a self-enrolment intent.
+    redeemSelfEnrolmentIntentsSafely(
+      organizationId,
+      survivor.id,
+      deps.db,
+      deps.logger
+    )
     res.status(200).json({ connected: true })
   })
 

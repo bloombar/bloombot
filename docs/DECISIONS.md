@@ -10743,3 +10743,51 @@ hook was extracted, since this is the first read of this particular shape in thi
 `getPersonLinkStatus` to "not connected" via a top-level `beforeEach`; a future screen added to that file
 that also lands there and cares about the connected state will need to override it explicitly, the same as
 any other per-test mock override in that file.
+
+---
+
+## D-95 — ENRL-13/ENRL-14: a self-enrolment intent, where its repo functions live, and the redemption-time re-check
+
+**Problem.** A course carries two new settings — whether asking it enrols the asker (ENRL-13), and whether
+it answers a student it has not enrolled (ENRL-14) — and ENRL-13's own mechanism needs an explicit record
+of "this person asked this course while unconnected," since an unconnected person's message leaves no
+transcript row at all for anything to derive the course from later. Three judgment calls the brief left to
+this slice, recorded here.
+
+**Choice: intents never expire.** `course_self_enrolment_intents` carries `redeemedAt`, nullable, but no
+`expiresAt` at all — unlike `person_link_challenges`/`discord_install_states`, both of which expire because
+an unfinished OAuth round trip is worthless once stale. An unredeemed self-enrolment intent costs nothing
+to keep and names no secret: a student who messaged in September and connects in December still means
+exactly the same thing by having done both — "I asked this course; when I connect, admit me." There is
+nothing here for staleness to protect against, and inventing a TTL would only risk silently dropping a
+genuine late connect.
+
+**Choice: the intent repo lives in its own file, `repos/self-enrolment.ts`, not folded into `repos/enrolments.ts`.**
+`enrolments.ts`'s own module comment states its file's whole job as "the platform records which of the
+[four, now] sources admitted them" — every exported function in it writes (or reads) the `enrolments`
+table itself. An intent is not an enrolment and never becomes one on its own (`docs/SPEC.md`'s own words);
+giving it a home in `enrolments.ts` would mean either stretching that file's own contract to cover a second
+table, or quietly breaking the "only `enrolVia*` writes a row" reading a later maintainer relies on. The new
+file owns exactly one table, the same one-table-per-file convention every other repo in this package
+already holds itself to (`course-join-links.ts`, `roster-channel-assignments.ts`, …); it imports
+`enrolments.ts#enrolViaSelfEnrolment` to actually admit, the same way `course-join-links.ts#redeemJoinLink`
+already imports `enrolments.ts#enrolViaJoinLink`.
+
+**Choice: redemption re-reads the course's own setting, not only the intent.** `redeemSelfEnrolmentIntents`
+(called from `/discord/confirm` and `/mcp/confirm` on a successful connect) re-reads each intent's course
+fresh, rather than trusting whatever `selfEnrolFromDiscord` read as at record time: a course that has since
+turned the setting off — or been disabled — admits nobody with an intent that predates the change. Each
+intent is redeemed exactly once regardless of the outcome (`redeemedAt` set whether or not it produced an
+enrolment), so a refusal is not silently retried on every later connect.
+
+**A finding along the way, not left as a residual gap: `people.ts#mergePeople` had to learn about the new
+table too.** `/discord/confirm`'s own real shape for the ordinary "message, then connect" case is a
+*merge* — the bare person `/discord/begin` mints before OAuth ever runs becomes the merge's survivor, not
+the identity that recorded the intent in the first place (`connectOrMerge`, `@bloombot/auth`'s
+`person-link.ts`). Without moving `course_self_enrolment_intents` rows the same way `mergePeople` already
+moves `enrolments` rows, an intent recorded by a student's very first message would be redeemed against
+the wrong person id and never found — silently defeating ENRL-13 for exactly the ordering its own SPEC text
+leads with. Caught by this slice's own e2e/integration tests (`packages/db/tests/people-merge.test.ts`,
+`apps/api/tests/routes/person-link.test.ts`), not anticipated from the brief's own file list — `mergePeople`
+is outside `docs/SPEC.md`'s named files for this slice, but the intent mechanism does not actually work
+without it.

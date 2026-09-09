@@ -397,6 +397,14 @@ export const duplicateProjectAction: Action<
             vectorStoreId: source.vectorStoreId,
             maxRequestsPerDay: source.maxRequestsPerDay,
             conversationScope: source.conversationScope,
+            // ENRL-13/ENRL-14 (must-fix 3, review round 1) — copied like
+            // every other setting here, not silently dropped: rolling a
+            // term forward is exactly when an instructor who ticked either
+            // box needs it to carry over, and a duplicate that quietly
+            // reverted to the defaults would answer or admit differently
+            // from its source with nothing telling anyone why.
+            selfEnrolFromDiscord: source.selfEnrolFromDiscord,
+            answerUnenrolled: source.answerUnenrolled,
             // TEN-9 (also-fix, coordinator round 1 rework) — copied like
             // every other field above, not dropped: rolling a term forward
             // in a two-binding organization is the natural next thing an

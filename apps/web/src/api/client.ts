@@ -435,6 +435,12 @@ export interface SaveCourseInput {
   model?: string | null
   vectorStoreId?: string | null
   maxRequestsPerDay?: number | null
+  // ENRL-13/ENRL-14 — unlike the nullable fields above, neither has a
+  // "clear" state to distinguish (`schema.ts`'s own column defaults are
+  // `false`/`true`, not nullable) — omitted keeps whatever is stored, the
+  // same way `conversationScope` behaves.
+  selfEnrolFromDiscord?: boolean
+  answerUnenrolled?: boolean
   // TEN-9 — same omitted-preserves/explicit-null-clears rule as the other
   // nullable fields above; validated server-side as an active binding of
   // the caller's own organization (`courses.save`'s own policy).

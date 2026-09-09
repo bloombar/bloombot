@@ -297,6 +297,11 @@ function blankForm() {
     model: '',
     vectorStoreId: '',
     maxRequestsPerDay: '',
+    // ENRL-13/ENRL-14 — the same defaults `schema.ts`'s own database columns
+    // carry: a brand-new course starts with today's behaviour, not with
+    // either box already ticked or unticked the other way.
+    selfEnrolFromDiscord: false,
+    answerUnenrolled: true,
     // TEN-9 — `null` resolves through the organization's own single active
     // binding, the same "not configured yet" reading `promptId`/`model`
     // etc. above already carry — a brand-new course starts undecided, not
@@ -317,6 +322,8 @@ function formFromCourse(course: Course) {
     vectorStoreId: course.vectorStoreId ?? '',
     maxRequestsPerDay:
       course.maxRequestsPerDay === null ? '' : String(course.maxRequestsPerDay),
+    selfEnrolFromDiscord: course.selfEnrolFromDiscord,
+    answerUnenrolled: course.answerUnenrolled,
     discordServerId: course.discordServerId,
     categories: course.categories.map((category) => ({
       key: newKey(),
@@ -661,6 +668,11 @@ export function CourseEditor({
         // `courseInstructions.save` instead.
         model: form.model.trim() === '' ? null : form.model.trim(),
         maxRequestsPerDay: maxRequestsPerDay.value,
+        // ENRL-13/ENRL-14 — sent explicitly, like `enabled` above: this
+        // form manages both checkboxes directly, so there is no "omitted"
+        // case for it to rely on.
+        selfEnrolFromDiscord: form.selfEnrolFromDiscord,
+        answerUnenrolled: form.answerUnenrolled,
         // TEN-9 — sent only while the selector is actually offered
         // (`offersServerSelector`, kept in lockstep with the render gate
         // above — must-fix 3, coordinator round 1 rework): a course this
@@ -1116,6 +1128,57 @@ export function CourseEditor({
     </div>
   )
 
+  /** ENRL-13 — whether a student's own message enrols them. */
+  const selfEnrolControl = (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+        <input
+          type="checkbox"
+          aria-label="Students can enrol themselves by messaging this course"
+          checked={form.selfEnrolFromDiscord}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              selfEnrolFromDiscord: event.target.checked,
+            }))
+          }
+          className={checkboxClasses}
+        />
+        Students can enrol themselves by messaging this course
+      </label>
+      <p className="text-sm text-neutral-600">
+        When checked, a student who messages this course is enrolled in it —
+        immediately if they already have a connected account, or as soon as they
+        connect one afterwards.
+      </p>
+    </div>
+  )
+
+  /** ENRL-14 — whether an unenrolled student is still answered. */
+  const answerUnenrolledControl = (
+    <div className="flex flex-col gap-1">
+      <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+        <input
+          type="checkbox"
+          aria-label="Answer students who are not enrolled"
+          checked={form.answerUnenrolled}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              answerUnenrolled: event.target.checked,
+            }))
+          }
+          className={checkboxClasses}
+        />
+        Answer students who are not enrolled
+      </label>
+      <p className="text-sm text-neutral-600">
+        When unchecked, only a student this course has enrolled gets an answer —
+        everyone else is told plainly that they are not enrolled.
+      </p>
+    </div>
+  )
+
   const categoriesFieldset = (
     <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
       <legend className="px-1 text-section-title font-semibold text-neutral-900">
@@ -1382,6 +1445,8 @@ export function CourseEditor({
           {titleField}
 
           {enabledControl}
+          {selfEnrolControl}
+          {answerUnenrolledControl}
 
           {categoriesFieldset}
 
@@ -1457,6 +1522,8 @@ export function CourseEditor({
               <>
                 {titleField}
                 {enabledControl}
+                {selfEnrolControl}
+                {answerUnenrolledControl}
 
                 {/* WEB-20: a course's join links — belongs to an existing
                     course. */}

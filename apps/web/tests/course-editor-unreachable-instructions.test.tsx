@@ -113,6 +113,8 @@ const COURSE: Course = {
   vectorStoreId: 'vs-1',
   maxRequestsPerDay: 20,
   conversationScope: 'course',
+  selfEnrolFromDiscord: false,
+  answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
   categories: [],

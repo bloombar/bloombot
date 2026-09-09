@@ -22,6 +22,7 @@ import type { Database, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
   conversations,
+  courseSelfEnrolmentIntents,
   enrolments,
   messages,
   people,
@@ -712,6 +713,20 @@ function mergeMessagesByCreatedAt(
  *    the survivor's own enrolment is what the merged person keeps going
  *    forward. Nothing is deleted either way — a loser's now-ended row is
  *    still the historical record of how they were admitted.
+ *  - **Self-enrolment intents** (ENRL-13) move the same way enrolments do,
+ *    for the same reason and by the same rule — an already-*redeemed* one
+ *    moves outright, an *unredeemed* one only if the survivor holds no
+ *    unredeemed intent for that same course already (left behind,
+ *    unmoved, otherwise — this table's own partial unique index permits at
+ *    most one unredeemed intent per (organization, course, person), and a
+ *    left-behind duplicate names no fact the survivor's own row does not
+ *    already carry). This is what makes `/discord/confirm`'s own merge case
+ *    (the ordinary "message, then connect" shape ENRL-13's SPEC text
+ *    describes first) actually redeem: the bare person `/discord/begin`
+ *    mints is the merge's survivor, never the identity that recorded the
+ *    intent in the first place, so an intent left behind on the loser would
+ *    never be found by the redemption sweep that runs the moment they
+ *    connect.
  *  - **Conversations and messages** (CONV-1, CONV-2) are the "unique
  *    constraints you will hit" case: a loser conversation for a
  *    (course, surface-scope) pair the survivor has no conversation for moves
@@ -853,6 +868,69 @@ export function mergePeople(
           .where(eq(enrolments.id, enrolment.id))
           .run()
       }
+    }
+
+    // ENRL-13 — self-enrolment intents. The same reason enrolments, just
+    // above, have to move rather than stay behind: `/discord/confirm`
+    // redeems intents against whichever id actually survives the whole
+    // connect, once every attach-or-merge step has run
+    // (`routes/person-link.ts#attachWebIdentityOrMerge`'s own doc comment —
+    // corrected by must-fix 2, review round 1, which found that id is not
+    // always `pending.survivorPersonId`: that function's own merge fallback
+    // can tombstone it too) — not against whichever identity the message
+    // that recorded the intent happened to arrive under. Left behind on a
+    // loser this function does not move it off of, an intent recorded by a
+    // student's very first message would never be found by the redemption
+    // sweep that runs the moment they actually connect, silently defeating
+    // ENRL-13 for exactly the ordering ("message, then connect") its own
+    // SPEC text calls out first.
+    const loserIntents = tx
+      .select()
+      .from(courseSelfEnrolmentIntents)
+      .where(
+        and(
+          eq(courseSelfEnrolmentIntents.organizationId, organizationId),
+          eq(courseSelfEnrolmentIntents.personId, loserPersonId)
+        )
+      )
+      .all()
+    for (const intent of loserIntents) {
+      if (intent.redeemedAt !== null) {
+        // Already redeemed — nothing left for it to collide on
+        // (`course_self_enrolment_intents_org_course_person_unredeemed_unique`
+        // is partial), so it moves outright, the same as an *ended*
+        // enrolment above.
+        tx.update(courseSelfEnrolmentIntents)
+          .set({ personId: survivorPersonId })
+          .where(eq(courseSelfEnrolmentIntents.id, intent.id))
+          .run()
+        continue
+      }
+      const survivorUnredeemed = tx
+        .select({ id: courseSelfEnrolmentIntents.id })
+        .from(courseSelfEnrolmentIntents)
+        .where(
+          and(
+            eq(courseSelfEnrolmentIntents.organizationId, organizationId),
+            eq(courseSelfEnrolmentIntents.courseId, intent.courseId),
+            eq(courseSelfEnrolmentIntents.personId, survivorPersonId),
+            isNull(courseSelfEnrolmentIntents.redeemedAt)
+          )
+        )
+        .get()
+      if (survivorUnredeemed) {
+        // The survivor already holds an unredeemed intent for this same
+        // course — moving this one would collide with this table's own
+        // partial unique index. Left behind on the (now tombstoned) loser,
+        // never redeemed: the survivor's own intent already names exactly
+        // the same fact ("this person asked this course"), so nothing is
+        // lost by not moving a duplicate of it.
+        continue
+      }
+      tx.update(courseSelfEnrolmentIntents)
+        .set({ personId: survivorPersonId })
+        .where(eq(courseSelfEnrolmentIntents.id, intent.id))
+        .run()
     }
 
     // roster_channel_assignments (ROST-17) — the durable channel-ownership

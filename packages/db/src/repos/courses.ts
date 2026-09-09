@@ -101,6 +101,16 @@ export interface NewCourse {
   // immediately (see `docs/DECISIONS.md` D-13 for what that does — and does
   // not — do to a conversation already on disk).
   conversationScope?: ConversationScope
+  // ENRL-13 — defaults to `false` when omitted, matching
+  // `courses.selfEnrolFromDiscord`'s own database default (`schema.ts`).
+  // Read by `@bloombot/discord`'s `handle-mention.ts` on every routed
+  // message, not cached anywhere.
+  selfEnrolFromDiscord?: boolean
+  // ENRL-14 — defaults to `true` when omitted, matching
+  // `courses.answerUnenrolled`'s own database default (`schema.ts`). Read
+  // by `@bloombot/discord`'s `handle-mention.ts` before `answerQuestion` is
+  // ever called.
+  answerUnenrolled?: boolean
   // TEN-9 — which of the organization's Discord servers this course routes
   // in. `undefined`/`null` (both mean "not set" here — `undefined` is what a
   // caller omits, `null` is what a re-save that wants to clear a previously
@@ -696,6 +706,8 @@ export function createCourse(
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
         conversationScope: input.conversationScope ?? 'course',
+        selfEnrolFromDiscord: input.selfEnrolFromDiscord ?? false,
+        answerUnenrolled: input.answerUnenrolled ?? true,
         discordServerId: input.discordServerId ?? null,
         createdAt: Date.now(),
       })
@@ -1037,6 +1049,8 @@ export function updateCourse(
         vectorStoreId: input.vectorStoreId ?? null,
         maxRequestsPerDay: input.maxRequestsPerDay ?? null,
         conversationScope: input.conversationScope ?? 'course',
+        selfEnrolFromDiscord: input.selfEnrolFromDiscord ?? false,
+        answerUnenrolled: input.answerUnenrolled ?? true,
         discordServerId: input.discordServerId ?? null,
       })
       .where(

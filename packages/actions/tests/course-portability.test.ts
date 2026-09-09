@@ -80,6 +80,11 @@ function seedFullCourse(
       model: 'gpt-5',
       maxRequestsPerDay: 40,
       conversationScope: 'course_surface',
+      // ENRL-13/ENRL-14 — non-default values, so a round trip that
+      // silently reverted either to its default would show up as a
+      // mismatch here rather than passing by accident.
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
       categories: [
         {
           name: 'Intro to CS - GLOBAL',
@@ -141,6 +146,8 @@ describe('courses.export', () => {
       instructions: 'Answer in plain language.',
       maxRequestsPerDay: 40,
       conversationScope: 'course_surface',
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
       websites: ['example.edu'],
       categories: [
         {
@@ -286,6 +293,12 @@ describe('courses.import', () => {
       model: 'gpt-5',
       maxRequestsPerDay: 40,
       conversationScope: 'course_surface',
+      // must-fix 4, review round 1 — both reviewers found this
+      // independently: neither setting was on the field list `courses.import`
+      // otherwise carries faithfully, so a round trip silently reversed an
+      // access decision with no report at all.
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
     })
     expect(result.course.categories.map((category) => category.name)).toEqual([
       'Intro to CS - GLOBAL',
@@ -375,6 +388,51 @@ describe('courses.import', () => {
     expect(result.notCarried).toMatchObject({
       vectorStore: true,
       attachments: 0,
+    })
+  })
+
+  // must-fix 4, review round 1 — a file exported before ENRL-13/ENRL-14
+  // existed carries neither key at all (`exportedCourseSchema`'s own
+  // `.optional()` on both, `@bloombot/schemas`); this pins that an absent
+  // value means "the behaviour this course had before either setting
+  // existed," the same defaults `schema.ts`'s own database columns carry —
+  // not that the file is refused, and not `undefined` reaching
+  // `createCourse` as something other than its own default.
+  it("imports an older file with neither ENRL-13 nor ENRL-14 key at all, defaulting to today's behaviour", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const oldFile = [
+      'bloombotCourseExport: 1',
+      'kind: bloombot.course',
+      "exportedAt: '2026-01-01T00:00:00.000Z'",
+      'course:',
+      '  title: Intro to CS',
+      '  adminsRole: admins-cs-fa26',
+      '  studentsRole: students-cs-fa26',
+      '  model: null',
+      '  instructions: null',
+      '  maxRequestsPerDay: null',
+      '  conversationScope: course',
+      '  categories: []',
+      '  websites: []',
+      'notCarried:',
+      '  vectorStore: false',
+      '  storedPrompt: false',
+      '  attachments: 0',
+      '  discordServer: false',
+      '',
+    ].join('\n')
+
+    const result = await dispatch(
+      importCourseAction,
+      { projectId, content: oldFile },
+      { organizationId, db: testDb.db, accountId: accountId(organizationId) }
+    )
+
+    expect(result.course).toMatchObject({
+      title: 'Intro to CS',
+      selfEnrolFromDiscord: false,
+      answerUnenrolled: true,
     })
   })
 

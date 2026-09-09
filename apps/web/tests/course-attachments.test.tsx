@@ -1,14 +1,14 @@
 /**
- * `components/CourseAttachments.tsx` (WEB-18, FILE-1..3): the screen a
- * course's knowledge files were missing entirely. Every case below is what
- * that component's own module comment promises: an upload, each file's own
- * pending/ready/failed status, a confirmed detach, and — the case this
- * project keeps hitting (`ScaffoldButton.tsx`'s own precedent) — a job
- * queued with no worker running to claim it read as "still queued," not a
- * silent hang.
+ * `components/CourseAttachments.tsx` (WEB-18, FILE-1..3, FILE-7): the screen
+ * a course's knowledge files were missing entirely. Every case below is
+ * what that component's own module comment promises: queuing and uploading
+ * several files in one pass, each file's own pending/ready/failed status, a
+ * one-click detach with no confirmation, and — the case this project keeps
+ * hitting (`ScaffoldButton.tsx`'s own precedent) — a job queued with no
+ * worker running to claim it read as "still queued," not a silent hang.
  */
 
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
@@ -55,18 +55,18 @@ afterEach(() => {
 })
 
 /**
- * Choose a file the way a person does — dropping it on the zone. The label
- * names the zone (a real button, so the keyboard can reach it), not the
- * hidden picker behind it, so `fireEvent.change` on the label's target no
- * longer selects anything.
+ * Choose one or several files the way a person does — dropping them on the
+ * zone. The label names the zone (a real button, so the keyboard can reach
+ * it), not the hidden picker behind it, so `fireEvent.change` on the
+ * label's target no longer selects anything.
  */
-function chooseFile(chosen: File): void {
-  fireEvent.drop(screen.getByRole('button', { name: /Course file/ }), {
-    dataTransfer: { files: [chosen], types: ['Files'] },
+function chooseFiles(files: File[]): void {
+  fireEvent.drop(screen.getByRole('button', { name: /Course files/ }), {
+    dataTransfer: { files, types: ['Files'] },
   })
 }
 
-describe('CourseAttachments (WEB-18)', () => {
+describe('CourseAttachments (WEB-18, FILE-7)', () => {
   it('shows the empty state when a course has no files attached', async () => {
     listCourseAttachments.mockResolvedValue([])
 
@@ -130,45 +130,228 @@ describe('CourseAttachments (WEB-18)', () => {
     expect(screen.queryByText(/vs_do_not_show_me/)).not.toBeInTheDocument()
   })
 
-  it('uploads the selected file, base64-encoded, and refreshes the list', async () => {
-    listCourseAttachments
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([attachment({ status: 'pending' })])
-    attachCourseFile.mockResolvedValue({
-      attachmentId: 'att-1',
-      jobId: 'job-1',
-    })
+  // FILE-7: choosing several files at once queues all of them, and the
+  // button's own label counts them.
+  it('choosing several files queues them all', async () => {
+    listCourseAttachments.mockResolvedValue([])
 
     renderWithModal(
       <CourseAttachments organizationId="org-1" courseId="course-1" />
     )
     await screen.findByText('No files attached yet.')
 
-    const file = new File(['%PDF-1.4 fixture'], 'syllabus.pdf', {
+    chooseFiles([
+      new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'b.pdf', { type: 'application/pdf' }),
+    ])
+
+    expect(
+      await screen.findByText('a.pdf', { exact: false })
+    ).toBeInTheDocument()
+    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Attach 2 files' })
+    ).toBeInTheDocument()
+  })
+
+  // FILE-7 rework finding — the queue's own per-file size used the whole-MB
+  // rounding the budget sentence uses (`describeMb`), which rounds any file
+  // under ~512 KB down to "0 MB". A sub-megabyte file — most syllabi,
+  // notes and schedules — must still show a real, non-zero size
+  // (`FileDropZone`'s own `describeSize`, which rounds to KB or bytes
+  // below a megabyte).
+  it('a sub-MB queued file shows a non-zero size, not "0 MB"', async () => {
+    listCourseAttachments.mockResolvedValue([])
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    // 200 KB — well under a megabyte, comfortably over the point where
+    // whole-MB rounding reads as zero.
+    const small = new File([new Uint8Array(200 * 1024)], 'small.pdf', {
       type: 'application/pdf',
     })
-    chooseFile(file)
-    fireEvent.click(screen.getByRole('button', { name: 'Attach file' }))
+    chooseFiles([small])
 
-    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(1))
-    const [organizationId, courseId, uploadInput] = attachCourseFile.mock
-      .calls[0] as [
-      string,
-      string,
-      { filename: string; contentType: string; contentBase64: string },
-    ]
-    expect(organizationId).toBe('org-1')
-    expect(courseId).toBe('course-1')
-    expect(uploadInput.filename).toBe('syllabus.pdf')
-    expect(uploadInput.contentType).toBe('application/pdf')
-    // The exact base64 encoding of the fixture's own bytes — proves this is
-    // a real encode of the selected file, not a stand-in string.
-    expect(uploadInput.contentBase64).toBe(
-      Buffer.from('%PDF-1.4 fixture').toString('base64')
+    await screen.findByText('small.pdf', { exact: false })
+    expect(screen.getByText('(200 KB)')).toBeInTheDocument()
+    expect(screen.queryByText('(0 MB)')).not.toBeInTheDocument()
+  })
+
+  // FILE-7: a second choose appends to the queue rather than replacing it —
+  // an instructor picking readings in two passes is the normal case.
+  it('a second choose appends to the queue', async () => {
+    listCourseAttachments.mockResolvedValue([])
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([new File(['a'], 'a.pdf', { type: 'application/pdf' })])
+    expect(
+      await screen.findByRole('button', { name: 'Attach 1 file' })
+    ).toBeInTheDocument()
+
+    chooseFiles([new File(['b'], 'b.pdf', { type: 'application/pdf' })])
+    expect(
+      await screen.findByRole('button', { name: 'Attach 2 files' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('a.pdf', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
+  })
+
+  // FILE-7: a queued file can be dropped from the queue before uploading.
+  it('a queued file can be removed before upload', async () => {
+    listCourseAttachments.mockResolvedValue([])
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([
+      new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'b.pdf', { type: 'application/pdf' }),
+    ])
+    await screen.findByRole('button', { name: 'Attach 2 files' })
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove a.pdf from the queue' })
     )
 
-    expect(await screen.findByText('syllabus.pdf')).toBeInTheDocument()
-    expect(listCourseAttachments).toHaveBeenCalledTimes(2)
+    expect(
+      await screen.findByRole('button', { name: 'Attach 1 file' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('a.pdf', { exact: false })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
+  })
+
+  // FILE-7: the queue uploads sequentially, one `attachCourseFile` call per
+  // file, and refreshes the list once done.
+  it('upload dispatches one attach per queued file, in order', async () => {
+    listCourseAttachments
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        attachment({ id: 'att-1', filename: 'a.pdf', status: 'pending' }),
+        attachment({ id: 'att-2', filename: 'b.pdf', status: 'pending' }),
+      ])
+    attachCourseFile
+      .mockResolvedValueOnce({ attachmentId: 'att-1', jobId: 'job-1' })
+      .mockResolvedValueOnce({ attachmentId: 'att-2', jobId: 'job-2' })
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([
+      new File(['a-bytes'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['b-bytes'], 'b.pdf', { type: 'application/pdf' }),
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 2 files' }))
+
+    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(2))
+    // Distinct content per queued file — a regression that encoded the
+    // wrong `File` in the loop (the second call reusing the first file's
+    // bytes, say) would pass a `filename`-only assertion but fail this
+    // one, since `a-bytes` and `b-bytes` base64-encode to different
+    // strings.
+    expect(attachCourseFile).toHaveBeenNthCalledWith(
+      1,
+      'org-1',
+      'course-1',
+      expect.objectContaining({
+        filename: 'a.pdf',
+        contentBase64: Buffer.from('a-bytes').toString('base64'),
+      })
+    )
+    expect(attachCourseFile).toHaveBeenNthCalledWith(
+      2,
+      'org-1',
+      'course-1',
+      expect.objectContaining({
+        filename: 'b.pdf',
+        contentBase64: Buffer.from('b-bytes').toString('base64'),
+      })
+    )
+
+    expect(await screen.findByText('a.pdf')).toBeInTheDocument()
+    expect(screen.getByText('b.pdf')).toBeInTheDocument()
+  })
+
+  // FILE-7: a failure part-way through the queue stops the upload, shows
+  // the error, and leaves the files that were never sent still queued —
+  // nothing is silently discarded.
+  it('a failure part-way leaves the unsent files queued and shows the error', async () => {
+    listCourseAttachments.mockResolvedValue([])
+    attachCourseFile
+      .mockResolvedValueOnce({ attachmentId: 'att-1', jobId: 'job-1' })
+      .mockRejectedValueOnce(new ApiError(413, { error: 'invalid_request' }))
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([
+      new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'b.pdf', { type: 'application/pdf' }),
+      new File(['c'], 'c.pdf', { type: 'application/pdf' }),
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 3 files' }))
+
+    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+
+    // `a.pdf` was sent (and removed from the queue); `b.pdf` failed; `c.pdf`
+    // was never attempted — both `b.pdf` and `c.pdf` are still queued so
+    // the instructor can retry without re-choosing them.
+    expect(
+      screen.queryByText('a.pdf', { exact: false })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
+    expect(screen.getByText('c.pdf', { exact: false })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Attach 2 files' })
+    ).toBeInTheDocument()
+  })
+
+  // FILE-7: the client-side budget pre-check refuses before ever calling
+  // the server, using the same wording the server's own refusal would.
+  it('refuses locally when the queue would put the course over its 100 MB budget', async () => {
+    listCourseAttachments.mockResolvedValue([
+      attachment({
+        id: 'att-1',
+        filename: 'existing.pdf',
+        sizeBytes: 99 * 1024 * 1024,
+      }),
+    ])
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('existing.pdf')
+
+    const oversized = new File(
+      [new Uint8Array(2 * 1024 * 1024)],
+      'two-mb.pdf',
+      { type: 'application/pdf' }
+    )
+    chooseFiles([oversized])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 1 file' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'That file would put this course over its 100 MB total. 99 MB of 100 MB is already used.'
+      )
+    ).toBeInTheDocument()
+    expect(attachCourseFile).not.toHaveBeenCalled()
   })
 
   it('a rejected upload shows the refusal and never adds a row', async () => {
@@ -182,11 +365,12 @@ describe('CourseAttachments (WEB-18)', () => {
     )
     await screen.findByText('No files attached yet.')
 
-    const file = new File(['x'.repeat(10)], 'huge.pdf', {
-      type: 'application/pdf',
-    })
-    chooseFile(file)
-    fireEvent.click(screen.getByRole('button', { name: 'Attach file' }))
+    chooseFiles([
+      new File(['x'.repeat(10)], 'huge.pdf', {
+        type: 'application/pdf',
+      }),
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 1 file' }))
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
     expect(screen.getByText('No files attached yet.')).toBeInTheDocument()
@@ -238,29 +422,9 @@ describe('CourseAttachments (WEB-18)', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('detach confirms first — cancelling leaves the file exactly as it was', async () => {
-    listCourseAttachments.mockResolvedValue([
-      attachment({ status: 'ready', filename: 'syllabus.pdf' }),
-    ])
-
-    renderWithModal(
-      <CourseAttachments organizationId="org-1" courseId="course-1" />
-    )
-    await screen.findByText('syllabus.pdf')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Detach syllabus.pdf' }))
-    const dialog = await screen.findByRole('dialog', {
-      name: 'Detach "syllabus.pdf"?',
-    })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => expect(dialog).not.toBeVisible())
-    expect(detachCourseAttachment).not.toHaveBeenCalled()
-    expect(screen.getByText('syllabus.pdf')).toBeInTheDocument()
-    expect(screen.getByText('Ready — grounding answers.')).toBeInTheDocument()
-  })
-
-  it('detach, confirmed, dispatches the action and the row disappears once the poll reflects it gone', async () => {
+  // FILE-7 — the regression that matters: clicking the delete icon
+  // dispatches the detach immediately, with no confirmation dialog first.
+  it('clicking the delete icon dispatches the detach with no confirmation dialog', async () => {
     listCourseAttachments
       .mockResolvedValueOnce([
         attachment({ status: 'ready', filename: 'syllabus.pdf' }),
@@ -278,11 +442,10 @@ describe('CourseAttachments (WEB-18)', () => {
     await screen.findByText('syllabus.pdf')
 
     fireEvent.click(screen.getByRole('button', { name: 'Detach syllabus.pdf' }))
-    const dialog = await screen.findByRole('dialog', {
-      name: 'Detach "syllabus.pdf"?',
-    })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Detach' }))
 
+    // No dialog ever appears — the dispatch happens synchronously with the
+    // click, not after a confirmation.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await waitFor(() =>
       expect(detachCourseAttachment).toHaveBeenCalledWith('org-1', 'att-1')
     )
@@ -311,10 +474,6 @@ describe('CourseAttachments (WEB-18)', () => {
     await screen.findByText('syllabus.pdf')
 
     fireEvent.click(screen.getByRole('button', { name: 'Detach syllabus.pdf' }))
-    const dialog = await screen.findByRole('dialog', {
-      name: 'Detach "syllabus.pdf"?',
-    })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Detach' }))
     await screen.findByText('Removing…')
 
     await waitFor(() =>

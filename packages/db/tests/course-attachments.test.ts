@@ -218,4 +218,116 @@ describe('course-attachments repo (FILE-1..3, FILE-5)', () => {
       courseAttachments.getAttachment(orgA, created.id, testDb.db)
     ).toBeUndefined()
   })
+
+  // FILE-7 — the per-course budget's own source of truth: a SQL `sum`, not a
+  // JS reduce over every row, scoped the same TEN-2 way every other write and
+  // read in this file already is.
+  describe('totalSizeBytesForCourse (FILE-7)', () => {
+    it('returns 0 for a course with no attachments', () => {
+      testDb = createTestDatabase()
+      const { orgA, courseA } = seedTwoOrganizationsWithCourses(testDb)
+
+      expect(
+        courseAttachments.totalSizeBytesForCourse(orgA, courseA.id, testDb.db)
+      ).toBe(0)
+    })
+
+    it("sums a course's own attachments, counting pending rows the same as ready ones", () => {
+      testDb = createTestDatabase()
+      const { orgA, courseA } = seedTwoOrganizationsWithCourses(testDb)
+
+      const first = courseAttachments.createPendingAttachment(
+        orgA,
+        {
+          courseId: courseA.id,
+          filename: 'a.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 1000,
+        },
+        testDb.db
+      )
+      courseAttachments.createPendingAttachment(
+        orgA,
+        {
+          courseId: courseA.id,
+          filename: 'b.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 2000,
+        },
+        testDb.db
+      )
+      // Moving one to `ready` must not change the total — a pending row
+      // already has its bytes on disk (FILE-5), so the budget counts it
+      // exactly the same either side of that transition.
+      courseAttachments.markAttachmentReady(
+        orgA,
+        first.id,
+        'file_abc',
+        testDb.db
+      )
+
+      expect(
+        courseAttachments.totalSizeBytesForCourse(orgA, courseA.id, testDb.db)
+      ).toBe(3000)
+    })
+
+    it('ignores another course in the same organization, and another organization entirely', () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, courseA, courseB } =
+        seedTwoOrganizationsWithCourses(testDb)
+      const secondProject = projects.createProject(
+        orgA,
+        { name: 'Spring 2027' },
+        testDb.db
+      )
+      const otherCourseInOrgA = courses.createCourse(
+        orgA,
+        {
+          projectId: secondProject.id,
+          title: 'Other Course',
+          enabled: true,
+          adminsRole: 'admins-oc',
+          studentsRole: 'students-oc',
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!otherCourseInOrgA.ok) throw new Error('seed course save failed')
+
+      courseAttachments.createPendingAttachment(
+        orgA,
+        {
+          courseId: courseA.id,
+          filename: 'a.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 500,
+        },
+        testDb.db
+      )
+      courseAttachments.createPendingAttachment(
+        orgA,
+        {
+          courseId: otherCourseInOrgA.course.id,
+          filename: 'other.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 9000,
+        },
+        testDb.db
+      )
+      courseAttachments.createPendingAttachment(
+        orgB,
+        {
+          courseId: courseB.id,
+          filename: 'b.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 7000,
+        },
+        testDb.db
+      )
+
+      expect(
+        courseAttachments.totalSizeBytesForCourse(orgA, courseA.id, testDb.db)
+      ).toBe(500)
+    })
+  })
 })

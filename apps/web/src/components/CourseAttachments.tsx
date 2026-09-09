@@ -1,13 +1,15 @@
 /**
- * WEB-18/FILE-1..3: the screen a course's knowledge files were missing
- * entirely — the action layer (`courseAttachments.attach/.list/.detach`),
- * the worker's own upload job and the provider round trip all already
- * existed, but nothing before this component ever offered any of it in the
- * panel; the capability was reachable only by dispatching an action by
- * hand. This lists what a course is grounded in, takes an upload, shows
- * each file's own FILE-2 status (pending, ready or failed, with the
- * provider's own reason), and detaches one behind a confirmation — FILE-3's
- * removal reaches the provider and cannot be undone.
+ * WEB-18/FILE-1..3, FILE-7: the screen a course's knowledge files were
+ * missing entirely — the action layer (`courseAttachments.attach/.list/
+ * .detach`), the worker's own upload job and the provider round trip all
+ * already existed, but nothing before this component ever offered any of
+ * it in the panel; the capability was reachable only by dispatching an
+ * action by hand. This lists what a course is grounded in, queues and
+ * uploads several files in one pass (FILE-7), shows each file's own FILE-2
+ * status (pending, ready or failed, with the provider's own reason), and
+ * detaches one with a single click — a product decision, not an oversight:
+ * the undo story is that the instructor re-uploads, so this does not ask
+ * first the way a destructive action elsewhere in this app might.
  *
  * **Never a vector store id.** The store is this platform's own
  * bookkeeping (`courses.vectorStoreId`) — an instructor uploads a syllabus
@@ -61,8 +63,7 @@ import {
 } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
-import { FileDropZone } from './FileDropZone.js'
-import { useModal } from './modal/ModalProvider.js'
+import { describeSize, FileDropZone } from './FileDropZone.js'
 
 export interface CourseAttachmentsProps {
   organizationId: string
@@ -112,22 +113,41 @@ function statusLabel(status: CourseAttachmentSummary['status']): string {
 }
 
 /**
- * The largest file this screen will send.
- *
- * The server's own ceiling is `ACTION_JSON_BODY_LIMIT_BYTES` (28 MB), which is
- * a *base64* budget — encoding inflates by about a third, so 20 MB of file is
- * roughly 27 MB on the wire and the two numbers agree rather than one being a
- * rounder version of the other. Refusing here means an instructor learns the
- * limit before waiting for an upload the server was always going to reject.
+ * FILE-7: a course's attachments, all of them added together, may total at
+ * most 100 MiB — the authoritative number lives in
+ * `packages/actions/src/actions/course-attachments.ts`'s own
+ * `MAX_COURSE_ATTACHMENTS_TOTAL_BYTES`, enforced there against every
+ * existing row before a new one is written. This app cannot import
+ * `@bloombot/actions` (`api/client.ts`'s own module comment on why that
+ * package is off-limits to this bundle — it is not even a declared
+ * dependency of `apps/web`), so this restates the same 100 MiB by hand
+ * rather than silently inventing a second, unrelated magic number: if the
+ * server's own budget ever changes, this comment is the pointer back to
+ * where the real number lives. This is a courtesy only — refusing here
+ * means an instructor learns the limit before waiting for an upload the
+ * server was always going to reject, but the server enforces it
+ * regardless of anything checked here.
  */
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+const MAX_COURSE_ATTACHMENTS_TOTAL_BYTES = 100 * 1024 * 1024
+
+/** Bytes rendered in whole MB — the same rounding `packages/actions`'s own `overBudgetMessage` uses server-side, so the client-side courtesy check and the server's real refusal read identically. */
+function describeMb(bytes: number): number {
+  return Math.round(bytes / (1024 * 1024))
+}
+
+/** The same wording `createAttachCourseAttachmentAction`'s own server-side refusal uses (`packages/actions/src/actions/course-attachments.ts`) — an instructor should not learn two different sentences for the same rule depending on which side caught it. */
+function overBudgetMessage(existingBytes: number): string {
+  const totalMb = describeMb(MAX_COURSE_ATTACHMENTS_TOTAL_BYTES)
+  const usedMb = describeMb(existingBytes)
+  return `That file would put this course over its ${totalMb} MB total. ${usedMb} MB of ${totalMb} MB is already used.`
+}
 
 /**
  * A browser `File`'s bytes, base64-encoded — what `courseAttachments.attach`'s
  * own `contentBase64` field wants. `FileReader#readAsDataURL` does the
  * encoding natively rather than this app looping over bytes itself
- * (`String.fromCharCode(...bytes)` on a file anywhere near FILE-1's own
- * 20 MB ceiling overflows the call stack a spread that large hits) — only
+ * (`String.fromCharCode(...bytes)` on a file anywhere near the 100 MB
+ * course budget overflows the call stack a spread that large hits) — only
  * the part after the comma in `data:<mime>;base64,<data>` is the payload
  * `courseAttachments.attach`'s schema wants.
  */
@@ -158,8 +178,16 @@ export function CourseAttachments({
     CourseAttachmentSummary[] | undefined
   >(undefined)
   const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
-  const [selectedFile, setSelectedFile] = useState<File | undefined>(undefined)
+  // FILE-7: a queue, not a single `File` — choosing (or dropping) several
+  // files at once, or in two passes, appends to this rather than replacing
+  // it, and "Attach N files" sends the whole queue in one action per file.
+  const [queuedFiles, setQueuedFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  // FILE-7: how far a sequential upload has gotten, for the button's own
+  // "Uploading 2 of 5…" — `undefined` while nothing is uploading.
+  const [uploadProgress, setUploadProgress] = useState<
+    { current: number; total: number } | undefined
+  >(undefined)
   const [uploadError, setUploadError] = useState<ApiError | undefined>(
     undefined
   )
@@ -171,7 +199,6 @@ export function CourseAttachments({
     undefined
   )
   const [stillQueuedIds, setStillQueuedIds] = useState<Set<string>>(new Set())
-  const { confirm } = useModal()
 
   // First-observed-active time per attachment id ("active" = pending, or a
   // detach still awaiting its row's removal) — the same bookkeeping
@@ -259,52 +286,101 @@ export function CourseAttachments({
     refresh,
   ])
 
-  // The drop zone owns the picker and its reset, so choosing a file is just
+  // The drop zone owns the picker and its reset, so choosing files is just
   // state here — clearing the last upload's error is the only extra step.
-  const chooseFile = (file: File): void => {
+  // FILE-7: appends rather than replaces, deduplicated by name+size — an
+  // instructor picking readings in two passes is the normal case, and
+  // choosing the same file twice by mistake should not queue it twice.
+  const chooseFiles = (files: File[]): void => {
     setUploadError(undefined)
-    setSelectedFile(file)
+    setQueuedFiles((current) => {
+      const next = [...current]
+      for (const file of files) {
+        const alreadyQueued = next.some(
+          (queued) => queued.name === file.name && queued.size === file.size
+        )
+        if (!alreadyQueued) next.push(file)
+      }
+      return next
+    })
+  }
+
+  const removeFromQueue = (file: File): void => {
+    setQueuedFiles((current) => current.filter((queued) => queued !== file))
   }
 
   const handleUpload = async () => {
-    if (!selectedFile) return
+    if (queuedFiles.length === 0) return
     setUploadError(undefined)
+
+    // FILE-7 — a client-side courtesy, not the gate: sum what is already
+    // listed plus what this queue would add, and refuse with the same
+    // wording `createAttachCourseAttachmentAction`'s own server-side check
+    // would use — an instructor learns the limit before waiting on an
+    // upload the server was always going to reject. The server checks
+    // again regardless, against the real, current total, since this read
+    // can be stale the moment another upload elsewhere completes first.
+    const alreadyUsedBytes = (attachments ?? []).reduce(
+      (total, attachment) => total + attachment.sizeBytes,
+      0
+    )
+    const queuedBytes = queuedFiles.reduce(
+      (total, file) => total + file.size,
+      0
+    )
+    if (alreadyUsedBytes + queuedBytes > MAX_COURSE_ATTACHMENTS_TOTAL_BYTES) {
+      setUploadError(
+        new ApiError(409, {
+          error: 'action_conflict',
+          conflict: { message: overBudgetMessage(alreadyUsedBytes) },
+        })
+      )
+      return
+    }
+
     setUploading(true)
     try {
-      const contentBase64 = await fileToBase64(selectedFile)
-      await attachCourseFile(organizationId, courseId, {
-        filename: selectedFile.name,
-        // A file this browser could not classify (an empty `File.type`,
-        // some OS/extension combinations) still has to satisfy
-        // `courseAttachments.attach`'s own `contentType: z.string().min(1)`
-        // — the provider gets to decide whether it can use it, not this
-        // form.
-        contentType: selectedFile.type || 'application/octet-stream',
-        contentBase64,
-      })
-      setSelectedFile(undefined)
-      await refresh()
+      // FILE-7 — one `attachCourseFile` at a time, never in parallel: each
+      // carries up to 100 MB of base64, and a handful of those in flight at
+      // once would be a real memory and bandwidth spike for no benefit an
+      // instructor would notice. A failure stops the loop where it is —
+      // the files already sent stay sent (removed from the queue as each
+      // one succeeds), and the ones after the failure are left queued so
+      // the instructor can retry without re-choosing them.
+      let index = 0
+      for (const file of queuedFiles) {
+        index += 1
+        setUploadProgress({ current: index, total: queuedFiles.length })
+        const contentBase64 = await fileToBase64(file)
+        await attachCourseFile(organizationId, courseId, {
+          filename: file.name,
+          // A file this browser could not classify (an empty `File.type`,
+          // some OS/extension combinations) still has to satisfy
+          // `courseAttachments.attach`'s own `contentType: z.string().min(1)`
+          // — the provider gets to decide whether it can use it, not this
+          // form.
+          contentType: file.type || 'application/octet-stream',
+          contentBase64,
+        })
+        setQueuedFiles((current) => current.filter((f) => f !== file))
+      }
     } catch (caught) {
       if (caught instanceof ApiError) setUploadError(caught)
       else throw caught
     } finally {
+      setUploadProgress(undefined)
       setUploading(false)
+      // Whatever got through before a failure (or all of it, on success)
+      // is already uploaded — refresh so the list reflects it immediately
+      // rather than waiting for the next poll.
+      await refresh()
     }
   }
 
   const handleDetach = async (attachment: CourseAttachmentSummary) => {
     setDetachError(undefined)
-    // FILE-3/WEB-18: detaching reaches the provider and cannot be undone —
-    // the existing modal primitive, not a bespoke dialog (WEB-15).
-    const confirmed = await confirm({
-      title: `Detach "${attachment.filename}"?`,
-      description:
-        'This removes it from what the course is grounded in and reaches the provider to delete it — it cannot be undone.',
-      confirmLabel: 'Detach',
-      destructive: true,
-    })
-    if (!confirmed) return
-
+    // FILE-7: one click, no confirmation — a product decision, not an
+    // oversight. The undo story is that the instructor re-uploads.
     setDetachingIds((current) => new Set(current).add(attachment.id))
     try {
       await detachCourseAttachment(organizationId, attachment.id)
@@ -365,15 +441,17 @@ export function CourseAttachments({
                     )}
                   </div>
                 </div>
+                {/* FILE-7: icon-only, no confirmation — one click detaches.
+                    `aria-label` still names the file, so screen readers (and
+                    this file's own tests) find it exactly as they did when
+                    the button also carried visible text. */}
                 <Button
                   variant="ghost"
                   aria-label={`Detach ${attachment.filename}`}
                   icon={<DeleteIcon aria-hidden="true" className="size-4" />}
                   onClick={() => void handleDetach(attachment)}
                   disabled={detaching}
-                >
-                  Detach
-                </Button>
+                />
               </li>
             )
           })}
@@ -384,20 +462,63 @@ export function CourseAttachments({
 
       <div className="flex flex-col gap-2">
         <FileDropZone
-          label="Course file"
-          help="Up to 20 MB — notes, syllabus or schedule."
-          maxBytes={MAX_ATTACHMENT_BYTES}
-          selectedFile={selectedFile}
+          label="Course files"
+          help={`Up to ${describeMb(MAX_COURSE_ATTACHMENTS_TOTAL_BYTES)} MB total for this course — ${describeMb(
+            Math.max(
+              0,
+              MAX_COURSE_ATTACHMENTS_TOTAL_BYTES -
+                (attachments ?? []).reduce(
+                  (total, attachment) => total + attachment.sizeBytes,
+                  0
+                ) -
+                queuedFiles.reduce((total, file) => total + file.size, 0)
+            )
+          )} MB left. Notes, syllabus, schedule — choose or drop several at once.`}
+          multiple
           disabled={uploading}
-          onFileChosen={chooseFile}
+          onFilesChosen={chooseFiles}
         />
+
+        {queuedFiles.length > 0 && (
+          <ul className="flex flex-col gap-1">
+            {queuedFiles.map((file) => (
+              <li
+                key={`${file.name}-${file.size}`}
+                className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 px-3 py-1.5 text-sm"
+              >
+                <span className="min-w-0 truncate">
+                  {file.name}{' '}
+                  {/* FILE-7 rework finding — `describeSize` (`FileDropZone.js`),
+                      not the whole-MB `describeMb` the budget sentence
+                      below uses: a sub-megabyte file (most syllabi, most
+                      schedules) would otherwise round to "0 MB" here. */}
+                  <span className="text-neutral-500">
+                    ({describeSize(file.size)})
+                  </span>
+                </span>
+                <Button
+                  variant="ghost"
+                  aria-label={`Remove ${file.name} from the queue`}
+                  icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+                  onClick={() => removeFromQueue(file)}
+                  disabled={uploading}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+
         <Button
           variant="secondary"
           icon={<AttachIcon aria-hidden="true" className="size-4" />}
           onClick={() => void handleUpload()}
-          disabled={!selectedFile || uploading}
+          disabled={queuedFiles.length === 0 || uploading}
         >
-          {uploading ? 'Uploading…' : 'Attach file'}
+          {uploadProgress
+            ? `Uploading ${uploadProgress.current} of ${uploadProgress.total}…`
+            : queuedFiles.length === 1
+              ? 'Attach 1 file'
+              : `Attach ${queuedFiles.length} files`}
         </Button>
       </div>
       {uploadError && <ErrorMessage error={uploadError} />}

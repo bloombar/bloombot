@@ -1333,6 +1333,15 @@ An entry is a bare domain — no scheme, no path — because that is what ground
 actually needs, and a course with no entries answers exactly as it does today. A website belongs to an
 organization and is reachable only through it, the same scoping FILE-5 gives a file.
 
+#### FILE-7 A course's files are uploaded together, within one budget
+
+An instructor chooses, or drops, several files at once — a semester of readings, not one upload per
+file — and the panel queues all of them and uploads the lot in one action. There is no longer a limit
+on any single file's own size; instead, a course's attachments are capped at 100 MB in total, enforced
+where the platform can see every file a course already has, not in the browser guessing at what the
+server would allow. Removing a file is a single click, with no confirmation first — the undo is that
+the instructor re-uploads.
+
 ### 24. Cost Ledger, Caps & Monitoring
 
 #### COST-1 Every model call is recorded with what it cost

@@ -27,8 +27,8 @@ type WebSource = NonNullable<ReturnType<typeof courseWebSources.getWebSource>>
 // which fails every question this course is asked from then on, with only
 // a log line and no signal in the panel that anything is wrong. The same
 // "an explicit, tested, named ceiling rather than a silent provider
-// rejection" discipline `MAX_COURSE_ATTACHMENT_BYTES`'s own doc comment
-// (`apps/api/src/routes/actions.ts`) already holds itself to for a
+// rejection" discipline `MAX_COURSE_ATTACHMENTS_TOTAL_BYTES`'s own doc
+// comment (`course-attachments.ts`, FILE-7) already holds itself to for a
 // different provider ceiling.
 export const MAX_COURSE_WEB_SOURCES = 100
 

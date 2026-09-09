@@ -38,13 +38,19 @@ import { memberships, type Database } from '@bloombot/db'
  * schedule (FILE-1's own text names all three), so a 300 kB PDF was
  * rejected `413` before this action ever ran.
  *
- * `MAX_COURSE_ATTACHMENT_BYTES` is this route's explicit, tested ceiling on
- * a raw file's own size — 20 MiB, generous for a course's notes, syllabus
- * and schedule (a scanned PDF included) without inviting an instructor to
- * treat this as general file storage. `ACTION_JSON_BODY_LIMIT_BYTES` is the
- * JSON body limit that ceiling actually requires: base64 encoding a 20 MiB
- * file takes `ceil(n / 3) * 4` bytes (~26.7 MiB), rounded up to 28 MiB for
- * headroom covering the payload's other fields (`courseId`, `filename`,
+ * FILE-7 replaced the per-file ceiling this comment used to derive its own
+ * number from with a per-*course* budget instead —
+ * `MAX_COURSE_ATTACHMENTS_TOTAL_BYTES` (`packages/actions/src/actions/course-attachments.ts`),
+ * 100 MiB total across every attachment a course has, enforced inside
+ * `createAttachCourseAttachmentAction`'s own `execute` where it can see
+ * every existing row, not here. What this route still owns is the one
+ * number that check needs the transport layer to permit before it ever
+ * runs: a *single* attach can legally carry the entire 100 MiB budget in
+ * one file (nothing stops an instructor uploading one 100 MiB PDF rather
+ * than several smaller ones), so this JSON body has to fit that much
+ * base64. `ACTION_JSON_BODY_LIMIT_BYTES` is that ceiling: base64 encoding
+ * 100 MiB takes `ceil(n / 3) * 4` bytes (~133.4 MiB), rounded up to 136 MiB
+ * for headroom covering the payload's other fields (`courseId`, `filename`,
  * `contentType`) and JSON's own string escaping — every other action's
  * input is tiny by comparison, so raising this only for the one route that
  * needs it, rather than globally, keeps the rest of this API's own request
@@ -55,8 +61,7 @@ import { memberships, type Database } from '@bloombot/db'
  * one path prefix without touching any other route's own limit. Recorded
  * in `docs/DECISIONS.md` D-32.
  */
-export const MAX_COURSE_ATTACHMENT_BYTES = 20 * 1024 * 1024
-export const ACTION_JSON_BODY_LIMIT_BYTES = 28 * 1024 * 1024
+export const ACTION_JSON_BODY_LIMIT_BYTES = 136 * 1024 * 1024
 
 /** `:organizationId/actions/:actionName` — mounted with `mergeParams` so both route params are visible here regardless of where `server.ts` mounts this router. */
 export function buildActionsRouter(

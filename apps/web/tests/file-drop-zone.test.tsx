@@ -144,4 +144,86 @@ describe('FileDropZone', () => {
 
     expect(onFileChosen).not.toHaveBeenCalled()
   })
+
+  // FILE-7: `multiple` routes every dropped file to `onFilesChosen`, in one
+  // call, rather than one `onFileChosen` call per file.
+  it('multiple: a drop carrying several files hands them all to onFilesChosen in one call', () => {
+    const onFilesChosen = vi.fn()
+    render(
+      <FileDropZone
+        label="Course files"
+        multiple
+        onFileChosen={vi.fn()}
+        onFilesChosen={onFilesChosen}
+      />
+    )
+
+    const zone = screen.getByRole('button', { name: /Course files/ })
+    fireEvent.drop(zone, {
+      dataTransfer: {
+        files: [file('a.pdf'), file('b.pdf')],
+        types: ['Files'],
+      },
+    })
+
+    expect(onFilesChosen).toHaveBeenCalledTimes(1)
+    const [chosen] = onFilesChosen.mock.calls[0] as [File[]]
+    expect(chosen.map((f) => f.name)).toEqual(['a.pdf', 'b.pdf'])
+  })
+
+  // FILE-7: a file that fails `maxBytes`/`validate` is dropped from the
+  // accepted set — the rest still reach `onFilesChosen`.
+  it('multiple: a file that fails validate is excluded, the rest still pass', async () => {
+    const onFilesChosen = vi.fn()
+    render(
+      <FileDropZone
+        label="Course files"
+        multiple
+        validate={(candidate) =>
+          candidate.name.endsWith('.exe')
+            ? 'That kind of file is not accepted.'
+            : undefined
+        }
+        onFileChosen={vi.fn()}
+        onFilesChosen={onFilesChosen}
+      />
+    )
+
+    fireEvent.drop(screen.getByRole('button', { name: /Course files/ }), {
+      dataTransfer: {
+        files: [file('good.pdf'), file('bad.exe')],
+        types: ['Files'],
+      },
+    })
+
+    expect(
+      await screen.findByText('That kind of file is not accepted.')
+    ).toBeInTheDocument()
+    expect(onFilesChosen).toHaveBeenCalledTimes(1)
+    const [chosen] = onFilesChosen.mock.calls[0] as [File[]]
+    expect(chosen.map((f) => f.name)).toEqual(['good.pdf'])
+  })
+
+  // FILE-7: without `multiple`, an existing single-file caller is
+  // unaffected — `<input>` never gets the `multiple` attribute.
+  it('without multiple, the hidden input never gets the multiple attribute', () => {
+    const { container } = render(
+      <FileDropZone label="Course file" onFileChosen={vi.fn()} />
+    )
+    const input = container.querySelector('input[type="file"]')
+    expect(input).not.toHaveAttribute('multiple')
+  })
+
+  it('with multiple, the hidden input gets the multiple attribute', () => {
+    const { container } = render(
+      <FileDropZone
+        label="Course files"
+        multiple
+        onFileChosen={vi.fn()}
+        onFilesChosen={vi.fn()}
+      />
+    )
+    const input = container.querySelector('input[type="file"]')
+    expect(input).toHaveAttribute('multiple')
+  })
 })

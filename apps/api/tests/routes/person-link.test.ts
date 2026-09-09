@@ -308,6 +308,93 @@ describe('POST /organizations/:organizationId/person-link/discord/begin', () => 
   })
 })
 
+/**
+ * LINK-7 (polish slice): `GET .../person-link/status` — the durable status
+ * `apps/web/src/pages/Connect.tsx` now reads on every mount instead of
+ * relying on a one-time flag `App.tsx` passes through right after the
+ * OAuth round trip. Fails without the route: every request here 404s on an
+ * unmodified router (no `/status` handler registered at all).
+ *
+ * Review finding (cheap-fix 4) — a "refuses a signed-out caller" case
+ * dropped from here: the router-level `router.use` guard 401s a signed-out
+ * request on *any* path, registered or not, so that case alone cannot tell
+ * "this route exists and is guarded" apart from "this route does not exist
+ * at all" — it stayed green against an unmodified router and carried no
+ * real weight. The four cases below already require the route to exist
+ * (each needs a *signed-in* caller to reach past the guard and hit
+ * `/status` itself), so they are what actually pins this route in.
+ */
+describe('GET /organizations/:organizationId/person-link/status', () => {
+  it('refuses a nonexistent organization — 404, matching /discord/begin', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/organizations/${randomUUID()}/person-link/status`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'organization_not_found' })
+  })
+
+  it('reports not connected for an account with no person at all in this organization', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/organizations/${caller.organizationId}/person-link/status`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ discord: { connected: false } })
+  })
+
+  it('reports not connected for an account with a connected web person but no Discord identity', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    seedConnectedWebPerson(testDb.db, caller.organizationId, caller.accountId)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/organizations/${caller.organizationId}/person-link/status`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ discord: { connected: false } })
+  })
+
+  it('reports connected once the caller own person has a real Discord identity, through the real connect endpoints', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const { state } = await beginConnect(app, caller.organizationId, caller)
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/person-link/discord/preview`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ code: 'a-code', state })
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/person-link/discord/confirm`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ state })
+
+    const response = await request(app)
+      .get(`/organizations/${caller.organizationId}/person-link/status`)
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ discord: { connected: true } })
+  })
+})
+
 describe('the tenant-write oracle is closed (D-44)', () => {
   // The reviewer's own reproduction, replayed directly: a junk MCP token
   // used to create a connected person in a real organization the caller

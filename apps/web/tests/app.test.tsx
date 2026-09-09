@@ -41,6 +41,7 @@ const {
   listChatCourses,
   getChatMessages,
   requestSignInLink,
+  getPersonLinkStatus,
 } = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   completeDiscordInstall: vi.fn(),
@@ -52,6 +53,12 @@ const {
   confirmDiscordPersonLink: vi.fn(),
   redeemCourseJoinLink: vi.fn(),
   redeemMembershipInvitation: vi.fn(),
+  // LINK-7: `Connect.tsx` now fetches this on every mount it reaches
+  // (signed in) — every test below that lands on `/connect/:organizationId`
+  // needs a resolved value or the fetch reaches this test's own unmocked
+  // `fetch` and fails as a genuine network error, the same reason
+  // `listDiscordServers`/`listProjects` above are mocked.
+  getPersonLinkStatus: vi.fn(),
   // WEB-32/WEB-34 — `App.tsx`'s own home resolution now navigates a
   // redeemed join link straight to `/o/:organizationId/chat/:courseId`
   // (`resolveHomeRoute`), so the `Chat` screen it lands on actually mounts,
@@ -82,6 +89,7 @@ vi.mock('../src/api/client.js', async () => {
     listChatCourses,
     getChatMessages,
     requestSignInLink,
+    getPersonLinkStatus,
   }
 })
 
@@ -89,6 +97,13 @@ afterEach(() => {
   vi.resetAllMocks()
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
+})
+
+// Default for every test — not connected — since most of them are not
+// exercising LINK-7's own status line; tests that are override it after
+// this runs.
+beforeEach(() => {
+  getPersonLinkStatus.mockResolvedValue({ discord: { connected: false } })
 })
 
 describe('App (WEB-1..4)', () => {
@@ -285,8 +300,11 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
     expect(
       await screen.findByRole('heading', { name: 'Connect your account' })
     ).toBeInTheDocument()
+    // LINK-7 — the button only appears once the status fetch (mocked "not
+    // connected" by this file's own top-level `beforeEach`) resolves;
+    // `findByRole` waits for it rather than assuming it is already there.
     expect(
-      screen.getByRole('button', { name: 'Connect Discord' })
+      await screen.findByRole('button', { name: 'Connect Discord' })
     ).toBeInTheDocument()
     // Not the ordinary shell — no organization switcher, no nav.
     expect(

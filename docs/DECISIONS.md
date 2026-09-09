@@ -10671,3 +10671,36 @@ round 1 cases against the pre-fix code reproduced the exact false-positive the r
 userinfo both classifying `match`, the host-case test passing on a warning whose text the old assertion
 never actually checked), the new `determineOutcome`/unparseable-body cases against `ERR_MODULE_NOT_FOUND` /
 `does not provide an export named 'determineOutcome'` since neither existed yet.
+
+---
+
+## D-94 — `apps/web`/`apps/api`: LINK-7 — the connect screen's Discord status is read from the server, and its branding does not add a second `<h1>`
+
+**Problem.** A defect/polish brief for `pages/Connect.tsx` asked for four things, two of which needed a
+judgment call the brief itself left open: (1) durable Discord status "in place of the button," and (2) the
+Bloombot logo/wordmark "above the existing heading," reusing `pages/Home.tsx`'s own header markup.
+
+**Choice, status.** A new read-only `GET .../person-link/status` (`routes/person-link.ts`) answers
+`{ discord: { connected, username? } }` from `people.resolveIdentity` + `people.getPersonIdentity` — the
+same two reads `/discord/begin` and `/mcp/preview` already use to find the caller's own connected person —
+rather than a flag threaded through `App.tsx`'s post-OAuth navigation, so a later, unrelated visit to the
+same URL still shows "connected." `person_identities` has no username column (`externalId` is the Discord
+snowflake, not a display name); `username` is simply omitted rather than invented, and no migration was
+added to hold one — the brief was explicit on this point, not a call made here.
+
+**Choice, branding.** `pages/Home.tsx`'s own header renders "Bloombot" as an `<h1>`; `Connect.tsx` already
+had its own `<h1>` ("Connect your account"). Rather than demote the existing heading to `<h2>` (a change the
+brief did not ask for, and one that would ripple into `apps/web/tests/app.test.tsx`'s heading-role
+assertions, which do not pin a level today but easily could start to), the reused `BrandHeader` renders the
+wordmark as a styled `<p>` — same classes `Home.tsx` uses for its own `<h1>`, same visual result, one `<h1>`
+per page kept intact.
+
+**Why not a global `useEffect`/loading convention.** `Connect.tsx` fetches its own status on mount, per
+`pages/Courses.tsx#refresh`'s own pattern (a `cancelled` guard rather than that file's fuller
+out-of-order-request-id device, since only one request is ever in flight for one mount here) — no shared
+hook was extracted, since this is the first read of this particular shape in this app.
+
+**Limits.** `apps/web/tests/app.test.tsx`'s three tests that land on `/connect/:organizationId` now default
+`getPersonLinkStatus` to "not connected" via a top-level `beforeEach`; a future screen added to that file
+that also lands there and cares about the connected state will need to override it explicitly, the same as
+any other per-test mock override in that file.

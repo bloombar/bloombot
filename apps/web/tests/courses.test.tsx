@@ -61,6 +61,8 @@ const COURSE: CourseSummary = {
   vectorStoreId: null,
   maxRequestsPerDay: null,
   conversationScope: 'course',
+  selfEnrolFromDiscord: false,
+  answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
 }

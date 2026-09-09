@@ -776,6 +776,286 @@ describe('handleMention — D-34/LINK-5: a Discord role holder is admitted throu
   })
 })
 
+describe('handleMention — ENRL-13: a course decides whether asking it enrols the asker', () => {
+  it('admits an already-connected student on the message itself, when the setting is on', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { selfEnrolFromDiscord: true }
+    )
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        courseId,
+        person.id,
+        testDb.db
+      )
+    ).toMatchObject({ source: 'self_enrolment' })
+  })
+
+  // Fails without the change: before ENRL-13, an unconnected person's
+  // message left no transcript row and no record of which course they
+  // asked at all (this file's own module comment on why an explicit intent
+  // is needed) — nothing in `course_self_enrolment_intents` would exist.
+  it('records an intent, not an enrolment, for an unconnected student — and the invitation reply is unchanged', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { selfEnrolFromDiscord: true, connectDefaultAuthor: false }
+    )
+    const { deps, model, reply } = makeDeps(testDb, {
+      connectUrl: 'https://app.bloombot.test',
+    })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'invited-to-connect' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain(
+      `https://app.bloombot.test/connect/${organizationId}`
+    )
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    // No enrolment yet — only an intent, redeemed later on connect
+    // (`apps/api/src/routes/person-link.ts`).
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        courseId,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+    const rows = testDb.db.$client
+      .prepare(
+        'select count(*) as count from course_self_enrolment_intents where organization_id = ? and course_id = ? and person_id = ? and redeemed_at is null'
+      )
+      .get(organizationId, courseId, person.id) as { count: number }
+    expect(rows.count).toBe(1)
+  })
+
+  it('does neither — no admission, no intent — while the setting is off (default)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db
+    )
+    const { deps } = makeDeps(testDb)
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        courseId,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+    const rows = testDb.db.$client
+      .prepare(
+        'select count(*) as count from course_self_enrolment_intents where organization_id = ? and course_id = ? and person_id = ?'
+      )
+      .get(organizationId, courseId, person.id) as { count: number }
+    expect(rows.count).toBe(0)
+  })
+
+  // ENRL-6 — the hard constraint, exercised from the self-enrolment path:
+  // an instructor-ended enrolment must not be re-admitted merely because
+  // the student keeps messaging a course that self-enrols.
+  it('an instructor-ended enrolment is not revived by a fresh message, even with selfEnrolFromDiscord on', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { selfEnrolFromDiscord: true }
+    )
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const first = enrolments.enrolViaSelfEnrolment(
+      organizationId,
+      { courseId, personId: person.id },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const { deps } = makeDeps(testDb)
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        courseId,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ endedAt: expect.any(Number) })
+  })
+})
+
+describe('handleMention — ENRL-14: a course decides whether it answers a student it has not enrolled', () => {
+  it('answers a connected, unenrolled student exactly as before while the setting is on (default)', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db)
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+
+  // Fails without the change: before ENRL-14, nothing gated an unenrolled,
+  // connected, category-routed student at all — this refusal, and the fact
+  // that no model call is made, only exist once the setting is honoured.
+  it('refuses an unenrolled student with no model call and no allowance spent, while the setting is off', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { answerUnenrolled: false }
+    )
+    const { deps, model, reply } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'not-enrolled' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toMatch(/not enrolled/i)
+    // No usage was spent on the refusal — the same "costs nothing" proof
+    // `declined-over-limit`'s own tests already run for their own refusal.
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        person.id,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+  })
+
+  it('still answers an enrolled student while the setting is off', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { answerUnenrolled: false }
+    )
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    enrolments.enrolViaRoster(
+      organizationId,
+      { courseId, personId: person.id },
+      testDb.db
+    )
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+
+  // Order matters (the brief's own words): a student ENRL-13 admits on this
+  // very message must be answered, not refused for "not yet enrolled" —
+  // both settings on, together.
+  it('admits and then answers a student in the same message, when both ENRL-13 and this setting are on', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
+    })
+    const { deps, model } = makeDeps(testDb)
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+
+  // ENRL-6 — the hard constraint, from the "does not answer unenrolled"
+  // side this time: a category-routed student whose enrolment was ended is
+  // exactly the gap the SPEC names (`docs/SPEC.md`'s own ENRL-14 text) —
+  // the role-based `enrolment-ended` refusal never fires for them at all,
+  // so this setting is what actually closes it.
+  it('refuses an instructor-ended, category-routed student, once the course only answers enrolled students', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { selfEnrolFromDiscord: true, answerUnenrolled: false }
+    )
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const first = enrolments.enrolViaSelfEnrolment(
+      organizationId,
+      { courseId, personId: person.id },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const { deps, model, reply } = makeDeps(testDb)
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'not-enrolled' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent[0]).toMatch(/not enrolled/i)
+    // Still ended, not silently re-admitted by the self-enrolment path.
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        courseId,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
+  })
+})
+
 describe('handleMention — SURF-5: the reply is sent through the port, and a long answer is split', () => {
   it('sends the answer through `reply`, not any other channel', async () => {
     testDb = createTestDatabase()

@@ -35,6 +35,10 @@ export interface SeedOptions {
   adminsRole?: string
   studentsRole?: string
   enabled?: boolean
+  /** ENRL-13 — defaults to `false`, matching `courses.selfEnrolFromDiscord`'s own database default. */
+  selfEnrolFromDiscord?: boolean
+  /** ENRL-14 — defaults to `true`, matching `courses.answerUnenrolled`'s own database default. */
+  answerUnenrolled?: boolean
   /**
    * LINK-1 — connect a person under `fixtures.ts#DEFAULT_AUTHOR_ID` by
    * default, so the great majority of this suite's tests (which use
@@ -105,6 +109,8 @@ export function seedBoundServerWithCourse(
         options.instructions === undefined
           ? 'Be helpful.'
           : options.instructions,
+      selfEnrolFromDiscord: options.selfEnrolFromDiscord ?? false,
+      answerUnenrolled: options.answerUnenrolled ?? true,
       categories: [
         { name: options.categoryName ?? 'Test Category', channels: [] },
       ],

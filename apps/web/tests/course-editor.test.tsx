@@ -110,6 +110,8 @@ const COURSE: Course = {
   vectorStoreId: 'vs-1',
   maxRequestsPerDay: 20,
   conversationScope: 'course',
+  selfEnrolFromDiscord: false,
+  answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
   categories: [
@@ -429,6 +431,101 @@ describe('CourseEditor (WEB-8)', () => {
       )
     )
     expect(disableCourse).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * ENRL-13/ENRL-14 — the two checkboxes beside `enabledControl` on the
+ * General tab. Each test fails without the code it names.
+ */
+describe('CourseEditor self-enrolment settings (ENRL-13/ENRL-14)', () => {
+  it('renders both checkboxes reflecting the loaded course', async () => {
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
+    })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(
+      screen.getByLabelText(
+        'Students can enrol themselves by messaging this course'
+      )
+    ).toBeChecked()
+    expect(
+      screen.getByLabelText('Answer students who are not enrolled')
+    ).not.toBeChecked()
+  })
+
+  it("a new course starts with today's defaults — self-enrol off, answer-unenrolled on", () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByLabelText(
+        'Students can enrol themselves by messaging this course'
+      )
+    ).not.toBeChecked()
+    expect(
+      screen.getByLabelText('Answer students who are not enrolled')
+    ).toBeChecked()
+  })
+
+  it('ticking both boxes and saving sends both values with the rest of the General tab', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.click(
+      screen.getByLabelText(
+        'Students can enrol themselves by messaging this course'
+      )
+    )
+    fireEvent.click(
+      screen.getByLabelText('Answer students who are not enrolled')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(saveCourse).toHaveBeenCalledWith(
+        'org-1',
+        expect.objectContaining({
+          id: 'course-1',
+          selfEnrolFromDiscord: true,
+          answerUnenrolled: false,
+        })
+      )
+    )
   })
 })
 

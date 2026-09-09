@@ -260,6 +260,32 @@ export const courses = sqliteTable(
     discordServerId: text('discord_server_id').references(
       () => discordServerBindings.serverId
     ),
+    // ENRL-13 — whether asking this course is itself a request to enrol.
+    // Defaulted at the database level (the same reasoning `conversationScope`
+    // above gives for its own default): added by a migration onto a table
+    // already holding rows, and every one of them means "the behaviour this
+    // course had before this column existed" — nothing about messaging it
+    // ever enrolled anyone, so the default is `false`, not `true`.
+    // `@bloombot/discord`'s `handle-mention.ts` is the only place this is
+    // read to decide whether to admit or record an intent
+    // (`repos/self-enrolment.ts`); see `docs/DECISIONS.md`.
+    selfEnrolFromDiscord: integer('self_enrol_from_discord', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
+    // ENRL-14 — whether this course answers a student it has never enrolled.
+    // Defaulted at the database level for the identical reason
+    // `selfEnrolFromDiscord` above is: every existing course already answers
+    // anyone whose message routes and who has connected an account
+    // (`@bloombot/core`'s `answer.ts`, LINK-1), so the default is `true` —
+    // "the behaviour this course had before this column existed," not a new
+    // restriction every course wakes up with. `@bloombot/discord`'s
+    // `handle-mention.ts` reads this to refuse an unenrolled student before
+    // `answerQuestion` is ever called.
+    answerUnenrolled: integer('answer_unenrolled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
@@ -935,10 +961,19 @@ export const costLedgerEntries = sqliteTable(
 // `enrolViaRoster`), so "a person never enrols themselves out of nothing"
 // is a fact about which functions exist, not a convention a caller has to
 // remember.
+// ENRL-13 — 'self_enrolment' is the fourth source, alongside the original
+// three: an enrolment admitted because the course itself carries
+// `selfEnrolFromDiscord` and the person either messaged it while already
+// connected, or connected after messaging it and redeemed the intent that
+// message recorded (`repos/self-enrolment.ts`). Added here **and** to
+// `enrolments_source_check` below — a source absent from that SQL check
+// fails at write time, not at compile time (`repos/enrolments.ts`'s own
+// `enrolViaSelfEnrolment` doc comment).
 export const ENROLMENT_SOURCES = [
   'join_link',
   'discord_role',
   'roster',
+  'self_enrolment',
 ] as const
 export type EnrolmentSource = (typeof ENROLMENT_SOURCES)[number]
 
@@ -1011,7 +1046,67 @@ export const enrolments = sqliteTable(
     index('enrolments_person_id_idx').on(table.personId, table.organizationId),
     check(
       'enrolments_source_check',
-      sql`${table.source} in ('join_link', 'discord_role', 'roster')`
+      sql`${table.source} in ('join_link', 'discord_role', 'roster', 'self_enrolment')`
+    ),
+  ]
+)
+
+// ENRL-13 — a student's message, in a course carrying `selfEnrolFromDiscord`,
+// recorded as an intent to enrol rather than an enrolment itself: it is
+// redeemed by the deliberate, later act of connecting (LINK-6), not by the
+// message alone. `repos/self-enrolment.ts` is the only file that writes or
+// reads this table.
+//
+// Intents never expire (see `docs/DECISIONS.md`) — unlike
+// `person_link_challenges`/`discord_install_states`, both of which carry an
+// `expiresAt` because an unfinished OAuth round trip is worthless once
+// stale, an unredeemed intent costs nothing to keep: it names no secret, and
+// a student who messaged in September and connects in December still means
+// the same thing by having done both — "I asked this course; when I
+// connect, admit me." There is nothing here for staleness to protect
+// against.
+//
+// **At most one *unredeemed* intent per (organization, course, person)** —
+// enforced structurally, the same partial-unique-index device
+// `enrolments_org_course_person_active_unique` already uses: a student who
+// messages the same course five times before connecting produces one row,
+// not five (`recordSelfEnrolmentIntent`'s own idempotence). A person may
+// still hold more than one *redeemed* intent for the same course over time
+// — re-enrolling after leaving, the same way `enrolments` allows more than
+// one ended row — which is exactly why this index, like that one, is
+// partial rather than plain.
+export const courseSelfEnrolmentIntents = sqliteTable(
+  'course_self_enrolment_intents',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    courseId: text('course_id')
+      .notNull()
+      .references(() => courses.id),
+    personId: text('person_id')
+      .notNull()
+      .references(() => people.id),
+    createdAt: integer('created_at').notNull(),
+    redeemedAt: integer('redeemed_at'),
+  },
+  (table) => [
+    uniqueIndex(
+      'course_self_enrolment_intents_org_course_person_unredeemed_unique'
+    )
+      .on(table.organizationId, table.courseId, table.personId)
+      .where(sql`${table.redeemedAt} is null`),
+    index('course_self_enrolment_intents_organization_id_idx').on(
+      table.organizationId
+    ),
+    // The same "person first" ordering `enrolments_person_id_idx` uses
+    // (Cheap-fix 10, above): `redeemSelfEnrolmentIntents` filters by
+    // `personId` alongside `organizationId` but never also by `courseId`, so
+    // `personId` leads here too.
+    index('course_self_enrolment_intents_person_id_idx').on(
+      table.personId,
+      table.organizationId
     ),
   ]
 )

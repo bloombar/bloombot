@@ -188,7 +188,13 @@ import {
   previewMcpPersonLink,
   type PersonLinkPreview,
 } from '@bloombot/auth'
-import { memberships, organizations, people, type Database } from '@bloombot/db'
+import {
+  memberships,
+  organizations,
+  people,
+  selfEnrolment,
+  type Database,
+} from '@bloombot/db'
 import {
   buildDiscordAuthorizationUrl,
   DiscordRequestError,
@@ -390,6 +396,38 @@ function attachWebIdentityOrMerge(
   people.mergePeople(organizationId, existingOwner.id, survivorId, db)
 }
 
+/**
+ * ENRL-13: redeem whatever unredeemed self-enrolment intents `personId`
+ * holds, now that connecting has just proved LINK-1's own gate for real —
+ * the SPEC's own words are "connecting ... is what admits them." Called
+ * from both `/discord/confirm` and `/mcp/confirm`, below: both routes are
+ * connecting, and neither is more "the real one" than the other.
+ *
+ * A failure here must not fail the connect itself — logged, not thrown, the
+ * same "does not block the reply" treatment `@bloombot/discord`'s
+ * `handle-mention.ts` already gives a failed enrolment write of its own. A
+ * student who connects successfully is connected either way. Each intent is
+ * redeemed in its own transaction (`repos/self-enrolment.ts`'s own doc
+ * comment), so a failure partway through this sweep leaves whichever
+ * intents had not yet been reached still unredeemed — tried again the next
+ * time this function runs for the same person, rather than lost.
+ */
+function redeemSelfEnrolmentIntentsSafely(
+  organizationId: string,
+  personId: string,
+  db: Database,
+  logger: Logger
+): void {
+  try {
+    selfEnrolment.redeemSelfEnrolmentIntents(organizationId, personId, db)
+  } catch (error) {
+    logger.error(
+      { err: error, organizationId, personId },
+      'apps/api: failed to redeem a self-enrolment intent on connect'
+    )
+  }
+}
+
 export function buildPersonLinkRouter(
   deps: PersonLinkRouterDependencies
 ): Router {
@@ -576,6 +614,14 @@ export function buildPersonLinkRouter(
       accountId,
       deps.db
     )
+    // ENRL-13 — connecting is what admits a self-enrolment intent; see this
+    // file's own `redeemSelfEnrolmentIntentsSafely` doc comment.
+    redeemSelfEnrolmentIntentsSafely(
+      organizationId,
+      pending.survivorPersonId,
+      deps.db,
+      deps.logger
+    )
     res.status(200).json({ connected: true })
   })
 
@@ -725,6 +771,14 @@ export function buildPersonLinkRouter(
       res.status(404).json({ error: 'person_link_not_found' })
       return
     }
+    // ENRL-13 — same as `/discord/confirm`, above: connecting is what
+    // admits a self-enrolment intent.
+    redeemSelfEnrolmentIntentsSafely(
+      organizationId,
+      survivor.id,
+      deps.db,
+      deps.logger
+    )
     res.status(200).json({ connected: true })
   })
 

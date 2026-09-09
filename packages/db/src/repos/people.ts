@@ -19,6 +19,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import {
   conversations,
   enrolments,
@@ -378,7 +379,7 @@ export function resolvePersonByIdentity(
   if (existing) return existing
 
   try {
-    return db.transaction((tx) => {
+    return writeTransaction(db, (tx) => {
       const person = tx
         .insert(people)
         .values({
@@ -585,7 +586,7 @@ export function connectIdentity(
   const existingOwner = resolveIdentity(organizationId, identity, db)
   if (existingOwner && existingOwner.id !== personId) return undefined
 
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const now = Date.now()
 
     if (existingOwner) {
@@ -794,7 +795,7 @@ export function mergePeople(
     return undefined
   }
 
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     // Identities (PPL-2) — move outright; see this function's own comment
     // for why the unique constraint cannot collide here.
     tx.update(personIdentities)

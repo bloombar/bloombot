@@ -16,6 +16,7 @@
 import { and, desc, eq } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { courseInstructionRevisions } from '../schema.js'
 
 export type CourseInstructionRevision =
@@ -57,7 +58,7 @@ export function createRevision(
   input: NewCourseInstructionRevision,
   db: TransactingExecutor
 ): CourseInstructionRevision {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const previous = tx
       .select({ sequence: courseInstructionRevisions.sequence })
       .from(courseInstructionRevisions)

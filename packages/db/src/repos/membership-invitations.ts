@@ -18,6 +18,7 @@
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { getAccountById } from './accounts.js'
 import * as memberships from './memberships.js'
 import { membershipInvitations, type MembershipRole } from '../schema.js'
@@ -238,7 +239,7 @@ export function redeemMembershipInvitation(
   now: number,
   db: Database
 ): memberships.Membership | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const invitation = findLiveInvitationByHash(secretHash, now, tx)
     if (!invitation) return undefined
 

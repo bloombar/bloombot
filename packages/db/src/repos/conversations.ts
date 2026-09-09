@@ -11,6 +11,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
+import { writeTransaction } from '../client.js'
 import {
   conversations,
   courses,
@@ -426,64 +427,60 @@ function runAppendMessageTransaction(
   conversation: Conversation,
   db: Database
 ): Message {
-  return db.transaction(
-    (tx) => {
-      const createdAt = input.createdAt ?? Date.now()
-      const previous = tx
-        .select({ sequence: messages.sequence })
-        .from(messages)
-        .where(eq(messages.conversationId, conversationId))
-        .orderBy(desc(messages.sequence))
-        .limit(1)
-        .get()
-      const sequence = (previous?.sequence ?? -1) + 1
+  return writeTransaction(db, (tx) => {
+    const createdAt = input.createdAt ?? Date.now()
+    const previous = tx
+      .select({ sequence: messages.sequence })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.sequence))
+      .limit(1)
+      .get()
+    const sequence = (previous?.sequence ?? -1) + 1
 
-      const message = tx
-        .insert(messages)
-        .values({
-          id: input.id ?? crypto.randomUUID(),
-          organizationId,
-          conversationId,
-          personId: conversation.personId,
-          courseId: conversation.courseId,
-          direction: input.direction,
-          content: input.content,
-          surface: input.surface ?? null,
-          channelRef: input.channelRef ?? null,
-          categoryRef: input.categoryRef ?? null,
-          sequence,
-          createdAt,
-        })
-        .returning()
-        .get()
+    const message = tx
+      .insert(messages)
+      .values({
+        id: input.id ?? crypto.randomUUID(),
+        organizationId,
+        conversationId,
+        personId: conversation.personId,
+        courseId: conversation.courseId,
+        direction: input.direction,
+        content: input.content,
+        surface: input.surface ?? null,
+        channelRef: input.channelRef ?? null,
+        categoryRef: input.categoryRef ?? null,
+        sequence,
+        createdAt,
+      })
+      .returning()
+      .get()
 
-      // finding 6 (MIG-1 rework): `lastMessageAt` moves *forward* to the later
-      // of its current value and this message's `createdAt` — never
-      // backward. A plain unconditional set was correct for every caller that
-      // appends "now" (`input.createdAt` omitted), but `packages/legacy-import`
-      // (MIG-3) is the one caller that supplies an explicit, potentially
-      // backdated `createdAt` — importing a two-year-old transcript into a
-      // conversation the live bot has already written to must not rewind
-      // "last message" into the past. Computed in the same `UPDATE` (`max`),
-      // not read-then-written from the `conversation` fetched before this
-      // transaction started, so a concurrent append cannot race it stale.
-      tx.update(conversations)
-        .set({
-          lastMessageAt: sql`max(${conversations.lastMessageAt}, ${createdAt})`,
-        })
-        .where(
-          and(
-            eq(conversations.id, conversationId),
-            eq(conversations.organizationId, organizationId)
-          )
+    // finding 6 (MIG-1 rework): `lastMessageAt` moves *forward* to the later
+    // of its current value and this message's `createdAt` — never
+    // backward. A plain unconditional set was correct for every caller that
+    // appends "now" (`input.createdAt` omitted), but `packages/legacy-import`
+    // (MIG-3) is the one caller that supplies an explicit, potentially
+    // backdated `createdAt` — importing a two-year-old transcript into a
+    // conversation the live bot has already written to must not rewind
+    // "last message" into the past. Computed in the same `UPDATE` (`max`),
+    // not read-then-written from the `conversation` fetched before this
+    // transaction started, so a concurrent append cannot race it stale.
+    tx.update(conversations)
+      .set({
+        lastMessageAt: sql`max(${conversations.lastMessageAt}, ${createdAt})`,
+      })
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.organizationId, organizationId)
         )
-        .run()
+      )
+      .run()
 
-      return message
-    },
-    // CONV-4/D-49 — see this function's own doc comment above.
-    { behavior: 'immediate' }
-  )
+    return message
+  })
 }
 
 /**

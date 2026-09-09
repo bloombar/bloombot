@@ -258,7 +258,16 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
   // before its enrolment write, still let the already-in-flight redemption
   // complete — `courseJoinLinks.revoke` could report success while one more
   // person joined anyway.
-  it('redemption is atomic: a revoke racing with an in-flight redemption cannot let one more person join', () => {
+  //
+  // D-91 changed what this test actually exercises — see this file's own
+  // identical note on `redeemJoinLinkForWebAccount`'s mirror of this test,
+  // below, for the full mechanism: `redeemJoinLink` now opens `BEGIN
+  // IMMEDIATE`, so `secondConnection`'s revoke below (nested on this
+  // transaction's own call stack) can never win the lock — there is no
+  // longer a race to lose, only a write that always fails instead of
+  // landing. `busy_timeout`, cut to 100ms, keeps the resulting (otherwise
+  // real) 5s wait from making this test slow.
+  it('redemption is atomic: a revoke attempted mid-redemption cannot land, and admits nobody', () => {
     testDb = createTestDatabase()
     const { organizationId, course, ownerId } =
       seedOrganizationWithCourse(testDb)
@@ -278,6 +287,11 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
     // different process (`apps/api`, revoking this link) racing against
     // another (`apps/bot`/`apps/web`) mid-redemption of it.
     const secondConnection = openDatabase(testDb.path)
+    // Short-circuits the wait this connection's own `writeTransaction`-held
+    // lock (above) turns into a genuine deadlock at the default 5,000ms —
+    // this test's own point is what happens when the race is lost, not how
+    // long that takes to observe.
+    secondConnection.$client.pragma('busy_timeout = 100')
     const realGetPerson = people.getPerson
     const spy = vi
       .spyOn(people, 'getPerson')
@@ -296,9 +310,12 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
     try {
       courseJoinLinks.redeemJoinLink('hash-1', person.id, Date.now(), testDb.db)
     } catch {
-      // Either outcome — a thrown write-conflict, or a clean `undefined` —
-      // is acceptable here; what this test actually pins down is the
-      // assertion below, which holds either way.
+      // D-91: this now always throws — `secondConnection`'s nested revoke
+      // (inside the spy) blocks on `writeTransaction`'s own held lock until
+      // its 100ms `busy_timeout` gives up, at which point that thrown
+      // `SQLITE_BUSY` propagates out through the spy and rolls the whole
+      // redemption back. What this test actually pins down is the
+      // assertion below, not which error (if any) surfaces here.
     } finally {
       spy.mockRestore()
       closeDatabase(secondConnection)
@@ -312,9 +329,14 @@ describe('course-join-links repo (ENRL-3, ENRL-4)', () => {
         testDb.db
       )
     ).toBeUndefined()
+    // D-91: the racing revoke above can no longer land — `writeTransaction`
+    // holds the write lock for this whole transaction, so the nested
+    // `secondConnection` write above always loses and never commits. Nobody
+    // was admitted either way (asserted above), which is the atomicity
+    // property this test exists to pin down.
     expect(
       courseJoinLinks.getJoinLink(organizationId, link.id, testDb.db)
-    ).toMatchObject({ revokedAt: expect.any(Number) })
+    ).toMatchObject({ revokedAt: null })
   })
 
   // --- Tenant scoping (TEN-2/TEN-5) ---------------------------------------
@@ -980,7 +1002,22 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
   // calls `getPerson` (only `resolveIdentity`, a raw query, and
   // `createPerson`), so `redeemJoinLink`'s own `getPerson`-spy device does
   // not transfer here.
-  it('web-account redemption is atomic: a revoke racing with an in-flight redemption cannot let one more person join', () => {
+  //
+  // D-91 changed what this test actually exercises. `redeemJoinLinkForWebAccount`
+  // now opens `BEGIN IMMEDIATE` (`writeTransaction`), so it holds the write
+  // lock for the whole of this transaction, not only from its first write —
+  // `secondConnection`'s revoke below, nested on the very call stack this
+  // transaction is still on, can never get that lock until this transaction
+  // itself returns, which it cannot do while still waiting on this nested
+  // call. There is no longer a race to lose, only a write that always fails
+  // instead of landing. `secondConnection`'s own `busy_timeout`, cut to
+  // 100ms, is what keeps that (otherwise real, 5s) deadlock from making
+  // this test slow; the revoke then fails with `SQLITE_BUSY` and never
+  // lands, which is why the final assertion below now expects `revokedAt:
+  // null`, not a number — see that assertion's own comment for why this is
+  // still the atomicity property this test exists to pin down, not a
+  // weakening of it.
+  it('web-account redemption is atomic: a revoke attempted mid-redemption cannot land, and connects nobody', () => {
     testDb = createTestDatabase()
     const { organizationId, course, ownerId } =
       seedOrganizationWithCourse(testDb)
@@ -997,6 +1034,11 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
     )
 
     const secondConnection = openDatabase(testDb.path)
+    // Short-circuits the wait this connection's own `writeTransaction`-held
+    // lock (above) turns into a genuine deadlock at the default 5,000ms —
+    // this test's own point is what happens when the race is lost, not how
+    // long that takes to observe.
+    secondConnection.$client.pragma('busy_timeout = 100')
     const realCreatePerson = people.createPerson
     const spy = vi
       .spyOn(people, 'createPerson')
@@ -1021,9 +1063,12 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
         testDb.db
       )
     } catch {
-      // Either outcome — a thrown write-conflict, or a clean `undefined` —
-      // is acceptable here; what this test actually pins down is the
-      // assertion below, which holds either way.
+      // D-91: this now always throws — `secondConnection`'s nested revoke
+      // (inside the spy) blocks on `writeTransaction`'s own held lock until
+      // its 100ms `busy_timeout` gives up, at which point that thrown
+      // `SQLITE_BUSY` propagates out through the spy and rolls the whole
+      // redemption back. What this test actually pins down is the
+      // assertion below, not which error (if any) surfaces here.
     } finally {
       spy.mockRestore()
       closeDatabase(secondConnection)
@@ -1044,8 +1089,16 @@ describe('course-join-links repo — an ended enrolment is not self-revivable (E
             testDb.db
           )
     ).toBeUndefined()
+    // D-91: the racing revoke above can no longer land — `writeTransaction`
+    // holds the write lock for this whole transaction, so the nested
+    // `secondConnection` write above always loses and never commits. No
+    // membership was granted either way (asserted above), which is the
+    // atomicity property this test exists to pin down; a genuinely separate
+    // process racing this transaction (not a nested call on the same one)
+    // would instead simply wait for it via `busy_timeout` and then succeed,
+    // exactly `packages/db/tests/client.test.ts`'s own D-91 tests.
     expect(
       courseJoinLinks.getJoinLink(organizationId, link.id, testDb.db)
-    ).toMatchObject({ revokedAt: expect.any(Number) })
+    ).toMatchObject({ revokedAt: null })
   })
 })

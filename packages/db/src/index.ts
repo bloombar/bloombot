@@ -3,6 +3,7 @@
 export {
   openDatabase,
   closeDatabase,
+  writeTransaction,
   type Database,
   type Executor,
   type TransactingExecutor,

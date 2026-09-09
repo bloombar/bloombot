@@ -10,6 +10,7 @@
 
 import {
   sessions as sessionsRepo,
+  writeTransaction,
   type Database,
   type Executor,
 } from '@bloombot/db'
@@ -132,7 +133,7 @@ export function rotateSession(
   ttlMs: number = DEFAULT_SESSION_TTL_MS
 ): CreatedSession | undefined {
   const now = Date.now()
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const revoked = sessionsRepo.revokeSessionByHash(hashSecret(token), now, tx)
     if (!revoked) return undefined
     if (now - revoked.createdAt > MAX_SESSION_AGE_MS) return undefined

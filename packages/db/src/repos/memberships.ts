@@ -43,6 +43,7 @@
 import { and, eq, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { memberships, type MembershipRole } from '../schema.js'
 
 export type Membership = typeof memberships.$inferSelect
@@ -358,7 +359,7 @@ export function revokeMembership(
   input: RevokeMembershipInput,
   db: Database
 ): Membership | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const target = getMembership(organizationId, input.accountId, tx)
     if (!target) return undefined
 

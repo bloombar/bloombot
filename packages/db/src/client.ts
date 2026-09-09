@@ -30,9 +30,12 @@ export type Database = ReturnType<typeof drizzle<typeof schema>>
  *  - `journal_mode = WAL`, so readers never block a writer or vice versa —
  *    the thing that makes a single SQLite file tolerable with three writing
  *    processes (bot, API, worker) on one droplet.
- *  - `busy_timeout = 5000`, so a writer that arrives while another write is
- *    mid-transaction waits up to 5s for the lock instead of failing
- *    immediately with `SQLITE_BUSY`.
+ *  - `busy_timeout = 5000`, so a writer that arrives while another write
+ *    already holds the write lock waits up to 5s for it instead of failing
+ *    immediately with `SQLITE_BUSY`. This only covers a transaction that
+ *    takes the write lock *up front* (`BEGIN IMMEDIATE`) — see
+ *    `writeTransaction`, below, for why a plain `db.transaction(...)` (a
+ *    deferred `BEGIN`) does not get this protection at all.
  *  - `foreign_keys = ON`, because SQLite ignores `references()` unless this is
  *    set on every connection — it is not a database-wide setting.
  */
@@ -78,6 +81,50 @@ export type Executor = Pick<Database, 'select' | 'insert' | 'update' | 'delete'>
  * later failure in that same outer transaction rolls this back too.
  */
 export type TransactingExecutor = Executor & Pick<Database, 'transaction'>
+
+/**
+ * The `tx` parameter `writeTransaction`'s own `fn` receives — pulled out of
+ * `Database['transaction']` itself with `infer`, rather than restated by
+ * hand, so it always matches whatever Drizzle's own callback type actually
+ * is.
+ */
+type WriteTx = Database['transaction'] extends (
+  transaction: (tx: infer Tx) => unknown,
+  ...rest: never[]
+) => unknown
+  ? Tx
+  : never
+
+/**
+ * Run `fn` inside a write transaction, the way every repo function that
+ * writes should open one (D-2).
+ *
+ * `db.transaction(...)` on its own issues a plain `BEGIN`, which SQLite
+ * treats as `BEGIN DEFERRED`: it takes a read lock first and only upgrades
+ * to a write lock at the transaction's first write. `busy_timeout` (set in
+ * `openDatabase`, above) cannot cover that upgrade — honouring it would mean
+ * retrying a write after the transaction's own earlier reads may no longer
+ * reflect the database, which SQLite refuses to do — so a deferred
+ * transaction that loses the upgrade race returns `SQLITE_BUSY`
+ * *immediately*, regardless of the pragma. `BEGIN IMMEDIATE` takes the write
+ * lock up front instead, so there is no upgrade to fail: `busy_timeout`
+ * governs the wait from the very first statement.
+ *
+ * Every repo function that opens its own top-level transaction should call
+ * this instead of `db.transaction(...)` directly, so a future one cannot
+ * silently end up deferred by forgetting an option. `db` may also be another
+ * transaction's own `tx` (a nested savepoint, `accounts.ts#createAccount`'s
+ * case) — `behavior` is meaningless there (a savepoint has no `BEGIN` of its
+ * own; it already runs inside whatever lock its outer transaction took) and
+ * is simply ignored by drizzle's nested-transaction path, so this is safe to
+ * call in both places uniformly.
+ */
+export function writeTransaction<T>(
+  db: Pick<Database, 'transaction'>,
+  fn: (tx: WriteTx) => T
+): T {
+  return db.transaction(fn, { behavior: 'immediate' })
+}
 
 /**
  * Release the underlying file handle.

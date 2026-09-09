@@ -12,7 +12,11 @@
  * never trusting a caller-supplied `organizationId`).
  */
 
-import { courseInstructionRevisions, courses } from '@bloombot/db'
+import {
+  courseInstructionRevisions,
+  courses,
+  writeTransaction,
+} from '@bloombot/db'
 import { z } from 'zod'
 
 import { ActionRefusedError } from '../errors.js'
@@ -79,7 +83,7 @@ export const saveCourseInstructionsAction: Action<
     // `createRevision` both now accept an `Executor`/`TransactingExecutor`
     // (`repos/courses.ts`, `repos/course-instruction-revisions.ts`) so they
     // can run against the same `tx` and commit or roll back together.
-    return db.transaction((tx) => {
+    return writeTransaction(db, (tx) => {
       const updated = courses.setCourseInstructions(
         organizationId,
         entity.id,
@@ -191,7 +195,7 @@ export const restoreCourseInstructionRevisionAction: Action<
 
     // One `db.transaction(...)` — see `saveCourseInstructionsAction`'s own
     // doc comment above for why.
-    return db.transaction((tx) => {
+    return writeTransaction(db, (tx) => {
       const updated = courses.setCourseInstructions(
         organizationId,
         entity.course.id,

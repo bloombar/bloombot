@@ -1549,6 +1549,15 @@ failing to start looks like. Signing in locally needs a development-only mail fi
 is a bearer credential that is never logged and never recoverable from a database that stores it hashed —
 that file is refused outright in production.
 
+#### OPS-15 Every process this platform owns is identifiable as its own on a shared droplet
+
+The droplet is shared with unrelated projects, so a supervised process's name says which
+platform it belongs to rather than a bare, generic word another project on the same box could
+plausibly claim too. Renaming a supervised process is itself a deliberate, one-time migration,
+not merely a config edit: an ordinary deploy reloads a name it already knows and otherwise
+starts a new one from scratch, so deploying a rename without migrating first would leave both
+the old and the new process running at once, which is worse than the problem the rename fixes.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

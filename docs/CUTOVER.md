@@ -165,8 +165,9 @@ model cost, for the rest of the rehearsal.
 **Do this before the real cutover, not after it fails once for real.** The rollback path is
 the part most likely to be written and never tested; the way to trust it is to run it:
 
-1. Stop the rehearsal's platform processes (`Ctrl-C` on `npm run dev`, or `pm2 stop api bot
-   worker mcp ops-monitor` if it was brought up under pm2 instead).
+1. Stop the rehearsal's platform processes (`Ctrl-C` on `npm run dev`, or `pm2 stop bloombot-api
+   bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor` if it was brought up under pm2
+   instead).
 2. Confirm the Python bot alone still answers in the test server — it never stopped, so this
    should need nothing.
 3. Time how long step 1 actually took, end to end. That number is what an operator should
@@ -202,23 +203,23 @@ before it could be the thing discovered at 9pm; see `scripts/deploy.sh`'s own
 > this box start". Run this, here, before §2.2:
 >
 > ```bash
-> pm2 start ecosystem.config.cjs --only api
-> pm2 status api        # expect status "online", not "restarting" or "errored"
-> pm2 logs api --lines 20 --nostream   # expect "apps/api: listening", not a mail-transport error
-> pm2 stop api
+> pm2 start ecosystem.config.cjs --only bloombot-api
+> pm2 status bloombot-api        # expect status "online", not "restarting" or "errored"
+> pm2 logs bloombot-api --lines 20 --nostream   # expect "apps/api: listening", not a mail-transport error
+> pm2 stop bloombot-api
 > ```
 >
 > This is safe against the still-running Python bot: a different port, and the same database
-> file through WAL. If `api` restart-loops here, stop — you have lost nothing, and everything
-> below this line is irreversible.
+> file through WAL. If `bloombot-api` restart-loops here, stop — you have lost nothing, and
+> everything below this line is irreversible.
 >
 > **Do not begin this phase without it.** §2.2 stops the Python bot and §2.3 resets the
-> Discord token, both irreversibly, before `api` is ever needed — reaching that point only to
-> discover `api` cannot start leaves every course server silent (§2.6's own bind step is the
-> only thing that makes a real course server answer at all, and it needs `api`) with the old
-> system already gone and the credential already rotated. §3's rollback still works regardless
-> of where this phase stopped, but confirming this precondition first is what keeps you from
-> ever needing it for this specific reason.
+> Discord token, both irreversibly, before `bloombot-api` is ever needed — reaching that point
+> only to discover it cannot start leaves every course server silent (§2.6's own bind step is
+> the only thing that makes a real course server answer at all, and it needs the API process)
+> with the old system already gone and the credential already rotated. §3's rollback still
+> works regardless of where this phase stopped, but confirming this precondition first is what
+> keeps you from ever needing it for this specific reason.
 
 Do this once the rehearsal above has been run at least once successfully, including 1.4.
 Pick a low-traffic window — there is a real, if short, gap between stopping the Python bot
@@ -291,19 +292,19 @@ if nothing changed between taking the two copies.
 ### 2.5 Start the platform
 
 ```bash
-pm2 start ecosystem.config.cjs --only api
-pm2 start ecosystem.config.cjs --only bot
-pm2 start ecosystem.config.cjs --only worker
-pm2 start ecosystem.config.cjs --only mcp
-pm2 start ecosystem.config.cjs --only ops-monitor
+pm2 start ecosystem.config.cjs --only bloombot-api
+pm2 start ecosystem.config.cjs --only bloombot-bot
+pm2 start ecosystem.config.cjs --only bloombot-worker
+pm2 start ecosystem.config.cjs --only bloombot-mcp
+pm2 start ecosystem.config.cjs --only bloombot-ops-monitor
 pm2 save
 ```
 
 (`scripts/deploy.sh` does this same sequence, plus the migration step, automatically on every
 future deploy once this one has run by hand — this manual sequence is only for the very first
-cutover.) Confirm `pm2 status` shows all five `online`, `api` included — this phase's own
-precondition means it should be, and if it is not, stop here rather than continuing into §2.6,
-which needs it.
+cutover.) Confirm `pm2 status` shows all five `online`, `bloombot-api` included — this phase's
+own precondition means it should be, and if it is not, stop here rather than continuing into
+§2.6, which needs it.
 
 ### 2.6 Bind the real course server — without this, nothing answers
 
@@ -352,16 +353,16 @@ curl -s 127.0.0.1:3003/health   # mcp
 
 Send a real message in the now-bound real course channel and confirm the platform answers it —
 this is the first point in this phase that message can actually be answered at all, now that
-§2.6 has bound the server it arrives in. Only once `api` itself has actually come up (`curl`
-above returns `{"ready":true,"database":true}`, not a connection refusal) — not merely started
-— go back to the OpenAI dashboard and revoke the *old* key from §2.3. Revoking it earlier,
-before confirming the new one is actually wired up anywhere that reads it, would turn a
+§2.6 has bound the server it arrives in. Only once `bloombot-api` itself has actually come up
+(`curl` above returns `{"ready":true,"database":true}`, not a connection refusal) — not merely
+started — go back to the OpenAI dashboard and revoke the *old* key from §2.3. Revoking it
+earlier, before confirming the new one is actually wired up anywhere that reads it, would turn a
 rotation into a self-inflicted outage.
 
 ### 2.8 Arm alerting (OPS-12)
 
-`ops-monitor` was already started in §2.5 — confirm `OPS_ALERT_WEBHOOK_URL` is set in `.env`
-before this cutover, not after the first incident. See §5 below for what it does and what
+`bloombot-ops-monitor` was already started in §2.5 — confirm `OPS_ALERT_WEBHOOK_URL` is set in
+`.env` before this cutover, not after the first incident. See §5 below for what it does and what
 "notified" means concretely.
 
 ---
@@ -375,7 +376,7 @@ tables without touching the ones the Python bot itself reads — D-9's "both sys
 the same SQLite file" is exactly what makes this possible.
 
 ```bash
-pm2 stop api bot worker mcp ops-monitor
+pm2 stop bloombot-api bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor
 pm2 start bloombot
 ```
 

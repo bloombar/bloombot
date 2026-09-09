@@ -10794,6 +10794,59 @@ without it.
 
 ---
 
+## D-96 — OPS-15: the pm2 rename's own half-migrated guard sits before the build, and the migration script never runs unattended
+
+**Problem.** Renaming this platform's five supervised pm2 processes to a `bloombot-` prefix is not safe to
+just deploy: `scripts/deploy.sh`'s own `start_or_reload` cannot tell "pm2 has never heard of this name" apart
+from "the migration to this name has not happened yet," so it would start a second, newly-named process
+alongside the still-running old one. Three judgment calls the brief left open, recorded here.
+
+**Choice: `check_pm2_names_migrated` runs before the checkout is even touched, not merely before
+`reload_everything`.** The brief only required the guard to fire "before anything is reloaded." Placing it
+at the very top of the Deploy section instead — right after the Helpers pm2 already needs are defined, before
+`git reset --hard "$TARGET_SHA"` — means a droplet an operator forgot to migrate fails in seconds, before a
+slow `npm run build` runs for nothing, rather than after.
+
+**Choice: the guard's own old-name list (`OLD_BARE_NAMES`) is hand-listed, not derived from `NODE_APPS`.**
+`NODE_APPS` already carries the *new* names; deriving the old ones by stripping a `bloombot-` prefix would
+make the guard silently track whatever `NODE_APPS` says forever, including through some future rename this
+one has no way to anticipate. A fixed, separate list means a later rename has to touch this guard
+deliberately, the same reason `scripts/migrate-pm2-names.sh`'s own `OLD_NAMES` is hand-listed rather than
+discovered from pm2's own process table — an unrelated `scabbot` or `wikistreets` on the same shared droplet
+must never become a candidate for anything either script does, no matter what pm2 reports.
+
+**Choice: `scripts/migrate-pm2-names.sh` is idempotent by checking "no old name left, no new name missing,"
+not merely "have I run before."** A crash partway through a first run (the process killed after deleting the
+old names but before starting all the new ones, say) leaves a droplet a naive "already ran" flag would call
+done, but that is still short a process. Recomputing the plan from pm2's own current state on every
+invocation means a second run always finishes whatever the first one did not, and only reports "nothing to
+do" once that is actually true.
+
+**Rework finding — the guard's own rule was wrong in the first draft, and it was wrong on the side that
+matters.** `check_pm2_names_migrated` originally aborted only when pm2 knew **both** an old bare name and its
+new `bloombot-` counterpart. A droplet that has never run the migration at all knows only the old names —
+exactly the shape that rule let straight through — so the very deploy this guard exists to stop would have
+run unattended on the first ordinary merge to master after this rename landed. Caught by review, not by the
+test suite as written at the time: every existing `scripts/deploy.test.mjs` scenario seeded pm2 with the
+already-renamed names, so nothing exercised "pm2 has never heard of any `bloombot-` name at all." Fixed to
+the rule the brief actually needed — abort if pm2 knows **any** of the old bare names, regardless of what
+else it knows — with a regression test for the wholly-unmigrated case added alongside the half-migrated one
+that was already covered.
+
+**Rework finding — the migration script itself could brick a droplet if run in the wrong order.** The first
+version of `scripts/migrate-pm2-names.sh` checked only that `ecosystem.config.cjs` existed, not what it
+named. Run against a checkout still on the commit *before* this rename (the documented order is
+checkout-then-migrate, but nothing enforced it), the delete half would succeed and every
+`pm2 start ecosystem.config.cjs --only bloombot-api` (etc.) would match no app in that file — pm2 exits 0
+having started nothing, and the droplet is left with the whole platform down and no old process left to
+recover to, with a second run unable to help since the config still lacks the new names. Fixed by asserting
+every new name is actually present in the checkout's own `ecosystem.config.cjs` before anything is deleted,
+refusing outright and touching nothing if it is not — and by stating the required order explicitly (update
+the checkout, then migrate, then deploy) in both the script's own header and the README, rather than only in
+this file.
+
+---
+
 ## D-97 — `packages/openai`: FILE-8 — `POST /vector_stores/{id}/files` is asynchronous, so the adapter polls
 
 **Problem.** Every knowledge-file upload on the live droplet failed five times and gave up. The worker log

@@ -2,8 +2,9 @@
 #
 # Three test jobs — the Python suite covering the bot and the management
 # scripts, the Node suite covering the project-board tooling and the
-# docs/SPEC.md format contract, and a shellcheck pass over the deploy script —
-# followed by a deploy job that ships the commit to the droplet.
+# docs/SPEC.md format contract, and a shellcheck pass over the deploy script
+# and the OPS-15 pm2-rename migration script — followed by a deploy job that
+# ships the commit to the droplet.
 #
 # The test jobs use no secrets. The Python suite runs with dummy credentials
 # supplied by tests/conftest.py and a throwaway SQLite database, so it never
@@ -111,8 +112,12 @@ jobs:
       - uses: actions/checkout@v7
 
       # shellcheck ships with the GitHub runner image — no action to install.
-      - name: Lint scripts/deploy.sh
-        run: shellcheck scripts/deploy.sh
+      # scripts/migrate-pm2-names.sh (OPS-15) is the one-time pm2 rename
+      # migration an operator runs by hand on the droplet — linted here too,
+      # since it is clean today and running unattended-ish on a shared
+      # droplet is exactly the kind of script that should stay that way.
+      - name: Lint scripts/deploy.sh and scripts/migrate-pm2-names.sh
+        run: shellcheck scripts/deploy.sh scripts/migrate-pm2-names.sh
 
       # The agent guardrail hooks are the only thing standing between an agent
       # and the live student database or a committed secret, so they are linted

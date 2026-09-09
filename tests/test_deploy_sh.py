@@ -198,9 +198,15 @@ def world(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     registered = state / "registered"
-    # pm2 already knows every supervised app, as on a live droplet.
+    # pm2 already knows every supervised app, as on a live, already-migrated
+    # droplet (OPS-15) — the bloombot- prefixed names, not the pre-rename
+    # bare ones. A droplet still on the bare names is its own, narrower
+    # scenario (test_half_migrated_pm2_names_aborts_before_reloading below),
+    # not the shape every other test in this file should have to route
+    # around.
     registered.write_text(
-        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+        "bloombot\nbloombot-api\nbloombot-bot\nbloombot-worker\nbloombot-mcp\nbloombot-ops-monitor\n",
+        encoding="utf-8",
     )
 
     env = {
@@ -269,6 +275,47 @@ def test_clean_deploy_moves_head_and_reloads(world):
     pm2 = world.calls("pm2")
     assert "reload bloombot --update-env" in pm2
     assert "save" in pm2
+
+
+def test_unmigrated_pm2_names_abort_before_anything_is_reloaded(world):
+    """OPS-15 — a droplet that has never run scripts/migrate-pm2-names.sh still
+    has pm2's process list under the pre-rename, bare names. Deploying onto it
+    unmigrated must refuse rather than start a second, bloombot- prefixed
+    process beside each one still running under its old name."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only)
+
+    assert result.returncode != 0
+    assert "pre-OPS-15 names" in result.stderr
+    assert "migrate-pm2-names.sh" in result.stderr
+    assert world.head() == world.first  # the checkout was never even touched
+    # Nothing was reloaded or started — only the read-only jlist calls the
+    # guard itself makes.
+    assert not any(
+        call.startswith("reload ") or call.startswith("start ")
+        for call in world.calls("pm2")
+    )
+
+
+def test_half_migrated_pm2_names_abort_before_anything_is_reloaded(world):
+    """The narrower case: pm2 knows both an old name and its new counterpart —
+    the signature of a migration that started but never finished. Still
+    refused, on the same "any old name present" rule."""
+    world.registered.write_text(
+        "bloombot\nbloombot-api\nbloombot-bot\nbloombot-worker\nbloombot-mcp\nbloombot-ops-monitor\nworker\n",
+        encoding="utf-8",
+    )
+
+    result = world.run(world.code_only)
+
+    assert result.returncode != 0
+    assert "pre-OPS-15 names" in result.stderr
+    assert "worker" in result.stderr
+    assert "migrate-pm2-names.sh" in result.stderr
+    assert world.head() == world.first
 
 
 def test_untracked_files_survive_a_deploy(world):
@@ -364,7 +411,15 @@ def test_unimportable_dependencies_abort_before_restart(world):
 
     assert result.returncode != 0
     assert "cannot import" in result.stderr
-    assert world.calls("pm2") == []  # nothing was restarted
+    # Nothing was restarted — OPS-15's own half-migrated guard already reads
+    # pm2's process list (`jlist`) before this point in the script, on every
+    # run, so `pm2` is no longer uncalled here the way it used to be; what
+    # this test is actually about is that no process was ever reloaded or
+    # started because of the broken interpreter.
+    assert not any(
+        call.startswith("reload ") or call.startswith("start ")
+        for call in world.calls("pm2")
+    )
     assert world.head() == world.first  # and the checkout was put back
 
 

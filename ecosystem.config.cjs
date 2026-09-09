@@ -5,6 +5,18 @@
 // pm2's `instances`/`exec_mode` are left at their defaults (one instance,
 // fork mode) throughout.
 //
+// OPS-15 — every process below except the legacy Python bot's own entry
+// carries a `bloombot-` prefix, so `pm2 list` on the shared droplet this
+// runs on says which processes belong to this platform, rather than bare
+// names (`api`, `worker`, ...) an unrelated project on the same box could
+// plausibly claim too. The Python bot's `bloombot` name is left exactly as
+// it is: it is keyed by `scripts/deploy.sh`'s own `PM2_APP` and is being
+// retired separately (D-1), not renamed here. A rename is not just this
+// file — see `scripts/migrate-pm2-names.sh` for the one-time migration a
+// droplet already running the old names needs before the first deploy of
+// this change, and `scripts/deploy.sh`'s own half-migrated guard for what
+// happens if that migration is forgotten.
+//
 // `scripts/deploy.sh` reloads each of these by name individually
 // (`pm2 reload <name>`) rather than restarting the whole file at once, so a
 // bad deploy of one process does not bounce the other three, and bootstraps
@@ -40,7 +52,7 @@ module.exports = {
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
     {
-      name: "api",
+      name: "bloombot-api",
       // `apps/api/package.json`'s own `start` script, run directly rather
       // than through `npm start` — one fewer process pm2 has to supervise
       // and restart per app.
@@ -50,7 +62,7 @@ module.exports = {
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
     {
-      name: "bot",
+      name: "bloombot-bot",
       // PLAT-3/PLAT-4 — the only process holding a Discord gateway
       // connection; single-instance is structural here, not merely the
       // default this file otherwise never overrides.
@@ -60,21 +72,21 @@ module.exports = {
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
     {
-      name: "worker",
+      name: "bloombot-worker",
       script: "apps/worker/dist/index.js",
       error_file: "./logs/pm2-worker-error.log",
       out_file: "./logs/pm2-worker-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
     {
-      name: "mcp",
+      name: "bloombot-mcp",
       script: "apps/mcp/dist/index.js",
       error_file: "./logs/pm2-mcp-error.log",
       out_file: "./logs/pm2-mcp-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
     {
-      name: "ops-monitor",
+      name: "bloombot-ops-monitor",
       // OPS-12 — polls the four processes above's own /health endpoints and
       // notifies on a transition (`scripts/ops-monitor.mjs`'s own module
       // comment has the full reasoning). Supervised the same as everything

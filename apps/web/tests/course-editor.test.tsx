@@ -1771,3 +1771,151 @@ describe('CourseEditor unsaved-changes guard (WEB-16)', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * Rework round 1, must-fix 1 — `onConnectDiscord` (passed to
+ * `ScaffoldButton`, below) used to call `navigate` directly, bypassing
+ * this same unsaved-changes guard: every other way out of this editor
+ * (`handleCancel`, `goToTabGuarded`) confirms first, but this one did not,
+ * so a dirty edit on the very tab "Create Discord channels" lives on
+ * vanished with no prompt the moment "Connect a server" was confirmed.
+ */
+describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)', () => {
+  it('a dirty editor prompts before navigating to the Discord page, and cancelling the prompt stays put', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    listDiscordServers.mockResolvedValue([])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={navigate}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design - GLOBAL')
+
+    // Dirties the form from the Discord tab itself.
+    fireEvent.change(screen.getByLabelText('Admins role'), {
+      target: { value: 'new-admins-role' },
+    })
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create Discord channels' })
+    )
+    const connectDialog = await screen.findByRole('dialog', {
+      name: 'Connect a Discord server first',
+    })
+    fireEvent.click(
+      within(connectDialog).getByRole('button', {
+        name: 'Connect a server',
+      })
+    )
+
+    // The unsaved-changes prompt, not a straight navigation.
+    const discardDialog = await screen.findByRole('dialog', {
+      name: 'Discard unsaved changes?',
+    })
+    expect(navigate).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      within(discardDialog).getByRole('button', { name: 'Keep editing' })
+    )
+    await waitFor(() => expect(discardDialog).not.toBeVisible())
+    expect(navigate).not.toHaveBeenCalled()
+    // The edit is still there — "keep editing" discards nothing.
+    expect(screen.getByLabelText('Admins role')).toHaveValue('new-admins-role')
+  })
+
+  it("confirming the discard prompt navigates to the organization's Discord page", async () => {
+    getCourse.mockResolvedValue(COURSE)
+    listDiscordServers.mockResolvedValue([])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={navigate}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design - GLOBAL')
+
+    fireEvent.change(screen.getByLabelText('Admins role'), {
+      target: { value: 'new-admins-role' },
+    })
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create Discord channels' })
+    )
+    const connectDialog = await screen.findByRole('dialog', {
+      name: 'Connect a Discord server first',
+    })
+    fireEvent.click(
+      within(connectDialog).getByRole('button', {
+        name: 'Connect a server',
+      })
+    )
+
+    const discardDialog = await screen.findByRole('dialog', {
+      name: 'Discard unsaved changes?',
+    })
+    fireEvent.click(
+      within(discardDialog).getByRole('button', { name: 'Discard changes' })
+    )
+
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        kind: 'discord',
+        organizationId: 'org-1',
+      })
+    )
+  })
+
+  it('a clean editor navigates straight through, with no discard prompt', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    listDiscordServers.mockResolvedValue([])
+    const navigate = vi.fn()
+
+    renderWithModal(
+      <CourseEditor
+        navigate={navigate}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design - GLOBAL')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create Discord channels' })
+    )
+    const connectDialog = await screen.findByRole('dialog', {
+      name: 'Connect a Discord server first',
+    })
+    fireEvent.click(
+      within(connectDialog).getByRole('button', {
+        name: 'Connect a server',
+      })
+    )
+
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        kind: 'discord',
+        organizationId: 'org-1',
+      })
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})

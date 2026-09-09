@@ -10064,7 +10064,130 @@ import tests on `pages/Projects.tsx`), and a new Playwright spec
 actually downloaded, drops that same file into the project's Import dialog, and asserts the copy arrives as
 `… 2`, disabled, with its roles, category and instructions intact.
 
-## D-90 — `packages/db`: D-2 — every write transaction opens `IMMEDIATE`, so `busy_timeout` actually governs contention
+## D-90 — `apps/web`/`apps/api`/`apps/bot`/`packages/config`/`packages/discord-rest`: SRV-6/TEN-4 — scaffolding refuses to enqueue with no Discord server connected, and `PUBLIC_APP_URL` is normalised in the schema itself
+
+Two independent defect fixes, bundled into one slice because both surface the same way to an
+administrator: something Discord-shaped fails without a clear reason. Reviewed and reworked once (below).
+
+**SRV-6 — checked fresh, at click time, not from a prop; and routed through the same unsaved-changes
+guard as every other way out of the editor.** `ScaffoldButton`'s "Create Discord channels" used to fire
+`discordServers.scaffold` unconditionally; with no active Discord server binding, the job enqueued, ran,
+and failed deep in the worker (`discord-scaffold.ts`'s own "...has no active Discord server bound") — an
+opaque failed job minutes later, for a condition the browser could have checked in one read. `handleClick`
+now calls `listDiscordServers` first and, finding no active binding, opens a confirmation (`useModal`'s
+`confirm`, the same primitive `InstallButton.tsx`'s own destructive-remove confirmation uses) instead of
+enqueueing; confirming calls a required `onConnectDiscord` prop (round 1 rework, below, on why required),
+which `pages/CourseEditor.tsx` wires to `confirmDiscard()` (`useUnsavedChangesGuard`) followed by
+`navigate({ kind: 'discord', organizationId })` — `ScaffoldButton` itself has no route access. Chose a
+fresh read over threading the binding list down as a prop: a prop can go stale the moment a binding is
+installed or removed elsewhere in the same session (another tab, another admin), and the whole point of
+asking before enqueueing is that the answer is current. A failed `listDiscordServers` read falls back to
+the pre-existing behaviour (attempt the scaffold) rather than blocking the button on a transient, unrelated
+read error — a genuine problem still surfaces through the job's own error path exactly as it always has.
+The "active" predicate (`removedAt === null`) was already duplicated in `pages/Shell.tsx` and
+`pages/CourseEditor.tsx`; a third copy in `ScaffoldButton.tsx` became `isActiveDiscordBinding`, exported
+from `api/types.ts` and adopted by all three rather than left triplicated. The worker's own guard
+(`discord-scaffold.ts`) is untouched — this is a browser-side convenience in front of it, not a
+replacement for it; a request that reaches the action directly (the MCP surface, a script) still gets
+refused there.
+
+**What this guard does and does not pre-empt (round 1 rework note 6).** `ScaffoldButton`'s own check is
+narrow, deliberately: "does this organization hold at least one active Discord server binding." The
+worker's own `resolveCourseDiscordServer` (`packages/db/src/repos/discord-servers.ts`) refuses two other,
+genuinely different ways — `'removed'` (the course's own `discordServerId` names a binding that has since
+been removed) and `'ambiguous'` (the column is `null` and the organization now holds two-or-more active
+bindings, so scaffolding cannot infer which one the course means) — and a job hitting either of those
+still enqueues from this button and still fails opaquely in the worker exactly as before this slice.
+Chose to narrow this paragraph's own claim rather than extend the guard to read `course.discordServerId`
+too: `CourseEditor.tsx` already surfaces both of those states directly in its own Discord server selector
+(`offersServerSelector`/`staleServerId`, that file's own comments) the moment two-or-more bindings exist or
+a course's stored id goes stale, so an instructor looking at the Discord tab already sees the ambiguity or
+the staleness before ever reaching the scaffold button in the ordinary case; duplicating that same
+resolution inside `ScaffoldButton.tsx` (a second, independent read of `course.discordServerId` plus the
+same `pickCourseServerId` logic `resolveCourseDiscordServer` already owns) is a real cost for a narrower
+gap than the one this slice actually set out to close (an organization with *zero* active bindings, the
+concrete bug in the original report). This fix closes exactly the zero-binding case; `'removed'` and
+`'ambiguous'` remain worker-side failures, unchanged by this slice.
+
+**TEN-4 — `PUBLIC_APP_URL` normalised in the schema itself, not at each reader.** Production defect: the
+install flow fails on Discord's own consent screen with `Invalid OAuth2 redirect_uri`. The Discord
+Developer Portal is outside this codebase and this slice cannot fix it — the exact registered-redirect
+mismatch for `bloombot.wonkledge.com` has to be corrected by an operator in the portal, and nothing here
+claims otherwise. What *is* a real code defect: `apps/api/src/index.ts` built `discordRedirectUri` as
+`` `${publicAppUrl}/discord/callback` `` with no normalisation, so an operator-supplied `PUBLIC_APP_URL`
+with a trailing slash (`https://host/`) silently produced `https://host//discord/callback` — a URI that
+can never match one registered in the portal, and fails with exactly this error, with a URL that "looks
+correct" at a glance. `buildSignInLink`, one line above, had the identical latent bug — and so, unnoticed
+in the first pass, did `apps/bot`'s own LINK-2 connect link (round 1 rework, below).
+
+**Round 1 rework — the normalisation moved from `apps/api`'s own local variable into
+`envSchema` (`packages/config/src/env.ts`).** The first pass normalised `publicAppUrl` once inside
+`apps/api/src/index.ts#main()`, reasoning "once, at the point it is read" — true for `apps/api`'s own two
+readers (`buildSignInLink`, `discordRedirectUri`), but `apps/bot/src/index.ts`'s own `connectUrl = CONFIG.PUBLIC_APP_URL`
+(LINK-2's connect link) reads `CONFIG` directly and was never touched, so the identical trailing-slash bug
+still reached it. Fixed properly this round by moving `stripTrailingSlashes` into `packages/config/src/env.ts`
+and applying it as a zod `.transform()` on `PUBLIC_APP_URL` itself — every reader of `CONFIG.PUBLIC_APP_URL`,
+present or future, gets an already-normalised value, with no call site left to remember the rule for itself.
+`apps/api`'s own local strip is gone (redundant now); `apps/bot` needed no code change at all, only a comment
+noting why. `packages/discord-rest/src/authorize-url.ts` no longer owns a private copy of
+`stripTrailingSlashes` either — it imports the one now exported from `@bloombot/config` (a dependency it
+already had, so this created no cycle) for its own, unrelated `oauthBase`-override normalisation, rather
+than keeping two identical one-line functions in two packages. `packages/config` is the honest home for a
+helper that exists because of a `CONFIG`-read environment variable; `@bloombot/discord-rest` never had
+anything to do with `PUBLIC_APP_URL` and should not have kept owning the rule.
+
+**Round 1 rework — the confirmation's own navigation used to bypass the editor's unsaved-changes guard.**
+`onConnectDiscord`'s first pass called `navigate` directly. Every *other* way out of `CourseEditor` —
+`handleCancel`, `goToTabGuarded` — confirms an unsaved edit first (`useUnsavedChangesGuard`'s own
+`confirmDiscard`); this one silently did not, so an instructor who edited a category name on the very
+Discord tab this button lives on, then clicked "Create Discord channels" → "Connect a server," lost that
+edit with no prompt the moment the editor unmounted — the exact loss `handleCancel` exists to prevent for
+every *other* exit. Fixed by awaiting `confirmDiscard()` before calling `navigate`, the same call
+`handleCancel` already makes for its own exit. `onConnectDiscord` was also made a required prop (not
+`?:`) in the same round: optional meant an absent handler left "Connect a server" a dead end that closed
+the dialog and did nothing, worse than the opaque failed job this whole slice exists to prevent — every
+real caller has a route to send the click to, and a test that does not care passes `vi.fn()`.
+
+**Discoverability: option (a), a startup log, not the `/install/begin` response.** The brief offered
+either logging the resolved `discordRedirectUri` at startup or returning it in `POST /install/begin`'s
+JSON body. Chose the startup log: `apps/api`'s own `main()` already logs exactly this kind of
+once-per-process operational fact (`apps/api: listening`), an operator fixing a redirect-URI mismatch is
+already looking at logs and a running process (not mid-request in the panel), and logging it once avoids
+growing `InstallBeginResponse`'s shape — which `apps/web` would then have to decide whether to render — for
+a value that is deployment-wide config, not something scoped to one request. Logged at `info`, alongside
+every other startup value this process already logs, with an explicit line that this string must be
+registered verbatim under OAuth2 → Redirects for the Discord application, or the install flow fails with
+`Invalid OAuth2 redirect_uri`. No secret in it (it is derived from `PUBLIC_APP_URL`, already public).
+
+**What this fix does and does not do.** It does: stop a trailing slash on `PUBLIC_APP_URL` from producing
+a doubled slash that can never match anything registered, in every one of its readers, not only `apps/api`'s
+own two; and make the exact resolved redirect URI easy for an operator to find and paste into the portal.
+It does not: touch, verify, or guess at what is actually registered in the Discord Developer Portal for
+application `1328738160850632825` — if the production `Invalid OAuth2 redirect_uri` error was caused by a
+mismatch there (the far more likely cause, since `PUBLIC_APP_URL` in that deployment does not obviously
+carry a trailing slash), this fix alone does not resolve it; an operator still has to register
+`https://bloombot.wonkledge.com/discord/callback` in the portal by hand. It also does not close the
+`'removed'`/`'ambiguous'` worker-side scaffold failures named above — only the zero-active-binding case.
+
+**Verification (round 1, after rework).** `npm run lint && npx prettier --check . && npm run typecheck &&
+npm test`. New/changed: 4 cases in `apps/web/tests/scaffold-button.test.tsx` (no active binding opens the
+confirmation and never enqueues; confirming calls `onConnectDiscord`; cancelling calls neither; a
+`removedAt`-set binding counts as not connected; a failed `listDiscordServers` read falls back to
+attempting the scaffold rather than showing the confirmation) — every pre-existing case in that file now
+passes an explicit `onConnectDiscord={vi.fn()}` (the prop's own required-ness); 3 cases in
+`apps/web/tests/course-editor.test.tsx` (a dirty editor prompts before navigating to the Discord page and
+"Keep editing" stays put with the edit intact; confirming the discard prompt navigates; a clean editor
+navigates straight through with no prompt); 1 in `packages/config/tests/env.test.ts` (`PUBLIC_APP_URL`
+with a trailing slash comes out of `parseEnv` already stripped). All confirmed red first: the
+`ScaffoldButton` no-binding cases against the pre-fix `handleClick` failed with the confirmation dialog
+never appearing and `scaffoldCourseDiscord` called anyway; the fallback case failed the same way with
+`hasActiveBinding`'s `catch` flipped to `false`, instead hanging on a confirmation dialog nobody expected;
+the `CourseEditor` cases failed (two of three — the clean-editor case has nothing to discard either way)
+against the pre-rework direct `navigate` call, with the "Discard unsaved changes?" dialog never appearing;
+the config case failed with `PUBLIC_APP_URL` coming back with its trailing slash still attached, against
+the schema with the `.transform()` removed.
+
+## D-91 — `packages/db`: D-2 — every write transaction opens `IMMEDIATE`, so `busy_timeout` actually governs contention
 
 **Problem.** CI run 34300930498 failed `e2e/course-configuration.spec.ts` with `SqliteError: database is
 locked` out of `courses.ts#createCourse`. `client.ts`'s own module comment claimed `busy_timeout = 5000`

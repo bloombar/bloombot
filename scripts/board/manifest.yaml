@@ -2140,7 +2140,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: In review
+  status: Done
   review: false
 - id: MDL-8
   title: Instructions are how a course is configured; a stored prompt id is only

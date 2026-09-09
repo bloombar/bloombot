@@ -11,24 +11,44 @@
  * exist at all.
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { JobStatus } from '../src/api/types.js'
+import type {
+  DiscordServerBindingSummary,
+  JobStatus,
+} from '../src/api/types.js'
 import { ScaffoldButton } from '../src/components/ScaffoldButton.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
-const { scaffoldCourseDiscord, getJobStatus } = vi.hoisted(() => ({
-  scaffoldCourseDiscord: vi.fn(),
-  getJobStatus: vi.fn(),
-}))
+const { scaffoldCourseDiscord, getJobStatus, listDiscordServers } = vi.hoisted(
+  () => ({
+    scaffoldCourseDiscord: vi.fn(),
+    getJobStatus: vi.fn(),
+    listDiscordServers: vi.fn(),
+  })
+)
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, scaffoldCourseDiscord, getJobStatus }
+  return { ...actual, scaffoldCourseDiscord, getJobStatus, listDiscordServers }
 })
+
+function binding(
+  overrides: Partial<DiscordServerBindingSummary> = {}
+): DiscordServerBindingSummary {
+  return {
+    serverId: 'guild-1',
+    organizationId: 'org-1',
+    installedByAccountId: 'account-1',
+    installedAt: Date.now(),
+    removedAt: null,
+    ...overrides,
+  }
+}
 
 function job(overrides: Partial<JobStatus> = {}): JobStatus {
   return {
@@ -50,11 +70,20 @@ afterEach(() => {
 })
 
 describe('ScaffoldButton (SRV-6)', () => {
+  beforeEach(() => {
+    // Every pre-existing case below is the regression this default covers:
+    // an organization with an active binding scaffolds exactly as it
+    // always has. The no-binding cases override this explicitly.
+    listDiscordServers.mockResolvedValue([binding()])
+  })
+
   it('enqueues the job and shows it as queued', async () => {
     scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(job({ status: 'pending' }))
 
-    render(<ScaffoldButton organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+    )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
     )
@@ -69,7 +98,7 @@ describe('ScaffoldButton (SRV-6)', () => {
     scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
     getJobStatus.mockResolvedValue(job({ status: 'pending' }))
 
-    render(
+    renderWithModal(
       <ScaffoldButton
         organizationId="org-1"
         courseId="course-1"
@@ -106,7 +135,7 @@ describe('ScaffoldButton (SRV-6)', () => {
       .mockResolvedValueOnce(job({ status: 'pending' }))
       .mockResolvedValue(job({ status: 'running' }))
 
-    render(
+    renderWithModal(
       <ScaffoldButton
         organizationId="org-1"
         courseId="course-1"
@@ -135,7 +164,7 @@ describe('ScaffoldButton (SRV-6)', () => {
       .mockResolvedValueOnce(job({ status: 'pending' }))
       .mockResolvedValue(job({ status: 'succeeded' }))
 
-    render(
+    renderWithModal(
       <ScaffoldButton
         organizationId="org-1"
         courseId="course-1"
@@ -163,7 +192,9 @@ describe('ScaffoldButton (SRV-6)', () => {
       job({ status: 'failed', lastError: 'Discord API rate limited' })
     )
 
-    render(<ScaffoldButton organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+    )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
     )
@@ -177,7 +208,9 @@ describe('ScaffoldButton (SRV-6)', () => {
       new ApiError(404, { error: 'action_refused' })
     )
 
-    render(<ScaffoldButton organizationId="org-1" courseId="course-1" />)
+    renderWithModal(
+      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+    )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
     )
@@ -185,5 +218,93 @@ describe('ScaffoldButton (SRV-6)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
     )
+  })
+
+  // Bug 1 — clicking "Create Discord channels" with no Discord server
+  // connected used to enqueue the job anyway, which then failed minutes
+  // later deep in the worker (`discord-scaffold.ts`'s own "...has no
+  // active Discord server bound"). These cover the click-time guard
+  // instead: no active binding means a confirmation, never a job.
+  describe('no active Discord server binding', () => {
+    it('opens a confirmation instead of enqueueing, and confirming calls onConnectDiscord', async () => {
+      listDiscordServers.mockResolvedValue([])
+      const onConnectDiscord = vi.fn()
+
+      renderWithModal(
+        <ScaffoldButton
+          organizationId="org-1"
+          courseId="course-1"
+          onConnectDiscord={onConnectDiscord}
+        />
+      )
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Create Discord channels' })
+      )
+
+      const dialog = await screen.findByRole('dialog', {
+        name: 'Connect a Discord server first',
+      })
+      // No job enqueued while the confirmation is open.
+      expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
+
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: 'Connect a server' })
+      )
+
+      await waitFor(() => expect(onConnectDiscord).toHaveBeenCalled())
+      expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
+    })
+
+    it('a binding whose removedAt is set counts as not connected', async () => {
+      listDiscordServers.mockResolvedValue([binding({ removedAt: Date.now() })])
+      const onConnectDiscord = vi.fn()
+
+      renderWithModal(
+        <ScaffoldButton
+          organizationId="org-1"
+          courseId="course-1"
+          onConnectDiscord={onConnectDiscord}
+        />
+      )
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Create Discord channels' })
+      )
+
+      await screen.findByRole('dialog', {
+        name: 'Connect a Discord server first',
+      })
+      expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
+    })
+
+    it('cancelling calls neither scaffoldCourseDiscord nor onConnectDiscord', async () => {
+      listDiscordServers.mockResolvedValue([])
+      const onConnectDiscord = vi.fn()
+
+      renderWithModal(
+        <ScaffoldButton
+          organizationId="org-1"
+          courseId="course-1"
+          onConnectDiscord={onConnectDiscord}
+        />
+      )
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Create Discord channels' })
+      )
+
+      const dialog = await screen.findByRole('dialog', {
+        name: 'Connect a Discord server first',
+      })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('dialog', {
+            name: 'Connect a Discord server first',
+          })
+        ).not.toBeInTheDocument()
+      )
+      expect(onConnectDiscord).not.toHaveBeenCalled()
+      expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
+    })
   })
 })

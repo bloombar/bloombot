@@ -19,7 +19,13 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { ApiError, getJobStatus, scaffoldCourseDiscord } from '../api/client.js'
+import {
+  ApiError,
+  getJobStatus,
+  listDiscordServers,
+  scaffoldCourseDiscord,
+} from '../api/client.js'
+import { isActiveDiscordBinding } from '../api/types.js'
 import type { JobStatus } from '../api/types.js'
 import {
   FailureIcon,
@@ -30,10 +36,21 @@ import {
 } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
+import { useModal } from './modal/ModalProvider.js'
 
 export interface ScaffoldButtonProps {
   organizationId: string
   courseId: string
+  /**
+   * SRV-6 — called instead of enqueueing the job when this organization
+   * has no active Discord server binding, after the confirmation modal
+   * below is accepted; `pages/CourseEditor.tsx` passes a handler that
+   * navigates to the organization's Discord page, where `InstallButton`
+   * lives. Optional so a caller with no route access (a unit test, say)
+   * still gets a modal that explains the problem — it just has nowhere to
+   * send the click.
+   */
+  onConnectDiscord?: () => void
   /** Test-only override of `DEFAULT_STILL_QUEUED_HINT_AFTER_MS`. */
   stillQueuedHintAfterMs?: number
   /** Test-only override of `DEFAULT_POLL_INTERVAL_MS`. */
@@ -84,6 +101,7 @@ function statusLabel(status: JobStatus['status']): string {
 export function ScaffoldButton({
   organizationId,
   courseId,
+  onConnectDiscord,
   stillQueuedHintAfterMs = DEFAULT_STILL_QUEUED_HINT_AFTER_MS,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: ScaffoldButtonProps) {
@@ -92,6 +110,7 @@ export function ScaffoldButton({
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [stillQueued, setStillQueued] = useState(false)
   const pollingSinceRef = useRef<number | undefined>(undefined)
+  const { confirm } = useModal()
 
   const settled = job?.status === 'succeeded' || job?.status === 'failed'
 
@@ -141,6 +160,39 @@ export function ScaffoldButton({
     setStarting(true)
     setStillQueued(false)
     try {
+      // SRV-6 — checked fresh, at click time, rather than from a prop:
+      // the worker's own guard (`discord-scaffold.ts`'s own "...has no
+      // active Discord server bound") already refuses to run without a
+      // binding, but that refusal only surfaces minutes later as an
+      // opaque failed job. A prop threaded down from whichever screen
+      // mounts this button can go stale the moment a binding is removed
+      // elsewhere in the same session; a read right before deciding
+      // whether to enqueue cannot.
+      let hasActiveBinding: boolean
+      try {
+        const bindings = await listDiscordServers(organizationId)
+        hasActiveBinding = bindings.some(isActiveDiscordBinding)
+      } catch {
+        // A transient read failure here must not block scaffolding on its
+        // own — fall back to the behaviour this component always had
+        // (attempt the scaffold) rather than stranding the user on a
+        // read error unrelated to the action they asked for; a genuine
+        // problem still surfaces through the ordinary `ApiError`/job-error
+        // paths below.
+        hasActiveBinding = true
+      }
+
+      if (!hasActiveBinding) {
+        const confirmed = await confirm({
+          title: 'Connect a Discord server first',
+          description:
+            'This organization has no Discord server connected yet. Connect one before this course can create categories and channels.',
+          confirmLabel: 'Connect a server',
+        })
+        if (confirmed) onConnectDiscord?.()
+        return
+      }
+
       const { jobId } = await scaffoldCourseDiscord(organizationId, courseId)
       const status = await getJobStatus(organizationId, jobId)
       pollingSinceRef.current = Date.now()

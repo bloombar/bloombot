@@ -10063,3 +10063,72 @@ import tests on `pages/Projects.tsx`), and a new Playwright spec
 (`e2e/course-export-import.spec.ts`) that exports a course from the panel, reads the bytes the browser
 actually downloaded, drops that same file into the project's Import dialog, and asserts the copy arrives as
 `… 2`, disabled, with its roles, category and instructions intact.
+
+## D-90 — `apps/web`/`apps/api`/`packages/discord-rest`: SRV-6/TEN-4 — scaffolding refuses to enqueue with no Discord server connected, and `PUBLIC_APP_URL` is normalised once, at the point it is read
+
+Two independent defect fixes, bundled into one slice because both surface the same way to an
+administrator: something Discord-shaped fails without a clear reason.
+
+**SRV-6 — checked fresh, at click time, not from a prop.** `ScaffoldButton`'s "Create Discord channels"
+used to fire `discordServers.scaffold` unconditionally; with no active Discord server binding, the job
+enqueued, ran, and failed deep in the worker (`discord-scaffold.ts`'s own "...has no active Discord server
+bound") — an opaque failed job minutes later, for a condition the browser could have checked in one read.
+`handleClick` now calls `listDiscordServers` first and, finding no active binding, opens a confirmation
+(`useModal`'s `confirm`, the same primitive `InstallButton.tsx`'s own destructive-remove confirmation
+uses) instead of enqueueing; confirming calls an optional `onConnectDiscord` prop, which
+`pages/CourseEditor.tsx` wires to `navigate({ kind: 'discord', organizationId })` — `ScaffoldButton` itself
+has no route access. Chose a fresh read over threading the binding list down as a prop: a prop can go
+stale the moment a binding is installed or removed elsewhere in the same session (another tab, another
+admin), and the whole point of asking before enqueueing is that the answer is current. A failed
+`listDiscordServers` read falls back to the pre-existing behaviour (attempt the scaffold) rather than
+blocking the button on a transient, unrelated read error — a genuine problem still surfaces through the
+job's own error path exactly as it always has. The "active" predicate (`removedAt === null`) was already
+duplicated in `pages/Shell.tsx` and `pages/CourseEditor.tsx`; a third copy in `ScaffoldButton.tsx` became
+`isActiveDiscordBinding`, exported from `api/types.ts` and adopted by all three rather than left
+triplicated. The worker's own guard (`discord-scaffold.ts`) is untouched — this is a browser-side
+convenience in front of it, not a replacement for it; a request that reaches the action directly (the MCP
+surface, a script) still gets refused there.
+
+**TEN-4 — `PUBLIC_APP_URL` normalised once, where it is read, not at each of its two call sites.**
+Production defect: the install flow fails on Discord's own consent screen with `Invalid OAuth2
+redirect_uri`. The Discord Developer Portal is outside this codebase and this slice cannot fix it — the
+exact registered-redirect mismatch for `bloombot.wonkledge.com` has to be corrected by an operator in the
+portal, and nothing here claims otherwise. What *is* a real code defect: `apps/api/src/index.ts` built
+`discordRedirectUri` as `` `${publicAppUrl}/discord/callback` `` with no normalisation, so an
+operator-supplied `PUBLIC_APP_URL` with a trailing slash (`https://host/`) silently produced
+`https://host//discord/callback` — a URI that can never match one registered in the portal, and fails with
+exactly this error, with a URL that "looks correct" at a glance. `buildSignInLink`, one line above, had the
+identical latent bug. Fixed by normalising `publicAppUrl` once, at the point it is read off `CONFIG`
+(`main()`'s own local, line ~124), rather than at each of the two templates built from it — one fix
+covers both, and neither call site has to remember to normalise for itself. Reused
+`packages/discord-rest/src/authorize-url.ts`'s existing (previously private) `stripTrailingSlashes`,
+exported rather than duplicated, since `DISCORD_OAUTH_BASE` already needed the identical one-line rule.
+
+**Discoverability: option (a), a startup log, not the `/install/begin` response.** The brief offered
+either logging the resolved `discordRedirectUri` at startup or returning it in `POST /install/begin`'s
+JSON body. Chose the startup log: `apps/api`'s own `main()` already logs exactly this kind of
+once-per-process operational fact (`apps/api: listening`), an operator fixing a redirect-URI mismatch is
+already looking at logs and a running process (not mid-request in the panel), and logging it once avoids
+growing `InstallBeginResponse`'s shape — which `apps/web` would then have to decide whether to render — for
+a value that is deployment-wide config, not something scoped to one request. Logged at `info`, alongside
+every other startup value this process already logs, with an explicit line that this string must be
+registered verbatim under OAuth2 → Redirects for the Discord application, or the install flow fails with
+`Invalid OAuth2 redirect_uri`. No secret in it (it is derived from `PUBLIC_APP_URL`, already public).
+
+**What this fix does and does not do.** It does: stop a trailing slash on `PUBLIC_APP_URL` from producing
+a doubled slash that can never match anything registered, and make the exact resolved URI easy for an
+operator to find and paste into the portal. It does not: touch, verify, or guess at what is actually
+registered in the Discord Developer Portal for application `1328738160850632825` — if the production
+`Invalid OAuth2 redirect_uri` error was caused by a mismatch there (the far more likely cause, since
+`PUBLIC_APP_URL` in that deployment does not obviously carry a trailing slash), this fix alone does not
+resolve it; an operator still has to register `https://bloombot.wonkledge.com/discord/callback` in the
+portal by hand.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test`. New: 3 cases
+in `apps/web/tests/scaffold-button.test.tsx` (no active binding opens the confirmation and never enqueues;
+confirming calls `onConnectDiscord`; cancelling calls neither; a `removedAt`-set binding counts as not
+connected) and 3 in `packages/discord-rest/tests/authorize-url.test.ts` (`stripTrailingSlashes`, including
+the exact `https://host/` → `https://host/discord/callback`, not `https://host//discord/callback`, shape).
+All confirmed red first: the `ScaffoldButton` cases against the pre-fix `handleClick` failed with the
+confirmation dialog never appearing and `scaffoldCourseDiscord` called anyway; the `stripTrailingSlashes`
+cases failed with `stripTrailingSlashes is not a function` against the pre-fix (unexported) helper.

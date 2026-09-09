@@ -5,7 +5,10 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { buildDiscordAuthorizationUrl } from '../src/authorize-url.js'
+import {
+  buildDiscordAuthorizationUrl,
+  stripTrailingSlashes,
+} from '../src/authorize-url.js'
 
 describe('buildDiscordAuthorizationUrl', () => {
   it('builds an authorize URL with response_type, client_id, redirect_uri, state and the S256 PKCE challenge', () => {
@@ -73,5 +76,30 @@ describe('buildDiscordAuthorizationUrl', () => {
     })
 
     expect(url.startsWith('http://127.0.0.1:9999/authorize?')).toBe(true)
+  })
+})
+
+describe('stripTrailingSlashes (TEN-4)', () => {
+  // `apps/api/src/index.ts` builds `discordRedirectUri` (and
+  // `buildSignInLink`) as `` `${publicAppUrl}/discord/callback` `` — an
+  // operator-supplied `PUBLIC_APP_URL` with a trailing slash used to
+  // survive into that template unnormalised, yielding
+  // `https://host//discord/callback`, a URI that can never match one
+  // registered in the Discord Developer Portal and fails with exactly
+  // `Invalid OAuth2 redirect_uri`. This is the exact shape that bug takes.
+  it('a trailing slash on the base URL does not produce a doubled slash once /discord/callback is appended', () => {
+    const publicAppUrl = stripTrailingSlashes('https://host/')
+
+    expect(`${publicAppUrl}/discord/callback`).toBe(
+      'https://host/discord/callback'
+    )
+  })
+
+  it('leaves a URL with no trailing slash unchanged', () => {
+    expect(stripTrailingSlashes('https://host')).toBe('https://host')
+  })
+
+  it('strips more than one trailing slash', () => {
+    expect(stripTrailingSlashes('https://host//')).toBe('https://host')
   })
 })

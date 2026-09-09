@@ -13,7 +13,7 @@
  * a button that looks live and does nothing is worse than one that says why.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, requestSignInLink, signInWithGoogle } from '../api/client.js'
 import { loadGoogleIdentityServices } from '../api/google-identity.js'
@@ -31,36 +31,6 @@ import { LEGAL_LINKS } from '../components/legal-links.js'
  * it belongs, rather than buried inside one of them.
  */
 const FORM_ID = 'sign-in-email-form'
-
-/**
- * Google's own multicolour "G", inlined so the button needs no network and
- * cannot render half-drawn. Reproduced at the proportions Google's sign-in
- * branding guidelines specify; the surrounding button supplies the white
- * background, neutral border and "Continue with Google" wording those same
- * guidelines ask for.
- */
-function GoogleGlyph() {
-  return (
-    <svg className="size-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#4285F4"
-        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
-      />
-      <path
-        fill="#34A853"
-        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"
-      />
-      <path
-        fill="#EA4335"
-        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06L5.84 9.9C6.71 7.31 9.14 5.38 12 5.38z"
-      />
-    </svg>
-  )
-}
 
 export interface SignInProps {
   /** `import.meta.env.VITE_GOOGLE_CLIENT_ID` by default — a prop so a test can supply, explicitly withhold (`undefined`, the "not configured" case), or omit it without stubbing Vite's env. */
@@ -110,32 +80,66 @@ export function SignIn(props: SignInProps) {
     }
   }
 
-  const handleGoogle = async () => {
+  // Where Google draws its own button. A ref rather than an id, because two
+  // `SignIn`s on one page (the home page embeds one) would otherwise both
+  // render into whichever element happened to win the id.
+  const googleButtonRef = useRef<HTMLDivElement | null>(null)
+
+  // Loading the script and rendering the button happen here rather than on a
+  // click: `renderButton` needs a mounted element to draw into, and the button
+  // it draws *is* the control — there is nothing left for an onClick to do.
+  // The script is still fetched only when a client id is configured, so a
+  // deployment without Google sign-in never reaches accounts.google.com (QA-2).
+  useEffect(() => {
+    // Gated on `accepted` as well as configuration: Google renders and owns
+    // that button, so it cannot be handed a `disabled` prop the way this
+    // app's own controls can, and dimming it with CSS would be a gate only
+    // until someone opened devtools. Not drawing it at all is a real one.
     if (!googleClientId || !accepted) return
-    setError(undefined)
-    try {
-      const google = await loadGoogleIdentityServices()
-      google.accounts.id.initialize({
-        client_id: googleClientId,
-        callback: (response) => {
-          signInWithGoogle(response.credential).then(
-            onSignedIn,
-            (caught: unknown) => {
-              if (caught instanceof ApiError) setError(caught)
-              else throw caught
-            }
-          )
-        },
-      })
-      google.accounts.id.prompt()
-    } catch {
-      setError(
-        new ApiError(0, {
-          error: 'google_unavailable',
+    const parent = googleButtonRef.current
+    if (!parent) return
+
+    let cancelled = false
+    loadGoogleIdentityServices()
+      .then((google) => {
+        // The component may have unmounted, or the id changed, while the
+        // script was in flight; drawing into a detached node would leave a
+        // button nobody can see and a callback nobody wants.
+        if (cancelled || !googleButtonRef.current) return
+        google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            signInWithGoogle(response.credential).then(
+              onSignedIn,
+              (caught: unknown) => {
+                if (caught instanceof ApiError) setError(caught)
+                else throw caught
+              }
+            )
+          },
         })
-      )
+        google.accounts.id.renderButton(googleButtonRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          width: 320,
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setError(
+          new ApiError(0, {
+            error: 'google_unavailable',
+          })
+        )
+      })
+
+    return () => {
+      cancelled = true
     }
-  }
+  }, [googleClientId, accepted, onSignedIn])
 
   if (linkRequested) {
     return (
@@ -193,15 +197,24 @@ export function SignIn(props: SignInProps) {
           button chrome, which is what Google's own sign-in branding guidelines
           ask of anything initiating an authorization. */}
       {googleClientId ? (
-        <button
-          type="button"
-          disabled={!accepted}
-          onClick={() => void handleGoogle()}
-          className="flex items-center justify-center gap-3 rounded-md border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400"
-        >
-          <GoogleGlyph />
-          Continue with Google
-        </button>
+        accepted ? (
+          // Google draws its own button in here once the script has loaded.
+          // Empty in the DOM until then, which is why it carries a testid
+          // rather than a role: there is nothing to query by role until
+          // Google has rendered into it.
+          <div
+            ref={googleButtonRef}
+            data-testid="google-button-slot"
+            className="flex justify-center"
+          />
+        ) : (
+          <p
+            data-testid="google-gated"
+            className="rounded-md border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-center text-sm text-neutral-500"
+          >
+            Agree to the documents above to sign in with Google.
+          </p>
+        )
       ) : (
         <p className="text-sm text-neutral-500">
           Google sign-in is not configured for this deployment.

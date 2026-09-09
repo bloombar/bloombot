@@ -9991,3 +9991,116 @@ real, named Discord channel a student and an instructor both recognize.
 playwright test` all green: 2557 vitest (no new files — `packages/db/tests/organizations-deletion.test.ts`'s
 own `seedFullTenant` and its existing assertions were extended in place, not given new `it` blocks), 90
 node, 38 Playwright e2e.
+
+## D-89 — `packages/db`: D-2 — every write transaction opens `IMMEDIATE`, so `busy_timeout` actually governs contention
+
+**Problem.** CI run 34300930498 failed `e2e/course-configuration.spec.ts` with `SqliteError: database is
+locked` out of `courses.ts#createCourse`. `client.ts`'s own module comment claimed `busy_timeout = 5000`
+meant "a writer that arrives while another write is mid-transaction waits up to 5s for the lock instead of
+failing immediately" — true for a transaction that takes the write lock at `BEGIN`, false for the shape
+every repo function in this package actually used. `db.transaction(...)` (Drizzle's own default) issues a
+plain `BEGIN`, which SQLite treats as `BEGIN DEFERRED`: it takes a read lock first and only asks for the
+write lock at the transaction's *first write*. When that write-lock request loses to a lock another
+connection already holds, SQLite cannot retry it the way `busy_timeout` retries an ordinary contended lock —
+retrying would mean re-validating a read snapshot the transaction's own earlier statements already
+committed to, which SQLite refuses to do — so it returns `SQLITE_BUSY` immediately, regardless of the
+pragma. Per D-2, five processes (API, bot, worker, MCP, ops-monitor) share this one file on one droplet, so
+any two concurrent writes could hit this, and the pragma everyone believed was covering it was not covering
+the one shape every write transaction in the package actually used.
+
+Not a new discovery in isolation — D-49's own `conversations.ts#appendMessage` had already found and fixed
+this exact mechanism for itself (`{ behavior: 'immediate' }`, plus a bounded retry for the residual
+`SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` D-49 measured as still worth catching) and even named the risk this
+slice closes: "a shared `withTransaction` helper extracted later ... would have left the whole suite green
+while this silently reverted to `deferred`" (D-49, on why its own pinned-SQL test exists). This slice is that
+extraction, generalized to the other eleven repo functions across `packages/db/src/repos/` that open their
+own top-level transaction and never had D-49's own fix at all.
+
+**Fix — `writeTransaction(db, fn)`, exported from `client.ts`, replacing every top-level `db.transaction(fn)`
+call in the package.** A shared helper rather than repeating `{ behavior: 'immediate' }` at each of the
+(now twelve) call sites, for the exact reason D-49 named: a future repo function that opens `db.transaction`
+directly, or a Drizzle upgrade that changes the option's shape, would silently revert to `deferred` with
+every existing test still green, since none of them observe *how* a transaction begins, only what it does.
+`writeTransaction` is the one place that decision is made now. Its `fn` parameter is typed by pulling `Tx` out
+of `Database['transaction']` itself with `infer` (`type WriteTx = Database['transaction'] extends
+(transaction: (tx: infer Tx) => unknown, ...rest: never[]) => unknown ? Tx : never`), not restated by hand,
+and not simply `Parameters<Database['transaction']>[0]` — the latter forces TypeScript to instantiate
+`transaction`'s own generic return type as `unknown` before extracting the parameter, which erased every
+caller's actual return type and left `writeTransaction`'s own result typed `unknown` everywhere (caught by
+`tsc`, not a runtime defect: `packages/db/tests/client.test.ts`'s own new coverage-count assertion surfaced it
+immediately as `'rowCount' is of type 'unknown'`). `db` may also be another transaction's own `tx` (a nested
+savepoint — `accounts.ts#createAccount`'s documented case): `behavior` is meaningless to a savepoint, which
+has no `BEGIN` of its own and already runs inside whatever lock its outer transaction took, and Drizzle's own
+nested-transaction path (`BetterSQLiteTransaction.transaction`, `drizzle-orm/better-sqlite3/session.js`) takes
+no config parameter at all — the option is simply not read — so passing it through uniformly is safe rather
+than a case that needs its own branch. `conversations.ts#appendMessage`'s own D-49 fix is folded into this:
+its `{ behavior: 'immediate' }` argument is removed (redundant, `writeTransaction` now supplies it) and its
+retry loop, and the pinned "opens `BEGIN IMMEDIATE`" SQL-assertion test D-49 added, are both unchanged — the
+runtime SQL `appendMessage` emits did not change, only where the option is set.
+
+**`client.ts`'s own module comment corrected**, not merely `writeTransaction`'s own doc comment: a future
+reader looking for what `busy_timeout` covers reads `openDatabase` first, so the misleading claim needed
+fixing at its source, with a pointer down to `writeTransaction`'s own comment for the deferred-versus-immediate
+mechanism itself, rather than duplicating that explanation in two places.
+
+**Reproduced directly, both ways, per this slice's own brief — not inferred from the CI flake alone.**
+`packages/db/tests/client.test.ts` gained two tests against a real held lock, not the snapshot-staleness
+shape D-49's own existing two tests in this file already cover (kept, unchanged — a different mechanism,
+`SQLITE_BUSY_SNAPSHOT` from a stale read, not `SQLITE_BUSY` from a lock genuinely held). The lock is held by a
+*second OS process* (`spawn(process.execPath, ['-e', <script>], ...)`, `better-sqlite3` `require`d directly,
+no build step needed), not a second in-process connection: `better-sqlite3` is synchronous, so whichever
+connection "holds" the lock would have to still be on the call stack, blocking the one JS thread the
+attempting connection also needs — the two would deadlock rather than race, not model two real processes at
+all. The holder process takes `BEGIN IMMEDIATE`, writes, prints `LOCKED` (the test's cue the lock is actually
+held, not merely that the process has started), sleeps 300ms via `Atomics.wait` (a real, unresponsive hold,
+not a poll that could itself race the test), then commits. One test runs a plain, deferred `db.transaction(fn)`
+against that held lock and asserts it throws `SQLITE_BUSY` in under 150ms — confirmed by running it against
+the pre-fix code path directly (not just informally reasoned about): it throws `DrizzleError` wrapping
+`SqliteError: database is locked`, `cause.code: 'SQLITE_BUSY'`, in under half the holder's own 300ms hold.
+The other runs `writeTransaction(db, fn)` against the identical setup and asserts it returns successfully
+with elapsed time at least 80% of the holder's own hold — confirmed to fail exactly as expected with
+`writeTransaction`'s own `behavior` temporarily edited back to `'deferred'`: the same `SQLITE_BUSY` the first
+test asserts, thrown instead of the wait-then-succeed this test exists to pin down — then restored, green
+again.
+
+**Cost — two existing atomicity tests broke, for a reason the brief for this slice did not anticipate, and
+had to be understood before being fixed rather than patched around.** `course-join-links.test.ts` (two
+tests) and `membership-invitations.test.ts` (one test) each simulate "a revoke races an in-flight
+redemption" by spying on a function called *inside* the redemption's own transaction, and firing a write
+against a *second, real* connection from inside that spy — a same-process stand-in for a genuinely
+concurrent second connection, which worked because the redemption's transaction was deferred: at the moment
+the spy fires (after the transaction's own liveness read, before its first write), the transaction held no
+lock yet, so the second connection's write went through immediately, and the *outer* transaction's own later
+write then lost to the now-stale snapshot it had already read from (`SQLITE_BUSY_SNAPSHOT`, D-49's own
+mechanism) — which is exactly the race these tests exist to prove is refused. Once the redemption itself
+uses `writeTransaction`, it holds the write lock from `BEGIN`, before its own liveness read even runs — so
+the second connection's nested write, still on the very call stack the transaction's own code is on, can
+never win that lock, and can never wait for it either: the outer transaction cannot release a lock it holds
+while control is still nested inside its own call stack waiting on the very connection it is blocking. This
+is not a slow wait but a genuine same-thread deadlock, resolved only when the second connection's own
+`busy_timeout` (5,000ms by default, `openDatabase`) is exhausted and it gives up with `SQLITE_BUSY` — which
+is why these three tests, unmodified, went from passing in tens of milliseconds to failing (`revokedAt:
+null`, not a number) after five real seconds each. Fixed two ways, not by changing what is asserted about
+atomicity: (1) each `secondConnection`'s own `busy_timeout` is cut to 100ms, since the point of each test is
+what happens when the race is lost, not how long losing takes to observe; (2) the final assertion on each
+test changed from `revokedAt: expect.any(Number)` to `revokedAt: null` — the racing revoke, nested on the
+transaction's own call stack, now always loses and never commits, so the property each test's own primary
+assertion already pins down (nobody was admitted or granted membership on a stale read) holds for a
+*stronger* reason than before: not a write that raced in and then lost a conflict check, but a write that
+was structurally unable to happen at all while the transaction it raced was in flight. A genuinely separate
+process — not a nested call on the same one — attempting the identical revoke would instead simply wait
+behind `busy_timeout` and then succeed, exactly like `client.test.ts`'s own new pair of tests above; that
+case did not need a new test of its own here, since it is precisely what this slice's own `client.test.ts`
+tests already prove for the underlying mechanism.
+
+**Out of scope, named rather than silently left.** `apps/**`, `e2e/**`, `.github/**` untouched — this slice
+changes how a transaction begins, not what any transaction does, and no caller outside `packages/db` opens
+its own `db.transaction(...)`. `busy_timeout`'s value, `journal_mode`, and `foreign_keys` are all unchanged.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green: 2586
+vitest (2 new in `packages/db/tests/client.test.ts`, the pair described above; 3 existing tests edited in
+place in `course-join-links.test.ts`/`membership-invitations.test.ts`, not given new `it` blocks — the cost
+described above), 93 node. `npm run test:coverage`'s own `packages/db/src/repos` figures (95.76%
+statements/90.73% branches/99.54% functions/97.32% lines) stay above the 90/85/90/90 floor; `client.ts`
+itself, where `writeTransaction` actually lives, is not in QA-4's own `include` list and carries no separate
+floor.

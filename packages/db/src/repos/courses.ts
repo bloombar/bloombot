@@ -29,6 +29,7 @@
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import {
   pickCourseServerId,
   resolveCourseDiscordServer,
@@ -645,7 +646,7 @@ export function createCourse(
   const selfConflict = findSelfConflict(input)
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     // Run inside the write transaction, not before it (D-12's "Limits"):
     // with no SQL constraint backing this check, running it and the write
     // in the same transaction is what narrows the race between two
@@ -928,7 +929,7 @@ export function updateCourse(
   const selfConflict = findSelfConflict(input, { checkRoles: rolesChanged })
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     if (input.enabled && projectResult.project.archivedAt === null) {
       const serverResolution = resolveCourseDiscordServer(
         organizationId,
@@ -1051,7 +1052,7 @@ export function enableCourse(
   if (!existing) return undefined
   if (existing.enabled) return { ok: true, changed: false }
 
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     // `existing.projectId` was validated against `organizationId` when it
     // was last saved (`loadOwnedProject`, above) — projects are never
     // reassigned outside a save, so it does not need re-checking here.

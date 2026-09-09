@@ -16,6 +16,7 @@
 import { and, desc, eq } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { transcriptExports, type TranscriptExportStatus } from '../schema.js'
 
 export type TranscriptExport = typeof transcriptExports.$inferSelect
@@ -50,7 +51,7 @@ export function createPendingExport(
   input: NewTranscriptExport,
   db: Database
 ): TranscriptExport {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const previous = tx
       .select({ sequence: transcriptExports.sequence })
       .from(transcriptExports)

@@ -21,6 +21,7 @@
 import { and, asc, desc, eq, gte, lte } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
+import { writeTransaction } from '../client.js'
 import {
   courses,
   messages,
@@ -78,7 +79,7 @@ export function readCourseTranscript(
   input: ReadCourseTranscriptInput,
   db: Database
 ): ReadCourseTranscriptResult | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const course = tx
       .select({ id: courses.id, title: courses.title })
       .from(courses)

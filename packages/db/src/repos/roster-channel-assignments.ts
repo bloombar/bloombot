@@ -16,6 +16,7 @@
 import { and, eq } from 'drizzle-orm'
 
 import type { Executor, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { rosterChannelAssignments } from '../schema.js'
 
 export type RosterChannelAssignment =
@@ -117,7 +118,7 @@ export function recordChannelAssignment(
   input: NewRosterChannelAssignment,
   db: TransactingExecutor
 ): RosterChannelAssignment {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const byPerson = tx
       .select()
       .from(rosterChannelAssignments)

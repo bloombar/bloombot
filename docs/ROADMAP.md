@@ -113,7 +113,7 @@ was already using.
 
 ## Phase 10 — Knowledge files & instructions
 
-**In scope:** FILE-1..5, FILE-7, WEB-18, MDL-8, WEB-19
+**In scope:** FILE-1..5, FILE-7, FILE-8, WEB-18, MDL-8, WEB-19
 
 WEB-19 is the third instance of the same shape in this phase, found while building the second:
 the versioned-instruction actions were built and reviewed, and the panel never called them.

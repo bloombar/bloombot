@@ -20,10 +20,14 @@ export interface PostJsonOptions {
    * FILE-1..3 — `postJson` now backs every JSON call this package makes,
    * not only a `POST`: `deleteFileEndpoint`/`deleteVectorStoreFile`
    * (`files.ts`) reach the same abort/timeout/JSON-parse machinery with a
-   * `DELETE`. Defaults to `'POST'` so every existing caller (`client.ts`,
+   * `DELETE`. FILE-8 widens this again to `'GET'` —
+   * `attachFileToVectorStore`'s own poll of `GET
+   * /vector_stores/{id}/files/{file_id}` reaches the same
+   * abort/timeout/JSON-parse machinery too, rather than a second fetch path.
+   * Defaults to `'POST'` so every existing caller (`client.ts`,
    * `conversations.ts`) is unaffected.
    */
-  method?: 'POST' | 'DELETE'
+  method?: 'POST' | 'DELETE' | 'GET'
 }
 
 export interface JsonResponse {
@@ -74,8 +78,17 @@ export async function postJson(
           // A `DELETE` call carries no body (`files.ts`'s own callers pass
           // `undefined` for `requestBody`) — `JSON.stringify(undefined)` is
           // itself `undefined`, which `fetch` already treats as "no body",
-          // so nothing more than this needs to change for that case.
-          body: JSON.stringify(requestBody),
+          // so nothing more than this needs to change for that case. A
+          // `GET` (FILE-8's poll) also sends no body — real API semantics,
+          // not something the runtime's own `fetch` would otherwise refuse
+          // (it does not reject a `GET` carrying one). The `body` key is
+          // omitted entirely for a `GET`, rather than set to `undefined`,
+          // because `exactOptionalPropertyTypes` treats an explicit `body:
+          // undefined` differently from no `body` key at all — the real
+          // type change this widening needed.
+          ...(options.method === 'GET'
+            ? {}
+            : { body: JSON.stringify(requestBody) }),
           signal: controller.signal,
         }
       )

@@ -8,7 +8,7 @@
  * "not found" for a foreign id the same way every scoped repo already
  * does, and a job's own `result` carrying its report).
  *
- * **`courseAttachments.attach` (FILE-1, FILE-2):**
+ * **`courseAttachments.attach` (FILE-1, FILE-2, FILE-8):**
  *  1. Read the attachment's row and its bytes (`@bloombot/db`'s
  *     `createFilesystemAttachmentStorage`) — both already written by
  *     `@bloombot/actions`' `courseAttachments.attach` action before this job
@@ -21,6 +21,10 @@
  *     `providerFileId` `null` forever, which is exactly what let
  *     `courseAttachments.detach`'s own `if (attachment.providerFileId)`
  *     guard skip both provider deletes for the row that most needed them.
+ *     FILE-8: a *retry* of this same job reads that recorded id back and
+ *     skips this upload entirely — a retry after a failed *attach* found
+ *     the provider had already accepted the upload; re-uploading only ever
+ *     produced an orphaned second file object for the same attachment.
  *  3. Resolve the vector store to attach it to: the course's own
  *     `vectorStoreId` when it already has one — hand-typed (D-3's escape
  *     hatch) or set by an earlier attachment, either way left alone — or a
@@ -182,18 +186,29 @@ export function createAttachCourseAttachmentHandler(
     let vectorStoreId: string
     let attached: AttachFileToVectorStoreResult
     try {
-      // Step 2 — upload.
-      fileId = await uploadFile(deps.openaiHttpOptions, {
-        filename: attachment.filename,
-        contentType: attachment.contentType,
-        bytes,
-      })
+      // Step 2 — upload. FILE-8: a retry of this job (JOB-2, after a
+      // *retryable* rejection from a later step) must not re-upload bytes
+      // the provider already has — `providerFileId` is recorded the
+      // instant the first upload succeeds (immediately below), so a retry
+      // that finds it already set reuses that id rather than uploading
+      // again. Without this, five attempts uploaded the same file five
+      // times, each one an orphaned object on the provider that nothing
+      // local would ever delete (this file's own module comment describes
+      // the same shape for `courseAttachments.detach`'s own guard).
+      fileId =
+        attachment.providerFileId ??
+        (await uploadFile(deps.openaiHttpOptions, {
+          filename: attachment.filename,
+          contentType: attachment.contentType,
+          bytes,
+        }))
 
       // Recorded the instant the upload succeeds, before either call below
       // runs (this file's own module comment, FILE-5's own "record the id
       // as soon as the upload succeeds") — so a rejection or an exhausted
       // retry on either of them still leaves `courseAttachments.detach`
-      // something to reach on the provider.
+      // something to reach on the provider. A no-op once already recorded
+      // (the reused-id path above).
       courseAttachments.recordProviderFileId(
         context.organizationId,
         attachmentId,

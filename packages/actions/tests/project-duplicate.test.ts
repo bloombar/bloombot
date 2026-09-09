@@ -487,6 +487,51 @@ describe('projects.duplicate', () => {
     expect(copiedCourses[0]?.discordServerId).toBe(serverId)
   })
 
+  // must-fix 3, review round 1 — the identical class of defect
+  // `discordServerId` had, above: ENRL-13/ENRL-14 were not on the field
+  // list this action otherwise copies faithfully, so a course rolled
+  // forward silently reverted to the defaults (self-enrol off, answer
+  // unenrolled on) even though its source had turned both the other way —
+  // students would message the copy all term and never appear on the roll,
+  // with nothing telling the instructor why.
+  it("copies a source course's own selfEnrolFromDiscord/answerUnenrolled, not merely every other field", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(
+      testDb.db,
+      'Fall 2026'
+    )
+    const source = courses.createCourse(
+      organizationId,
+      {
+        projectId,
+        title: 'Web Design',
+        enabled: true,
+        adminsRole: 'admins-wd-fa26',
+        studentsRole: 'students-wd-fa26',
+        selfEnrolFromDiscord: true,
+        answerUnenrolled: false,
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!source.ok) throw new Error('setup failed: unexpected conflict')
+
+    const result = await dispatch(
+      duplicateProjectAction,
+      { projectId, name: 'Spring 2027' },
+      { organizationId, db: testDb.db }
+    )
+
+    const copiedCourses = courses.listCourses(organizationId, testDb.db, {
+      projectId: result.project.id,
+    })
+    expect(copiedCourses).toHaveLength(1)
+    expect(copiedCourses[0]).toMatchObject({
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
+    })
+  })
+
   // FILE-6/MDL-9 (also-fix, coordinator round 2 rework): a source course's
   // own websites were dropped the same way `discordServerId` was before
   // the fix above — rolling a term forward silently lost every course's

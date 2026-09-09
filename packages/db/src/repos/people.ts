@@ -872,16 +872,18 @@ export function mergePeople(
 
     // ENRL-13 — self-enrolment intents. The same reason enrolments, just
     // above, have to move rather than stay behind: `/discord/confirm`
-    // redeems intents against `pending.survivorPersonId` — the *bare*
-    // person `/discord/begin` mints before OAuth ever runs, which becomes
-    // the merge's own survivor here (`connectOrMerge`'s own doc comment,
-    // `@bloombot/auth`'s `person-link.ts`) — not against whichever identity
-    // the message that recorded the intent happened to arrive under. Left
-    // behind on the loser, an intent recorded by a student's very first
-    // message would never be found by the redemption sweep that runs the
-    // moment they actually connect, silently defeating ENRL-13 for exactly
-    // the ordering ("message, then connect") its own SPEC text calls out
-    // first.
+    // redeems intents against whichever id actually survives the whole
+    // connect, once every attach-or-merge step has run
+    // (`routes/person-link.ts#attachWebIdentityOrMerge`'s own doc comment —
+    // corrected by must-fix 2, review round 1, which found that id is not
+    // always `pending.survivorPersonId`: that function's own merge fallback
+    // can tombstone it too) — not against whichever identity the message
+    // that recorded the intent happened to arrive under. Left behind on a
+    // loser this function does not move it off of, an intent recorded by a
+    // student's very first message would never be found by the redemption
+    // sweep that runs the moment they actually connect, silently defeating
+    // ENRL-13 for exactly the ordering ("message, then connect") its own
+    // SPEC text calls out first.
     const loserIntents = tx
       .select()
       .from(courseSelfEnrolmentIntents)

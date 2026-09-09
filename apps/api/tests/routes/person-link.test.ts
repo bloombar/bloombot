@@ -42,7 +42,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
-import { issueMcpPersonLinkToken } from '@bloombot/auth'
+import { beginDiscordPersonLink, issueMcpPersonLinkToken } from '@bloombot/auth'
 import {
   courses,
   enrolments,
@@ -1244,6 +1244,129 @@ describe('ENRL-13: connecting redeems a self-enrolment intent', () => {
     expect(logger.errorCalls.length).toBeGreaterThan(0)
 
     redeemSpy.mockRestore()
+  })
+
+  // must-fix 2, review round 1 — both reviewers found this independently:
+  // `attachWebIdentityOrMerge`'s own merge fallback (two concurrent
+  // `/discord/begin` calls for one account) keeps whichever person already
+  // held the account's `web` identity, not `pending.survivorPersonId` — so
+  // redeeming against that id blindly finds nothing once this branch fires.
+  // Fails without the fix: the intent's course never gets an active
+  // enrolment, because the sweep ran against the tombstoned id.
+  it("survives attachWebIdentityOrMerge's own merge fallback — two Discord identities racing to claim the same account's web identity", async () => {
+    testDb = createTestDatabase()
+    // An owner testing their own connect flow twice (D-44's own allowance
+    // for a caller with membership) — the same account both attempts
+    // belong to, standing in for "a double click, two tabs"
+    // (`attachWebIdentityOrMerge`'s own doc comment).
+    const org = seedSignedInCaller(testDb.db)
+    const { courseId } = seedSelfEnrolCourse(testDb.db, org.organizationId)
+
+    // The student already asked this course under a Discord identity
+    // before ever connecting — the intent this test proves survives the
+    // race.
+    const discordExternalId = `discord-${randomUUID()}`
+    const discordPerson = people.resolvePersonByIdentity(
+      org.organizationId,
+      { surface: 'discord', externalId: discordExternalId },
+      testDb.db
+    )
+    selfEnrolment.recordSelfEnrolmentIntent(
+      org.organizationId,
+      { courseId, personId: discordPerson.id },
+      testDb.db
+    )
+
+    const pendingDiscordConnects = new Map()
+
+    // Attempt 1 — an ordinary begin/preview/confirm for a *different*,
+    // never-before-seen Discord identity: attaches the account's own
+    // `web` identity to its own bare survivor first, so that survivor
+    // becomes the `existingOwner` attempt 2's own `attachWebIdentityOrMerge`
+    // has to merge into.
+    const otherDiscordExternalId = `discord-other-${randomUUID()}`
+    const app1 = await buildTestApp(testDb.db, {
+      discordRestClient: createFakeDiscordRestClient({
+        currentUser: { id: otherDiscordExternalId, username: 'other-tab' },
+      }),
+      pendingDiscordConnects,
+    })
+    const { state: state1 } = await beginConnect(app1, org.organizationId, org)
+    await request(app1)
+      .post(`/organizations/${org.organizationId}/person-link/discord/preview`)
+      .set('Cookie', org.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ code: 'the-code-1', state: state1 })
+    const confirm1 = await request(app1)
+      .post(`/organizations/${org.organizationId}/person-link/discord/confirm`)
+      .set('Cookie', org.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ state: state1 })
+    expect(confirm1.status).toBe(200)
+
+    // Attempt 2 — a genuinely second bare survivor, the shape a truly
+    // concurrent second `/discord/begin` call would have minted before
+    // either attempt's own OAuth completed — inserted directly into the
+    // same shared, in-memory map both apps read, the same "simulate the
+    // precondition, not the mechanism under test" device this file's own
+    // `seedConnectedWebPerson` already uses elsewhere; the reuse-scan
+    // `resolveOrCreateBareDiscordSurvivor` runs on an ordinary sequential
+    // call is not what this test is about.
+    const secondSurvivor = people.createPerson(
+      org.organizationId,
+      {},
+      testDb.db
+    )
+    // A real challenge row (`person_link_challenges`), not a bare map
+    // entry — `/discord/preview` reads it back through
+    // `peekDiscordPersonLinkCodeVerifier`, the same as any other attempt's
+    // own `state`.
+    const begun2 = beginDiscordPersonLink(
+      org.organizationId,
+      secondSurvivor.id,
+      testDb.db
+    )
+    pendingDiscordConnects.set(begun2.state, {
+      accountId: org.accountId,
+      organizationId: org.organizationId,
+      survivorPersonId: secondSurvivor.id,
+      expiresAt: begun2.expiresAt,
+    })
+    const state2 = begun2.state
+    const app2 = await buildTestApp(testDb.db, {
+      discordRestClient: createFakeDiscordRestClient({
+        currentUser: { id: discordExternalId, username: 'the-student' },
+      }),
+      pendingDiscordConnects,
+    })
+    await request(app2)
+      .post(`/organizations/${org.organizationId}/person-link/discord/preview`)
+      .set('Cookie', org.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ code: 'the-code-2', state: state2 })
+    const confirm2 = await request(app2)
+      .post(`/organizations/${org.organizationId}/person-link/discord/confirm`)
+      .set('Cookie', org.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ state: state2 })
+    expect(confirm2.status).toBe(200)
+
+    // The intent survives — redeemed against whichever id actually
+    // survived the whole connect, not the tombstoned `secondSurvivor.id`.
+    const finalPerson = people.resolveIdentity(
+      org.organizationId,
+      { surface: 'discord', externalId: discordExternalId },
+      testDb.db
+    )
+    if (!finalPerson) throw new Error('setup failed: identity not resolved')
+    expect(
+      enrolments.getActiveEnrolment(
+        org.organizationId,
+        courseId,
+        finalPerson.id,
+        testDb.db
+      )
+    ).toMatchObject({ source: 'self_enrolment' })
   })
 })
 

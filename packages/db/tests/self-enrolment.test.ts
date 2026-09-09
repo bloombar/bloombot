@@ -308,4 +308,51 @@ describe('self-enrolment repo (ENRL-13)', () => {
       enrolments.getEnrolment(organizationId, first.id, testDb.db)
     ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })
   })
+
+  // --- TEN-2: recordSelfEnrolmentIntent refuses a foreign course/person,
+  // the same guard `admit` runs for every `enrolVia*` (cheap-fix 5, review
+  // round 1) -----------------------------------------------------------
+
+  it('recordSelfEnrolmentIntent refuses a courseId that does not belong to this organization', () => {
+    testDb = createTestDatabase()
+    const { course: courseA } = seedOrganizationWithSelfEnrolCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithSelfEnrolCourse(testDb)
+    const personInOrgB = people.createPerson(orgB, {}, testDb.db)
+
+    expect(
+      selfEnrolment.recordSelfEnrolmentIntent(
+        orgB,
+        { courseId: courseA.id, personId: personInOrgB.id },
+        testDb.db
+      )
+    ).toBeUndefined()
+    const rows = testDb.db.$client
+      .prepare(
+        'select count(*) as count from course_self_enrolment_intents where organization_id = ?'
+      )
+      .get(orgB) as { count: number }
+    expect(rows.count).toBe(0)
+  })
+
+  it('recordSelfEnrolmentIntent refuses a personId that does not belong to this organization', () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, course: courseA } =
+      seedOrganizationWithSelfEnrolCourse(testDb)
+    const { organizationId: orgB } = seedOrganizationWithSelfEnrolCourse(testDb)
+    const personInOrgB = people.createPerson(orgB, {}, testDb.db)
+
+    expect(
+      selfEnrolment.recordSelfEnrolmentIntent(
+        orgA,
+        { courseId: courseA.id, personId: personInOrgB.id },
+        testDb.db
+      )
+    ).toBeUndefined()
+    const rows = testDb.db.$client
+      .prepare(
+        'select count(*) as count from course_self_enrolment_intents where organization_id = ?'
+      )
+      .get(orgA) as { count: number }
+    expect(rows.count).toBe(0)
+  })
 })

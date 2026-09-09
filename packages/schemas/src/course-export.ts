@@ -63,6 +63,15 @@ export const exportedCourseSchema = z.strictObject({
   instructions: z.string().nullable(),
   maxRequestsPerDay: z.number().int().positive().nullable(),
   conversationScope: z.enum(['course', 'course_surface']),
+  // ENRL-13/ENRL-14 — both `.optional()`, not required: a file exported
+  // before this slice existed carries neither key at all, and the module's
+  // own convention (this file's own header comment) is that an added field
+  // is optional rather than a version bump, so an older file "simply
+  // omits" it. `@bloombot/actions`' own `courses.import` is what decides
+  // what an absent value means on the way in (the same defaults
+  // `schema.ts`'s own database columns carry — today's behaviour).
+  selfEnrolFromDiscord: z.boolean().optional(),
+  answerUnenrolled: z.boolean().optional(),
   categories: z.array(categorySchema),
   /** FILE-6/MDL-9 — the course's own websites, as normalized domains. */
   websites: z.array(z.string().min(1)),

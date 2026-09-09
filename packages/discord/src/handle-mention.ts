@@ -37,6 +37,17 @@
  * (`false`/`true` respectively, `schema.ts`'s own comment on why) — this
  * file changes nothing until an instructor ticks one of the two checkboxes
  * on the course's own General tab.
+ *
+ * **The `answerUnenrolled: false` refusal only fires for a connected
+ * person (must-fix 1, review round 1).** An unconnected person cannot be
+ * enrolled yet by definition, so this refusal would tell them only what
+ * they cannot act on — and, on a course also carrying `selfEnrolFromDiscord`,
+ * it pre-empted `answerQuestion`'s own LINK-1 `not-connected` result before
+ * that function ever ran, silencing the very connect invitation the intent
+ * this message just recorded depends on someone reading. An unconnected
+ * person falls through to `answerQuestion` and gets the ordinary connect
+ * invitation instead, exactly as they would on a course with this setting
+ * left on.
  */
 
 import {
@@ -563,11 +574,24 @@ export async function handleMention(
   // already takes. Run *after* the ENRL-13 admission above, not before — a
   // student that admission just enrolled already holds an active enrolment
   // by the time this checks, so they are answered, not refused for not yet
-  // being enrolled. Applies regardless of whether the person is connected:
-  // ENRL-14's own text is "everybody else," and an unconnected person who
-  // holds no active enrolment either (this course does not self-enrol, or
-  // they have not messaged before) is exactly "everybody else."
-  if (course && !course.answerUnenrolled) {
+  // being enrolled.
+  //
+  // **Gated on `person.connectedAt !== null` (must-fix 1, review round 1).**
+  // An unconnected person cannot hold an enrolment yet by definition — the
+  // only way ENRL-13 admits one is on a message from someone already
+  // connected (`enrolViaSelfEnrolment`, above) or on redeeming an intent
+  // *after* connecting (`repos/self-enrolment.ts`). Refusing them here for
+  // "not enrolled" told them the one thing they cannot act on, and — worse,
+  // on a course with `selfEnrolFromDiscord` also on — pre-empted
+  // `answerQuestion`'s own `not-connected` result entirely, so the connect
+  // invitation that is the only way they could *become* enrolled never
+  // reached them: the intent this same message just recorded, above, would
+  // never be redeemed by anyone who was never told to connect. Falling
+  // through here instead lets `answerQuestion` reach its own LINK-1 gate
+  // and send the ordinary connect invitation — the same reply an
+  // unconnected person on a course with this setting left on has always
+  // gotten (`not-connected`, below), unchanged by ENRL-14 either way.
+  if (course && !course.answerUnenrolled && person.connectedAt !== null) {
     const activeEnrolment = enrolments.getActiveEnrolment(
       organizationId,
       courseId,

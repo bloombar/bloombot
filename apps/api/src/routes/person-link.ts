@@ -376,13 +376,28 @@ function attachWithoutMembershipIsForbidden(
  * behind. The same attach-or-merge shape `@bloombot/auth`'s own
  * `connectOrMerge` already uses, composed here from the same two exported
  * primitives rather than duplicated as a new one.
+ *
+ * **Returns the id that actually survives — not always `survivorId`
+ * (must-fix 2, review round 1).** `people.ts#mergePeople`'s own signature
+ * is `(organizationId, survivorPersonId, loserPersonId, db)`, and the merge
+ * branch here calls it as `mergePeople(organizationId, existingOwner.id,
+ * survivorId, db)` — `existingOwner`, the account's *already-registered*
+ * `web` identity, is kept, and `survivorId` (this function's own parameter
+ * — the Discord-proved survivor the caller has been carrying) is the one
+ * merged away. A caller that went on using `survivorId` after this ran
+ * would be reading and writing against a tombstoned id the instant this
+ * branch fired — exactly what `redeemSelfEnrolmentIntentsSafely` did before
+ * this fix, silently finding no intents to redeem for a person who had just
+ * been merged out from under it. Every caller of this function must use
+ * its return value for anything downstream, not its own `survivorId`
+ * argument.
  */
 function attachWebIdentityOrMerge(
   organizationId: string,
   survivorId: string,
   accountId: string,
   db: Database
-): void {
+): string {
   const identity = { surface: 'web' as const, externalId: accountId }
   const attached = people.connectIdentity(
     organizationId,
@@ -390,10 +405,11 @@ function attachWebIdentityOrMerge(
     identity,
     db
   )
-  if (attached) return
+  if (attached) return survivorId
   const existingOwner = people.resolveIdentity(organizationId, identity, db)
-  if (!existingOwner || existingOwner.id === survivorId) return
+  if (!existingOwner || existingOwner.id === survivorId) return survivorId
   people.mergePeople(organizationId, existingOwner.id, survivorId, db)
+  return existingOwner.id
 }
 
 /**
@@ -608,7 +624,11 @@ export function buildPersonLinkRouter(
     // Only now — Discord's own OAuth has genuinely proved this identity,
     // and `connectIdentity` has already set `connectedAt` for that real
     // reason — give the survivor the account's own `web` identity too.
-    attachWebIdentityOrMerge(
+    // must-fix 2, review round 1 — redeem against the id that actually
+    // survives `attachWebIdentityOrMerge`, not `pending.survivorPersonId`
+    // itself: that function's own merge fallback can tombstone it (its own
+    // doc comment has the exact shape).
+    const finalPersonId = attachWebIdentityOrMerge(
       organizationId,
       pending.survivorPersonId,
       accountId,
@@ -618,7 +638,7 @@ export function buildPersonLinkRouter(
     // file's own `redeemSelfEnrolmentIntentsSafely` doc comment.
     redeemSelfEnrolmentIntentsSafely(
       organizationId,
-      pending.survivorPersonId,
+      finalPersonId,
       deps.db,
       deps.logger
     )

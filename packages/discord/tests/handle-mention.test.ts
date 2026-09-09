@@ -1054,6 +1054,77 @@ describe('handleMention — ENRL-14: a course decides whether it answers a stude
       )
     ).toBeUndefined()
   })
+
+  // must-fix 1, review round 1 — both reviewers found this independently:
+  // an unconnected person cannot be enrolled yet by definition, so refusing
+  // them for "not enrolled" tells them the one thing they cannot act on.
+  // Isolates the ENRL-14 gate alone (selfEnrolFromDiscord left off) — fails
+  // without the `person.connectedAt !== null` guard: before the fix, this
+  // got the `not-enrolled` refusal instead of the ordinary connect
+  // invitation.
+  it('an unconnected person still gets the connect invitation, not the not-enrolled refusal, while answerUnenrolled is off', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      answerUnenrolled: false,
+      connectDefaultAuthor: false,
+    })
+    const { deps, model, reply } = makeDeps(testDb, {
+      connectUrl: 'https://e2e.bloombot.test',
+    })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'invited-to-connect' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain('https://e2e.bloombot.test')
+    expect(reply.sent[0]).not.toMatch(/not enrolled/i)
+  })
+
+  // must-fix 1's own headline case: both settings on together, unconnected.
+  // Before the fix, the `not-enrolled` refusal pre-empted `answerQuestion`
+  // entirely, so the connect invitation the intent this same message
+  // records depends on someone reading never reached the student — the
+  // automatic admission the instructor turned on could never fire for
+  // anyone not already connected. This is the exact gap both reviewers
+  // named; the existing ENRL-13 "records an intent" test above runs with
+  // `answerUnenrolled` at its own default (`true`), so it never exercised
+  // this combination.
+  it('a course with self-enrol on and answer-unenrolled off still invites an unconnected person to connect, and still records the intent', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      {
+        selfEnrolFromDiscord: true,
+        answerUnenrolled: false,
+        connectDefaultAuthor: false,
+      }
+    )
+    const { deps, model, reply } = makeDeps(testDb, {
+      connectUrl: 'https://e2e.bloombot.test',
+    })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'invited-to-connect' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toContain('https://e2e.bloombot.test')
+    expect(reply.sent[0]).not.toMatch(/not enrolled/i)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    const rows = testDb.db.$client
+      .prepare(
+        'select count(*) as count from course_self_enrolment_intents where organization_id = ? and course_id = ? and person_id = ? and redeemed_at is null'
+      )
+      .get(organizationId, courseId, person.id) as { count: number }
+    expect(rows.count).toBe(1)
+  })
 })
 
 describe('handleMention — SURF-5: the reply is sent through the port, and a long answer is split', () => {

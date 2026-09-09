@@ -219,6 +219,23 @@ describe('apps/web bundle (WEB-6)', () => {
       expect(html).toContain('What it does')
     })
 
+    it('never bakes a build-time env-failure message into the prerendered homepage', () => {
+      // This build sets no `VITE_GOOGLE_CLIENT_ID` (this test file's own
+      // beforeAll never does) — exactly the build the reviewer reproduced
+      // the regression on. `SignIn.tsx`'s "not configured" text is accurate
+      // and expected in the *real client bundle* (a genuine visitor's
+      // browser is right to be told that), but must never reach the static
+      // HTML a non-JavaScript crawler reads — Google's own OAuth reviewer
+      // fetches `/` exactly that way (`docs/DECISIONS.md`'s prerendering
+      // entry, and `Home.tsx`'s own `googleClientId` doc comment, have the
+      // full reasoning for the neutral-shell fix this pins).
+      const html = readFileSync(join(DIST_DIR, 'index.html'), 'utf8')
+      expect(html.toLowerCase()).not.toContain('not configured')
+      // The neutral shell `Home.tsx` forces during prerendering instead —
+      // proof this is the fix, not merely the absence of the failure text.
+      expect(html).toContain('Agree to the documents above')
+    })
+
     it('writes a real, standalone document at dist/privacy/index.html', () => {
       const path = join(DIST_DIR, 'privacy', 'index.html')
       const html = readFileSync(path, 'utf8')

@@ -124,7 +124,10 @@ export function prerenderPlugin(): Plugin {
         // `Record<string, unknown>`; these two interfaces describe only the
         // shape this function actually calls.
         const { Home } = homeModule as {
-          Home: (props: { onSignedIn: () => void }) => ReactElement
+          Home: (props: {
+            onSignedIn: () => void
+            googleClientId?: string
+          }) => ReactElement
         }
         const { StaticDocument } = staticDocumentModule as {
           StaticDocument: (props: {
@@ -145,7 +148,28 @@ export function prerenderPlugin(): Plugin {
         const template = readFileSync(join(distDir, 'index.html'), 'utf8')
 
         const homeHtml = renderToStaticMarkup(
-          createElement(Home, { onSignedIn: () => {} })
+          createElement(Home, {
+            onSignedIn: () => {},
+            // A placeholder, not this deployment's real `VITE_GOOGLE_CLIENT_ID`
+            // (which may well be unset in the environment this build runs in,
+            // e.g. before production secrets are configured, or in a CI/test
+            // build like `tests/bundle.test.ts`'s own). `SignIn.tsx` renders a
+            // "Google sign-in is not configured for this deployment" message
+            // when it has no client id — accurate for a real, JavaScript-
+            // running browser evaluating its own build-time env, but exactly
+            // the "deployment failure" text that must never reach a
+            // non-JavaScript crawler's static HTML (`Home.tsx`'s own
+            // `googleClientId` doc comment; `docs/DECISIONS.md`'s
+            // prerendering entry has the full reasoning). Forcing this truthy
+            // renders the neutral "agree to the documents" shell instead —
+            // the same shell a real, correctly-configured deployment shows
+            // before its own script has loaded — and the client-side render
+            // that replaces this markup on mount (`main.tsx`'s `createRoot`,
+            // not `hydrateRoot`) uses the real client bundle's own env
+            // regardless, so a genuinely unconfigured deployment still tells
+            // an actual visitor the truth once JavaScript runs.
+            googleClientId: 'prerender-placeholder-client-id',
+          })
         )
         writeFileSync(
           join(distDir, 'index.html'),

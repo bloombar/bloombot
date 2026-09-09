@@ -137,9 +137,16 @@ describe('/privacy and /terms (published legal documents)', () => {
       )
     })
 
-    it('gives a concrete deletion path for a Google-linked account', () => {
+    it('gives a concrete deletion path for a Google-linked account, without promising a finer-grained one than the software has', () => {
+      // The manual path is real (tenant-level deletion, described below in
+      // "How long we keep it"), but it deletes the whole organization, not
+      // only the Google-linked account — this must not read as a per-account
+      // delete button the platform does not have.
       expect(flat(privacyDocument.body)).toMatch(
-        /instructor account, or your whole organization, be deleted/i
+        /ask for your whole organization to be deleted/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(
+        /no button that deletes only your account/i
       )
     })
   })

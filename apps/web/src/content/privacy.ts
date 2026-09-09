@@ -133,12 +133,15 @@ never has been.
 
 **Retention and deletion.** Like every other account record, your Google
 account data is kept for as long as the service runs, under the same "How
-long we keep it" rule below. Unlike a student's conversation, this one has a
-concrete answer: write to ${OPERATOR.contactEmail} and ask that your
-instructor account, or your whole organization, be deleted, and the operator
-can act on it — the same tenant-level deletion this policy already describes
-the platform as capable of. It removes your Google account data along with
-everything else on the account.
+long we keep it" rule below. There is no button that deletes only your
+account or only its Google-derived data — but there is one concrete,
+manual path an operator can take on request: write to
+${OPERATOR.contactEmail} and ask for your whole organization to be deleted.
+That is the same tenant-level deletion this policy describes below as the
+platform's only real deletion capability, not a finer-grained one invented
+for this section — and it removes your Google account data along with
+everything else in the organization, at the cost of removing everything
+else in the organization too.
 
 ## How long we keep it — and what we cannot yet offer
 
@@ -166,8 +169,9 @@ is before students start using the service.
 
 Every connection to the service, including sign-in and every request the
 Google sign-in flow makes, is encrypted in transit (HTTPS/TLS) — the operator
-terminates TLS in front of the service, and it does not accept a plain,
-unencrypted connection. Sign-in links are single-use bearer credentials,
+terminates TLS in front of the service, and a plain HTTP request is redirected
+to HTTPS rather than answered directly. Sign-in links are single-use bearer
+credentials,
 stored hashed and short-lived. Session cookies are signed. Credentials the
 service needs live in server-side configuration and are never sent to a
 browser. Every request that reads or changes something checks that the

@@ -8,7 +8,7 @@
  * `docs/ARCHITECTURE.md` describes for `packages/openai`.
  */
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, stripTrailingSlashes } from '@bloombot/config'
 
 export interface BuildDiscordAuthorizationUrlInput {
   /** Defaults to `CONFIG.DISCORD_OAUTH_BASE` (QA-2) — read here, at call time, not at module load (PLAT-5). */
@@ -35,21 +35,6 @@ export interface BuildDiscordAuthorizationUrlInput {
    * to verify it actually administers the one being installed into.
    */
   scope?: string
-}
-
-/**
- * TEN-4 — exported so `apps/api/src/index.ts` can apply the same
- * normalisation to `PUBLIC_APP_URL` once, at the point it is read, rather
- * than leaving a second private copy of this one-line rule beside it. An
- * operator-supplied `PUBLIC_APP_URL` with a trailing slash
- * (`https://host/`) otherwise survives unnormalised into whatever gets
- * built from it (`discordRedirectUri`, `buildSignInLink`), and for the
- * redirect URI specifically produces `https://host//discord/callback` —
- * which Discord rejects outright as `Invalid OAuth2 redirect_uri`, with a
- * URL that looks correct at a glance.
- */
-export function stripTrailingSlashes(url: string): string {
-  return url.replace(/\/+$/, '')
 }
 
 /** Build the URL a signed-in caller is sent to Discord's own consent screen through. */

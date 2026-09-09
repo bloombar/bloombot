@@ -29,10 +29,7 @@ import {
   runMigrations,
   type Database,
 } from '@bloombot/db'
-import {
-  createDiscordRestClient,
-  stripTrailingSlashes,
-} from '@bloombot/discord-rest'
+import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createAdmissionGate } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
 import { createOpenAiModelClient } from '@bloombot/openai'
@@ -124,18 +121,18 @@ async function main(): Promise<void> {
   const logsDir = CONFIG.LOGS_DIR
   const databasePath = CONFIG.DATABASE_PATH
   const port = CONFIG.API_PORT
-  // TEN-4 — normalised once, here, rather than at each of the two places
-  // below that build a URL from it (`buildSignInLink` and
-  // `discordRedirectUri`): an operator-supplied `PUBLIC_APP_URL` with a
-  // trailing slash (`https://host/`) used to survive unnormalised into
-  // `discordRedirectUri`, producing `https://host//discord/callback` — a
-  // URI that can never match one registered in the Discord Developer
-  // Portal, and fails on the consent screen with exactly
-  // `Invalid OAuth2 redirect_uri` (a URL that "looks correct" at a
-  // glance). `stripTrailingSlashes` already existed for the same reason on
-  // `DISCORD_OAUTH_BASE` (`packages/discord-rest/src/authorize-url.ts`);
-  // exported from there rather than duplicated here.
-  const publicAppUrl = stripTrailingSlashes(CONFIG.PUBLIC_APP_URL)
+  // TEN-4 — `CONFIG.PUBLIC_APP_URL` is normalised in the schema itself
+  // now (`packages/config/src/env.ts`'s own `stripTrailingSlashes`
+  // transform), so every reader — this one, and `apps/bot`'s own LINK-2
+  // connect link — already gets a value with no trailing slash. Read
+  // directly, with no second local strip: an operator-supplied
+  // `PUBLIC_APP_URL` with a trailing slash (`https://host/`) used to
+  // survive unnormalised into `discordRedirectUri`, below, producing
+  // `https://host//discord/callback` — a URI that can never match one
+  // registered in the Discord Developer Portal, and fails on the consent
+  // screen with exactly `Invalid OAuth2 redirect_uri` (a URL that "looks
+  // correct" at a glance).
+  const publicAppUrl = CONFIG.PUBLIC_APP_URL
   const nodeEnv = CONFIG.NODE_ENV
   // FILE-1..5 — read once here, alongside every other `CONFIG` value this
   // process reads at startup, and threaded to `buildApp` rather than left
@@ -204,7 +201,7 @@ async function main(): Promise<void> {
   // TEN-4 — makes the resolved redirect URI discoverable without reading
   // source: `Invalid OAuth2 redirect_uri` on the consent screen means this
   // exact string is not registered under OAuth2 → Redirects for
-  // `discordClientId` in the Discord Developer Portal, not that it is
+  // `BOT_APP_ID` in the Discord Developer Portal, not that it is
   // malformed — logged once, here, alongside every other piece of startup
   // config this process already logs, rather than left for an operator to
   // reconstruct from `PUBLIC_APP_URL` by hand. No secret in it.

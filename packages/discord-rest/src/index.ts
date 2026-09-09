@@ -14,10 +14,7 @@ export {
   type UnresolvedRoleEntry,
 } from './client.js'
 
-export {
-  buildDiscordAuthorizationUrl,
-  stripTrailingSlashes,
-} from './authorize-url.js'
+export { buildDiscordAuthorizationUrl } from './authorize-url.js'
 export type { BuildDiscordAuthorizationUrlInput } from './authorize-url.js'
 
 export { administersGuild, type DiscordGuildSummary } from './permissions.js'

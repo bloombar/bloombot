@@ -82,7 +82,11 @@ describe('ScaffoldButton (SRV-6)', () => {
     getJobStatus.mockResolvedValue(job({ status: 'pending' }))
 
     renderWithModal(
-      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        onConnectDiscord={vi.fn()}
+      />
     )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
@@ -104,6 +108,7 @@ describe('ScaffoldButton (SRV-6)', () => {
         courseId="course-1"
         pollIntervalMs={10}
         stillQueuedHintAfterMs={30}
+        onConnectDiscord={vi.fn()}
       />
     )
     fireEvent.click(
@@ -141,6 +146,7 @@ describe('ScaffoldButton (SRV-6)', () => {
         courseId="course-1"
         pollIntervalMs={10}
         stillQueuedHintAfterMs={20}
+        onConnectDiscord={vi.fn()}
       />
     )
     fireEvent.click(
@@ -169,6 +175,7 @@ describe('ScaffoldButton (SRV-6)', () => {
         organizationId="org-1"
         courseId="course-1"
         pollIntervalMs={10}
+        onConnectDiscord={vi.fn()}
       />
     )
     fireEvent.click(
@@ -193,7 +200,11 @@ describe('ScaffoldButton (SRV-6)', () => {
     )
 
     renderWithModal(
-      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        onConnectDiscord={vi.fn()}
+      />
     )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
@@ -209,7 +220,11 @@ describe('ScaffoldButton (SRV-6)', () => {
     )
 
     renderWithModal(
-      <ScaffoldButton organizationId="org-1" courseId="course-1" />
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        onConnectDiscord={vi.fn()}
+      />
     )
     fireEvent.click(
       screen.getByRole('button', { name: 'Create Discord channels' })
@@ -306,5 +321,41 @@ describe('ScaffoldButton (SRV-6)', () => {
       expect(onConnectDiscord).not.toHaveBeenCalled()
       expect(scaffoldCourseDiscord).not.toHaveBeenCalled()
     })
+  })
+
+  // Rework round 1, cheap-fix 4 — the fallback branch (a failed
+  // `listDiscordServers` read must not block scaffolding) had no test of
+  // its own: flipping `hasActiveBinding = true` in that `catch` to `false`
+  // would show "Connect a Discord server first" to every organization on a
+  // transient 401/network blip, and every other case in this file would
+  // still pass.
+  it('a failed listDiscordServers read falls back to attempting the scaffold, not the confirmation', async () => {
+    listDiscordServers.mockRejectedValue(
+      new ApiError(401, { error: 'unauthenticated' })
+    )
+    scaffoldCourseDiscord.mockResolvedValue({ jobId: 'job-1' })
+    getJobStatus.mockResolvedValue(job({ status: 'pending' }))
+    const onConnectDiscord = vi.fn()
+
+    renderWithModal(
+      <ScaffoldButton
+        organizationId="org-1"
+        courseId="course-1"
+        onConnectDiscord={onConnectDiscord}
+      />
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create Discord channels' })
+    )
+
+    await waitFor(() =>
+      expect(scaffoldCourseDiscord).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Connect a Discord server first',
+      })
+    ).not.toBeInTheDocument()
+    expect(onConnectDiscord).not.toHaveBeenCalled()
   })
 })

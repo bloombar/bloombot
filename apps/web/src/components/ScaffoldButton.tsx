@@ -46,11 +46,13 @@ export interface ScaffoldButtonProps {
    * has no active Discord server binding, after the confirmation modal
    * below is accepted; `pages/CourseEditor.tsx` passes a handler that
    * navigates to the organization's Discord page, where `InstallButton`
-   * lives. Optional so a caller with no route access (a unit test, say)
-   * still gets a modal that explains the problem — it just has nowhere to
-   * send the click.
+   * lives. Required, not optional: an absent handler would leave "Connect
+   * a server" a dead end that closes the dialog and does nothing, which is
+   * worse than the opaque failed job this component exists to prevent —
+   * every real caller has a route to send the click to, and a test that
+   * does not care can pass `vi.fn()`.
    */
-  onConnectDiscord?: () => void
+  onConnectDiscord: () => void
   /** Test-only override of `DEFAULT_STILL_QUEUED_HINT_AFTER_MS`. */
   stillQueuedHintAfterMs?: number
   /** Test-only override of `DEFAULT_POLL_INTERVAL_MS`. */
@@ -189,7 +191,7 @@ export function ScaffoldButton({
             'This organization has no Discord server connected yet. Connect one before this course can create categories and channels.',
           confirmLabel: 'Connect a server',
         })
-        if (confirmed) onConnectDiscord?.()
+        if (confirmed) onConnectDiscord()
         return
       }
 

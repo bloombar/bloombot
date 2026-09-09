@@ -203,4 +203,51 @@ describe('apps/web bundle (WEB-6)', () => {
       }
     }
   })
+
+  // The public pages a signed-out visitor or crawler can reach are
+  // prerendered into real HTML at build time (`prerender-plugin.ts`,
+  // `docs/DECISIONS.md` D-89) — nested in this same `describe` rather than
+  // given its own top-level one so it reuses the one real `vite build` this
+  // file's own `beforeAll` already pays for, instead of racing a second
+  // build against the same `dist/` directory.
+  describe('prerendering the public pages (D-89)', () => {
+    it('is no longer an empty <div id="root"> at /', () => {
+      const html = readFileSync(join(DIST_DIR, 'index.html'), 'utf8')
+      expect(html).not.toContain('<div id="root"></div>')
+      // The homepage's own "what it does" heading — proof this is Home.tsx's
+      // real markup, not an arbitrary non-empty string.
+      expect(html).toContain('What it does')
+    })
+
+    it('writes a real, standalone document at dist/privacy/index.html', () => {
+      const path = join(DIST_DIR, 'privacy', 'index.html')
+      const html = readFileSync(path, 'utf8')
+
+      // A distinctive sentence from the privacy body — proof the policy's
+      // actual prose reached the built file, not merely *some* markup.
+      expect(html).toContain('An instructor can read their own students')
+      expect(html).toContain('<title>Privacy policy')
+      expect(html).toContain('rel="canonical"')
+      expect(statSync(path).size).toBeGreaterThan(1221)
+    })
+
+    it('writes a real, standalone document at dist/terms/index.html', () => {
+      const html = readFileSync(join(DIST_DIR, 'terms', 'index.html'), 'utf8')
+
+      // A distinctive sentence from the terms body.
+      expect(html).toContain('They are frequently wrong')
+      expect(html).toContain('<title>Terms &amp; conditions')
+      expect(html).toContain('rel="canonical"')
+    })
+
+    it('writes robots.txt and sitemap.xml pointing at the built pages', () => {
+      const robots = readFileSync(join(DIST_DIR, 'robots.txt'), 'utf8')
+      const sitemap = readFileSync(join(DIST_DIR, 'sitemap.xml'), 'utf8')
+
+      expect(robots).toContain('Allow: /')
+      expect(robots).toMatch(/Sitemap: https?:\/\/\S+\/sitemap\.xml/)
+      expect(sitemap).toContain('/privacy')
+      expect(sitemap).toContain('/terms')
+    })
+  })
 })

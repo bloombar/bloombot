@@ -79,6 +79,20 @@ export function Home({ onSignedIn }: HomeProps) {
           </p>
         </header>
 
+        {/* Sign-in sits directly under the header, above the explanation: a
+            visitor who already knows what this is should not have to scroll
+            past a description to get in. The page still describes the service
+            before anything else — the header does that — which is what
+            Google's homepage requirement actually asks for. */}
+        <section aria-labelledby="sign-in" className="mt-10">
+          <h2 id="sign-in" className="sr-only">
+            Sign in
+          </h2>
+          {/* Instructors sign in here; students reach the service through
+              Discord or an emailed invitation and never see this page. */}
+          <SignIn onSignedIn={onSignedIn} />
+        </section>
+
         <section aria-labelledby="what-it-does" className="mt-12">
           <h2
             id="what-it-does"
@@ -128,15 +142,6 @@ export function Home({ onSignedIn }: HomeProps) {
             set out the agreement. Both are drafts pending legal review, and
             both say so.
           </p>
-        </section>
-
-        <section aria-labelledby="sign-in" className="mt-12">
-          <h2 id="sign-in" className="sr-only">
-            Sign in
-          </h2>
-          {/* Instructors sign in here; students reach the service through
-              Discord or an emailed invitation and never see this page. */}
-          <SignIn onSignedIn={onSignedIn} />
         </section>
       </main>
 

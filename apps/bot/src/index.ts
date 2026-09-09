@@ -133,6 +133,10 @@ async function main(): Promise<void> {
   // LINK-2 — the panel's own address, read once here (the same "read CONFIG
   // once in main(), thread it through" discipline `admission`/`pricing`
   // already follow below): `@bloombot/discord` itself never reads `CONFIG`.
+  // TEN-4 — already normalised (no trailing slash) by `envSchema`'s own
+  // `PUBLIC_APP_URL` transform (`packages/config/src/env.ts`), so the
+  // connect link this builds can never double a slash the way it could
+  // before that normalisation moved into the schema itself.
   const connectUrl = CONFIG.PUBLIC_APP_URL
   const botToken = requireEnv('BOT_TOKEN')
   const openaiApiKey = requireEnv('OPENAI_API_KEY')

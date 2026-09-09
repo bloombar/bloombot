@@ -16,6 +16,24 @@ import { z } from 'zod'
 
 import { DEFAULT_PRICING_JSON } from './pricing.js'
 
+/**
+ * TEN-4 — every consumer of `PUBLIC_APP_URL` builds a URL by string
+ * concatenation (`apps/api`'s own `discordRedirectUri`/`buildSignInLink`,
+ * `apps/bot`'s own LINK-2 connect link), so a trailing slash here
+ * (`https://host/`) used to survive into each of them unnormalised,
+ * producing a doubled slash (`https://host//discord/callback`) that can
+ * never match anything registered — Discord rejects it outright as
+ * `Invalid OAuth2 redirect_uri`. Normalised once here, in the schema
+ * itself (`envSchema`'s own `PUBLIC_APP_URL`, below), rather than at each
+ * call site: every reader of `CONFIG.PUBLIC_APP_URL` gets the same
+ * already-normalised value, with nothing left for a new call site to
+ * forget. Exported so a unit test can pin the exact shape without
+ * validating a whole environment.
+ */
+export function stripTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
 /** A port number as it can appear in an environment variable: a decimal string. */
 const port = (defaultValue: number) =>
   z.coerce.number().int().min(1).max(65535).default(defaultValue)
@@ -48,8 +66,11 @@ export const envSchema = z.object({
   // reasoning — see this repository's `.gitignore`.
   ATTACHMENT_STORAGE_DIR: z.string().min(1).default('./data/attachments'),
 
-  // Public origin of the control panel, used to build links in outbound email.
-  PUBLIC_APP_URL: z.url(),
+  // Public origin of the control panel, used to build links in outbound email
+  // and the Discord OAuth2 redirect URI (`apps/api`) and LINK-2 connect links
+  // (`apps/bot`) — normalised (`stripTrailingSlashes`, above) so a trailing
+  // slash here can never produce a doubled slash in one of those.
+  PUBLIC_APP_URL: z.url().transform(stripTrailingSlashes),
 
   // Port the Express API listens on.
   API_PORT: port(3000),

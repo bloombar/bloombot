@@ -3490,7 +3490,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-2
   title: An export carries configuration, never people
@@ -3505,7 +3505,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-3
   title: An export names what it could not carry
@@ -3522,7 +3522,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-4
   title: A course is imported into a project the caller chooses
@@ -3537,7 +3537,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-5
   title: An imported course's title never collides with one already there
@@ -3554,7 +3554,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-6
   title: An imported course arrives disabled
@@ -3568,7 +3568,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-7
   title: An import is reported, not assumed
@@ -3582,7 +3582,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: PORT-8
   title: Export and import are actions like any other
@@ -3594,7 +3594,7 @@
   section: §35 Course Portability
   family: PORT
   phase: 24
-  status: In review
+  status: Done
   review: false
 - id: WEB-39
   title: A course is exported and imported from the panel
@@ -3609,5 +3609,5 @@
   section: §35 Course Portability
   family: WEB
   phase: 24
-  status: In review
+  status: Done
   review: false

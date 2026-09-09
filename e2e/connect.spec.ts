@@ -60,7 +60,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { requestSignInLink } from './support/sign-in.js'
 
 test('the connect screen asks a signed-out visitor to sign in, then redeems an MCP-issued token through the real API (LINK-6/8)', async ({
   page,
@@ -91,10 +91,7 @@ test('the connect screen asks a signed-out visitor to sign in, then redeems an M
     page.getByRole('heading', { name: 'Sign in to Bloombot' })
   ).toBeVisible()
 
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
+  const token = await requestSignInLink(page, email)
 
   // 3. Redeeming the link returns the browser to this same organization's
   //    own connect screen — not the ordinary shell. AUTH-6 rework: the

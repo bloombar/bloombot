@@ -60,7 +60,7 @@ import {
 } from '@bloombot/db'
 
 import { E2E_DATABASE_PATH } from './support/env.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { requestSignInLink } from './support/sign-in.js'
 
 /** The same hash `@bloombot/actions`' own (module-private) `hashSecret` computes — see this file's own module comment. */
 function hashSecret(secret: string): string {
@@ -150,10 +150,7 @@ test('a real visitor redeems a course join link, signing in along the way, and l
     page.getByRole('heading', { name: 'Sign in to Bloombot' })
   ).toBeVisible()
 
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
+  const token = await requestSignInLink(page, email)
 
   // 2. Redeeming the sign-in link returns the browser to this same join
   //    link (AUTH-6: the destination the *token itself* was issued for,
@@ -237,10 +234,7 @@ test('a sign-in that completes in a different browsing context than the one that
   // Tab A: follow the join link, signed out, and request a sign-in link —
   // exactly as far as a visitor gets before switching to their mail client.
   await page.goto(`/join/${secret}`)
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
+  const token = await requestSignInLink(page, email)
 
   // Tab B: a genuinely different browsing context — a fresh `Page` in the
   // same `BrowserContext`, sharing cookies (irrelevant here: neither tab has
@@ -277,9 +271,7 @@ test('redeeming the same join link a second time still lands the student in the 
   const { courseTitle, secret } = seedJoinLink(suffix)
 
   await page.goto(`/join/${secret}`)
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  const token = await readSignInToken(email)
+  const token = await requestSignInLink(page, email)
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByTestId('join-confirmation')).toContainText(
     `You're enrolled in ${courseTitle}.`
@@ -303,10 +295,7 @@ test('a never-issued secret is refused not-found-shaped, rather than crashing or
   const email = `join-bad-${suffix}@example.edu`
 
   await page.goto(`/join/never-issued-${suffix}`)
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
+  const token = await requestSignInLink(page, email)
 
   await page.goto(`/sign-in/${token}`)
   await expect(page.getByRole('alert')).toContainText(

@@ -40,7 +40,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('an owner reads a course transcript, then reads its own access log — a display name on both sides, never an email (ADMIN-2)', async ({
   page,
@@ -54,12 +54,7 @@ test('an owner reads a course transcript, then reads its own access log — a di
 
   // 1. Sign in and define an enabled course — the same panel-only path
   //    every other spec in this suite establishes.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(ownerEmail)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(ownerEmail)
-  const ownerToken = await readSignInToken(ownerEmail)
-  await page.goto(`/sign-in/${ownerToken}`)
+  await signIn(page, ownerEmail)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

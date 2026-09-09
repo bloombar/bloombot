@@ -82,6 +82,9 @@ describe('JoinLink — signed out', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'student@example.edu' },
     })
+    // The consent checkbox gates both sign-in paths (`pages/SignIn.tsx`);
+    // without ticking it the form will not submit at all.
+    fireEvent.click(screen.getByTestId('accept-legal'))
     fireEvent.click(
       screen.getByRole('button', { name: 'Email me a sign-in link' })
     )

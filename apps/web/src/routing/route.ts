@@ -140,6 +140,12 @@ export type Route =
   | { kind: 'connect'; organizationId: string }
   | { kind: 'join-link'; secret: string }
   | { kind: 'invitation'; secret: string }
+  // The two published legal documents. Deliberately outside `ShellRoute` and
+  // outside every signed-in tree: a privacy policy that needs an account to
+  // read is not published, and Google's own OAuth review asks for one at a
+  // public address.
+  | { kind: 'privacy' }
+  | { kind: 'terms' }
   | { kind: 'not-found' }
 
 /**
@@ -178,6 +184,9 @@ export function parseRoute(pathname: string): Route {
   const [first, second, ...rest] = segments
 
   if (first === 'account' && segments.length === 1) return { kind: 'account' }
+
+  if (first === 'privacy' && segments.length === 1) return { kind: 'privacy' }
+  if (first === 'terms' && segments.length === 1) return { kind: 'terms' }
 
   // WEB-33 — the admin console's own sub-addresses, `/platform-admin/...`.
   // `/platform-admin` alone (no `second` at all) is the console's one entry
@@ -349,6 +358,10 @@ export function buildPath(route: Route): string {
       return '/'
     case 'account':
       return '/account'
+    case 'privacy':
+      return '/privacy'
+    case 'terms':
+      return '/terms'
     case 'platform-admin':
       return '/platform-admin'
     case 'admin-organizations':

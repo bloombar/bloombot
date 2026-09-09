@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test('the navigation drawer is the only nav at a desktop viewport, and the header names the organization and reaches account settings (WEB-29, WEB-30)', async ({
   page,
@@ -30,12 +30,7 @@ test('the navigation drawer is the only nav at a desktop viewport, and the heade
   // so this is Playwright's 1280x720 default) is already a desktop width —
   // WEB-29's own point is that there is no wider breakpoint where a second,
   // header-row copy of the nav appears.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
 
   // WEB-30: a fresh account has exactly one organization (TEN-1's personal
   // organization) — the header names it plainly, not as a dropdown.

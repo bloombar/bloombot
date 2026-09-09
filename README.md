@@ -266,13 +266,23 @@ ids key the issues, so an existing id must never be renamed or renumbered.
 
 `ecosystem.config.cjs` also names the TypeScript platform's own processes — the API, the
 bot, the worker, the MCP server and the alerting monitor (OPS-8, OPS-12) — supervised the
-same way, each restarted independently. The commands below still work for the Python bot
-alone; see [docs/CUTOVER.md](docs/CUTOVER.md) for bringing up the whole platform, rehearsing
-the legacy import, and retiring the Python bot deliberately. For a full production
-deployment from an empty server, including nginx, TLS, the Discord/OpenAI/Google Cloud setup
-and every environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — and
+same way, each restarted independently. Every one of those five carries a `bloombot-` prefix
+(`bloombot-api`, `bloombot-bot`, `bloombot-worker`, `bloombot-mcp`, `bloombot-ops-monitor`,
+OPS-15) — the droplet is shared with unrelated projects, and a bare name like `api` or
+`worker` is one another project on the same box could plausibly claim too. The legacy Python
+bot's own `bloombot` name is unchanged; the commands below still work for it alone. See
+[docs/CUTOVER.md](docs/CUTOVER.md) for bringing up the whole platform, rehearsing the legacy
+import, and retiring the Python bot deliberately. For a full production deployment from an
+empty server, including nginx, TLS, the Discord/OpenAI/Google Cloud setup and every
+environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — and
 [docs/DEPLOY_APP_PLATFORM.md](docs/DEPLOY_APP_PLATFORM.md) for why DigitalOcean's App
 Platform is not (yet) a fit for this platform's single-SQLite-file architecture.
+
+**A droplet already running this platform under the old, bare names needs a one-time
+migration before its first deploy of the commit that renames them** — run
+`scripts/migrate-pm2-names.sh` by hand once (see that script's own header for exactly what it
+does and why a deploy cannot safely do it unattended). A droplet being set up for the first
+time never had the old names and can skip this entirely.
 
 ### Install pm2
 

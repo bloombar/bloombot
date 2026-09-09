@@ -77,12 +77,15 @@ fi
 # OPS-8 — the four PLAT-4 processes plus OPS-12's own monitor, in the exact
 # names `ecosystem.config.cjs` gives them. Reloaded and health-checked
 # individually so a bad build of one does not bounce the other three
-# (`ecosystem.config.cjs`'s own module comment).
-NODE_APPS=(api bot worker mcp ops-monitor)
+# (`ecosystem.config.cjs`'s own module comment). OPS-15 — `bloombot-`
+# prefixed, matching that file's own rename; a droplet still on the old,
+# bare names needs `scripts/migrate-pm2-names.sh` run once first (see the
+# half-migrated guard below).
+NODE_APPS=(bloombot-api bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor)
 # The subset of NODE_APPS with a real `/health` endpoint `scripts/health-check.mjs`
 # can poll — `ops-monitor` is the watcher, not something watched the same way
 # (its own module comment: it has no HTTP surface of its own).
-HEALTH_CHECKED_APPS=(api bot worker mcp)
+HEALTH_CHECKED_APPS=(bloombot-api bloombot-bot bloombot-worker bloombot-mcp)
 # Every process this deploy supervises, in reload order: the legacy Python bot
 # first when this droplet still has one, then OPS-8's Node processes. Derived
 # once here so the reload loop, the restart-count snapshot, the health check
@@ -420,9 +423,54 @@ needs a human to look, not a re-run of this script."
   fi
 }
 
+# OPS-15 — the pm2-name rename's own hazard: a droplet where the migration
+# in `scripts/migrate-pm2-names.sh` has not been run yet still has every
+# process under its old, bare name, and `start_or_reload` cannot tell that
+# apart from "pm2 has never heard of this app" — it would start the new,
+# `bloombot-` prefixed name fresh, alongside the old one still running.
+# Two `bloombot-worker`-and-`worker` both claiming jobs breaks PLAT-4's
+# single-instance guarantee structurally, not just untidily, and the two
+# new processes cannot even bind their health ports (the old ones still
+# hold them), so they crash-loop, the health check below fails, and the
+# rollback lands on a half-renamed droplet instead of a clean one.
+#
+# Checked once, before anything else in this deploy touches pm2, against
+# every *old* name this rename actually retired — deliberately hand-listed
+# here rather than derived from `NODE_APPS`, so a future rename of this
+# list does not silently widen what this guard refuses to tolerate.
+# `bloombot` (the legacy Python bot) is excluded on purpose: it was never
+# renamed, so it can never collide with itself.
+OLD_BARE_NAMES=(api bot worker mcp ops-monitor)
+
+# Aborts the deploy if pm2 knows both an old bare name and its new
+# `bloombot-` counterpart — the signature of a rename whose migration step
+# was skipped. Collects every offending pair, the same "report everything
+# wrong, not just the first" discipline `reload_everything` already uses,
+# so one deploy attempt tells an operator the full list to fix.
+check_pm2_names_migrated() {
+  local half_migrated=()
+  local old new
+  for old in "${OLD_BARE_NAMES[@]}"; do
+    new="bloombot-${old}"
+    if pm2_knows_app "$old" && pm2_knows_app "$new"; then
+      half_migrated+=("$old / $new")
+    fi
+  done
+  if [ ${#half_migrated[@]} -gt 0 ]; then
+    fail "pm2 knows both the old and the new name for: ${half_migrated[*]}.
+This droplet has not finished the OPS-15 pm2 rename — run
+scripts/migrate-pm2-names.sh once, by hand, before deploying again. Refusing
+to reload rather than risk two processes (old and new) both running at
+once — see that script's own header for what it does."
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Deploy
 # ---------------------------------------------------------------------------
+
+log "checking for a half-migrated pm2 rename"
+check_pm2_names_migrated
 
 log "deploying ${PREV_SHA:0:8} -> ${TARGET_SHA:0:8} in $APP_DIR"
 git reset --hard "$TARGET_SHA"

@@ -328,8 +328,8 @@ async function setUpRepo({
   writeFileSync(
     join(workDir, 'ecosystem.config.cjs'),
     `module.exports = { apps: [
-      { name: "bloombot" }, { name: "api" }, { name: "bot" },
-      { name: "worker" }, { name: "mcp" }, { name: "ops-monitor" },
+      { name: "bloombot" }, { name: "bloombot-api" }, { name: "bloombot-bot" },
+      { name: "bloombot-worker" }, { name: "bloombot-mcp" }, { name: "bloombot-ops-monitor" },
     ] };\n`
   )
   await run('git', ['add', '-A'], opts)
@@ -407,6 +407,47 @@ test('deploy.sh: the happy path builds, migrates once, reloads every process, an
   assert.equal(migrateCount, 1)
 })
 
+// OPS-15 — the hazard the pm2 rename itself carries: a droplet where
+// `scripts/migrate-pm2-names.sh` was never run still has every process
+// under its old, bare name, and `start_or_reload` cannot tell that apart
+// from "pm2 has never heard of this app" — it would start a second,
+// `bloombot-`-prefixed process alongside the one still running under the
+// old name. This pins the guard that catches that state explicitly, before
+// `reload_everything` (or anything else) ever runs, rather than trusting a
+// deploy to notice via a crash-looping health check afterwards.
+test('deploy.sh: aborts before reloading anything when pm2 already knows both an old and a new name, naming the migration script', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(base, `pm2-state-half-migrated-${Date.now()}.json`)
+  // Seeded directly, bypassing `runDeploy`'s own default state file — pm2
+  // already knows both `bloombot-worker` (this rename's own new name) and
+  // the old, bare `worker` it replaced, the exact signature a forgotten
+  // migration leaves behind.
+  writeFileSync(
+    pm2State,
+    JSON.stringify([
+      { name: 'worker', pm2_env: { status: 'online', restart_time: 0 } },
+      {
+        name: 'bloombot-worker',
+        pm2_env: { status: 'online', restart_time: 0 },
+      },
+    ])
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+  })
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /worker \/ bloombot-worker/)
+  assert.match(output, /migrate-pm2-names\.sh/)
+  // Nothing was reloaded, and no build or migration step ran either — the
+  // guard is checked before anything else in the script touches the
+  // checkout.
+  assert.doesNotMatch(output, /reloading every supervised process/)
+  assert.doesNotMatch(output, /applying the platform database migration/)
+})
+
 // Rework finding — `start_or_reload`/`reload_everything` used to run pm2's
 // own reload/start as a bare statement; a failure there under `set -e`
 // killed the whole script immediately, with no health check and no
@@ -414,7 +455,7 @@ test('deploy.sh: the happy path builds, migrates once, reloads every process, an
 // made to fail, and a working deploy must still notice, roll back, and say
 // so — not die on the first pm2 error line.
 test('deploy.sh: a pm2 reload failure mid-loop rolls back and reports it, rather than dying silently', async () => {
-  writeDefaultStubs({ failReload: 'bot' })
+  writeDefaultStubs({ failReload: 'bloombot-bot' })
   const { target, checkoutDir } = await setUpRepo()
   const result = await runDeploy(checkoutDir, target)
 
@@ -453,7 +494,7 @@ test('deploy.sh: a control-panel build failure aborts before reloading anything,
 // for the sibling case: everything reloads fine at first, a *different*
 // process fails its health check, and only the rollback's own retry fails.
 test("deploy.sh: a process that never reloads at all fails the forward path's own retry too, and escalates to CRITICAL", async () => {
-  writeDefaultStubs({ failReloadAlways: 'worker' })
+  writeDefaultStubs({ failReloadAlways: 'bloombot-worker' })
   const { target, checkoutDir } = await setUpRepo()
   const result = await runDeploy(checkoutDir, target)
 
@@ -478,7 +519,7 @@ test("deploy.sh: a process that never reloads at all fails the forward path's ow
 // own reload "succeeds" from `reload_everything`'s point of view, so only
 // `confirm_rolled_back_online`'s own explicit pm2-status check can catch it.
 test('deploy.sh: confirm_rolled_back_online catches a rollback that pm2 accepted but did not actually bring up', async () => {
-  writeDefaultStubs({ failReload: 'bot', stayOffline: 'mcp' })
+  writeDefaultStubs({ failReload: 'bloombot-bot', stayOffline: 'bloombot-mcp' })
   const { target, checkoutDir } = await setUpRepo()
   const result = await runDeploy(checkoutDir, target)
 
@@ -501,7 +542,10 @@ test('deploy.sh: confirm_rolled_back_online catches a rollback that pm2 accepted
 // (that is the separate test above). This isolates the UNHEALTHY branch's
 // own "if ! reload_everything" guard specifically.
 test("deploy.sh: unhealthy-after-reload correctly detected, then the rollback's own reload failing on retry still escalates to CRITICAL", async () => {
-  writeDefaultStubs({ stayOffline: 'mcp', failReloadOnRetry: 'worker' })
+  writeDefaultStubs({
+    stayOffline: 'bloombot-mcp',
+    failReloadOnRetry: 'bloombot-worker',
+  })
   const { target, checkoutDir } = await setUpRepo()
   const result = await runDeploy(checkoutDir, target)
 
@@ -654,7 +698,13 @@ test('deploy.sh: an empty PM2_APP skips the legacy Python bot entirely rather th
     `the retired Python bot was started anyway: ${names.join(', ')}`
   )
   // The four Node processes and the monitor still deployed normally.
-  for (const expected of ['api', 'bot', 'worker', 'mcp', 'ops-monitor']) {
+  for (const expected of [
+    'bloombot-api',
+    'bloombot-bot',
+    'bloombot-worker',
+    'bloombot-mcp',
+    'bloombot-ops-monitor',
+  ]) {
     assert.ok(names.includes(expected), `${expected} was not started`)
   }
   // Python dependency files changed in this repo, and the install must still

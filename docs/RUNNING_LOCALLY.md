@@ -81,6 +81,14 @@ right. `Invalid OAuth2 redirect_uri` on Discord's own consent screen means this 
 registered** — not that it is malformed. `apps/api` logs the resolved value once at startup (`info`) so you
 can paste it into the portal rather than reconstruct it by hand.
 
+Run `npm run check:discord` to check this in one command instead of comparing strings by eye. It reports
+one of three outcomes: **verified** (the derived redirect URI is registered on the application `BOT_APP_ID`
+names — exit 0); **mismatch**, naming the specific near-miss (a stray slash, `http` vs `https`, `www.` vs
+apex, path casing) or that the URI is simply absent (exit non-zero); or **could not verify**, meaning
+Discord's API response for this application does not expose its `redirect_uris` list, so the Developer
+Portal is the only place left to check — the script still prints the exact string to paste there (exit 0;
+this is a legitimate outcome, not a failure).
+
 ## 3. Start it
 
 One command starts everything:

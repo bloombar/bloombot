@@ -10142,9 +10142,11 @@ user data to be addressed at a level of specificity — what is received, that n
 it is not sold/shared/used for advertising/used for credit decisions/used to train an AI or ML model, and a
 concrete retention-and-deletion answer — that would have been lost if scattered piecemeal across sections
 written for a different purpose. A dedicated section states each point once, explicitly, including the one
-concrete deletion path this platform can actually offer for Google-linked data (an instructor account or
-whole organization, on request to the operator's contact address) even though the surrounding "How long we
-keep it" section still correctly declines to promise per-student deletion generally.
+concrete deletion path this platform can actually offer for Google-linked data (the whole organization, on
+request to the operator's contact address — not the account alone, which the software has no way to delete
+in isolation; "Review round 1" below is where an earlier draft of this section overclaimed the opposite)
+even though the surrounding "How long we keep it" section still correctly declines to promise per-student
+deletion generally.
 
 **Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green, plus
 `npm run build --workspace apps/web` producing `dist/index.html`, `dist/privacy/index.html`,
@@ -10157,3 +10159,55 @@ carries the prerendered content, confirmed red first against the pre-plugin buil
 `dist/privacy/`). `tests/static-documents.test.tsx` gained assertions that the draft banner and every
 placeholder are gone and that the Google-account-data commitments are present, confirmed red against the
 pre-change content.
+
+**Review round 1 — three real defects, all fixed here.**
+
+- **The prerendered homepage baked in the "not configured" failure text.** `SignIn.tsx` renders "Google
+  sign-in is not configured for this deployment" whenever `import.meta.env['VITE_GOOGLE_CLIENT_ID']` is
+  unset, and the prerender step froze whatever `Home`/`SignIn` rendered at build time into `dist/index.html`
+  as static HTML — reproduced on a build with no client id set, exactly the build `tests/bundle.test.ts`'s own
+  `beforeAll` already runs. This is the single worst regression this slice could have shipped: the same
+  Google OAuth reviewer this whole slice exists to satisfy fetches `/` with no JavaScript and would have read
+  its own sign-in path declared broken, on a build that may simply not have its production secret set yet —
+  a failure this static before this slice existed only after JavaScript ran. Fixed with the
+  neutral-render approach over a hard build failure (the brief's own preferred option): `Home.tsx` gained an
+  optional `googleClientId` pass-through prop, forwarded to the embedded `SignIn` only when given — omitted
+  in every ordinary render (`App.tsx` never sets it), so real behaviour for a real visitor is unchanged
+  either way. `prerender-plugin.ts` is the only caller that ever sets it, to a placeholder value that is
+  truthy but not a real client id — `SignIn`'s own `useEffect` that would load Google's script and draw the
+  real button never runs during a `renderToStaticMarkup` call regardless, so the placeholder can never reach
+  Google's own servers or leak into anything a person could click; it exists purely to steer `SignIn` into
+  its "Agree to the documents above to sign in with Google" shell rather than its "not configured" one. The
+  client-side render that replaces this markup on mount (`main.tsx`'s `createRoot`, still not `hydrateRoot`)
+  reads the real, deployment-specific env from the actual client bundle regardless, so a genuinely
+  unconfigured deployment still tells a real visitor the truth once JavaScript runs — this fix changes only
+  what a non-JavaScript crawler ever sees. `tests/bundle.test.ts` gained a test asserting `dist/index.html`
+  contains neither "not configured" nor any other build-time env-failure text, confirmed red first against
+  the pre-fix code (the exact string the reviewer reported).
+- **A false encryption claim.** The Security section said the service "does not accept a plain, unencrypted
+  connection" — false: `docs/DEPLOY_DROPLET.md` §5.2/§5.3 has an nginx `listen 80` block that `certbot`
+  itself edits in place to add an HTTP→HTTPS redirect, not a refusal, and that same `:80` listener is what
+  serves the ACME HTTP-01 challenge `certbot` needs to issue the certificate in the first place. Reworded to
+  "a plain HTTP request is redirected to HTTPS rather than answered directly" — true, and still says the one
+  thing that matters to a reader (nothing this service actually serves is reachable unencrypted).
+- **A deletion overclaim that contradicted the same document's own honesty two paragraphs later.** The
+  Google-account-data section offered "your instructor account, or your whole organization" as things "the
+  operator can act on" deleting — but the only deletion path in the software is tenant-level
+  (`packages/db/src/repos/organizations.ts#deleteOrganizationData`, `apps/api/src/routes/admin.ts`'s own
+  organization-name-confirmation flow); there is no `deleteUser`/`deleteAccount`/`deleteInstructor` anywhere,
+  and the very next section ("How long we keep it") still correctly says no deletion finer than a whole
+  organization exists. Reworded to say plainly that there is no button that deletes only the account or only
+  its Google-derived data, and that the one real, manual path — asking the operator, at the contact address,
+  to delete the whole organization — takes everything else in the organization down with it. This is the
+  Google-required disclosure (a concrete answer, not a refusal) surviving without promising a granularity the
+  platform does not have — restoring the deliberate honesty `privacy.ts`'s own module comment describes,
+  which this section had traded away for reviewer-friendliness. `tests/static-documents.test.tsx`'s own test
+  for this section was rewritten to match — asserting the "whole organization" wording and the explicit "no
+  button that deletes only your account" disclaimer, rather than the withdrawn per-account phrasing.
+
+**Verification (round 1).** `npm run lint && npm run format:check && npm run typecheck && npm test && npx
+playwright test` all green: 93 node tests, 2683 vitest tests (`tests/bundle.test.ts` gained the "not
+configured" regression test above, confirmed red first against the pre-fix `Home`/`prerender-plugin.ts`;
+`tests/static-documents.test.tsx`'s deletion-path test was rewritten for the reworded text), 40 Playwright
+e2e specs (one more than the previous round's own count — `e2e/course-export-import.spec.ts`, merged in from
+the base branch, unrelated to this rework).

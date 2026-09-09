@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 
 import { expect, test } from '@playwright/test'
 
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 import { navigateTo } from './support/navigate.js'
 
 test('a course is exported to a file and imported back into a project, numbered and disabled (PORT-1, PORT-5, PORT-6, PORT-7, WEB-39)', async ({
@@ -35,12 +35,7 @@ test('a course is exported to a file and imported back into a project, numbered 
   // 1. Sign in, and build one course worth exporting — title, both role
   //    names, a category (CFG-4) and instructions (FILE-4), through the
   //    panel alone.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

@@ -47,7 +47,9 @@ describe('loadGoogleIdentityServices', () => {
     expect(secondScript).not.toBe(firstScript)
 
     const fakeGoogle = {
-      accounts: { id: { initialize: vi.fn(), prompt: vi.fn() } },
+      accounts: {
+        id: { initialize: vi.fn(), renderButton: vi.fn(), prompt: vi.fn() },
+      },
     }
     window.google = fakeGoogle
     secondScript?.onload?.(new Event('load'))

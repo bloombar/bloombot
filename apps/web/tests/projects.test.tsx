@@ -395,3 +395,37 @@ describe('Projects (WEB-7)', () => {
     expect(onOpenProject).toHaveBeenCalledWith(PROJECT)
   })
 })
+
+/**
+ * WEB-39/PORT-4: the project row's own Import item opens the course import
+ * dialog for *that* project, and a successful import is said out loud on
+ * this screen rather than only inside the dialog that closed.
+ */
+describe('Projects — import a course (WEB-39)', () => {
+  it('opens the import dialog for the row it was chosen from', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+
+    expect(
+      screen.getByText('Import a course into "Fall 2026"')
+    ).toBeInTheDocument()
+    // PORT-6, said before the import runs rather than after it.
+    expect(screen.getByText(/arrives disabled/)).toBeInTheDocument()
+  })
+
+  it('shows no import dialog until the item is chosen', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+
+    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    await screen.findByText('Fall 2026')
+
+    expect(
+      screen.queryByText('Import a course into "Fall 2026"')
+    ).not.toBeInTheDocument()
+  })
+})

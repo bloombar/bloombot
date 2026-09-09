@@ -475,7 +475,7 @@ describe('signInWithGoogle (AUTH-2)', () => {
  * A small standalone script, run as a genuinely separate OS process, that
  * takes a real write lock on `path` with `BEGIN IMMEDIATE`, prints `LOCKED`
  * once it actually holds it, holds it for `holdMs`, then commits and exits.
- * Mirrors `packages/db/tests/client.test.ts`'s own identical helper (D-89);
+ * Mirrors `packages/db/tests/client.test.ts`'s own identical helper (D-90);
  * duplicated here rather than imported across a package boundary test
  * helpers are not published through, the same reasoning `test-db.ts`'s own
  * module comment gives for its duplication.
@@ -499,7 +499,7 @@ const HOLD_WRITE_LOCK_SCRIPT = `
  * `exit` listener attached here, at spawn time, not later inside the
  * returned object — attaching lazily can miss a child that has already
  * exited by the time something calls it, hanging the caller to its own
- * timeout instead (`client.test.ts`'s own D-89 rework fixed exactly this).
+ * timeout instead (`client.test.ts`'s own D-90 rework fixed exactly this).
  * `kill` guarantees the holder is gone rather than trusting it to exit on
  * its own, so a hung holder cannot leak a lock onto the temp file
  * `testDb.cleanup()` is about to delete.
@@ -545,10 +545,10 @@ function holdWriteLockInChildProcess(
 }
 
 /**
- * D-89 rework round 1's own hot-path concern, reproduced directly:
+ * D-90 rework round 1's own hot-path concern, reproduced directly:
  * `signInWithGoogle` reads (`accountsRepo.getAccountByEmail`) before it
  * writes (creating the account, the session, or both), the exact
- * deferred-upgrade shape D-89 exists to close, on the path two concurrent
+ * deferred-upgrade shape D-90 exists to close, on the path two concurrent
  * `POST /auth/google` requests actually take. Reproduced the same way
  * `client.test.ts` reproduces the `packages/db` case: a second, real OS
  * process holds a genuine write lock on the same on-disk file (never
@@ -561,7 +561,7 @@ function holdWriteLockInChildProcess(
  * way, so this test's own value depends on `signInWithGoogle` actually
  * reading first, which its own source confirms.
  */
-describe('signInWithGoogle: a concurrent writer elsewhere is waited for, not raced (D-89)', () => {
+describe('signInWithGoogle: a concurrent writer elsewhere is waited for, not raced (D-90)', () => {
   it('signs in successfully after waiting for a write lock a separate process genuinely holds', async () => {
     testDb = createTestDatabase()
 

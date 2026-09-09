@@ -63,7 +63,7 @@ import {
 } from '../icons.js'
 import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
-import { FileDropZone } from './FileDropZone.js'
+import { describeSize, FileDropZone } from './FileDropZone.js'
 
 export interface CourseAttachmentsProps {
   organizationId: string
@@ -488,8 +488,12 @@ export function CourseAttachments({
               >
                 <span className="min-w-0 truncate">
                   {file.name}{' '}
+                  {/* FILE-7 rework finding — `describeSize` (`FileDropZone.js`),
+                      not the whole-MB `describeMb` the budget sentence
+                      below uses: a sub-megabyte file (most syllabi, most
+                      schedules) would otherwise round to "0 MB" here. */}
                   <span className="text-neutral-500">
-                    ({describeMb(file.size)} MB)
+                    ({describeSize(file.size)})
                   </span>
                 </span>
                 <Button

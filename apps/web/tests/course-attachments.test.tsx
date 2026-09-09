@@ -154,6 +154,32 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     ).toBeInTheDocument()
   })
 
+  // FILE-7 rework finding — the queue's own per-file size used the whole-MB
+  // rounding the budget sentence uses (`describeMb`), which rounds any file
+  // under ~512 KB down to "0 MB". A sub-megabyte file — most syllabi,
+  // notes and schedules — must still show a real, non-zero size
+  // (`FileDropZone`'s own `describeSize`, which rounds to KB or bytes
+  // below a megabyte).
+  it('a sub-MB queued file shows a non-zero size, not "0 MB"', async () => {
+    listCourseAttachments.mockResolvedValue([])
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    // 200 KB — well under a megabyte, comfortably over the point where
+    // whole-MB rounding reads as zero.
+    const small = new File([new Uint8Array(200 * 1024)], 'small.pdf', {
+      type: 'application/pdf',
+    })
+    chooseFiles([small])
+
+    await screen.findByText('small.pdf', { exact: false })
+    expect(screen.getByText('(200 KB)')).toBeInTheDocument()
+    expect(screen.queryByText('(0 MB)')).not.toBeInTheDocument()
+  })
+
   // FILE-7: a second choose appends to the queue rather than replacing it —
   // an instructor picking readings in two passes is the normal case.
   it('a second choose appends to the queue', async () => {
@@ -230,17 +256,28 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Attach 2 files' }))
 
     await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(2))
+    // Distinct content per queued file — a regression that encoded the
+    // wrong `File` in the loop (the second call reusing the first file's
+    // bytes, say) would pass a `filename`-only assertion but fail this
+    // one, since `a-bytes` and `b-bytes` base64-encode to different
+    // strings.
     expect(attachCourseFile).toHaveBeenNthCalledWith(
       1,
       'org-1',
       'course-1',
-      expect.objectContaining({ filename: 'a.pdf' })
+      expect.objectContaining({
+        filename: 'a.pdf',
+        contentBase64: Buffer.from('a-bytes').toString('base64'),
+      })
     )
     expect(attachCourseFile).toHaveBeenNthCalledWith(
       2,
       'org-1',
       'course-1',
-      expect.objectContaining({ filename: 'b.pdf' })
+      expect.objectContaining({
+        filename: 'b.pdf',
+        contentBase64: Buffer.from('b-bytes').toString('base64'),
+      })
     )
 
     expect(await screen.findByText('a.pdf')).toBeInTheDocument()

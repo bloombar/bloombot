@@ -66,8 +66,15 @@ export interface FileDropZoneProps {
   disabled?: boolean
 }
 
-/** Bytes rendered the way somebody reading a limit expects to see them. */
-function describeSize(bytes: number): string {
+/**
+ * Bytes rendered the way somebody reading a limit expects to see them —
+ * exported (FILE-7) so `CourseAttachments.tsx`'s own queued-file list can
+ * use the same whole-unit rounding for a single file's size, rather than
+ * the coarser whole-MB rounding its own budget sentence uses (`describeMb`
+ * there): a queued file well under a megabyte would otherwise round to
+ * "0 MB" and read as if it had no size at all.
+ */
+export function describeSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
   return `${bytes} bytes`

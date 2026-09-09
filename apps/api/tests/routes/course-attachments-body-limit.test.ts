@@ -97,6 +97,41 @@ describe("FILE-1 — courseAttachments.attach's own raised body limit", () => {
     expect(response.status).toBe(200)
   })
 
+  // FILE-7 rework finding — the two cases above are both expressed relative
+  // to the imported `ACTION_JSON_BODY_LIMIT_BYTES` itself, so neither one
+  // actually exercises *this slice's own raise* of that constant: both
+  // pass unchanged against the old 28 MiB value just as they do against the
+  // new 136 MiB one. This case uses a literal size instead — a ~30 MB raw
+  // file, base64-encoded to roughly 40 MB on the wire — comfortably over
+  // the old 28 MiB ceiling (so this is red against that constant) and
+  // comfortably under the new 136 MiB one (so it is green against this
+  // slice's own change), which is exactly what FILE-7's own raise is
+  // supposed to have made acceptable that was not before.
+  it('accepts a ~30 MB file — over the old 28 MiB ceiling, comfortably under the new 136 MiB one', async () => {
+    testDb = createTestDatabase()
+    attachmentStorageDir = join(ATTACHMENT_TMP_ROOT, randomUUID())
+    const caller = seedSignedInCaller(testDb.db)
+    const courseId = seedCourse(caller.organizationId, testDb.db)
+    const app = await buildTestApp(testDb.db, { attachmentStorageDir })
+
+    const contentBase64 = Buffer.alloc(30 * 1024 * 1024, 'a').toString('base64')
+
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/actions/courseAttachments.attach`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({
+        courseId,
+        filename: 'big-syllabus.pdf',
+        contentType: 'application/pdf',
+        contentBase64,
+      })
+
+    expect(response.status).toBe(200)
+  }, 30000)
+
   it('still refuses (413) a body over the explicit ceiling itself, so the raised limit is a real bound, not accidentally unbounded', async () => {
     testDb = createTestDatabase()
     attachmentStorageDir = join(ATTACHMENT_TMP_ROOT, randomUUID())

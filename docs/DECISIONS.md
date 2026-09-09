@@ -2460,17 +2460,56 @@ reference) — but `apps/api` never gave that route its own body-size limit, so 
 ordinary 100 kB default from `server.ts`'s global middleware. Base64 encoding inflates a file's raw size by
 4/3, so 100 kB of JSON body is roughly a 74 kB *raw file* ceiling — well under a real syllabus, notes file or
 schedule (`FILE-1`'s own text names all three), so an ordinary multi-page PDF was rejected `413` before this
-action ever ran, a rework finding. `routes/actions.ts` now exports two constants recording the chosen bound
-explicitly: `MAX_COURSE_ATTACHMENT_BYTES` (20 MiB) is the ceiling on a raw file's own size — generous for a
-course's own notes, syllabus and schedule, including a scanned PDF, without inviting an instructor to treat
-this as general file storage; `ACTION_JSON_BODY_LIMIT_BYTES` (28 MiB) is the JSON body limit that ceiling
-actually requires once base64's 4/3 inflation and the payload's other fields (`courseId`, `filename`,
-`contentType`) are accounted for. The raised limit is scoped to the `/organizations/:organizationId/actions`
-path prefix alone — `server.ts` mounts a second `express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })` ahead
-of its own general-purpose one, and body-parser's own "already parsed" guard makes the second a no-op for that
-one prefix — rather than raising the global default, since every other action's own input is small and a
-100 kB-scale body is still the right ceiling for all of them; only this one route carries binary content at
-all.
+action ever ran, a rework finding. `routes/actions.ts` originally exported two constants recording the chosen
+bound explicitly: `MAX_COURSE_ATTACHMENT_BYTES` (20 MiB), the ceiling on a raw file's own size, and
+`ACTION_JSON_BODY_LIMIT_BYTES` (28 MiB), the JSON body limit that ceiling required once base64's 4/3 inflation
+and the payload's other fields (`courseId`, `filename`, `contentType`) were accounted for. `FILE-7` (below)
+replaced the first of those with a per-course total and raised the second to match — this paragraph now
+describes the current shape; see `FILE-7`'s own paragraph for why the ceiling moved from a file to a course.
+The raised limit is scoped to the `/organizations/:organizationId/actions` path prefix alone — `server.ts`
+mounts a second `express.json({ limit: ACTION_JSON_BODY_LIMIT_BYTES })` ahead of its own general-purpose one,
+and body-parser's own "already parsed" guard makes the second a no-op for that one prefix — rather than
+raising the global default, since every other action's own input is small and a 100 kB-scale body is still the
+right ceiling for all of them; only this one route carries binary content at all.
+
+**`FILE-7` — a per-course budget replaces the per-file ceiling, and why the check has to be a transaction, not
+two statements.** The per-file ceiling above generously bounded one upload, but did nothing to stop an
+instructor's course from accumulating an unbounded number of files over time — `FILE-7`'s own text asks for
+the opposite shape: no limit on any single file, but a course's attachments capped at 100 MiB in total,
+enforced "where the platform can see every file... not in the browser." `MAX_COURSE_ATTACHMENTS_TOTAL_BYTES`
+(`packages/actions/src/actions/course-attachments.ts`) is that cap, and `repos/course-attachments.ts#totalSizeBytesForCourse`
+is the SQL `sum()` `createAttachCourseAttachmentAction`'s own `execute` checks it against — counting a
+`pending` row exactly the same as a `ready` one, since a pending row's bytes are already reserved the moment
+the row is inserted (below). Because a single attach can legally carry the whole 100 MiB budget in one file,
+`ACTION_JSON_BODY_LIMIT_BYTES` moved with it: `ceil(100 MiB / 3) * 4` is roughly 133.4 MiB, rounded up to
+136 MiB for the same reasons the old 28 MiB gave headroom over the old 26.7 MiB — the payload's other fields
+and JSON's own string escaping.
+
+Reading the running total, then inserting the new row as a second, later statement, is not safe under
+concurrency, and a rework finding on this same slice caught it directly: two attaches dispatched concurrently
+against the same course could each read the total *before either had written its own row* — both pass the
+same "still under budget" check, and the course lands over its cap by as much as the second file's own size,
+unboundedly with more concurrent callers. The fix is `@bloombot/db`'s own `writeTransaction` (`client.ts`'s
+`BEGIN IMMEDIATE` precedent, first introduced for `repos/transcript-access.ts`): the budget read and the row's
+own insert now run inside one write transaction, which takes the write lock before its first statement runs,
+so a second attach against the same course blocks until the first has committed (or rolled back) its own row
+— there is no point at which two attaches can observe the same "not yet over" total. Throwing inside the
+transaction's own callback rolls the whole thing back (better-sqlite3's own `transaction()` behaviour), so a
+refused attach still leaves no row behind.
+
+This forced a second reordering: `attachmentStorage.write` (the bytes actually landing on disk) now runs
+*after* the transaction commits the row, not before, the reverse of this section's own original design.
+`attachmentStorage.write` is an async filesystem call, and better-sqlite3's `transaction()` wraps a
+*synchronous* callback — awaiting inside it would let the wrapper commit before the write had actually
+finished, defeating the atomicity the fix exists for. The tradeoff this accepts: the failure mode on a storage
+error is now a `pending` row that reserved its share of the budget but has no bytes and no job behind it,
+rather than orphaned bytes with no row (the previous ordering's own failure mode). `createAttachCourseAttachmentAction`
+handles it by deleting the row on a storage-write failure, so a caller never sees a permanent ghost attachment
+— but the row and the bytes are briefly out of sync while the write is in flight, a window the previous
+ordering did not have. `totalSizeBytesForCourse`/`createPendingAttachment` (`repos/course-attachments.ts`) both
+widened their own `db` parameter from `Database` to the narrower `Executor` (`client.ts`) to accept either the
+top-level connection or the transaction's own `tx` — the same shape `TransactingExecutor` already gives
+`accounts.ts#createAccount` for a nested savepoint, applied here for a top-level `writeTransaction` instead.
 
 ## D-33 — `packages/db`/`packages/config`/`packages/core`/`packages/openai`/`packages/actions`/`apps/bot`: where pricing rates live, what a cap refusal costs, how the cap interacts with the daily allowance, and what the administrator read does not expose
 

@@ -35,6 +35,7 @@ import {
   courseAttachments,
   courses,
   jobs,
+  writeTransaction,
   type AttachmentStorage,
 } from '@bloombot/db'
 import { z } from 'zod'
@@ -104,13 +105,14 @@ type AttachInput = z.infer<typeof attachInputSchema>
 
 /**
  * FILE-1: attach a file to a course. Resolves the course (scoped to the
- * caller's organization, ACT-2), writes the decoded bytes to
- * `AttachmentStorage` under a freshly minted attachment id, records a
- * `pending` row, and enqueues a `courseAttachments.attach` job naming it —
- * the provider upload and the vector-store attach are `apps/worker`'s own
- * handler's concern once it claims the row, not this action's, the same
- * division `discordServers.scaffold`/`roster.import` already hold
- * themselves to.
+ * caller's organization, ACT-2), then — inside one write transaction,
+ * FILE-7's own concurrency fix, below — checks the course's 100 MiB budget
+ * and records a `pending` row under a freshly minted attachment id before
+ * writing the decoded bytes to `AttachmentStorage` and enqueueing a
+ * `courseAttachments.attach` job naming it. The provider upload and the
+ * vector-store attach are `apps/worker`'s own handler's concern once it
+ * claims the row, not this action's, the same division
+ * `discordServers.scaffold`/`roster.import` already hold themselves to.
  */
 export function createAttachCourseAttachmentAction(
   attachmentStorage: AttachmentStorage
@@ -132,61 +134,88 @@ export function createAttachCourseAttachmentAction(
     },
     execute: async ({ organizationId, input, entity, db }) => {
       const bytes = Buffer.from(input.contentBase64, 'base64')
-
-      // FILE-7 — the budget check runs before anything is written: a
-      // `totalSizeBytesForCourse` read (a SQL `sum`, `@bloombot/db`'s own
-      // repo) that counts every row this course already has, `pending`
-      // included — a pending row's bytes are already on disk (FILE-5's own
-      // `attachmentStorage.write` runs before the row exists at all), so a
-      // pending upload not yet confirmed by the provider still counts
-      // against the total it is already spending. Refusing here, before
-      // `attachmentStorage.write` and before `createPendingAttachment`,
-      // means a refused attach leaves nothing behind on disk or in the
-      // table — the opposite of writing first and having to clean up after
-      // a refusal discovered too late.
-      const existingBytes = courseAttachments.totalSizeBytesForCourse(
-        organizationId,
-        entity.id,
-        db
-      )
-      if (
-        existingBytes + bytes.byteLength >
-        MAX_COURSE_ATTACHMENTS_TOTAL_BYTES
-      ) {
-        throw new ActionConflictError({
-          message: overBudgetMessage(existingBytes),
-        })
-      }
-
       const attachmentId = crypto.randomUUID()
 
-      // FILE-5 — the bytes land under this attachment's own id before the
-      // row naming it exists at all, so there is never a moment where a
-      // `pending` row points at nothing on disk.
-      await attachmentStorage.write(organizationId, attachmentId, bytes)
+      // FILE-7 rework finding — the budget check and the row's own
+      // reservation must happen inside one write transaction, not as two
+      // separate statements a concurrent attach can interleave with.
+      // Reading `totalSizeBytesForCourse`, then inserting the row as a
+      // second, later statement, let two concurrent attaches against the
+      // same course each read the total *before either had written its own
+      // row* — both could pass the same "still under budget" check, and
+      // the course would land over its cap by as much as the second
+      // file's own size, unboundedly with more concurrent callers.
+      // `writeTransaction` (`@bloombot/db`'s own `BEGIN IMMEDIATE`
+      // precedent, `client.ts`) closes that window: it takes the write
+      // lock before this transaction's first statement runs, so a second
+      // attach against the same course blocks until the first one has
+      // committed (or rolled back) its own row — there is no point at
+      // which two attaches can observe the same "not yet over" total.
+      // Throwing inside the callback rolls the whole transaction back
+      // (better-sqlite3's own `transaction()` behaviour), so a refused
+      // attach leaves no row behind.
+      //
+      // The bytes are written to `AttachmentStorage` *after* this
+      // transaction commits, not before (the reverse of this action's
+      // first version): `attachmentStorage.write` is an async filesystem
+      // call, and better-sqlite3's `transaction()` wraps a *synchronous*
+      // callback — an `await` inside it would let the wrapper treat the
+      // callback as already finished (and commit) before the write had
+      // actually run, which would defeat the atomicity this fix exists
+      // for. Reserving the row first means the failure mode on a storage
+      // error is an orphaned `pending` row with no bytes and no job,
+      // handled below by deleting it rather than leaving a ghost the panel
+      // would show forever.
+      writeTransaction(db, (tx) => {
+        const existingBytes = courseAttachments.totalSizeBytesForCourse(
+          organizationId,
+          entity.id,
+          tx
+        )
+        if (
+          existingBytes + bytes.byteLength >
+          MAX_COURSE_ATTACHMENTS_TOTAL_BYTES
+        ) {
+          throw new ActionConflictError({
+            message: overBudgetMessage(existingBytes),
+          })
+        }
+        courseAttachments.createPendingAttachment(
+          organizationId,
+          {
+            id: attachmentId,
+            courseId: entity.id,
+            filename: input.filename,
+            contentType: input.contentType,
+            sizeBytes: bytes.byteLength,
+          },
+          tx
+        )
+      })
 
-      const attachment = courseAttachments.createPendingAttachment(
-        organizationId,
-        {
-          id: attachmentId,
-          courseId: entity.id,
-          filename: input.filename,
-          contentType: input.contentType,
-          sizeBytes: bytes.byteLength,
-        },
-        db
-      )
+      try {
+        await attachmentStorage.write(organizationId, attachmentId, bytes)
+      } catch (error) {
+        // The row already reserved this attachment's share of the budget,
+        // but the bytes never landed — delete it rather than leave a
+        // `pending` attachment with nothing on disk and no job ever coming
+        // to resolve it (FILE-5's own "a pending row's bytes are already
+        // on disk" no longer holds for this one row once this branch
+        // runs).
+        courseAttachments.deleteAttachment(organizationId, attachmentId, db)
+        throw error
+      }
 
       const job = jobs.enqueueJob(
         organizationId,
         {
           kind: ATTACH_JOB_KIND,
-          payload: { attachmentId: attachment.id },
+          payload: { attachmentId },
           maxAttempts: ATTACHMENT_JOB_MAX_ATTEMPTS,
         },
         db
       )
-      return { attachmentId: attachment.id, jobId: job.id }
+      return { attachmentId, jobId: job.id }
     },
   }
 }

@@ -20,13 +20,14 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
 }) => {
   const email = `e2e-${Date.now()}@example.edu`
 
-  // 1. The signed-out visitor requests a link.
+  // 1. A signed-out visitor reaches the home page and is offered sign-in.
   await page.goto('/')
   await expect(
     page.getByRole('heading', { name: 'Sign in to Bloombot' })
   ).toBeVisible()
 
-  // 2. Redeem the link the API actually sent.
+  // 2. Accept the documents, request a link, and redeem the one the API
+  //    actually sent — `completeSignIn` does all three (e2e/support/sign-in.ts).
   await completeSignIn(page, email)
 
   // 3. Signed in: the shell renders, showing the organization this

@@ -229,6 +229,60 @@ describe('files.ts (FILE-1..3)', () => {
       })
     })
 
+    // FILE-8: `cancelled` is terminal, the same as `failed` — polling it as
+    // "still going" ran every attempt to the full budget before finally
+    // reporting a reason ("still processing") that misdescribed what had
+    // actually happened.
+    it('FILE-8: cancelled on a later poll resolves failed, without polling to the deadline', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      server.respondToVectorStoreFileAttachPoll({
+        status: 200,
+        body: { status: 'cancelled' },
+      })
+
+      const result = await attachFileToVectorStore(options, 'vs_1', 'file_1', {
+        maxWaitMs: 100,
+        pollIntervalMs: 5,
+      })
+
+      expect(result).toEqual({
+        status: 'failed',
+        reason:
+          "OpenAI cancelled this file's processing for reasons it did not explain",
+      })
+      // One poll, not polled to exhaustion.
+      expect(server.requests.filter((r) => r.method === 'GET')).toHaveLength(1)
+    })
+
+    // FILE-8: a status this adapter has never seen must not poll to
+    // exhaustion either — the same fix `cancelled` needed, generalised to
+    // "anything that is not `completed` and not still in flight is
+    // terminal."
+    it('FILE-8: an unrecognised status on a later poll resolves failed, naming the status, without polling to the deadline', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      server.respondToVectorStoreFileAttachPoll({
+        status: 200,
+        body: { status: 'some_future_status' },
+      })
+
+      const result = await attachFileToVectorStore(options, 'vs_1', 'file_1', {
+        maxWaitMs: 100,
+        pollIntervalMs: 5,
+      })
+
+      expect(result).toEqual({
+        status: 'failed',
+        reason: expect.stringContaining('some_future_status'),
+      })
+      expect(server.requests.filter((r) => r.method === 'GET')).toHaveLength(1)
+    })
+
     // FILE-8: an immediate `completed` (rare, but the API's own docs do not
     // rule it out) must resolve without ever reaching the poll endpoint —
     // there is nothing left to wait for.
@@ -256,19 +310,19 @@ describe('files.ts (FILE-1..3)', () => {
         status: 200,
         body: { status: 'in_progress' },
       })
-      // Every poll (there is no queued default `completed`) keeps reporting
-      // `in_progress` — the fake's own default would otherwise settle it.
-      for (let i = 0; i < 10; i++) {
-        server.respondToVectorStoreFileAttachPoll({
-          status: 200,
-          body: { status: 'in_progress' },
-        })
-      }
-
+      // Every poll keeps reporting `in_progress` (the fake's own default,
+      // now that it is honest about the endpoint's real steady state — see
+      // `fake-openai-server.ts`'s own comment on
+      // `DEFAULT_VECTOR_STORE_FILE_ATTACH_POLL_RESPONSE`).
+      //
+      // `pollIntervalMs` (50ms) is well above what a loopback request
+      // actually costs here, so the attempt-count cap (`maxPolls`, below)
+      // is what stops this loop, not the wall-clock deadline landing a
+      // request early — the other bound gets its own test just below.
       await expect(
         attachFileToVectorStore(options, 'vs_1', 'file_1', {
-          maxWaitMs: 40,
-          pollIntervalMs: 10,
+          maxWaitMs: 500,
+          pollIntervalMs: 50,
         })
       ).rejects.toMatchObject({
         kind: 'server_error',
@@ -277,8 +331,41 @@ describe('files.ts (FILE-1..3)', () => {
       })
 
       const polls = server.requests.filter((r) => r.method === 'GET')
-      // ceil(40 / 10) = 4 — bounded, not unbounded.
-      expect(polls).toHaveLength(4)
+      // ceil(500 / 50) = 10 — bounded, not unbounded.
+      expect(polls).toHaveLength(10)
+    })
+
+    // FILE-8: the *other* bound. A poll that runs slow (here, deliberately
+    // delayed past the poll interval) eats real wall-clock time that a
+    // count-only cap would never notice — this asserts the loop actually
+    // stops at the `maxWaitMs` deadline, well short of `maxPolls`, rather
+    // than continuing to poll for `maxPolls × timeoutMs` regardless of how
+    // long each round took.
+    it('FILE-8: a slow poll sequence stops at the wall-clock deadline, not at the poll-count cap', async () => {
+      server.respondToVectorStoreFileAttach({
+        status: 200,
+        body: { status: 'in_progress' },
+      })
+      for (let i = 0; i < 10; i++) {
+        server.respondToVectorStoreFileAttachPoll({
+          status: 200,
+          body: { status: 'in_progress' },
+          delayMs: 30,
+        })
+      }
+
+      await expect(
+        attachFileToVectorStore(options, 'vs_1', 'file_1', {
+          maxWaitMs: 50,
+          pollIntervalMs: 10,
+        })
+      ).rejects.toMatchObject({ kind: 'server_error', retryable: true })
+
+      const polls = server.requests.filter((r) => r.method === 'GET')
+      // ceil(50 / 10) = 5 would be the count-only cap; each poll's own
+      // 30ms delay means the deadline is what actually stops this well
+      // before that.
+      expect(polls.length).toBeLessThan(5)
     })
 
     // FILE-8: a poll itself can fail transiently (a timeout, a rate limit,
@@ -296,7 +383,19 @@ describe('files.ts (FILE-1..3)', () => {
           maxWaitMs: 100,
           pollIntervalMs: 5,
         })
-      ).rejects.toBeInstanceOf(ModelRequestError)
+        // A `server_error`/`retryable: true` is the distinction that
+        // actually matters here — `markAttachmentFailed` vs. an ordinary
+        // JOB-2 retry (`apps/worker/src/handlers/course-attachments.ts`).
+        // `toBeInstanceOf(ModelRequestError)` alone would also pass if this
+        // 500 were misclassified as a non-retryable `client_error`, or —
+        // before this slice — if the *create* call's own `in_progress` were
+        // thrown as an error before any poll ever ran; the `kind`/
+        // `retryable` assertion and the "a GET actually happened" check
+        // below rule both of those out.
+      ).rejects.toMatchObject({ kind: 'server_error', retryable: true })
+
+      const polls = server.requests.filter((r) => r.method === 'GET')
+      expect(polls).toHaveLength(1)
     })
   })
 

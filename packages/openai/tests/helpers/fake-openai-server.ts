@@ -81,10 +81,10 @@ const DEFAULT_VECTOR_STORE_FILE_ATTACH_RESPONSE: FakeResponse = {
   body: { status: 'completed' },
 }
 
-/** FILE-8 — the default answer to a poll (`GET /vector_stores/:id/files/:fileId`) when a test never queues one; `completed` so a test only has to script the polls it actually cares about. */
+/** FILE-8 — the default answer to a poll (`GET /vector_stores/:id/files/:fileId`) when a test never queues one; `in_progress`, the real API's own default steady state (not `completed` — the shape the real API does not return, which is exactly why the original bug shipped), so a test that wants a terminal poll response scripts it explicitly with `respondToVectorStoreFileAttachPoll`. */
 const DEFAULT_VECTOR_STORE_FILE_ATTACH_POLL_RESPONSE: FakeResponse = {
   status: 200,
-  body: { status: 'completed' },
+  body: { status: 'in_progress' },
 }
 
 const DEFAULT_DELETE_RESPONSE: FakeResponse = {

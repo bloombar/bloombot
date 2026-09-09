@@ -79,13 +79,13 @@ export async function postJson(
           // `undefined` for `requestBody`) — `JSON.stringify(undefined)` is
           // itself `undefined`, which `fetch` already treats as "no body",
           // so nothing more than this needs to change for that case. A
-          // `GET` (FILE-8's poll) must send no body at all — the runtime's
-          // own `fetch` throws on a `GET`/`HEAD` request carrying one, even
-          // an `undefined`-valued one — so the key itself is omitted
-          // (`exactOptionalPropertyTypes` treats an explicit `body:
-          // undefined` differently from no `body` key at all) rather than
-          // relying on the same `JSON.stringify(undefined)` trick `DELETE`
-          // uses.
+          // `GET` (FILE-8's poll) also sends no body — real API semantics,
+          // not something the runtime's own `fetch` would otherwise refuse
+          // (it does not reject a `GET` carrying one). The `body` key is
+          // omitted entirely for a `GET`, rather than set to `undefined`,
+          // because `exactOptionalPropertyTypes` treats an explicit `body:
+          // undefined` differently from no `body` key at all — the real
+          // type change this widening needed.
           ...(options.method === 'GET'
             ? {}
             : { body: JSON.stringify(requestBody) }),

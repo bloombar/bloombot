@@ -125,23 +125,49 @@ interface VectorStoreFileStatusBody {
   last_error?: { message?: unknown }
 }
 
-/** `body.status` read into the one shape this adapter cares about — `undefined` for anything it does not recognise, so an unexpected shape polls again rather than misreading it as one of the two terminal states. */
-function readStatus(body: VectorStoreFileStatusBody | undefined): unknown {
-  return body?.status
-}
-
+/**
+ * Read one poll (or the initial create call)'s body into the one shape this
+ * adapter distinguishes: still going (`undefined`, meaning "poll again"), or
+ * settled. The only statuses that mean "poll again" are `in_progress` and
+ * `pending` (the other in-flight spelling); `completed` is the one success
+ * case, and *everything else* (`failed`, `cancelled`, or a status this
+ * adapter has never seen) is terminal and reported as `failed`, never
+ * polled to exhaustion. A `cancelled` file used to poll as "still in
+ * progress" until the budget ran out — burning a whole `maxWaitMs` window,
+ * five times over, once per retry — before finally reporting a reason
+ * ("still processing") that misdescribed what had actually happened;
+ * treating every non-`completed`, non-in-flight status as terminal fixes
+ * that the same way for any status the provider might one day add that
+ * this adapter has never seen either.
+ */
 function attachResultFromBody(
   body: VectorStoreFileStatusBody | undefined
 ): AttachFileToVectorStoreResult | undefined {
-  if (readStatus(body) === 'completed') return { status: 'completed' }
-  if (readStatus(body) === 'failed') {
-    const reason =
-      typeof body?.last_error?.message === 'string'
-        ? body.last_error.message
-        : 'OpenAI rejected this file for reasons it did not explain'
-    return { status: 'failed', reason }
+  const status = body?.status
+  if (status === 'in_progress' || status === 'pending') return undefined
+  if (status === 'completed') return { status: 'completed' }
+  if (typeof body?.last_error?.message === 'string') {
+    return { status: 'failed', reason: body.last_error.message }
   }
-  return undefined
+  if (status === 'failed') {
+    return {
+      status: 'failed',
+      reason: 'OpenAI rejected this file for reasons it did not explain',
+    }
+  }
+  if (status === 'cancelled') {
+    return {
+      status: 'failed',
+      reason:
+        "OpenAI cancelled this file's processing for reasons it did not explain",
+    }
+  }
+  // A status this adapter has never seen — reported rather than polled to
+  // exhaustion, per this function's own doc comment.
+  return {
+    status: 'failed',
+    reason: `OpenAI reported an unrecognised status for this file (status: ${String(status)})`,
+  }
 }
 
 /**
@@ -157,12 +183,20 @@ function attachResultFromBody(
  * already accepted.
  *
  * So this function polls itself, rather than leaving that to `apps/worker`'s
- * own job queue: `GET /vector_stores/{id}/files/{file_id}` until `status` is
- * `completed` or `failed`, bounded by `maxWaitMs` (default 120s — comfortably
- * inside the worker's own `JOB_HANDLER_TIMEOUT_MS`, 240s in production) at
- * `pollIntervalMs` apart (default 2s). If the deadline passes still
- * `in_progress`, *that* is when this throws a retryable `server_error` — a
- * retry is genuinely the right move at that point, and (with
+ * own job queue: `GET /vector_stores/{id}/files/{file_id}` until `status`
+ * settles (`completed`, or a terminal failure — see `attachResultFromBody`'s
+ * own doc comment for what counts), bounded by *two* independent limits — a
+ * genuine `Date.now()` wall-clock deadline (`maxWaitMs`, default 120s —
+ * comfortably inside the worker's own `JOB_HANDLER_TIMEOUT_MS`, 240s in
+ * production), checked before every poll, and `maxPolls` (derived from
+ * `maxWaitMs`/`pollIntervalMs`), an attempt-count cap. Neither bound alone
+ * is enough: each poll's own request is bounded only by `options.timeoutMs`,
+ * not by what is left of `maxWaitMs`, so a slow poll (or several) can burn
+ * most of the budget in one round — a count-only cap could then run for
+ * `maxPolls × timeoutMs`, worst case tens of minutes against a
+ * 120-second-looking bound. If the deadline passes still `in_progress`,
+ * *that* is when this throws a retryable `server_error` — a retry is
+ * genuinely the right move at that point, and (with
  * `apps/worker/src/handlers/course-attachments.ts`'s own providerFileId
  * guard) it resumes rather than re-uploading.
  */
@@ -188,16 +222,25 @@ export async function attachFileToVectorStore(
   )
   if (immediate) return immediate
 
-  // Still `in_progress` (or a shape this adapter does not recognise) right
-  // after the create call — the ordinary case (see this function's own doc
-  // comment). Poll the file's own status until it settles or the budget
-  // runs out. The number of polls is derived from `maxWaitMs`/
-  // `pollIntervalMs` up front, rather than compared against a wall-clock
-  // deadline each time round — an explicit, finite bound a test can assert
-  // the exact call count of, with no dependence on how fast the machine
-  // running it happens to be.
+  // Still `in_progress` right after the create call — the ordinary case
+  // (see this function's own doc comment). Poll the file's own status
+  // until it settles or either budget below runs out.
+  //
+  // `deadline` is the real bound: checked before every poll, so a slow
+  // poll (or several) that has already eaten most of `maxWaitMs` stops this
+  // loop rather than running the full `maxPolls` regardless of how long
+  // each round actually took.
+  //
+  // `maxPolls` is a belt-and-suspenders attempt-count cap, derived from the
+  // same two parameters — with it, a suite of fast, in-process polls (the
+  // ordinary shape a test drives) still bounds the number of poll calls to
+  // an exact, assertable count, rather than depending only on the wall
+  // clock ever catching up.
+  const deadline = Date.now() + maxWaitMs
   const maxPolls = Math.max(1, Math.ceil(maxWaitMs / pollIntervalMs))
   for (let attempt = 0; attempt < maxPolls; attempt++) {
+    if (Date.now() >= deadline) break
+
     await sleep(pollIntervalMs)
 
     const pollResponse = await postJson(

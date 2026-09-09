@@ -10794,7 +10794,7 @@ without it.
 
 ---
 
-## D-96 — `packages/openai`: FILE-8 — `POST /vector_stores/{id}/files` is asynchronous, so the adapter polls
+## D-97 — `packages/openai`: FILE-8 — `POST /vector_stores/{id}/files` is asynchronous, so the adapter polls
 
 **Problem.** Every knowledge-file upload on the live droplet failed five times and gave up. The worker log
 was hundreds of copies of one line: `OpenAI vector_stores.files.create did not complete synchronously
@@ -10808,13 +10808,33 @@ operation that had already worked, and after five attempts `markAttachmentFailed
 never happened — the file was often actually attached and searchable, several times over.
 
 **Choice: the adapter polls itself, not the queue.** `attachFileToVectorStore` now polls
-`GET /vector_stores/{id}/files/{file_id}` until `status` is `completed` or `failed`, bounded by an explicit
-`maxWaitMs` (default 120s) and `pollIntervalMs` (default 2s) — comfortably inside `apps/worker`'s own
-`JOB_HANDLER_TIMEOUT_MS` (240s in production). Only once that budget is exhausted while still `in_progress`
-does this throw a retryable `server_error` — at that point a retry genuinely is the right thing, and (see
-the next choice) it resumes rather than restarts. **Do not reintroduce "let the queue retry it" for this
-endpoint** — that reasoning is what shipped this outage, and the "asynchronous by design" premise is not
-going to stop being true.
+`GET /vector_stores/{id}/files/{file_id}` until `status` settles, bounded by an explicit `maxWaitMs`
+(default 120s) and `pollIntervalMs` (default 2s) — the 120s default sits comfortably inside `apps/worker`'s
+own `JOB_HANDLER_TIMEOUT_MS` (240s in production), but only because `maxWaitMs` is enforced as a genuine
+`Date.now()` wall-clock deadline, checked before every poll — not, as a first pass at this fix did, as a
+poll-*count* budget alone (`maxPolls`, derived from `maxWaitMs`/`pollIntervalMs`). Each poll's own request
+is bounded only by `options.timeoutMs`, not by what is left of `maxWaitMs`; a count-only budget could still
+run for `maxPolls × timeoutMs` in the worst case — around 82 minutes against a "120s" bound, found in
+review before this shipped a second, quieter version of the same outage: `runHandlerWithTimeout` would
+reject the handler at 240s with a plain `Error`, not a `ModelRequestError`, so the last-attempt
+`markAttachmentFailed` branch would never run, and the abandoned handler — JS cannot cancel an in-flight
+`await` — would keep polling while the queue started a fresh attempt on the same attachment, racing
+`markAttachmentReady`/`setCourseVectorStoreIdIfUnset`. Both bounds are kept, not one replacing the other: the
+wall clock is what actually protects the handler's own timeout, and the poll-count cap is what keeps a fast,
+in-process test's own call count exact and assertable. Only once the wall-clock budget is exhausted while
+still `in_progress` does this throw a retryable `server_error` — at that point a retry genuinely is the
+right thing, and (see the next choice) it resumes rather than restarts. **Do not reintroduce "let the queue
+retry it" for this endpoint** — that reasoning is what shipped this outage, and the "asynchronous by design"
+premise is not going to stop being true.
+
+**Choice: `cancelled`, and any status this adapter has never seen, is terminal — not "still going."** The
+vector-store-file `status` enum is `in_progress | completed | cancelled | failed`; the first pass at this
+fix recognised only `completed`/`failed` as terminal, so a `cancelled` file polled to the full `maxWaitMs`
+budget — on every one of JOB-2's retries — before finally reporting a reason ("still processing") that
+misdescribed what had actually happened. `attachResultFromBody` now treats only `in_progress`/`pending` as
+"poll again"; `cancelled` and any unrecognised status are reported as `{status: 'failed', reason}`
+immediately, the same as an explicit `failed`, and a future status this adapter has never seen fails the
+same way rather than polling to exhaustion.
 
 **Choice: a retry must resume, not re-upload.** `apps/worker/src/handlers/course-attachments.ts`'s step 2
 (`uploadFile`) used to sit inside the retried block with no check for an id already recorded, so each of
@@ -10824,8 +10844,10 @@ set, reusing that id — the row already carries it, recorded the instant the fi
 
 **Choice: `postJson` widened to `'GET'`, not a second fetch path.** The poll reaches the same
 abort/timeout/JSON-parse machinery every other call in this package already uses (`http.ts`), rather than a
-bespoke poll loop reimplementing that discipline — a `GET` sends no body (the runtime's own `fetch` rejects
-one on a `GET`/`HEAD`), forced explicitly rather than relying on `JSON.stringify(undefined)`.
+bespoke poll loop reimplementing that discipline — a `GET` sends no body. That is real API semantics, not
+something the runtime's own `fetch` would otherwise refuse (checked: it does not reject a `GET` carrying
+one); the `body` key is omitted entirely for a `GET` rather than set to `undefined`, because
+`exactOptionalPropertyTypes` treats those two differently — the actual type change this widening needed.
 
 **Choice: the panel's stuck-job copy dropped its dev-only advice.** `apps/web/src/components/CourseAttachments.tsx`
 told a stuck user to run `npm run worker:dev` — the only thing the panel said when a job was stuck, on

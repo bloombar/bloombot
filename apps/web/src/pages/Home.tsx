@@ -61,9 +61,23 @@ const PRIVACY_SUMMARY: readonly string[] = [
 export interface HomeProps {
   /** Passed through to the embedded sign-in form. */
   onSignedIn: () => void
+  /**
+   * Passed straight through to the embedded `SignIn`'s own `googleClientId`
+   * prop — omitted in every ordinary render (`App.tsx` never sets it), so
+   * `SignIn` falls back to its own build-time env read exactly as it always
+   * has. Set only by the prerender step (`prerender-plugin.ts`), to a
+   * placeholder value: the static HTML a `vite build` writes for `/` must
+   * never contain SignIn's "not configured" text, because a non-JavaScript
+   * crawler (the same Google OAuth reviewer this page exists for) would read
+   * that as this service's own sign-in being broken, in a build that simply
+   * has not set `VITE_GOOGLE_CLIENT_ID` yet — see `SignIn.tsx`'s own module
+   * comment and `docs/DECISIONS.md`'s prerendering entry for why a neutral
+   * shell is the fix rather than failing the build.
+   */
+  googleClientId?: string
 }
 
-export function Home({ onSignedIn }: HomeProps) {
+export function Home({ onSignedIn, googleClientId }: HomeProps) {
   return (
     <div className="min-h-screen bg-neutral-50" data-testid="home-page">
       <main className="mx-auto max-w-3xl px-4 py-12">
@@ -90,7 +104,10 @@ export function Home({ onSignedIn }: HomeProps) {
           </h2>
           {/* Instructors sign in here; students reach the service through
               Discord or an emailed invitation and never see this page. */}
-          <SignIn onSignedIn={onSignedIn} />
+          <SignIn
+            onSignedIn={onSignedIn}
+            {...(googleClientId !== undefined ? { googleClientId } : {})}
+          />
         </section>
 
         <section aria-labelledby="what-it-does" className="mt-12">
@@ -139,8 +156,7 @@ export function Home({ onSignedIn }: HomeProps) {
             <a href="/terms" className="text-brand-600 underline">
               terms &amp; conditions
             </a>{' '}
-            set out the agreement. Both are drafts pending legal review, and
-            both say so.
+            set out the agreement.
           </p>
         </section>
       </main>

@@ -11,6 +11,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import {
   conversations,
   costLedgerEntries,
@@ -286,7 +287,7 @@ export function deleteOrganizationData(
   organizationId: string,
   db: Database
 ): OrganizationDeletionPreview | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     // Read inside this same transaction, before anything below deletes a
     // row it counts, so the summary returned is exactly what this call is
     // about to remove.

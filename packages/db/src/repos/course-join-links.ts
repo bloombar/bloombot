@@ -23,6 +23,7 @@
 import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 
 import type { Database, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { getAccountById } from './accounts.js'
 import * as enrolments from './enrolments.js'
 import {
@@ -252,7 +253,7 @@ export function redeemJoinLink(
   now: number,
   db: Database
 ): enrolments.Enrolment | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const link = findLiveJoinLinkByHash(secretHash, now, tx)
     if (!link) return undefined
 
@@ -364,7 +365,7 @@ export function redeemJoinLinkForWebAccount(
   now: number,
   db: Database
 ): { enrolment: enrolments.Enrolment; alreadyEnrolled: boolean } | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const link = findLiveJoinLinkByHash(secretHash, now, tx)
     if (!link) return undefined
 

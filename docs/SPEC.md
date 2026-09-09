@@ -1854,7 +1854,9 @@ in order, rather than truncated or dropped by the platform.
 Each outcome the answering core can return has a rendering: an answer, an answer carrying
 the day's-last notice, a refusal when the allowance is spent, an apology when the model
 fails, and — for a course configured to answer nothing, or a message that matches no
-course — a log line naming the cause rather than a silent drop the instructor cannot see.
+course — a log line naming the cause rather than a silent drop the instructor cannot see. SURF-8
+qualifies this for the not-configured outcome: that one also gets a reply in the channel, not just the
+log line.
 
 #### SURF-7 The process starts, reports its health, and stops cleanly
 

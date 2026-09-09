@@ -218,6 +218,11 @@ function notEnrolledRefusalText(courseTitle: string): string {
   return `You are not enrolled in ${courseTitle}. See ${courseTitle} admins for help.`
 }
 
+/** SURF-8 — a course routed correctly but configured to answer nothing (neither a `promptId` nor `instructions`) now says so in the channel, rather than leaving the bot indistinguishable from one that is down, unbound, or not mentioned. No configuration detail, no course internals, nothing a student cannot act on — the same one-line discipline every other refusal in this file already holds itself to. */
+function notConfiguredReplyText(): string {
+  return `This course has not been configured yet.`
+}
+
 /**
  * Strips anything after a `#` and lowercases — the same cleanup
  * `roster-import.ts`'s own `normalizeHandle` applies to a roster's
@@ -689,15 +694,28 @@ export async function handleMention(
       )
       return { kind: 'declined-over-cap' }
     }
-    case 'course-disabled':
-    case 'not-configured': {
-      // SURF-6 — "a course configured to answer nothing": logged, not
-      // answered, matching `answerQuestion`'s own treatment of both.
+    case 'course-disabled': {
+      // SURF-6 — a course deliberately turned off stays silent: announcing
+      // itself in the channel it was disabled in is the opposite of what
+      // disabling it asked for.
       logger.info(
         { organizationId, courseId, personId: person.id, kind: result.kind },
         'handleMention: dropped, course is not configured to answer'
       )
-      return { kind: result.kind }
+      return { kind: 'course-disabled' }
+    }
+    case 'not-configured': {
+      // SURF-8 — unlike `course-disabled` above, a course that has never
+      // been configured gets a reply: an instructor testing their own new
+      // course otherwise sees only silence, indistinguishable from the bot
+      // being down. The log line SURF-6 already required stays exactly as
+      // it is; this adds a reply beside it, not instead of it.
+      await sendReply(reply, notConfiguredReplyText())
+      logger.info(
+        { organizationId, courseId, personId: person.id, kind: result.kind },
+        'handleMention: dropped, course is not configured to answer'
+      )
+      return { kind: 'not-configured' }
     }
     case 'not-connected': {
       // LINK-1/LINK-2 — the invitation reaches the student (unlike

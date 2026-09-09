@@ -1262,19 +1262,43 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
     expect(reply.sent[1]).toMatch(/reached the maximum number of responses/)
   })
 
-  it('logs and stays silent for a course configured to answer nothing', async () => {
+  // SURF-8 — fails without the change: before this, `not-configured` logged
+  // and returned with `reply.sent` empty, the same as `course-disabled`. An
+  // instructor testing their own newly created course saw only silence,
+  // indistinguishable from the bot being down. No model call is made and no
+  // allowance is spent — the same "costs nothing" proof the ENRL-14 tests
+  // above already run for their own refusal.
+  it('replies once, in the channel, for a course configured to answer nothing (SURF-8)', async () => {
     testDb = createTestDatabase()
-    const { guildId } = seedBoundServerWithCourse(testDb.db, {
-      instructions: null,
-      promptId: null,
-    })
-    const { deps, reply, logger } = makeDeps(testDb)
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { instructions: null, promptId: null }
+    )
+    const { deps, model, reply, logger } = makeDeps(testDb)
 
     const result = await handleMention(inboundMention({ guildId }), deps)
 
     expect(result).toEqual({ kind: 'not-configured' })
-    expect(reply.sent).toHaveLength(0)
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toBe('This course has not been configured yet.')
     expect(logger.infoCalls.length).toBeGreaterThan(0)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        person.id,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
   })
 
   // `answerQuestion`'s own `course-disabled` result exists for a caller that
@@ -1283,7 +1307,10 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
   // adapter"). `routeMessage` drops a disabled course before it can ever
   // match, so a disabled course reaches `handleMention` as `unrouted`, not
   // `course-disabled` — asserted here so that stays true rather than
-  // assumed.
+  // assumed. SURF-8 splits `not-configured` from `course-disabled` in the
+  // switch over `answerQuestion`'s result; this test is the other side of
+  // that split — a disabled course stays silent, unlike the reply
+  // `not-configured` now gets, above.
   it('routes around a disabled course entirely — it never reaches answerQuestion at all', async () => {
     testDb = createTestDatabase()
     const { guildId } = seedBoundServerWithCourse(testDb.db, { enabled: false })

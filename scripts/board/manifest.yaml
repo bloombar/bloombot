@@ -3641,7 +3641,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 25
-  status: In progress
+  status: Done
   review: false
 - id: ENRL-14
   title: A course decides whether it answers a student it has not enrolled
@@ -3658,5 +3658,5 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 25
-  status: In progress
+  status: Done
   review: false

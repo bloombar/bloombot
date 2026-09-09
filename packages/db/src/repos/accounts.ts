@@ -12,6 +12,7 @@
 import { and, eq } from 'drizzle-orm'
 
 import type { Database, Executor, TransactingExecutor } from '../client.js'
+import { writeTransaction } from '../client.js'
 import { accounts, memberships, type MembershipRole } from '../schema.js'
 import { revokeAllSessionsForAccount } from './sessions.js'
 
@@ -96,7 +97,7 @@ export function createAccount(
   input: NewAccount,
   db: TransactingExecutor
 ): Account {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const account = tx
       .insert(accounts)
       .values({
@@ -174,7 +175,7 @@ export function disableAccount(
   accountId: string,
   db: TransactingExecutor
 ): Account | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const account = tx
       .update(accounts)
       .set({ disabledAt: Date.now() })

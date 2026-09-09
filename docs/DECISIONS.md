@@ -10063,3 +10063,361 @@ import tests on `pages/Projects.tsx`), and a new Playwright spec
 (`e2e/course-export-import.spec.ts`) that exports a course from the panel, reads the bytes the browser
 actually downloaded, drops that same file into the project's Import dialog, and asserts the copy arrives as
 `… 2`, disabled, with its roles, category and instructions intact.
+
+## D-90 — `apps/web`/`apps/api`/`apps/bot`/`packages/config`/`packages/discord-rest`: SRV-6/TEN-4 — scaffolding refuses to enqueue with no Discord server connected, and `PUBLIC_APP_URL` is normalised in the schema itself
+
+Two independent defect fixes, bundled into one slice because both surface the same way to an
+administrator: something Discord-shaped fails without a clear reason. Reviewed and reworked once (below).
+
+**SRV-6 — checked fresh, at click time, not from a prop; and routed through the same unsaved-changes
+guard as every other way out of the editor.** `ScaffoldButton`'s "Create Discord channels" used to fire
+`discordServers.scaffold` unconditionally; with no active Discord server binding, the job enqueued, ran,
+and failed deep in the worker (`discord-scaffold.ts`'s own "...has no active Discord server bound") — an
+opaque failed job minutes later, for a condition the browser could have checked in one read. `handleClick`
+now calls `listDiscordServers` first and, finding no active binding, opens a confirmation (`useModal`'s
+`confirm`, the same primitive `InstallButton.tsx`'s own destructive-remove confirmation uses) instead of
+enqueueing; confirming calls a required `onConnectDiscord` prop (round 1 rework, below, on why required),
+which `pages/CourseEditor.tsx` wires to `confirmDiscard()` (`useUnsavedChangesGuard`) followed by
+`navigate({ kind: 'discord', organizationId })` — `ScaffoldButton` itself has no route access. Chose a
+fresh read over threading the binding list down as a prop: a prop can go stale the moment a binding is
+installed or removed elsewhere in the same session (another tab, another admin), and the whole point of
+asking before enqueueing is that the answer is current. A failed `listDiscordServers` read falls back to
+the pre-existing behaviour (attempt the scaffold) rather than blocking the button on a transient, unrelated
+read error — a genuine problem still surfaces through the job's own error path exactly as it always has.
+The "active" predicate (`removedAt === null`) was already duplicated in `pages/Shell.tsx` and
+`pages/CourseEditor.tsx`; a third copy in `ScaffoldButton.tsx` became `isActiveDiscordBinding`, exported
+from `api/types.ts` and adopted by all three rather than left triplicated. The worker's own guard
+(`discord-scaffold.ts`) is untouched — this is a browser-side convenience in front of it, not a
+replacement for it; a request that reaches the action directly (the MCP surface, a script) still gets
+refused there.
+
+**What this guard does and does not pre-empt (round 1 rework note 6).** `ScaffoldButton`'s own check is
+narrow, deliberately: "does this organization hold at least one active Discord server binding." The
+worker's own `resolveCourseDiscordServer` (`packages/db/src/repos/discord-servers.ts`) refuses two other,
+genuinely different ways — `'removed'` (the course's own `discordServerId` names a binding that has since
+been removed) and `'ambiguous'` (the column is `null` and the organization now holds two-or-more active
+bindings, so scaffolding cannot infer which one the course means) — and a job hitting either of those
+still enqueues from this button and still fails opaquely in the worker exactly as before this slice.
+Chose to narrow this paragraph's own claim rather than extend the guard to read `course.discordServerId`
+too: `CourseEditor.tsx` already surfaces both of those states directly in its own Discord server selector
+(`offersServerSelector`/`staleServerId`, that file's own comments) the moment two-or-more bindings exist or
+a course's stored id goes stale, so an instructor looking at the Discord tab already sees the ambiguity or
+the staleness before ever reaching the scaffold button in the ordinary case; duplicating that same
+resolution inside `ScaffoldButton.tsx` (a second, independent read of `course.discordServerId` plus the
+same `pickCourseServerId` logic `resolveCourseDiscordServer` already owns) is a real cost for a narrower
+gap than the one this slice actually set out to close (an organization with *zero* active bindings, the
+concrete bug in the original report). This fix closes exactly the zero-binding case; `'removed'` and
+`'ambiguous'` remain worker-side failures, unchanged by this slice.
+
+**TEN-4 — `PUBLIC_APP_URL` normalised in the schema itself, not at each reader.** Production defect: the
+install flow fails on Discord's own consent screen with `Invalid OAuth2 redirect_uri`. The Discord
+Developer Portal is outside this codebase and this slice cannot fix it — the exact registered-redirect
+mismatch for `bloombot.wonkledge.com` has to be corrected by an operator in the portal, and nothing here
+claims otherwise. What *is* a real code defect: `apps/api/src/index.ts` built `discordRedirectUri` as
+`` `${publicAppUrl}/discord/callback` `` with no normalisation, so an operator-supplied `PUBLIC_APP_URL`
+with a trailing slash (`https://host/`) silently produced `https://host//discord/callback` — a URI that
+can never match one registered in the portal, and fails with exactly this error, with a URL that "looks
+correct" at a glance. `buildSignInLink`, one line above, had the identical latent bug — and so, unnoticed
+in the first pass, did `apps/bot`'s own LINK-2 connect link (round 1 rework, below).
+
+**Round 1 rework — the normalisation moved from `apps/api`'s own local variable into
+`envSchema` (`packages/config/src/env.ts`).** The first pass normalised `publicAppUrl` once inside
+`apps/api/src/index.ts#main()`, reasoning "once, at the point it is read" — true for `apps/api`'s own two
+readers (`buildSignInLink`, `discordRedirectUri`), but `apps/bot/src/index.ts`'s own `connectUrl = CONFIG.PUBLIC_APP_URL`
+(LINK-2's connect link) reads `CONFIG` directly and was never touched, so the identical trailing-slash bug
+still reached it. Fixed properly this round by moving `stripTrailingSlashes` into `packages/config/src/env.ts`
+and applying it as a zod `.transform()` on `PUBLIC_APP_URL` itself — every reader of `CONFIG.PUBLIC_APP_URL`,
+present or future, gets an already-normalised value, with no call site left to remember the rule for itself.
+`apps/api`'s own local strip is gone (redundant now); `apps/bot` needed no code change at all, only a comment
+noting why. `packages/discord-rest/src/authorize-url.ts` no longer owns a private copy of
+`stripTrailingSlashes` either — it imports the one now exported from `@bloombot/config` (a dependency it
+already had, so this created no cycle) for its own, unrelated `oauthBase`-override normalisation, rather
+than keeping two identical one-line functions in two packages. `packages/config` is the honest home for a
+helper that exists because of a `CONFIG`-read environment variable; `@bloombot/discord-rest` never had
+anything to do with `PUBLIC_APP_URL` and should not have kept owning the rule.
+
+**Round 1 rework — the confirmation's own navigation used to bypass the editor's unsaved-changes guard.**
+`onConnectDiscord`'s first pass called `navigate` directly. Every *other* way out of `CourseEditor` —
+`handleCancel`, `goToTabGuarded` — confirms an unsaved edit first (`useUnsavedChangesGuard`'s own
+`confirmDiscard`); this one silently did not, so an instructor who edited a category name on the very
+Discord tab this button lives on, then clicked "Create Discord channels" → "Connect a server," lost that
+edit with no prompt the moment the editor unmounted — the exact loss `handleCancel` exists to prevent for
+every *other* exit. Fixed by awaiting `confirmDiscard()` before calling `navigate`, the same call
+`handleCancel` already makes for its own exit. `onConnectDiscord` was also made a required prop (not
+`?:`) in the same round: optional meant an absent handler left "Connect a server" a dead end that closed
+the dialog and did nothing, worse than the opaque failed job this whole slice exists to prevent — every
+real caller has a route to send the click to, and a test that does not care passes `vi.fn()`.
+
+**Discoverability: option (a), a startup log, not the `/install/begin` response.** The brief offered
+either logging the resolved `discordRedirectUri` at startup or returning it in `POST /install/begin`'s
+JSON body. Chose the startup log: `apps/api`'s own `main()` already logs exactly this kind of
+once-per-process operational fact (`apps/api: listening`), an operator fixing a redirect-URI mismatch is
+already looking at logs and a running process (not mid-request in the panel), and logging it once avoids
+growing `InstallBeginResponse`'s shape — which `apps/web` would then have to decide whether to render — for
+a value that is deployment-wide config, not something scoped to one request. Logged at `info`, alongside
+every other startup value this process already logs, with an explicit line that this string must be
+registered verbatim under OAuth2 → Redirects for the Discord application, or the install flow fails with
+`Invalid OAuth2 redirect_uri`. No secret in it (it is derived from `PUBLIC_APP_URL`, already public).
+
+**What this fix does and does not do.** It does: stop a trailing slash on `PUBLIC_APP_URL` from producing
+a doubled slash that can never match anything registered, in every one of its readers, not only `apps/api`'s
+own two; and make the exact resolved redirect URI easy for an operator to find and paste into the portal.
+It does not: touch, verify, or guess at what is actually registered in the Discord Developer Portal for
+application `1328738160850632825` — if the production `Invalid OAuth2 redirect_uri` error was caused by a
+mismatch there (the far more likely cause, since `PUBLIC_APP_URL` in that deployment does not obviously
+carry a trailing slash), this fix alone does not resolve it; an operator still has to register
+`https://bloombot.wonkledge.com/discord/callback` in the portal by hand. It also does not close the
+`'removed'`/`'ambiguous'` worker-side scaffold failures named above — only the zero-active-binding case.
+
+**Verification (round 1, after rework).** `npm run lint && npx prettier --check . && npm run typecheck &&
+npm test`. New/changed: 4 cases in `apps/web/tests/scaffold-button.test.tsx` (no active binding opens the
+confirmation and never enqueues; confirming calls `onConnectDiscord`; cancelling calls neither; a
+`removedAt`-set binding counts as not connected; a failed `listDiscordServers` read falls back to
+attempting the scaffold rather than showing the confirmation) — every pre-existing case in that file now
+passes an explicit `onConnectDiscord={vi.fn()}` (the prop's own required-ness); 3 cases in
+`apps/web/tests/course-editor.test.tsx` (a dirty editor prompts before navigating to the Discord page and
+"Keep editing" stays put with the edit intact; confirming the discard prompt navigates; a clean editor
+navigates straight through with no prompt); 1 in `packages/config/tests/env.test.ts` (`PUBLIC_APP_URL`
+with a trailing slash comes out of `parseEnv` already stripped). All confirmed red first: the
+`ScaffoldButton` no-binding cases against the pre-fix `handleClick` failed with the confirmation dialog
+never appearing and `scaffoldCourseDiscord` called anyway; the fallback case failed the same way with
+`hasActiveBinding`'s `catch` flipped to `false`, instead hanging on a confirmation dialog nobody expected;
+the `CourseEditor` cases failed (two of three — the clean-editor case has nothing to discard either way)
+against the pre-rework direct `navigate` call, with the "Discard unsaved changes?" dialog never appearing;
+the config case failed with `PUBLIC_APP_URL` coming back with its trailing slash still attached, against
+the schema with the `.transform()` removed.
+
+## D-91 — `packages/db`: D-2 — every write transaction opens `IMMEDIATE`, so `busy_timeout` actually governs contention
+
+**Problem.** CI run 34300930498 failed `e2e/course-configuration.spec.ts` with `SqliteError: database is
+locked` out of `courses.ts#createCourse`. `client.ts`'s own module comment claimed `busy_timeout = 5000`
+meant "a writer that arrives while another write is mid-transaction waits up to 5s for the lock instead of
+failing immediately" — true for a transaction that takes the write lock at `BEGIN`, false for the shape
+every repo function in this package actually used. `db.transaction(...)` (Drizzle's own default) issues a
+plain `BEGIN`, which SQLite treats as `BEGIN DEFERRED`: it takes a read lock first and only asks for the
+write lock at the transaction's *first write*. When that write-lock request loses to a lock another
+connection already holds, SQLite cannot retry it the way `busy_timeout` retries an ordinary contended lock —
+retrying would mean re-validating a read snapshot the transaction's own earlier statements already
+committed to, which SQLite refuses to do — so it returns `SQLITE_BUSY` immediately, regardless of the
+pragma. Per D-2, five processes (API, bot, worker, MCP, ops-monitor) share this one file on one droplet, so
+any two concurrent writes could hit this, and the pragma everyone believed was covering it was not covering
+the one shape every write transaction in the package actually used.
+
+Not a new discovery in isolation — D-49's own `conversations.ts#appendMessage` had already found and fixed
+this exact mechanism for itself (`{ behavior: 'immediate' }`, plus a bounded retry for the residual
+`SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` D-49 measured as still worth catching) and even named the risk this
+slice closes: "a shared `withTransaction` helper extracted later ... would have left the whole suite green
+while this silently reverted to `deferred`" (D-49, on why its own pinned-SQL test exists). This slice is that
+extraction, generalized to the other eleven repo functions across `packages/db/src/repos/` that open their
+own top-level transaction and never had D-49's own fix at all.
+
+**Fix — `writeTransaction(db, fn)`, exported from `client.ts`, replacing every top-level `db.transaction(fn)`
+call in the package.** A shared helper rather than repeating `{ behavior: 'immediate' }` at each of the
+(now twelve) call sites, for the exact reason D-49 named: a future repo function that opens `db.transaction`
+directly, or a Drizzle upgrade that changes the option's shape, would silently revert to `deferred` with
+every existing test still green, since none of them observe *how* a transaction begins, only what it does.
+`writeTransaction` is the one place that decision is made now. Its `fn` parameter is typed by pulling `Tx` out
+of `Database['transaction']` itself with `infer` (`type WriteTx = Database['transaction'] extends
+(transaction: (tx: infer Tx) => unknown, ...rest: never[]) => unknown ? Tx : never`), not restated by hand,
+and not simply `Parameters<Database['transaction']>[0]` — the latter forces TypeScript to instantiate
+`transaction`'s own generic return type as `unknown` before extracting the parameter, which erased every
+caller's actual return type and left `writeTransaction`'s own result typed `unknown` everywhere (caught by
+`tsc`, not a runtime defect: `packages/db/tests/client.test.ts`'s own new coverage-count assertion surfaced it
+immediately as `'rowCount' is of type 'unknown'`). `db` may also be another transaction's own `tx` (a nested
+savepoint — `accounts.ts#createAccount`'s documented case): `behavior` is meaningless to a savepoint, which
+has no `BEGIN` of its own and already runs inside whatever lock its outer transaction took, and Drizzle's own
+nested-transaction path (`BetterSQLiteTransaction.transaction`, `drizzle-orm/better-sqlite3/session.js`) takes
+no config parameter at all — the option is simply not read — so passing it through uniformly is safe rather
+than a case that needs its own branch. `conversations.ts#appendMessage`'s own D-49 fix is folded into this:
+its `{ behavior: 'immediate' }` argument is removed (redundant, `writeTransaction` now supplies it) and its
+retry loop, and the pinned "opens `BEGIN IMMEDIATE`" SQL-assertion test D-49 added, are both unchanged — the
+runtime SQL `appendMessage` emits did not change, only where the option is set.
+
+**`client.ts`'s own module comment corrected**, not merely `writeTransaction`'s own doc comment: a future
+reader looking for what `busy_timeout` covers reads `openDatabase` first, so the misleading claim needed
+fixing at its source, with a pointer down to `writeTransaction`'s own comment for the deferred-versus-immediate
+mechanism itself, rather than duplicating that explanation in two places.
+
+**Reproduced directly, both ways, per this slice's own brief — not inferred from the CI flake alone.**
+`packages/db/tests/client.test.ts` gained two tests against a real held lock, not the snapshot-staleness
+shape D-49's own existing two tests in this file already cover (kept, unchanged — a different mechanism,
+`SQLITE_BUSY_SNAPSHOT` from a stale read, not `SQLITE_BUSY` from a lock genuinely held). The lock is held by a
+*second OS process* (`spawn(process.execPath, ['-e', <script>], ...)`, `better-sqlite3` `require`d directly,
+no build step needed), not a second in-process connection: `better-sqlite3` is synchronous, so whichever
+connection "holds" the lock would have to still be on the call stack, blocking the one JS thread the
+attempting connection also needs — the two would deadlock rather than race, not model two real processes at
+all. The holder process takes `BEGIN IMMEDIATE`, writes, prints `LOCKED` (the test's cue the lock is actually
+held, not merely that the process has started), sleeps 300ms via `Atomics.wait` (a real, unresponsive hold,
+not a poll that could itself race the test), then commits. One test runs a plain, deferred `db.transaction(fn)`
+against that held lock and asserts it throws `SQLITE_BUSY` in under 150ms — confirmed by running it against
+the pre-fix code path directly (not just informally reasoned about): it throws `DrizzleError` wrapping
+`SqliteError: database is locked`, `cause.code: 'SQLITE_BUSY'`, in under half the holder's own 300ms hold.
+The other runs `writeTransaction(db, fn)` against the identical setup and asserts it returns successfully
+with elapsed time at least 50% of the holder's own hold (round 1 rework, below, widened this from an
+initial 80% for headroom on a loaded runner — still well clear of "returned instantly") — confirmed to fail
+exactly as expected with `writeTransaction`'s own `behavior` temporarily edited back to `'deferred'`: the
+same `SQLITE_BUSY` the first test asserts, thrown instead of the wait-then-succeed this test exists to pin
+down — then restored, green again.
+
+**Cost — two existing atomicity tests broke, for a reason the brief for this slice did not anticipate, and
+had to be understood before being fixed rather than patched around.** `course-join-links.test.ts` (two
+tests) and `membership-invitations.test.ts` (one test) each simulate "a revoke races an in-flight
+redemption" by spying on a function called *inside* the redemption's own transaction, and firing a write
+against a *second, real* connection from inside that spy — a same-process stand-in for a genuinely
+concurrent second connection, which worked because the redemption's transaction was deferred: at the moment
+the spy fires (after the transaction's own liveness read, before its first write), the transaction held no
+lock yet, so the second connection's write went through immediately, and the *outer* transaction's own later
+write then lost to the now-stale snapshot it had already read from (`SQLITE_BUSY_SNAPSHOT`, D-49's own
+mechanism) — which is exactly the race these tests exist to prove is refused. Once the redemption itself
+uses `writeTransaction`, it holds the write lock from `BEGIN`, before its own liveness read even runs — so
+the second connection's nested write, still on the very call stack the transaction's own code is on, can
+never win that lock, and can never wait for it either: the outer transaction cannot release a lock it holds
+while control is still nested inside its own call stack waiting on the very connection it is blocking. This
+is not a slow wait but a genuine same-thread deadlock, resolved only when the second connection's own
+`busy_timeout` (5,000ms by default, `openDatabase`) is exhausted and it gives up with `SQLITE_BUSY` — which
+is why these three tests, unmodified, went from passing in tens of milliseconds to failing (`revokedAt:
+null`, not a number) after five real seconds each. Fixed two ways, not by changing what is asserted about
+atomicity: (1) each `secondConnection`'s own `busy_timeout` is cut to 100ms, since the point of each test is
+what happens when the race is lost, not how long losing takes to observe; (2) the final assertion on each
+test changed from `revokedAt: expect.any(Number)` to `revokedAt: null` — the racing revoke, nested on the
+transaction's own call stack, now always loses and never commits, so the property each test's own primary
+assertion already pins down (nobody was admitted or granted membership on a stale read) holds for a
+*stronger* reason than before: not a write that raced in and then lost a conflict check, but a write that
+was structurally unable to happen at all while the transaction it raced was in flight. A genuinely separate
+process — not a nested call on the same one — attempting the identical revoke would instead simply wait
+behind `busy_timeout` and then succeed, exactly like `client.test.ts`'s own new pair of tests above; that
+case did not need a new test of its own here, since it is precisely what this slice's own `client.test.ts`
+tests already prove for the underlying mechanism.
+
+**Out of scope, named rather than silently left.** `apps/**`, `e2e/**`, `.github/**` untouched. `busy_timeout`'s
+value, `journal_mode`, and `foreign_keys` are all unchanged.
+
+**Round 1 rework — the claim above ("no caller outside `packages/db` opens its own `db.transaction(...)`")
+was false, and the false version of it shipped in this entry's own first draft.** Two independent reviewers
+found ten top-level, deferred, read-before-write transactions this first pass missed: `packages/auth/src/
+sign-in.ts` (`ensureWebPersonForAccount`, `redeemSignInLink`, `signInWithGoogle`,
+`tryCreateAccountForEmail`), `person-link.ts` (`completeDiscordPersonLink`, `completeMcpPersonLink`),
+`sessions.ts` (`rotateSession`), and `packages/actions/src/actions/course-instructions.ts`
+(`saveCourseInstructionsAction`, `restoreCourseInstructionsRevisionAction`) and `projects.ts`
+(`duplicateProjectAction`) — each takes a `Database`, not a `tx`, so each was its own genuine top-level
+deferred transaction, not a nested savepoint `writeTransaction`'s own `behavior` cannot reach anyway. The
+worst of these is `signInWithGoogle`: it reads `accountsRepo.getAccountByEmail` before it ever writes,
+exactly D-89's own vulnerable shape, on the literal path two concurrent `POST /auth/google` requests take —
+the bug this entry claimed was eliminated was still live on sign-in itself. All ten converted to
+`writeTransaction`, the same helper, no new pattern — `@bloombot/db` was already imported in every one of
+these five files, so this added one import and one call-site rewrite each, not new infrastructure.
+
+Checked, not assumed, that `writeTransaction` is the right call in all ten: `accounts.createAccount` — the
+`writeTransaction` call `tryCreateAccountForEmail` and `findOrCreateAccountForEmail` both pass their own
+`tx` into — already becomes a savepoint under a deferred *outer* `BEGIN` when reached through
+`signInWithGoogle`'s or `redeemSignInLink`'s own now-fixed top-level transaction; before this round, that
+outer transaction being deferred meant the inner call gained nothing from opening `immediate` itself, since
+the outer read-then-upgrade race was still live around it. Converting only the outer call closes this for
+real, which is exactly why the sweep had to find the *top-level* callers, not just any remaining
+`db.transaction(...)`.
+
+**Proven, not merely converted — one auth path re-verified the same way `packages/db` was.**
+`packages/auth/tests/sign-in.test.ts` gained a `signInWithGoogle` race test built like
+`client.test.ts`'s own pair: a second real OS process holds `BEGIN IMMEDIATE` on the same on-disk file,
+and `signInWithGoogle` is asserted to wait for it and succeed. Confirmed to actually discriminate — not a
+test that "passes either way," which `client.test.ts`'s own existing `packages/db` pair already showed is
+possible for a transaction whose first statement is already a write (no read-then-upgrade gap for a
+deferred transaction to lose): with `writeTransaction`'s `behavior` reverted to `'deferred'`, this test
+fails immediately (`SqliteError: database is locked`, thrown from `tryCreateAccountForEmail`'s own nested
+`writeTransaction`, ~118ms total, nowhere near the 300ms holder's own hold), then passes again restored.
+A symmetric attempt at the same test for `rotateSession` (`sessions.ts`) was written first and discarded:
+`rotateSession`'s own first statement, `revokeSessionByHash`, is itself a write, so — like
+`courses.ts#createCourse` and every other write-first transaction already in this package — deferred and
+immediate behave identically there, and the test passed under both, proving nothing about either. Recorded
+here rather than silently dropped: not every one of the ten converted call sites was actually exposed to
+the bug this entry describes (`rotateSession`, `tryCreateAccountForEmail`, and the two `person-link.ts`
+functions all write first too) — `writeTransaction` is still the correct, uniform call for all ten, per this
+entry's own "a future repo function cannot silently end up deferred" reasoning, but only `signInWithGoogle`
+and `ensureWebPersonForAccount` (both read-then-write) were actually live instances of the CI failure's own
+mechanism.
+
+**Round 1 rework — the exit-listener hang in `client.test.ts`'s own race tests, found by a reviewer running
+it standalone.** `holdWriteLockInChildProcess` built `waitForExit` by attaching `child.on('exit', ...)`
+*inside* the returned object, the first time a caller actually asked for it. Node's `'exit'` event fires at
+most once; if the holder process had already exited by the time a test's own `finally` called
+`waitForExit()` — the ordinary case for the "waits and succeeds" test, since by definition it does not
+return until *after* the holder's own hold and commit — attaching then misses an event that already fired,
+and the promise never resolves, hanging the test to vitest's own timeout. Reproduced directly: a minimal
+standalone script attaching `child.on('exit', ...)` after a child had already exited hung on a
+manually-added timeout exactly as described; the same script attaching an `exit` listener at spawn time
+(`child.once('exit', ...)`, captured in a promise built before the function returns) resolved immediately.
+Fixed by building `exited` eagerly, inside `holdWriteLockInChildProcess` itself, before either promise is
+returned — `waitForExit` just hands back that already-in-flight (or already-settled) promise, regardless of
+when it is called. `kill()` is also returned now and called in every test's own `finally`, so a holder that
+somehow does not exit on its own cannot leak a lock onto the temp file `afterEach` is about to delete.
+
+**Round 1 rework — cheap fixes to the same tests, also in `client.test.ts`.** The stderr handler used to
+`reject` on the very first byte written to the child's stderr, which would have failed the test on an
+unrelated Node deprecation warning or anything a CI runner injects via `NODE_OPTIONS`, not only on an actual
+holder crash; it now buffers stderr and only surfaces it if the child exits without ever reaching `LOCKED`
+(the one case where stderr is actually informative). The "waited long enough" assertion (`elapsedMs >=
+holdMs * 0.8`) left too little margin across a real process boundary — the parent's own timer starts only
+after `openDatabase` returns, not when the child was spawned — so it is `0.5` now; the property the
+assertion exists to prove (waited for the lock, rather than returned instantly) does not need a tighter
+number to hold.
+
+**Round 1 rework — the three tests changed in `course-join-links.test.ts`/`membership-invitations.test.ts`
+kept their assertions but were confirmed, not merely renamed, to still catch the defect they exist for.** A
+reviewer mutated `redeemJoinLink` to drop its transaction entirely and re-ran the suite: the test still
+failed, on its primary `getActiveEnrolment` assertion (an extra person admitted), independent of the
+`revokedAt` assertion this entry's own "Cost" section above already explains changed. Their names and
+leading comments, though, still read "a revoke racing with an in-flight redemption cannot let X" — worded
+for the pre-D-89 mechanism (a race that could be lost), not the current one (a write that can never land at
+all). Reworded to say what each test now demonstrates (`"... a revoke attempted mid-redemption cannot land,
+and admits/connects/grants ..."`) and updated the `catch` blocks' own comments to say why the redemption now
+always throws, rather than "either outcome is acceptable" — a claim that was accurate before this round and
+is not anymore. No assertion in any of the three changed as part of this.
+
+**Round 1 rework — `transcript-access.ts#readCourseTranscript`'s own lock-window regression, and the sweep
+for others.** Before D-89, this function's course/person checks, its transcript scan (an unbounded `.all()`
+over every message a course has ever exchanged — the slowest thing this function does, and the one
+`transcripts.export`'s own job handler, ADMIN-3, calls on potentially years of history) and its audit insert
+all ran inside one deferred transaction, so the scan itself only ever held an ordinary read lock; only the
+final insert asked for the write lock at all. `writeTransaction`'s `BEGIN IMMEDIATE` would have moved that
+acquisition to the very first statement instead, holding the *exclusive* write lock for the entire scan — on
+a five-process droplet (D-2), a large transcript export blocking every other writer past `busy_timeout` is a
+real production regression, not a test artifact. Fixed by scoping the write transaction to the audit row's
+own read-max-then-insert alone (the concurrency-sensitive part — see `schema.ts`'s own `sequence` comment on
+why this pair has to stay atomic together), and running the course/person checks and the scan as plain reads
+against `db` beforehand, outside any transaction. The caller still never sees transcript data without the
+matching audit row committed first — `rows` is read, but not returned, until after the small transaction
+below it has actually finished.
+
+Checked, not assumed, before moving anything: the old single transaction gave one guarantee this split gives
+up — `course`, the scan, and the audit insert used to share one consistent snapshot, so a course or person
+deleted *between* this function's checks and its audit write would have failed the whole thing atomically
+(`SQLITE_BUSY_SNAPSHOT`) rather than logging an access against a row no longer there. This is safe to give up
+here specifically: neither a `courses` nor a `people` row is ever deleted on its own — the only path that
+removes either is `organizations.ts#deleteOrganizationData`, itself one transaction that deletes every
+`transcript_access_log`/`messages` row for the same organization first (in FK-safe order) — so the only way
+this window could matter is a whole-organization deletion racing a transcript read within it, at which point
+TEN-2's own "the organization is gone" already makes the access log's own fate moot. Recorded in this
+function's own doc comment, not only here, so a future reader does not have to re-derive it.
+
+Swept every other `writeTransaction` call site (all twenty-two, the twelve from this entry's first pass plus
+the ten above) for the same shape — an unbounded or otherwise disproportionate read ahead of the first write
+— and found none. Every other read-before-write site reads at most one indexed row (an existing account, an
+existing person, an existing course) before writing; every read scoped to *more* than one row (`mergePeople`'s
+own loop over one person's own enrolments, `deleteOrganizationData`'s own per-table `count(*)`) is scoped to
+exactly the rows that same transaction is about to rewrite or delete, not an unrelated read riding along with
+an unrelated small write the way `readCourseTranscript`'s scan was — holding the lock for those is
+proportionate to what the write itself already has to touch, not a new cost this slice introduced.
+
+**Verification (round 1).** `npm run lint && npm run format:check && npm run typecheck && npm test && npm run
+test:coverage` all green. `packages/auth` (31 files, 385→386 tests) and `packages/actions` suites both pass
+after the ten conversions; `packages/db/src/repos` coverage stays above the 90/85/90/90 floor (re-measured
+after `transcript-access.ts`'s own restructuring); `client.ts`, where `writeTransaction` lives, carries no
+separate floor (not in QA-4's own `include` list), same as round 0.
+
+**Verification (round 0).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all
+green: 2586 vitest (2 new in `packages/db/tests/client.test.ts`, the pair described above; 3 existing tests
+edited in place in `course-join-links.test.ts`/`membership-invitations.test.ts`, not given new `it` blocks —
+the cost described above), 93 node. `npm run test:coverage`'s own `packages/db/src/repos` figures (95.76%
+statements/90.73% branches/99.54% functions/97.32% lines) stay above the 90/85/90/90 floor; `client.ts`
+itself, where `writeTransaction` actually lives, is not in QA-4's own `include` list and carries no separate
+floor.

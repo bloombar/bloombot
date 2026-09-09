@@ -19,6 +19,7 @@ import {
   organizations as organizationsRepo,
   people as peopleRepo,
   signInTokens as signInTokensRepo,
+  writeTransaction,
   type Database,
   type TransactingExecutor,
 } from '@bloombot/db'
@@ -230,7 +231,7 @@ export function ensureWebPersonForAccount(
   if (existing) return existing
 
   try {
-    return db.transaction((tx) => {
+    return writeTransaction(db, (tx) => {
       const again = peopleRepo.resolveIdentity(organizationId, identity, tx)
       if (again) return again
 
@@ -447,7 +448,7 @@ export function redeemSignInLink(
   token: string,
   db: Database
 ): SignInResult | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const consumed = consumeSignInToken(token, tx)
     if (!consumed) return undefined
 
@@ -506,7 +507,7 @@ export function signInWithGoogle(
   identity: GoogleIdentity,
   db: Database
 ): SignInResult | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const existing = accountsRepo.getAccountByEmail(identity.email, tx)
     const decision = decideLinkOutcome(identity, existing?.email)
 
@@ -563,7 +564,7 @@ function tryCreateAccountForEmail(
   // — catching *inside* the callback would let that organization row commit
   // as an orphan alongside the account insert's refusal.
   try {
-    return db.transaction((tx) => {
+    return writeTransaction(db, (tx) => {
       const organizationId = crypto.randomUUID()
       organizationsRepo.createOrganization(
         organizationId,

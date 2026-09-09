@@ -1301,16 +1301,49 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
     ).toBe(0)
   })
 
+  // SURF-8 cheap-fix (review round 1) — fails without the change: before
+  // the log line was written first, a rejecting reply (no Send Messages
+  // permission, a Discord 5xx — the failure this outcome is most exposed
+  // to, on exactly the misconfigured server SURF-8 exists for) threw out of
+  // `sendReply` before `logger.info` ever ran, so the SURF-6 log line for
+  // this outcome vanished along with the reply. Ordering the log first
+  // means the outcome is still on record even when the reply itself fails.
+  it('logs "not-configured" before attempting the reply, so the log line survives a reply that rejects', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      instructions: null,
+      promptId: null,
+    })
+    const rejectingReply = {
+      reply: async () => {
+        throw new Error('missing permission to send messages in this channel')
+      },
+    }
+    const { deps, logger } = makeDeps(testDb, { reply: rejectingReply })
+
+    await expect(
+      handleMention(inboundMention({ guildId }), deps)
+    ).rejects.toThrow(/missing permission/)
+
+    expect(logger.infoCalls.length).toBeGreaterThan(0)
+    expect(
+      logger.infoCalls.some(
+        (call) => (call[0] as { kind?: string }).kind === 'not-configured'
+      )
+    ).toBe(true)
+  })
+
   // `answerQuestion`'s own `course-disabled` result exists for a caller that
   // reaches it without going through routing (its own comment: "CORE-2's
   // routing already filters a disabled course out for the Discord
   // adapter"). `routeMessage` drops a disabled course before it can ever
   // match, so a disabled course reaches `handleMention` as `unrouted`, not
   // `course-disabled` — asserted here so that stays true rather than
-  // assumed. SURF-8 splits `not-configured` from `course-disabled` in the
-  // switch over `answerQuestion`'s result; this test is the other side of
-  // that split — a disabled course stays silent, unlike the reply
-  // `not-configured` now gets, above.
+  // assumed. This is the test that actually covers the user-visible
+  // "disabled stays silent" behaviour end-to-end; the `case 'course-disabled'`
+  // arm SURF-8 split out in the switch above exists only for exhaustiveness
+  // — it is unreachable through `handleMention`, and this test would still
+  // pass if that arm were deleted entirely.
   it('routes around a disabled course entirely — it never reaches answerQuestion at all', async () => {
     testDb = createTestDatabase()
     const { guildId } = seedBoundServerWithCourse(testDb.db, { enabled: false })

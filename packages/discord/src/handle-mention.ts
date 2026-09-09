@@ -697,10 +697,14 @@ export async function handleMention(
     case 'course-disabled': {
       // SURF-6 — a course deliberately turned off stays silent: announcing
       // itself in the channel it was disabled in is the opposite of what
-      // disabling it asked for.
+      // disabling it asked for. This arm exists for switch exhaustiveness
+      // only — `routeMessage` filters a disabled course out before it can
+      // ever reach here (a disabled course reaches `handleMention` as
+      // `unrouted`, not `course-disabled`), so the user-visible silence is
+      // covered end-to-end by that routing test, not this one.
       logger.info(
         { organizationId, courseId, personId: person.id, kind: result.kind },
-        'handleMention: dropped, course is not configured to answer'
+        'handleMention: dropped, course is disabled'
       )
       return { kind: 'course-disabled' }
     }
@@ -709,12 +713,16 @@ export async function handleMention(
       // been configured gets a reply: an instructor testing their own new
       // course otherwise sees only silence, indistinguishable from the bot
       // being down. The log line SURF-6 already required stays exactly as
-      // it is; this adds a reply beside it, not instead of it.
-      await sendReply(reply, notConfiguredReplyText())
+      // it is; this adds a reply beside it, not instead of it. Logged
+      // *before* the reply is sent — if `reply.reply` rejects (no Send
+      // Messages permission, a Discord 5xx), the throw must not take this
+      // log line down with it: the reply is the part most likely to fail
+      // in exactly the misconfigured-server situation SURF-8 exists for.
       logger.info(
         { organizationId, courseId, personId: person.id, kind: result.kind },
         'handleMention: dropped, course is not configured to answer'
       )
+      await sendReply(reply, notConfiguredReplyText())
       return { kind: 'not-configured' }
     }
     case 'not-connected': {

@@ -121,6 +121,7 @@ import {
   saveCourse,
 } from '../api/client.js'
 import type { SaveCourseCategoryInput, SaveCourseInput } from '../api/client.js'
+import { isActiveDiscordBinding } from '../api/types.js'
 import type {
   Course,
   DiscordServerBindingSummary,
@@ -475,9 +476,7 @@ export function CourseEditor({
   const [discordBindings, setDiscordBindings] = useState<
     DiscordServerBindingSummary[]
   >([])
-  const activeBindings = discordBindings.filter(
-    (binding) => binding.removedAt === null
-  )
+  const activeBindings = discordBindings.filter(isActiveDiscordBinding)
   // Must-fix 3 (coordinator round 1 rework): `activeBindings.length > 1`
   // alone stranded a course whose own `discordServerId` names a binding
   // that has since been removed — the owner removes the second of two
@@ -1589,6 +1588,24 @@ export function CourseEditor({
                   <ScaffoldButton
                     organizationId={organizationId}
                     courseId={courseId}
+                    // SRV-6 — `ScaffoldButton` has no route access of
+                    // its own; when its own click-time check finds no
+                    // active Discord server binding, it confirms and then
+                    // defers to this to take the person to the
+                    // organization's Discord page, where `InstallButton`
+                    // lives. Routed through `confirmDiscard()` first — the
+                    // same unsaved-changes prompt `handleCancel` (above)
+                    // uses for its own leave-the-editor navigation — since
+                    // this, like Cancel, unmounts the whole editor: a
+                    // dirty category/channel edit on this very tab would
+                    // otherwise vanish with no prompt the moment "Connect
+                    // a server" is clicked, unlike every other way out of
+                    // this form.
+                    onConnectDiscord={async () => {
+                      if (await confirmDiscard()) {
+                        navigate({ kind: 'discord', organizationId })
+                      }
+                    }}
                   />
                 </section>
               </>

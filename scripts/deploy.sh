@@ -442,26 +442,32 @@ needs a human to look, not a re-run of this script."
 # renamed, so it can never collide with itself.
 OLD_BARE_NAMES=(api bot worker mcp ops-monitor)
 
-# Aborts the deploy if pm2 knows both an old bare name and its new
-# `bloombot-` counterpart — the signature of a rename whose migration step
-# was skipped. Collects every offending pair, the same "report everything
-# wrong, not just the first" discipline `reload_everything` already uses,
-# so one deploy attempt tells an operator the full list to fix.
+# Aborts the deploy if pm2 knows ANY of the old bare names — not only when
+# both the old and the new name are present. Rework finding: the original
+# version of this guard only fired on that both-present shape, which is
+# exactly what an *unmigrated* droplet never has (it knows only the old
+# names, never the new ones) — the one case this guard exists to catch. An
+# unmigrated droplet passed the old check silently, and `start_or_reload`
+# went on to start all five new processes beside the five still-running
+# old ones: two workers claiming jobs, two Discord gateways, and the new
+# processes crash-looping because the old ones already hold their health
+# ports. After a correct migration none of the old names exist any more,
+# so this is silent from then on; before one, every deploy refuses.
 check_pm2_names_migrated() {
-  local half_migrated=()
-  local old new
+  local still_old=()
+  local old
   for old in "${OLD_BARE_NAMES[@]}"; do
-    new="bloombot-${old}"
-    if pm2_knows_app "$old" && pm2_knows_app "$new"; then
-      half_migrated+=("$old / $new")
+    if pm2_knows_app "$old"; then
+      still_old+=("$old")
     fi
   done
-  if [ ${#half_migrated[@]} -gt 0 ]; then
-    fail "pm2 knows both the old and the new name for: ${half_migrated[*]}.
-This droplet has not finished the OPS-15 pm2 rename — run
+  if [ ${#still_old[@]} -gt 0 ]; then
+    fail "pm2 still knows these pre-OPS-15 names: ${still_old[*]}.
+This droplet has not run the OPS-15 pm2 rename migration — run
 scripts/migrate-pm2-names.sh once, by hand, before deploying again. Refusing
-to reload rather than risk two processes (old and new) both running at
-once — see that script's own header for what it does."
+to reload rather than risk starting a second, bloombot-prefixed process
+beside each one still running under its old name — see that script's own
+header for what it does and the order it must run in."
   fi
 }
 

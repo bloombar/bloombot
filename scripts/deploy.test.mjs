@@ -415,14 +415,62 @@ test('deploy.sh: the happy path builds, migrates once, reloads every process, an
 // old name. This pins the guard that catches that state explicitly, before
 // `reload_everything` (or anything else) ever runs, rather than trusting a
 // deploy to notice via a crash-looping health check afterwards.
-test('deploy.sh: aborts before reloading anything when pm2 already knows both an old and a new name, naming the migration script', async () => {
+//
+// Rework finding — the first version of this guard only aborted when pm2
+// knew BOTH an old name and its new counterpart. A droplet that has never
+// been migrated at all knows only the old names, so that version passed
+// silently through the exact case it existed to catch, and CD would have
+// started all five new processes beside the five still-running old ones
+// unattended on the very next merge to master. This is the regression test
+// for a wholly-unmigrated droplet — no `bloombot-` name present at all —
+// which the both-present rule let straight through.
+test('deploy.sh: aborts before reloading anything when pm2 knows an old bare name at all — even a wholly-unmigrated droplet with no new names yet', async () => {
   writeDefaultStubs()
   const { target, checkoutDir } = await setUpRepo()
-  const pm2State = join(base, `pm2-state-half-migrated-${Date.now()}.json`)
+  const pm2State = join(
+    base,
+    `pm2-state-unmigrated-${Date.now()}-${Math.random()}.json`
+  )
   // Seeded directly, bypassing `runDeploy`'s own default state file — pm2
-  // already knows both `bloombot-worker` (this rename's own new name) and
-  // the old, bare `worker` it replaced, the exact signature a forgotten
-  // migration leaves behind.
+  // knows every old, bare name and none of the new `bloombot-` ones at
+  // all: a droplet that has never run the migration, not a half-migrated
+  // one.
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      ['api', 'bot', 'worker', 'mcp', 'ops-monitor'].map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+  })
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /pm2 still knows these pre-OPS-15 names/)
+  assert.match(output, /api/)
+  assert.match(output, /worker/)
+  assert.match(output, /migrate-pm2-names\.sh/)
+  // Nothing was reloaded, and no build or migration step ran either — the
+  // guard is checked before anything else in the script touches the
+  // checkout.
+  assert.doesNotMatch(output, /reloading every supervised process/)
+  assert.doesNotMatch(output, /applying the platform database migration/)
+})
+
+// The sibling case: pm2 knows both an old name and its new counterpart —
+// still refused, on the same "any old name present" rule, not merely the
+// narrower both-present shape the original guard checked for.
+test('deploy.sh: aborts before reloading anything when pm2 knows both an old and a new name, naming the migration script', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-half-migrated-${Date.now()}-${Math.random()}.json`
+  )
   writeFileSync(
     pm2State,
     JSON.stringify([
@@ -439,11 +487,9 @@ test('deploy.sh: aborts before reloading anything when pm2 already knows both an
 
   assert.notEqual(result.code, 0)
   const output = result.stdout + result.stderr
-  assert.match(output, /worker \/ bloombot-worker/)
+  assert.match(output, /pm2 still knows these pre-OPS-15 names/)
+  assert.match(output, /worker/)
   assert.match(output, /migrate-pm2-names\.sh/)
-  // Nothing was reloaded, and no build or migration step ran either — the
-  // guard is checked before anything else in the script touches the
-  // checkout.
   assert.doesNotMatch(output, /reloading every supervised process/)
   assert.doesNotMatch(output, /applying the platform database migration/)
 })

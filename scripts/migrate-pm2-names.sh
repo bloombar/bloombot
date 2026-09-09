@@ -17,7 +17,10 @@
 # `bot` processes holding two Discord gateway connections, and the new
 # processes crash-looping because the old ones already hold their health
 # ports — which fails `scripts/deploy.sh`'s own health check and rolls the
-# deploy back into a half-renamed state.
+# deploy back into a half-renamed state. `scripts/deploy.sh`'s own guard
+# (`check_pm2_names_migrated`) refuses to reload at all while pm2 still
+# knows ANY of the old names, rather than let that happen — it never
+# deletes anything itself, and names this script in its failure message.
 #
 # This script is the deliberate migration instead: it deletes each old name
 # pm2 still knows, starts each new name that is missing, then `pm2 save`s
@@ -26,17 +29,29 @@
 # `wikistreets` process on the same shared droplet is untouchable), and it
 # is not run automatically by CI or by `scripts/deploy.sh` itself — deleting
 # a pm2 process on a shared droplet is an operator's decision, not one a
-# deploy script gets to make unattended. `scripts/deploy.sh`'s own
-# half-migrated guard only ever refuses to proceed when it finds both an old
-# and a new name registered; it never deletes anything itself and instead
-# names this script in its failure message.
+# deploy script gets to make unattended.
 #
-# Run this once, by hand, on a droplet that still has the old bare names —
-# BEFORE the first deploy of the commit that renamed them:
+# THE ORDER THIS MUST RUN IN MATTERS. The "start" half below runs
+# `pm2 start ecosystem.config.cjs --only <new-name>`, which only works if
+# the checkout's *own* `ecosystem.config.cjs` — right here, in the current
+# working directory — already defines that name. If this is run while the
+# checkout is still on the commit *before* the rename, the old processes
+# get deleted, every `--only <new-name>` matches nothing in the file pm2 is
+# told to read, pm2 exits 0 anyway having started nothing, and the droplet
+# ends up with the whole platform down and no old processes left to fall
+# back to. This script refuses to delete anything until it has confirmed the
+# checkout it is run from actually names every new process (see
+# `assert_ecosystem_has_new_names` below) — but the order below is still
+# the one to follow, not something this refusal is a substitute for:
 #
-#   cd <the checkout, the same directory scripts/deploy.sh's own APP_DIR is>
-#   scripts/migrate-pm2-names.sh          # prints the plan, asks to confirm
-#   scripts/migrate-pm2-names.sh --yes    # skips the confirmation prompt
+#   1. Update the droplet's checkout to the commit that renamed the
+#      processes (whatever the next `scripts/deploy.sh` run, or a manual
+#      update to that same commit, would put there) — BEFORE running this.
+#   2. Run this script, once, by hand:
+#        cd <the checkout, the same directory scripts/deploy.sh's own APP_DIR is>
+#        scripts/migrate-pm2-names.sh          # prints the plan, asks to confirm
+#        scripts/migrate-pm2-names.sh --yes    # skips the confirmation prompt
+#   3. Only then let (or trigger) the next ordinary deploy.
 #
 # Idempotent: run it again on an already-migrated droplet (no old names left,
 # every new name already present) and it reports "nothing to do" and exits 0
@@ -50,14 +65,15 @@ fail() {
   exit 1
 }
 
-# The exact old names this migration acts on, hand-listed rather than
-# discovered from pm2's own process list — so an unrelated process on the
-# same shared droplet, whatever it happens to be called, is never a
+# The exact old/new name pairs this migration acts on, hand-listed rather
+# than discovered from pm2's own process list — so an unrelated process on
+# the same shared droplet, whatever it happens to be called, is never a
 # candidate for deletion no matter what pm2 reports. The legacy Python
 # bot's own `bloombot` entry has no pair here: it was never renamed
 # (`ecosystem.config.cjs`'s own module comment says why), so it cannot
 # collide with itself.
 OLD_NAMES=(api bot worker mcp ops-monitor)
+NEW_NAMES=(bloombot-api bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor)
 
 for cmd in pm2 node; do
   command -v "$cmd" >/dev/null 2>&1 || fail "required command not on PATH: $cmd"
@@ -73,6 +89,37 @@ for arg in "$@"; do
     *) fail "unrecognized argument: $arg (only --yes is accepted)" ;;
   esac
 done
+
+# Rework finding — the first version of this script had no precondition on
+# `ecosystem.config.cjs`'s own contents at all, only that the file existed.
+# Run against a checkout still on the pre-rename commit (the documented,
+# and only sane, order is checkout-then-migrate, but nothing enforced it),
+# the delete half below would succeed, and every `pm2 start
+# ecosystem.config.cjs --only bloombot-api` (etc.) would match no app in
+# that file, exit 0 having started nothing, and leave the droplet with the
+# whole platform down and no old processes left to recover to. Checked
+# before anything is deleted, against the *current* `ecosystem.config.cjs`
+# in this directory, using node (already required above) to read it the
+# same way pm2 itself would.
+assert_ecosystem_has_new_names() {
+  local missing=()
+  local new
+  for new in "${NEW_NAMES[@]}"; do
+    if ! node -e '
+      const apps = (require(process.argv[1]).apps || []);
+      process.exit(apps.some((a) => a && a.name === process.argv[2]) ? 0 : 1);
+    ' "$(pwd)/ecosystem.config.cjs" "$new"; then
+      missing+=("$new")
+    fi
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    fail "ecosystem.config.cjs in $(pwd) does not name: ${missing[*]}.
+This checkout is still on the commit before the OPS-15 pm2 rename. Update
+the checkout to the renamed commit FIRST, THEN run this migration — never
+the other way around. Nothing was deleted."
+  fi
+}
+assert_ecosystem_has_new_names
 
 # Reads one field of a named pm2 app record out of `pm2 jlist` — the same
 # approach `scripts/deploy.sh`'s own `pm2_field` uses, duplicated rather
@@ -119,7 +166,12 @@ if [ ${#PRESENT_OLD[@]} -eq 0 ] && [ ${#MISSING_NEW[@]} -eq 0 ]; then
 fi
 
 log "this migration will:"
-[ ${#PRESENT_OLD[@]} -gt 0 ] && log "  delete: ${PRESENT_OLD[*]}"
+if [ ${#PRESENT_OLD[@]} -gt 0 ]; then
+  log "  delete: ${PRESENT_OLD[*]}"
+  log "  (these are generic names an unrelated project on this shared droplet"
+  log "   could plausibly own too — check \`pm2 describe <name>\` for anything"
+  log "   you did not expect before confirming)"
+fi
 [ ${#MISSING_NEW[@]} -gt 0 ] && log "  start (from ecosystem.config.cjs): ${MISSING_NEW[*]}"
 log "  then, if every step above succeeds: pm2 save"
 
@@ -133,7 +185,13 @@ fi
 # tells an operator everything that needs a second look, not just whichever
 # step happened to fail first.
 FAILED=()
-for old in "${PRESENT_OLD[@]}"; do
+# `"${ARR[@]}"` on an EMPTY array under `set -u` is an unbound-variable
+# error on bash 3.2 (macOS's own `/bin/bash`, still bash 3.2 by license —
+# reproduced running this script locally on it); the droplet's own bash 5
+# has long since fixed this, but the `${ARR[@]+"${ARR[@]}"}` form below
+# costs nothing and keeps a local, macOS-run rehearsal of this script from
+# failing for a reason that has nothing to do with what it is testing.
+for old in ${PRESENT_OLD[@]+"${PRESENT_OLD[@]}"}; do
   log "pm2 delete $old"
   if ! pm2 delete "$old"; then
     echo "ERROR: pm2 delete $old failed" >&2
@@ -141,7 +199,7 @@ for old in "${PRESENT_OLD[@]}"; do
   fi
 done
 
-for new in "${MISSING_NEW[@]}"; do
+for new in ${MISSING_NEW[@]+"${MISSING_NEW[@]}"}; do
   log "pm2 start ecosystem.config.cjs --only $new"
   if ! pm2 start ecosystem.config.cjs --only "$new"; then
     echo "ERROR: pm2 start $new failed" >&2

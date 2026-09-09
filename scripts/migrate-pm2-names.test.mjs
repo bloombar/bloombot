@@ -94,12 +94,39 @@ esac
   )
 }
 
-/** Seeds a throwaway checkout directory with an `ecosystem.config.cjs` and returns its path. */
+/**
+ * Seeds a throwaway checkout directory with an `ecosystem.config.cjs` and
+ * returns its path. Named the renamed, `bloombot-` prefixed apps by
+ * default — the ordinary case this script runs against is a checkout
+ * already updated to the commit that renamed them; `setUpPreRenameCheckout`
+ * below is the one exception.
+ */
 function setUpCheckout() {
   const dir = mkdtempSync(join(base, 'checkout-'))
   writeFileSync(
     join(dir, 'ecosystem.config.cjs'),
-    'module.exports = { apps: [] };\n'
+    `module.exports = { apps: [
+      { name: "bloombot-api" }, { name: "bloombot-bot" },
+      { name: "bloombot-worker" }, { name: "bloombot-mcp" },
+      { name: "bloombot-ops-monitor" },
+    ] };\n`
+  )
+  return dir
+}
+
+/**
+ * Seeds a throwaway checkout still on the commit BEFORE the OPS-15 rename —
+ * `ecosystem.config.cjs` names only the old, bare processes, the exact
+ * shape that must refuse rather than delete anything (must-fix 1).
+ */
+function setUpPreRenameCheckout() {
+  const dir = mkdtempSync(join(base, 'checkout-pre-rename-'))
+  writeFileSync(
+    join(dir, 'ecosystem.config.cjs'),
+    `module.exports = { apps: [
+      { name: "api" }, { name: "bot" },
+      { name: "worker" }, { name: "mcp" }, { name: "ops-monitor" },
+    ] };\n`
   )
   return dir
 }
@@ -325,5 +352,38 @@ esac
 
   assert.notEqual(result.code, 0)
   assert.match(result.stdout + result.stderr, /delete bot/)
+  assert.throws(() => readFileSync(saveMarker))
+})
+
+// Rework finding (must-fix 1) — the first version of this script only
+// checked that `ecosystem.config.cjs` existed, not what it actually named.
+// Run against a checkout still on the commit BEFORE the OPS-15 rename (the
+// documented order is checkout-then-migrate, but nothing enforced it), the
+// delete half would succeed and every `pm2 start ecosystem.config.cjs
+// --only bloombot-api` (etc.) would match no app in that file — exiting 0
+// having started nothing, leaving the droplet with the whole platform down
+// and no old processes left to fall back to. This is the regression test:
+// the script must refuse before deleting anything when the checkout it is
+// run from does not yet name the new processes.
+test('migrate-pm2-names.sh: refuses, and deletes nothing, when the checkout is still on the pre-rename commit', async () => {
+  const checkoutDir = setUpPreRenameCheckout()
+  const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
+  const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
+  writePm2Stub(pm2State, saveMarker)
+  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+
+  const result = await runMigrate(checkoutDir, pm2State)
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /does not name/)
+  assert.match(output, /bloombot-api/)
+  assert.match(output, /before the OPS-15 pm2 rename/)
+  // Nothing was deleted — every old name pm2 knew about is still there.
+  const apps = JSON.parse(readFileSync(pm2State, 'utf8'))
+  assert.deepEqual(
+    apps.map((a) => a.name).sort(),
+    ['api', 'bot', 'mcp', 'ops-monitor', 'worker'].sort()
+  )
   assert.throws(() => readFileSync(saveMarker))
 })

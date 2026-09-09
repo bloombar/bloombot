@@ -10058,10 +10058,11 @@ against that held lock and asserts it throws `SQLITE_BUSY` in under 150ms — co
 the pre-fix code path directly (not just informally reasoned about): it throws `DrizzleError` wrapping
 `SqliteError: database is locked`, `cause.code: 'SQLITE_BUSY'`, in under half the holder's own 300ms hold.
 The other runs `writeTransaction(db, fn)` against the identical setup and asserts it returns successfully
-with elapsed time at least 80% of the holder's own hold — confirmed to fail exactly as expected with
-`writeTransaction`'s own `behavior` temporarily edited back to `'deferred'`: the same `SQLITE_BUSY` the first
-test asserts, thrown instead of the wait-then-succeed this test exists to pin down — then restored, green
-again.
+with elapsed time at least 50% of the holder's own hold (round 1 rework, below, widened this from an
+initial 80% for headroom on a loaded runner — still well clear of "returned instantly") — confirmed to fail
+exactly as expected with `writeTransaction`'s own `behavior` temporarily edited back to `'deferred'`: the
+same `SQLITE_BUSY` the first test asserts, thrown instead of the wait-then-succeed this test exists to pin
+down — then restored, green again.
 
 **Cost — two existing atomicity tests broke, for a reason the brief for this slice did not anticipate, and
 had to be understood before being fixed rather than patched around.** `course-join-links.test.ts` (two
@@ -10093,14 +10094,135 @@ behind `busy_timeout` and then succeed, exactly like `client.test.ts`'s own new 
 case did not need a new test of its own here, since it is precisely what this slice's own `client.test.ts`
 tests already prove for the underlying mechanism.
 
-**Out of scope, named rather than silently left.** `apps/**`, `e2e/**`, `.github/**` untouched — this slice
-changes how a transaction begins, not what any transaction does, and no caller outside `packages/db` opens
-its own `db.transaction(...)`. `busy_timeout`'s value, `journal_mode`, and `foreign_keys` are all unchanged.
+**Out of scope, named rather than silently left.** `apps/**`, `e2e/**`, `.github/**` untouched. `busy_timeout`'s
+value, `journal_mode`, and `foreign_keys` are all unchanged.
 
-**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green: 2586
-vitest (2 new in `packages/db/tests/client.test.ts`, the pair described above; 3 existing tests edited in
-place in `course-join-links.test.ts`/`membership-invitations.test.ts`, not given new `it` blocks — the cost
-described above), 93 node. `npm run test:coverage`'s own `packages/db/src/repos` figures (95.76%
+**Round 1 rework — the claim above ("no caller outside `packages/db` opens its own `db.transaction(...)`")
+was false, and the false version of it shipped in this entry's own first draft.** Two independent reviewers
+found ten top-level, deferred, read-before-write transactions this first pass missed: `packages/auth/src/
+sign-in.ts` (`ensureWebPersonForAccount`, `redeemSignInLink`, `signInWithGoogle`,
+`tryCreateAccountForEmail`), `person-link.ts` (`completeDiscordPersonLink`, `completeMcpPersonLink`),
+`sessions.ts` (`rotateSession`), and `packages/actions/src/actions/course-instructions.ts`
+(`saveCourseInstructionsAction`, `restoreCourseInstructionsRevisionAction`) and `projects.ts`
+(`duplicateProjectAction`) — each takes a `Database`, not a `tx`, so each was its own genuine top-level
+deferred transaction, not a nested savepoint `writeTransaction`'s own `behavior` cannot reach anyway. The
+worst of these is `signInWithGoogle`: it reads `accountsRepo.getAccountByEmail` before it ever writes,
+exactly D-89's own vulnerable shape, on the literal path two concurrent `POST /auth/google` requests take —
+the bug this entry claimed was eliminated was still live on sign-in itself. All ten converted to
+`writeTransaction`, the same helper, no new pattern — `@bloombot/db` was already imported in every one of
+these five files, so this added one import and one call-site rewrite each, not new infrastructure.
+
+Checked, not assumed, that `writeTransaction` is the right call in all ten: `accounts.createAccount` — the
+`writeTransaction` call `tryCreateAccountForEmail` and `findOrCreateAccountForEmail` both pass their own
+`tx` into — already becomes a savepoint under a deferred *outer* `BEGIN` when reached through
+`signInWithGoogle`'s or `redeemSignInLink`'s own now-fixed top-level transaction; before this round, that
+outer transaction being deferred meant the inner call gained nothing from opening `immediate` itself, since
+the outer read-then-upgrade race was still live around it. Converting only the outer call closes this for
+real, which is exactly why the sweep had to find the *top-level* callers, not just any remaining
+`db.transaction(...)`.
+
+**Proven, not merely converted — one auth path re-verified the same way `packages/db` was.**
+`packages/auth/tests/sign-in.test.ts` gained a `signInWithGoogle` race test built like
+`client.test.ts`'s own pair: a second real OS process holds `BEGIN IMMEDIATE` on the same on-disk file,
+and `signInWithGoogle` is asserted to wait for it and succeed. Confirmed to actually discriminate — not a
+test that "passes either way," which `client.test.ts`'s own existing `packages/db` pair already showed is
+possible for a transaction whose first statement is already a write (no read-then-upgrade gap for a
+deferred transaction to lose): with `writeTransaction`'s `behavior` reverted to `'deferred'`, this test
+fails immediately (`SqliteError: database is locked`, thrown from `tryCreateAccountForEmail`'s own nested
+`writeTransaction`, ~118ms total, nowhere near the 300ms holder's own hold), then passes again restored.
+A symmetric attempt at the same test for `rotateSession` (`sessions.ts`) was written first and discarded:
+`rotateSession`'s own first statement, `revokeSessionByHash`, is itself a write, so — like
+`courses.ts#createCourse` and every other write-first transaction already in this package — deferred and
+immediate behave identically there, and the test passed under both, proving nothing about either. Recorded
+here rather than silently dropped: not every one of the ten converted call sites was actually exposed to
+the bug this entry describes (`rotateSession`, `tryCreateAccountForEmail`, and the two `person-link.ts`
+functions all write first too) — `writeTransaction` is still the correct, uniform call for all ten, per this
+entry's own "a future repo function cannot silently end up deferred" reasoning, but only `signInWithGoogle`
+and `ensureWebPersonForAccount` (both read-then-write) were actually live instances of the CI failure's own
+mechanism.
+
+**Round 1 rework — the exit-listener hang in `client.test.ts`'s own race tests, found by a reviewer running
+it standalone.** `holdWriteLockInChildProcess` built `waitForExit` by attaching `child.on('exit', ...)`
+*inside* the returned object, the first time a caller actually asked for it. Node's `'exit'` event fires at
+most once; if the holder process had already exited by the time a test's own `finally` called
+`waitForExit()` — the ordinary case for the "waits and succeeds" test, since by definition it does not
+return until *after* the holder's own hold and commit — attaching then misses an event that already fired,
+and the promise never resolves, hanging the test to vitest's own timeout. Reproduced directly: a minimal
+standalone script attaching `child.on('exit', ...)` after a child had already exited hung on a
+manually-added timeout exactly as described; the same script attaching an `exit` listener at spawn time
+(`child.once('exit', ...)`, captured in a promise built before the function returns) resolved immediately.
+Fixed by building `exited` eagerly, inside `holdWriteLockInChildProcess` itself, before either promise is
+returned — `waitForExit` just hands back that already-in-flight (or already-settled) promise, regardless of
+when it is called. `kill()` is also returned now and called in every test's own `finally`, so a holder that
+somehow does not exit on its own cannot leak a lock onto the temp file `afterEach` is about to delete.
+
+**Round 1 rework — cheap fixes to the same tests, also in `client.test.ts`.** The stderr handler used to
+`reject` on the very first byte written to the child's stderr, which would have failed the test on an
+unrelated Node deprecation warning or anything a CI runner injects via `NODE_OPTIONS`, not only on an actual
+holder crash; it now buffers stderr and only surfaces it if the child exits without ever reaching `LOCKED`
+(the one case where stderr is actually informative). The "waited long enough" assertion (`elapsedMs >=
+holdMs * 0.8`) left too little margin across a real process boundary — the parent's own timer starts only
+after `openDatabase` returns, not when the child was spawned — so it is `0.5` now; the property the
+assertion exists to prove (waited for the lock, rather than returned instantly) does not need a tighter
+number to hold.
+
+**Round 1 rework — the three tests changed in `course-join-links.test.ts`/`membership-invitations.test.ts`
+kept their assertions but were confirmed, not merely renamed, to still catch the defect they exist for.** A
+reviewer mutated `redeemJoinLink` to drop its transaction entirely and re-ran the suite: the test still
+failed, on its primary `getActiveEnrolment` assertion (an extra person admitted), independent of the
+`revokedAt` assertion this entry's own "Cost" section above already explains changed. Their names and
+leading comments, though, still read "a revoke racing with an in-flight redemption cannot let X" — worded
+for the pre-D-89 mechanism (a race that could be lost), not the current one (a write that can never land at
+all). Reworded to say what each test now demonstrates (`"... a revoke attempted mid-redemption cannot land,
+and admits/connects/grants ..."`) and updated the `catch` blocks' own comments to say why the redemption now
+always throws, rather than "either outcome is acceptable" — a claim that was accurate before this round and
+is not anymore. No assertion in any of the three changed as part of this.
+
+**Round 1 rework — `transcript-access.ts#readCourseTranscript`'s own lock-window regression, and the sweep
+for others.** Before D-89, this function's course/person checks, its transcript scan (an unbounded `.all()`
+over every message a course has ever exchanged — the slowest thing this function does, and the one
+`transcripts.export`'s own job handler, ADMIN-3, calls on potentially years of history) and its audit insert
+all ran inside one deferred transaction, so the scan itself only ever held an ordinary read lock; only the
+final insert asked for the write lock at all. `writeTransaction`'s `BEGIN IMMEDIATE` would have moved that
+acquisition to the very first statement instead, holding the *exclusive* write lock for the entire scan — on
+a five-process droplet (D-2), a large transcript export blocking every other writer past `busy_timeout` is a
+real production regression, not a test artifact. Fixed by scoping the write transaction to the audit row's
+own read-max-then-insert alone (the concurrency-sensitive part — see `schema.ts`'s own `sequence` comment on
+why this pair has to stay atomic together), and running the course/person checks and the scan as plain reads
+against `db` beforehand, outside any transaction. The caller still never sees transcript data without the
+matching audit row committed first — `rows` is read, but not returned, until after the small transaction
+below it has actually finished.
+
+Checked, not assumed, before moving anything: the old single transaction gave one guarantee this split gives
+up — `course`, the scan, and the audit insert used to share one consistent snapshot, so a course or person
+deleted *between* this function's checks and its audit write would have failed the whole thing atomically
+(`SQLITE_BUSY_SNAPSHOT`) rather than logging an access against a row no longer there. This is safe to give up
+here specifically: neither a `courses` nor a `people` row is ever deleted on its own — the only path that
+removes either is `organizations.ts#deleteOrganizationData`, itself one transaction that deletes every
+`transcript_access_log`/`messages` row for the same organization first (in FK-safe order) — so the only way
+this window could matter is a whole-organization deletion racing a transcript read within it, at which point
+TEN-2's own "the organization is gone" already makes the access log's own fate moot. Recorded in this
+function's own doc comment, not only here, so a future reader does not have to re-derive it.
+
+Swept every other `writeTransaction` call site (all twenty-two, the twelve from this entry's first pass plus
+the ten above) for the same shape — an unbounded or otherwise disproportionate read ahead of the first write
+— and found none. Every other read-before-write site reads at most one indexed row (an existing account, an
+existing person, an existing course) before writing; every read scoped to *more* than one row (`mergePeople`'s
+own loop over one person's own enrolments, `deleteOrganizationData`'s own per-table `count(*)`) is scoped to
+exactly the rows that same transaction is about to rewrite or delete, not an unrelated read riding along with
+an unrelated small write the way `readCourseTranscript`'s scan was — holding the lock for those is
+proportionate to what the write itself already has to touch, not a new cost this slice introduced.
+
+**Verification (round 1).** `npm run lint && npm run format:check && npm run typecheck && npm test && npm run
+test:coverage` all green. `packages/auth` (31 files, 385→386 tests) and `packages/actions` suites both pass
+after the ten conversions; `packages/db/src/repos` coverage stays above the 90/85/90/90 floor (re-measured
+after `transcript-access.ts`'s own restructuring); `client.ts`, where `writeTransaction` lives, carries no
+separate floor (not in QA-4's own `include` list), same as round 0.
+
+**Verification (round 0).** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all
+green: 2586 vitest (2 new in `packages/db/tests/client.test.ts`, the pair described above; 3 existing tests
+edited in place in `course-join-links.test.ts`/`membership-invitations.test.ts`, not given new `it` blocks —
+the cost described above), 93 node. `npm run test:coverage`'s own `packages/db/src/repos` figures (95.76%
 statements/90.73% branches/99.54% functions/97.32% lines) stay above the 90/85/90/90 floor; `client.ts`
 itself, where `writeTransaction` actually lives, is not in QA-4's own `include` list and carries no separate
 floor.

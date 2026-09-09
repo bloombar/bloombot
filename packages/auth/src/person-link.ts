@@ -49,6 +49,7 @@ import { createHash } from 'node:crypto'
 import {
   people,
   personLinkChallenges,
+  writeTransaction,
   type Database,
   type Executor,
   type TransactingExecutor,
@@ -297,7 +298,7 @@ export function completeDiscordPersonLink(
   callerPersonId: string,
   db: Database
 ): Person | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const consumed = consumeDiscordPersonLink(state, tx)
     if (!consumed) return undefined
     if (consumed.personId !== callerPersonId) return undefined
@@ -477,7 +478,7 @@ export function completeMcpPersonLink(
   survivorPersonId: string,
   db: Database
 ): Person | undefined {
-  return db.transaction((tx) => {
+  return writeTransaction(db, (tx) => {
     const consumed = consumeMcpPersonLinkToken(token, tx)
     if (!consumed) return undefined
     return connectOrMerge(

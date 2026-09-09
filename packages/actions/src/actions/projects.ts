@@ -11,6 +11,7 @@ import {
   courseWebSources,
   organizations,
   projects,
+  writeTransaction,
   type Database,
 } from '@bloombot/db'
 import { z } from 'zod'
@@ -341,7 +342,7 @@ export const duplicateProjectAction: Action<
     resolve: resolveOwnProject,
   },
   execute: ({ organizationId, entity, input, db }) =>
-    db.transaction((tx): DuplicateProjectOutput => {
+    writeTransaction(db, (tx): DuplicateProjectOutput => {
       let newProject: Project
       try {
         newProject = projects.createProject(

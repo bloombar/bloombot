@@ -64,97 +64,136 @@ export interface ReadCourseTranscriptResult {
 
 /**
  * Read a course's transcript, optionally filtered by student and by date,
- * and write the ADMIN-2 audit row for having done so — both inside the
- * same transaction, so there is no way to get the messages back without
- * the read being recorded (this file's own module comment).
+ * and write the ADMIN-2 audit row for having done so — the caller never
+ * sees the messages without the read being recorded (this file's own
+ * module comment), because the audit insert below is what this function
+ * returns *after*, not a fire-and-forget side effect of a read that could
+ * come back regardless.
  *
  * `undefined` when `courseId` does not belong to `organizationId`, or
  * `personId` is supplied and does not belong to it either (TEN-2/TEN-5) —
  * refused before anything is read or logged, the same "resolve every id
  * before doing anything with it" order `cost-ledger.ts#recordCostLedgerEntry`
  * already follows.
+ *
+ * D-89 finding: the course/person checks and the transcript scan below
+ * are deliberately plain reads against `db`, *not* run inside the
+ * `writeTransaction` that follows — only the audit row's own
+ * read-max-then-insert is. Before D-89, all of this ran inside one
+ * `db.transaction(...)`; that transaction was deferred, so the scan below
+ * (an unbounded `.all()` over every message a large course has ever
+ * exchanged, potentially the slowest thing this function does) ran under
+ * an ordinary read lock, and only the final audit insert asked for the
+ * write lock at all. `writeTransaction`'s `BEGIN IMMEDIATE` would have
+ * moved that write-lock acquisition to the very first statement instead —
+ * holding it, exclusively, for the entire scan — turning a transcript
+ * export into something that can block every other writer on this
+ * five-process droplet (D-2) past `busy_timeout`, a real regression this
+ * function's own callers (`transcripts.export`'s job handler, ADMIN-3)
+ * make worse the larger a course's history gets. Scoping the write
+ * transaction to the audit insert alone avoids that: the exclusive lock is
+ * only ever held for two small, indexed statements, never for the scan.
+ *
+ * This does give up one guarantee the old single deferred transaction had
+ * "for free": before D-89, `course`, the transcript scan and the audit
+ * insert all read from one consistent snapshot, so a course or person
+ * deleted *between* this function's checks and its audit write would have
+ * failed the whole thing atomically (`SQLITE_BUSY_SNAPSHOT`, D-49's own
+ * mechanism) rather than logging an access against a row no longer there.
+ * Checked, not assumed away: neither `courses` nor `people` rows are ever
+ * deleted on their own — the only path that removes either is
+ * `organizations.ts#deleteOrganizationData`, itself one transaction that
+ * also deletes every `transcript_access_log`/`messages` row for the same
+ * organization first (in FK-safe order) — so the only way this window
+ * could matter is a whole-organization deletion racing a transcript read
+ * within it, at which point TEN-2's own "the organization is gone" already
+ * makes the access log's own fate moot. Recorded here, not only reasoned
+ * about once: a future caller of this function is not expected to re-derive
+ * this from scratch.
  */
 export function readCourseTranscript(
   organizationId: string,
   input: ReadCourseTranscriptInput,
   db: Database
 ): ReadCourseTranscriptResult | undefined {
-  return writeTransaction(db, (tx) => {
-    const course = tx
-      .select({ id: courses.id, title: courses.title })
-      .from(courses)
+  const course = db
+    .select({ id: courses.id, title: courses.title })
+    .from(courses)
+    .where(
+      and(
+        eq(courses.id, input.courseId),
+        eq(courses.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!course) return undefined
+
+  if (input.personId) {
+    const person = db
+      .select({ id: people.id })
+      .from(people)
       .where(
         and(
-          eq(courses.id, input.courseId),
-          eq(courses.organizationId, organizationId)
-        )
-      )
-      .get()
-    if (!course) return undefined
-
-    if (input.personId) {
-      const person = tx
-        .select({ id: people.id })
-        .from(people)
-        .where(
-          and(
-            eq(people.id, input.personId),
-            eq(people.organizationId, organizationId)
-          )
-        )
-        .get()
-      if (!person) return undefined
-    }
-
-    const dateConditions = [
-      input.startAt !== undefined
-        ? gte(messages.createdAt, input.startAt)
-        : undefined,
-      input.endAt !== undefined
-        ? lte(messages.createdAt, input.endAt)
-        : undefined,
-    ].filter((condition) => condition !== undefined)
-
-    const rows = tx
-      .select({
-        personId: messages.personId,
-        personDisplayName: people.displayName,
-        direction: messages.direction,
-        content: messages.content,
-        createdAt: messages.createdAt,
-      })
-      .from(messages)
-      .innerJoin(
-        people,
-        and(
-          eq(people.id, messages.personId),
+          eq(people.id, input.personId),
           eq(people.organizationId, organizationId)
         )
       )
-      .where(
-        and(
-          eq(messages.organizationId, organizationId),
-          eq(messages.courseId, input.courseId),
-          input.personId ? eq(messages.personId, input.personId) : undefined,
-          ...dateConditions
-        )
-      )
-      .orderBy(asc(messages.createdAt), asc(messages.sequence))
-      .all()
+      .get()
+    if (!person) return undefined
+  }
 
-    // ADMIN-2 — written in the same transaction as the read above, not
-    // after it: a read that succeeds and an audit write that then fails
-    // (or vice versa) must not be possible, or the trail this function
-    // exists to keep would be incomplete exactly when something already
-    // went wrong.
-    //
-    // `sequence` (`schema.ts`'s own comment on the column) is computed
-    // here, as one more than the highest already recorded for this course
-    // — the same "read the previous max, write the next value, in one
-    // transaction" shape this file's own `appendMessage`-adjacent
-    // `messages.sequence` convention already uses, for the same reason:
-    // two accesses landing in the same millisecond must still get a real,
-    // distinguishable order.
+  const dateConditions = [
+    input.startAt !== undefined
+      ? gte(messages.createdAt, input.startAt)
+      : undefined,
+    input.endAt !== undefined
+      ? lte(messages.createdAt, input.endAt)
+      : undefined,
+  ].filter((condition) => condition !== undefined)
+
+  // The potentially large read this function's own module comment (and the
+  // D-89 note above) calls out — deliberately run before the write
+  // transaction below opens, not inside it.
+  const rows = db
+    .select({
+      personId: messages.personId,
+      personDisplayName: people.displayName,
+      direction: messages.direction,
+      content: messages.content,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .innerJoin(
+      people,
+      and(
+        eq(people.id, messages.personId),
+        eq(people.organizationId, organizationId)
+      )
+    )
+    .where(
+      and(
+        eq(messages.organizationId, organizationId),
+        eq(messages.courseId, input.courseId),
+        input.personId ? eq(messages.personId, input.personId) : undefined,
+        ...dateConditions
+      )
+    )
+    .orderBy(asc(messages.createdAt), asc(messages.sequence))
+    .all()
+
+  // ADMIN-2 — the audit row this function's own return value is
+  // conditioned on: `rows` above is only ever handed back once this
+  // transaction (small and fast — two indexed statements, not the scan
+  // above) has actually committed, so a caller can never observe messages
+  // without the matching access having been durably recorded.
+  //
+  // `sequence` (`schema.ts`'s own comment on the column) is computed here,
+  // as one more than the highest already recorded for this course — the
+  // same "read the previous max, write the next value, in one transaction"
+  // shape this file's own `appendMessage`-adjacent `messages.sequence`
+  // convention already uses, for the same reason: two accesses landing in
+  // the same millisecond must still get a real, distinguishable order.
+  writeTransaction(db, (tx) => {
     const previousAccess = tx
       .select({ sequence: transcriptAccessLog.sequence })
       .from(transcriptAccessLog)
@@ -183,9 +222,9 @@ export function readCourseTranscript(
         createdAt: Date.now(),
       })
       .run()
-
-    return { courseId: course.id, courseTitle: course.title, entries: rows }
   })
+
+  return { courseId: course.id, courseTitle: course.title, entries: rows }
 }
 
 /**

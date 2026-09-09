@@ -210,32 +210,62 @@ const HOLD_WRITE_LOCK_SCRIPT = `
 /**
  * Spawns `HOLD_WRITE_LOCK_SCRIPT` against `path`, and resolves once it has
  * confirmed the lock is held (its `LOCKED` line) — not merely once the
- * process has started, which race the test itself against the child's own
- * `BEGIN IMMEDIATE`.
+ * process has started, which would race the test itself against the
+ * child's own `BEGIN IMMEDIATE`.
+ *
+ * `waitForExit` is built from an `exit` listener attached *here*, at spawn
+ * time — not later, inside the returned object, once a caller asks for it.
+ * A reviewer found that the later form hangs a test to its own timeout
+ * whenever the child has already exited by the time something calls
+ * `waitForExit()`: `'exit'` fires at most once, and attaching after it
+ * already fired never sees it. Attaching immediately means this promise is
+ * already settled (or on its way to being settled) regardless of when
+ * `waitForExit` is actually called. `kill` is also handed back so a caller
+ * can guarantee the holder is gone rather than trusting it to exit on its
+ * own — a hung or slow-to-commit holder otherwise leaks a lock on the temp
+ * file this test's own `afterEach` deletes next.
  */
 function holdWriteLockInChildProcess(
   path: string,
   holdMs: number
-): Promise<{ waitForExit: () => Promise<void> }> {
+): Promise<{ waitForExit: () => Promise<void>; kill: () => void }> {
+  const child = spawn(process.execPath, [
+    '-e',
+    HOLD_WRITE_LOCK_SCRIPT,
+    path,
+    String(holdMs),
+  ])
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve())
+  })
+
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [
-      '-e',
-      HOLD_WRITE_LOCK_SCRIPT,
-      path,
-      String(holdMs),
-    ])
+    let sawLocked = false
+    let stderrOutput = ''
     child.on('error', reject)
     child.stderr.on('data', (chunk: Buffer) => {
-      // Surface a child crash as a test failure with the actual cause,
-      // rather than a bare timeout with no explanation.
-      reject(new Error(`holder process stderr: ${chunk.toString()}`))
+      // Buffered, not rejected on immediately: a Node deprecation warning
+      // or anything a CI runner injects via `NODE_OPTIONS` writes to
+      // stderr too, and would otherwise fail this test for a reason that
+      // has nothing to do with the lock it exists to prove. Surfaced only
+      // if the child never reaches `LOCKED` at all (below), where it is
+      // the actual cause of that failure.
+      stderrOutput += chunk.toString()
     })
     child.stdout.on('data', (chunk: Buffer) => {
-      if (chunk.toString().includes('LOCKED')) {
-        resolve({
-          waitForExit: () =>
-            new Promise((exitResolve) => child.on('exit', () => exitResolve())),
-        })
+      if (!sawLocked && chunk.toString().includes('LOCKED')) {
+        sawLocked = true
+        resolve({ waitForExit: () => exited, kill: () => child.kill() })
+      }
+    })
+    child.on('exit', (code) => {
+      if (!sawLocked) {
+        reject(
+          new Error(
+            `holder process exited (code ${code}) before signaling LOCKED` +
+              (stderrOutput ? `: ${stderrOutput}` : '')
+          )
+        )
       }
     })
   })
@@ -296,6 +326,12 @@ describe('writeTransaction: a deferred-to-immediate lock upgrade is not the same
       expect(elapsedMs).toBeLessThan(150)
     } finally {
       closeDatabase(db)
+      // Guarantees the holder is actually gone rather than trusting it to
+      // commit and exit on its own — otherwise a hung or slow holder leaks
+      // a lock on the file `afterEach` is about to delete. A no-op if it
+      // has already exited (this test's own assertions above already ran
+      // well inside its 300ms hold).
+      holder.kill()
       await holder.waitForExit()
     }
   })
@@ -331,10 +367,16 @@ describe('writeTransaction: a deferred-to-immediate lock upgrade is not the same
       // Waited for something close to the holder's own hold time, not
       // returned instantly — proves this genuinely blocked on the lock
       // (`busy_timeout` doing its job) rather than, say, racing in ahead of
-      // the holder for an unrelated reason.
-      expect(elapsedMs).toBeGreaterThanOrEqual(holdMs * 0.8)
+      // the holder for an unrelated reason. `0.5`, not a tighter fraction:
+      // this crosses a real process boundary (the parent's own timer starts
+      // only after `openDatabase` returns, and native `Atomics.wait`
+      // granularity is not exact), and the property this assertion exists
+      // to prove — "waited for the lock" versus "returned instantly" — is
+      // just as well distinguished with headroom for a loaded CI runner.
+      expect(elapsedMs).toBeGreaterThanOrEqual(holdMs * 0.5)
     } finally {
       closeDatabase(db)
+      holder.kill()
       await holder.waitForExit()
     }
   })

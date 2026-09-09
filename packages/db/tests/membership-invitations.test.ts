@@ -500,14 +500,15 @@ describe('membership-invitations repo (ENRL-10)', () => {
   // What this test actually pins down is the assertion below, which holds
   // either way: no membership was granted.
   //
-  // D-89 changed what "racing" produces here — see
+  // D-89 changed what this test actually exercises — see
   // `course-join-links.test.ts`'s own identical note on its mirror of this
   // test for the full mechanism: `redeemMembershipInvitation` now opens
   // `BEGIN IMMEDIATE`, so `secondConnection`'s revoke below (nested on this
-  // transaction's own call stack) can never win the lock and always fails
-  // instead of landing — `busy_timeout`, cut to 100ms, keeps the resulting
-  // (otherwise real) 5s wait from making this test slow.
-  it('redemption is atomic: a revoke racing with an in-flight redemption cannot let the grant through', () => {
+  // transaction's own call stack) can never win the lock — there is no
+  // longer a race to lose, only a write that always fails instead of
+  // landing. `busy_timeout`, cut to 100ms, keeps the resulting (otherwise
+  // real) 5s wait from making this test slow.
+  it('redemption is atomic: a revoke attempted mid-redemption cannot land, and grants nothing', () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId } = seedOrganization(testDb)
     const { accountId } = seedAccountWithEmail(testDb, 'invitee@example.edu')
@@ -556,8 +557,12 @@ describe('membership-invitations repo (ENRL-10)', () => {
         testDb.db
       )
     } catch {
-      // Either outcome — a thrown write-conflict, or a clean `undefined` —
-      // is acceptable here; see this test's own comment above.
+      // D-89: this now always throws — `secondConnection`'s nested revoke
+      // (inside the spy) blocks on `writeTransaction`'s own held lock until
+      // its 100ms `busy_timeout` gives up, at which point that thrown
+      // `SQLITE_BUSY` propagates out through the spy and rolls the whole
+      // redemption back. What this test actually pins down is the
+      // assertion below, not which error (if any) surfaces here.
     } finally {
       spy.mockRestore()
       closeDatabase(secondConnection)

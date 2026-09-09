@@ -5,6 +5,8 @@
  * them".
  */
 
+import { spawn } from 'node:child_process'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { accounts, organizations, people, schema } from '@bloombot/db'
@@ -466,6 +468,129 @@ describe('signInWithGoogle (AUTH-2)', () => {
     )
 
     expect(result).toBeUndefined()
+  })
+})
+
+/**
+ * A small standalone script, run as a genuinely separate OS process, that
+ * takes a real write lock on `path` with `BEGIN IMMEDIATE`, prints `LOCKED`
+ * once it actually holds it, holds it for `holdMs`, then commits and exits.
+ * Mirrors `packages/db/tests/client.test.ts`'s own identical helper (D-89);
+ * duplicated here rather than imported across a package boundary test
+ * helpers are not published through, the same reasoning `test-db.ts`'s own
+ * module comment gives for its duplication.
+ */
+const HOLD_WRITE_LOCK_SCRIPT = `
+  const Database = require('better-sqlite3')
+  const path = process.argv[1]
+  const holdMs = Number(process.argv[2])
+  const db = new Database(path)
+  db.pragma('journal_mode = WAL')
+  db.exec('BEGIN IMMEDIATE')
+  console.log('LOCKED')
+  const sab = new Int32Array(new SharedArrayBuffer(4))
+  Atomics.wait(sab, 0, 0, holdMs)
+  db.exec('COMMIT')
+`
+
+/**
+ * Spawns `HOLD_WRITE_LOCK_SCRIPT` against `path`, resolving once it has
+ * confirmed the lock is actually held. `waitForExit` is built from an
+ * `exit` listener attached here, at spawn time, not later inside the
+ * returned object — attaching lazily can miss a child that has already
+ * exited by the time something calls it, hanging the caller to its own
+ * timeout instead (`client.test.ts`'s own D-89 rework fixed exactly this).
+ * `kill` guarantees the holder is gone rather than trusting it to exit on
+ * its own, so a hung holder cannot leak a lock onto the temp file
+ * `testDb.cleanup()` is about to delete.
+ */
+function holdWriteLockInChildProcess(
+  path: string,
+  holdMs: number
+): Promise<{ waitForExit: () => Promise<void>; kill: () => void }> {
+  const child = spawn(process.execPath, [
+    '-e',
+    HOLD_WRITE_LOCK_SCRIPT,
+    path,
+    String(holdMs),
+  ])
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve())
+  })
+
+  return new Promise((resolve, reject) => {
+    let sawLocked = false
+    let stderrOutput = ''
+    child.on('error', reject)
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrOutput += chunk.toString()
+    })
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (!sawLocked && chunk.toString().includes('LOCKED')) {
+        sawLocked = true
+        resolve({ waitForExit: () => exited, kill: () => child.kill() })
+      }
+    })
+    child.on('exit', (code) => {
+      if (!sawLocked) {
+        reject(
+          new Error(
+            `holder process exited (code ${code}) before signaling LOCKED` +
+              (stderrOutput ? `: ${stderrOutput}` : '')
+          )
+        )
+      }
+    })
+  })
+}
+
+/**
+ * D-89 rework round 1's own hot-path concern, reproduced directly:
+ * `signInWithGoogle` reads (`accountsRepo.getAccountByEmail`) before it
+ * writes (creating the account, the session, or both), the exact
+ * deferred-upgrade shape D-89 exists to close, on the path two concurrent
+ * `POST /auth/google` requests actually take. Reproduced the same way
+ * `client.test.ts` reproduces the `packages/db` case: a second, real OS
+ * process holds a genuine write lock on the same on-disk file (never
+ * `data/data.db` — `createTestDatabase`'s own `tmp/auth-tests`), and
+ * `signInWithGoogle` is asserted to wait for that lock and succeed, rather
+ * than fail immediately with `SQLITE_BUSY` the way a plain deferred
+ * `db.transaction(...)` would — confirmed to actually distinguish the two:
+ * `packages/db/tests/client.test.ts` itself already showed a genuinely
+ * write-first transaction (no read before the first write) succeeds either
+ * way, so this test's own value depends on `signInWithGoogle` actually
+ * reading first, which its own source confirms.
+ */
+describe('signInWithGoogle: a concurrent writer elsewhere is waited for, not raced (D-89)', () => {
+  it('signs in successfully after waiting for a write lock a separate process genuinely holds', async () => {
+    testDb = createTestDatabase()
+
+    const holdMs = 300
+    const holder = await holdWriteLockInChildProcess(testDb.path, holdMs)
+    try {
+      const start = Date.now()
+      const result = signInWithGoogle(
+        verifiedGoogleIdentity({ email: 'new-under-contention@example.edu' }),
+        testDb.db
+      )
+      const elapsedMs = Date.now() - start
+
+      expect(result?.createdAccount).toBe(true)
+      expect(result?.account.email).toBe('new-under-contention@example.edu')
+      expect(validateSession(result!.session.token, testDb.db)).toMatchObject({
+        accountId: result?.account.id,
+      })
+      // Waited for something close to the holder's own hold time rather
+      // than returning instantly — `0.5`, not a tighter fraction, for the
+      // same reason `client.test.ts`'s own identical assertion gives: this
+      // crosses a real process boundary, and the property this exists to
+      // prove — "waited for the lock" versus "failed instantly" — is just
+      // as well distinguished with headroom for a loaded runner.
+      expect(elapsedMs).toBeGreaterThanOrEqual(holdMs * 0.5)
+    } finally {
+      holder.kill()
+      await holder.waitForExit()
+    }
   })
 })
 

@@ -83,10 +83,72 @@ describe('/privacy and /terms (published legal documents)', () => {
     expect(screen.queryByText(/^## /)).not.toBeInTheDocument()
   })
 
-  it('marks both documents as unreviewed drafts', () => {
+  it('does not open with a draft-pending-review banner', () => {
+    // Google's OAuth review reads a page that announces itself as an
+    // unreviewed draft as evidence it is not a published policy at all
+    // (`content/document.ts`'s own module comment on why the banner is
+    // gone) — this is what stops that banner from quietly coming back.
     for (const doc of [privacyDocument, termsDocument]) {
-      expect(flat(doc.body)).toMatch(/Draft, pending legal review/)
+      expect(flat(doc.body)).not.toMatch(/draft, pending legal review/i)
+      expect(flat(doc.body)).not.toMatch(/has not been reviewed by a lawyer/i)
     }
+  })
+
+  it('carries no square-bracket placeholder', () => {
+    // `[Operator legal name]`-style text is exactly what a reviewer reads as
+    // "no real party stands behind this policy" — the failure this policy
+    // was rejected for. Excludes Markdown's own `[label](url)` link syntax
+    // (`[Privacy policy](/privacy)` is a real, intentional link, not a
+    // placeholder) by requiring the bracketed text not be followed by `(`.
+    for (const doc of [privacyDocument, termsDocument]) {
+      expect(doc.body).not.toMatch(/\[[^\]]*\](?!\()/)
+    }
+  })
+
+  it('identifies the operator by name', () => {
+    for (const doc of [privacyDocument, termsDocument]) {
+      expect(flat(doc.body)).toMatch(/Bloombot/)
+    }
+  })
+
+  describe('Google account data', () => {
+    it('describes what Google Sign-In gives this service, and that it never receives a password', () => {
+      expect(flat(privacyDocument.body)).toMatch(
+        /email address, your\s*name and your profile picture/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(/never receive a password/i)
+    })
+
+    it('states Google account data is never used for advertising, profiling or credit decisions', () => {
+      expect(flat(privacyDocument.body)).toMatch(
+        /not used for advertising or profiling/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(
+        /never a factor in a credit decision/i
+      )
+    })
+
+    it('states Google account data is never used to train an AI or machine-learning model', () => {
+      expect(flat(privacyDocument.body)).toMatch(
+        /never used to train any AI or machine-learning model/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(
+        /never sent to the model provider/i
+      )
+    })
+
+    it('gives a concrete deletion path for a Google-linked account, without promising a finer-grained one than the software has', () => {
+      // The manual path is real (tenant-level deletion, described below in
+      // "How long we keep it"), but it deletes the whole organization, not
+      // only the Google-linked account — this must not read as a per-account
+      // delete button the platform does not have.
+      expect(flat(privacyDocument.body)).toMatch(
+        /ask for your whole organization to be deleted/i
+      )
+      expect(flat(privacyDocument.body)).toMatch(
+        /no button that deletes only your account/i
+      )
+    })
   })
 
   describe('the promises these documents deliberately withhold', () => {

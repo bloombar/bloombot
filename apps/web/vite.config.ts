@@ -14,11 +14,18 @@
  * e2e harness's own throwaway one, `e2e/support/start-api.ts`) is a matter
  * of setting the same environment variable before starting Vite, nothing
  * this file needs to know about.
+ *
+ * `prerenderPlugin()` (below) is the one addition that runs only for `vite
+ * build`, never `vite dev`/`vite preview` — see its own module comment
+ * (`prerender-plugin.ts`) for why the public pages are prerendered at build
+ * time rather than served by a runtime SSR process.
  */
 
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+import { prerenderPlugin } from './prerender-plugin.js'
 
 const apiPort = process.env['API_PORT'] ?? '3000'
 const apiOrigin = `http://127.0.0.1:${apiPort}`
@@ -58,7 +65,7 @@ export default defineConfig({
   // WEB-11: Tailwind is the one styling system — `@tailwindcss/vite` builds
   // `src/style.css`'s `@import "tailwindcss"` directly, no separate
   // `postcss.config` or `tailwind.config` file to keep in sync with it.
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), prerenderPlugin()],
   server: { proxy },
   preview: { proxy },
 })

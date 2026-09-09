@@ -9,14 +9,13 @@
  * statement that this is a pilot. See `privacy.ts`'s own module comment for
  * why that is the honest form rather than a gap to be filled in later.
  */
-import { draftNotice, OPERATOR, type StaticDocument } from './document.js'
+import { OPERATOR, type StaticDocument } from './document.js'
 
 export const termsDocument: StaticDocument = {
   title: 'Terms & conditions',
   summary: 'The agreement between you and us for using Bloombot.',
   updated: '8 September 2026',
   body: `
-${draftNotice(OPERATOR)}
 
 These terms are an agreement between you and ${OPERATOR.name} ("we", "us")
 covering your use of Bloombot ("the service"). By creating an account, joining
@@ -146,7 +145,6 @@ courts have jurisdiction over disputes arising from them.
 ## Contact
 
 ${OPERATOR.name}
-${OPERATOR.postalAddress}
-${OPERATOR.contactEmail}
+${OPERATOR.postalAddress ? `${OPERATOR.postalAddress}\n` : ''}${OPERATOR.contactEmail}
 `.trim(),
 }

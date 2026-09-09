@@ -203,4 +203,68 @@ describe('apps/web bundle (WEB-6)', () => {
       }
     }
   })
+
+  // The public pages a signed-out visitor or crawler can reach are
+  // prerendered into real HTML at build time (`prerender-plugin.ts`,
+  // `docs/DECISIONS.md` D-92) — nested in this same `describe` rather than
+  // given its own top-level one so it reuses the one real `vite build` this
+  // file's own `beforeAll` already pays for, instead of racing a second
+  // build against the same `dist/` directory.
+  describe('prerendering the public pages (D-92)', () => {
+    it('is no longer an empty <div id="root"> at /', () => {
+      const html = readFileSync(join(DIST_DIR, 'index.html'), 'utf8')
+      expect(html).not.toContain('<div id="root"></div>')
+      // The homepage's own "what it does" heading — proof this is Home.tsx's
+      // real markup, not an arbitrary non-empty string.
+      expect(html).toContain('What it does')
+    })
+
+    it('never bakes a build-time env-failure message into the prerendered homepage', () => {
+      // This build sets no `VITE_GOOGLE_CLIENT_ID` (this test file's own
+      // beforeAll never does) — exactly the build the reviewer reproduced
+      // the regression on. `SignIn.tsx`'s "not configured" text is accurate
+      // and expected in the *real client bundle* (a genuine visitor's
+      // browser is right to be told that), but must never reach the static
+      // HTML a non-JavaScript crawler reads — Google's own OAuth reviewer
+      // fetches `/` exactly that way (`docs/DECISIONS.md`'s prerendering
+      // entry, and `Home.tsx`'s own `googleClientId` doc comment, have the
+      // full reasoning for the neutral-shell fix this pins).
+      const html = readFileSync(join(DIST_DIR, 'index.html'), 'utf8')
+      expect(html.toLowerCase()).not.toContain('not configured')
+      // The neutral shell `Home.tsx` forces during prerendering instead —
+      // proof this is the fix, not merely the absence of the failure text.
+      expect(html).toContain('Agree to the documents above')
+    })
+
+    it('writes a real, standalone document at dist/privacy/index.html', () => {
+      const path = join(DIST_DIR, 'privacy', 'index.html')
+      const html = readFileSync(path, 'utf8')
+
+      // A distinctive sentence from the privacy body — proof the policy's
+      // actual prose reached the built file, not merely *some* markup.
+      expect(html).toContain('An instructor can read their own students')
+      expect(html).toContain('<title>Privacy policy')
+      expect(html).toContain('rel="canonical"')
+      expect(statSync(path).size).toBeGreaterThan(1221)
+    })
+
+    it('writes a real, standalone document at dist/terms/index.html', () => {
+      const html = readFileSync(join(DIST_DIR, 'terms', 'index.html'), 'utf8')
+
+      // A distinctive sentence from the terms body.
+      expect(html).toContain('They are frequently wrong')
+      expect(html).toContain('<title>Terms &amp; conditions')
+      expect(html).toContain('rel="canonical"')
+    })
+
+    it('writes robots.txt and sitemap.xml pointing at the built pages', () => {
+      const robots = readFileSync(join(DIST_DIR, 'robots.txt'), 'utf8')
+      const sitemap = readFileSync(join(DIST_DIR, 'sitemap.xml'), 'utf8')
+
+      expect(robots).toContain('Allow: /')
+      expect(robots).toMatch(/Sitemap: https?:\/\/\S+\/sitemap\.xml/)
+      expect(sitemap).toContain('/privacy')
+      expect(sitemap).toContain('/terms')
+    })
+  })
 })

@@ -10421,3 +10421,151 @@ the cost described above), 93 node. `npm run test:coverage`'s own `packages/db/s
 statements/90.73% branches/99.54% functions/97.32% lines) stay above the 90/85/90/90 floor; `client.ts`
 itself, where `writeTransaction` actually lives, is not in QA-4's own `include` list and carries no separate
 floor.
+
+## D-92 — `apps/web`: build-time prerendering of the public pages, and a privacy policy Google can actually verify
+
+**Problem.** Google Cloud's OAuth branding verification rejected the privacy policy at
+`https://bloombot.wonkledge.com/privacy` outright — "does not have sufficient content." Confirmed directly:
+`curl -sSL https://bloombot.wonkledge.com/privacy` returned 1221 bytes of `index.html`, an empty SPA shell
+whose `<body>` is only `<div id="root"></div>`. `apps/web` is a client-rendered Vite SPA and nginx serves it
+with `try_files $uri $uri/ /index.html` (`docs/DEPLOY_DROPLET.md` §5) — Google's verifier and search crawlers
+do not execute JavaScript, so `/`, `/privacy` and `/terms` were all, to them, blank pages. The prose in
+`content/privacy.ts` was substantial; it simply never reached anything that does not run a browser.
+
+**Choice — build-time prerendering (SSG), not a runtime SSR server.** The deploy is a static nginx `root`
+with no Node process in front of it. Introducing runtime SSR to fix three pages that never change between
+requests would mean a new pm2 entry, a new `proxy_pass`, and an ongoing process to keep alive — real
+operational surface for content that is identical on every request. Prerendering once, at build time, into
+static files nginx already knows how to serve gives a crawler byte-identical HTML with none of that surface.
+Implemented as a `vite build`-only plugin (`prerender-plugin.ts`, wired into `vite.config.ts`), rather than a
+separate npm-script step run after `vite build`: a plugin's `closeBundle` hook fires for *any* invocation of
+`vite build` — including `tests/bundle.test.ts`'s own `beforeAll`, which already runs one for WEB-6 — so the
+prerendered output is exercised by the same real build every existing slower check already pays for, with no
+second `vite build` racing it for the same `dist/` directory.
+
+**How the prerendered HTML is produced.** `closeBundle` opens a second, short-lived Vite dev server in
+middleware mode and calls `ssrLoadModule` on `pages/Home.tsx`, `pages/StaticDocument.tsx`,
+`content/privacy.ts` and `content/terms.ts` directly from source — the same components the SPA itself
+renders for these three routes, not a second, parallel copy of their markup that could drift from it.
+`ssrLoadModule` runs the identical TypeScript/JSX transform and `import.meta.env` replacement the outer,
+browser-targeted build already used, so `OPERATOR`'s `VITE_OPERATOR_*` reads resolve exactly as they did in
+the bundle just written. `react-dom/server#renderToStaticMarkup` turns each into an HTML string, injected
+into the built `index.html`'s empty `<div id="root">` (`src/prerender/inject.ts#injectPrerenderedPage`) —
+written back to `dist/index.html` for the home page, and to new `dist/privacy/index.html`/`dist/terms/index.html`
+files, which `try_files $uri $uri/ /index.html` serves directly for `/privacy`/`/terms` without any nginx
+change.
+
+**Choice — the client still discards the prerendered markup on mount, rather than hydrating it.**
+`main.tsx` calls `createRoot(container).render(...)`, unchanged by this slice — not `hydrateRoot`. A crawler
+sees the server-rendered HTML; a browser briefly shows it and then React replaces it with its own render on
+mount. Hydrating instead would need every prerendered component's server output to match its client output
+byte-for-byte or React logs a hydration-mismatch warning to the console — a real risk here, since `SignIn`
+(embedded in `Home`) reads `import.meta.env['VITE_GOOGLE_CLIENT_ID']` and mounts a Google-drawn button via a
+`useEffect` that never runs during static rendering. `createRoot`'s plain re-render sidesteps that whole
+failure class for a one-time cost (a sub-frame flash of prerendered markup) this deployment does not need to
+avoid.
+
+**Choice — per-page `<title>`/`<meta name="description">`/`<link rel="canonical">`, generated `robots.txt`/
+`sitemap.xml`, not static files under `public/`.** `/privacy` and `/terms` are now their own documents, each
+copied from the same built shell — `injectPrerenderedPage`'s own `meta` parameter overwrites the shell's
+title/description and adds a canonical link pointing at `VITE_PUBLIC_APP_URL` (a new `apps/web`-scoped
+variable, `docs/CONTRIBUTING.md`'s own build-time configuration table, mirroring the root `.env`'s
+`PUBLIC_APP_URL` the same way `VITE_GOOGLE_CLIENT_ID` already mirrors a root-level Google client id one level
+down). `robots.txt`/`sitemap.xml` are written by the same `closeBundle` hook rather than shipped from
+`public/`, because their one line of real content — the sitemap URL, and the sitemap's own three `<loc>`
+entries — needs that same deployment-specific origin, which a file copied verbatim from `public/` cannot
+carry.
+
+**Choice — the four `VITE_OPERATOR_*` defaults are real values, not placeholders.** `content/document.ts`'s
+`OPERATOR` used to read `[Operator legal name]`/`[legal@example.com]`-style square-bracket text — plausibly a
+direct contributor to the rejection, since a bracketed placeholder is close to the canonical shape of "this
+page is not really published." Made build-time configurable from `VITE_OPERATOR_NAME`/
+`VITE_OPERATOR_CONTACT_EMAIL`/`VITE_OPERATOR_JURISDICTION`/`VITE_OPERATOR_POSTAL_ADDRESS`, each defaulting to
+a real, non-placeholder value (`Bloombot`, `privacy@wonkledge.com`, `New York, United States`) so an
+unconfigured build still ships a name-bearing, publishable policy — except `postalAddress`, which defaults to
+empty rather than to a fabricated street address, and whose Contact section omits the line entirely when
+empty rather than printing a bracketed blank.
+
+**Choice — the `draftNotice` banner is deleted outright, not merely reworded.** Both documents opened with a
+blockquote reading "Draft, pending legal review. This text has not been reviewed by a lawyer" — accurate, but
+a policy that announces itself as an unreviewed draft in its own first line reads to an external reviewer as
+"not a published policy," the same failure mode as a bracketed placeholder. The honesty the banner existed
+to carry stays in the prose itself (the sections on what the platform cannot yet do — per-student deletion,
+no availability commitment — are unchanged and still say so plainly); only the announcement that the whole
+document is provisional is gone.
+
+**Choice — a new "Google account data" section, rather than folding it into the existing "AI processing"/
+"Sharing" sections.** Google's own OAuth review (support.google.com/cloud/answer/13806988) asks for Google
+user data to be addressed at a level of specificity — what is received, that no password is received, that
+it is not sold/shared/used for advertising/used for credit decisions/used to train an AI or ML model, and a
+concrete retention-and-deletion answer — that would have been lost if scattered piecemeal across sections
+written for a different purpose. A dedicated section states each point once, explicitly, including the one
+concrete deletion path this platform can actually offer for Google-linked data (the whole organization, on
+request to the operator's contact address — not the account alone, which the software has no way to delete
+in isolation; "Review round 1" below is where an earlier draft of this section overclaimed the opposite)
+even though the surrounding "How long we keep it" section still correctly declines to promise per-student
+deletion generally.
+
+**Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test` all green, plus
+`npm run build --workspace apps/web` producing `dist/index.html`, `dist/privacy/index.html`,
+`dist/terms/index.html`, `dist/robots.txt` and `dist/sitemap.xml`. `dist/privacy/index.html` grew from 1221
+bytes (the empty shell) to several times that once prerendered, and now contains the operator name and the
+Google-account-data prose Google's review asks for. `tests/prerender.test.ts` pins `src/prerender/inject.ts`'s
+own HTML-injection function directly (fast, no `vite build`); `tests/bundle.test.ts`'s existing `beforeAll` —
+which already runs one real `vite build` for WEB-6 — gained the assertions that the built output actually
+carries the prerendered content, confirmed red first against the pre-plugin build (an empty root div, no
+`dist/privacy/`). `tests/static-documents.test.tsx` gained assertions that the draft banner and every
+placeholder are gone and that the Google-account-data commitments are present, confirmed red against the
+pre-change content.
+
+**Review round 1 — three real defects, all fixed here.**
+
+- **The prerendered homepage baked in the "not configured" failure text.** `SignIn.tsx` renders "Google
+  sign-in is not configured for this deployment" whenever `import.meta.env['VITE_GOOGLE_CLIENT_ID']` is
+  unset, and the prerender step froze whatever `Home`/`SignIn` rendered at build time into `dist/index.html`
+  as static HTML — reproduced on a build with no client id set, exactly the build `tests/bundle.test.ts`'s own
+  `beforeAll` already runs. This is the single worst regression this slice could have shipped: the same
+  Google OAuth reviewer this whole slice exists to satisfy fetches `/` with no JavaScript and would have read
+  its own sign-in path declared broken, on a build that may simply not have its production secret set yet —
+  a failure this static before this slice existed only after JavaScript ran. Fixed with the
+  neutral-render approach over a hard build failure (the brief's own preferred option): `Home.tsx` gained an
+  optional `googleClientId` pass-through prop, forwarded to the embedded `SignIn` only when given — omitted
+  in every ordinary render (`App.tsx` never sets it), so real behaviour for a real visitor is unchanged
+  either way. `prerender-plugin.ts` is the only caller that ever sets it, to a placeholder value that is
+  truthy but not a real client id — `SignIn`'s own `useEffect` that would load Google's script and draw the
+  real button never runs during a `renderToStaticMarkup` call regardless, so the placeholder can never reach
+  Google's own servers or leak into anything a person could click; it exists purely to steer `SignIn` into
+  its "Agree to the documents above to sign in with Google" shell rather than its "not configured" one. The
+  client-side render that replaces this markup on mount (`main.tsx`'s `createRoot`, still not `hydrateRoot`)
+  reads the real, deployment-specific env from the actual client bundle regardless, so a genuinely
+  unconfigured deployment still tells a real visitor the truth once JavaScript runs — this fix changes only
+  what a non-JavaScript crawler ever sees. `tests/bundle.test.ts` gained a test asserting `dist/index.html`
+  contains neither "not configured" nor any other build-time env-failure text, confirmed red first against
+  the pre-fix code (the exact string the reviewer reported).
+- **A false encryption claim.** The Security section said the service "does not accept a plain, unencrypted
+  connection" — false: `docs/DEPLOY_DROPLET.md` §5.2/§5.3 has an nginx `listen 80` block that `certbot`
+  itself edits in place to add an HTTP→HTTPS redirect, not a refusal, and that same `:80` listener is what
+  serves the ACME HTTP-01 challenge `certbot` needs to issue the certificate in the first place. Reworded to
+  "a plain HTTP request is redirected to HTTPS rather than answered directly" — true, and still says the one
+  thing that matters to a reader (nothing this service actually serves is reachable unencrypted).
+- **A deletion overclaim that contradicted the same document's own honesty two paragraphs later.** The
+  Google-account-data section offered "your instructor account, or your whole organization" as things "the
+  operator can act on" deleting — but the only deletion path in the software is tenant-level
+  (`packages/db/src/repos/organizations.ts#deleteOrganizationData`, `apps/api/src/routes/admin.ts`'s own
+  organization-name-confirmation flow); there is no `deleteUser`/`deleteAccount`/`deleteInstructor` anywhere,
+  and the very next section ("How long we keep it") still correctly says no deletion finer than a whole
+  organization exists. Reworded to say plainly that there is no button that deletes only the account or only
+  its Google-derived data, and that the one real, manual path — asking the operator, at the contact address,
+  to delete the whole organization — takes everything else in the organization down with it. This is the
+  Google-required disclosure (a concrete answer, not a refusal) surviving without promising a granularity the
+  platform does not have — restoring the deliberate honesty `privacy.ts`'s own module comment describes,
+  which this section had traded away for reviewer-friendliness. `tests/static-documents.test.tsx`'s own test
+  for this section was rewritten to match — asserting the "whole organization" wording and the explicit "no
+  button that deletes only your account" disclaimer, rather than the withdrawn per-account phrasing.
+
+**Verification (round 1).** `npm run lint && npm run format:check && npm run typecheck && npm test && npx
+playwright test` all green: 93 node tests, 2683 vitest tests (`tests/bundle.test.ts` gained the "not
+configured" regression test above, confirmed red first against the pre-fix `Home`/`prerender-plugin.ts`;
+`tests/static-documents.test.tsx`'s deletion-path test was rewritten for the reworded text), 40 Playwright
+e2e specs (one more than the previous round's own count — `e2e/course-export-import.spec.ts`, merged in from
+the base branch, unrelated to this rework).

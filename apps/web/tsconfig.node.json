@@ -6,8 +6,17 @@
     // vite.config.ts itself runs under Node, at build/dev time — never
     // bundled into the browser output `tests/bundle.test.ts` (WEB-6)
     // checks, so it keeps the base project's Node `types` rather than the
-    // app project's browser `lib`/`types` above.
-    "types": ["node"]
+    // app project's browser `lib`/`types` above. `vite/client` is added
+    // alongside it only for `src/content/document.ts`'s own `import.meta.env`
+    // reads (`OPERATOR`'s `VITE_OPERATOR_*` variables) — that file is shared
+    // with `tsconfig.app.json`'s browser project below and is JSX-free, so
+    // pulling in Vite's env types here costs this project nothing.
+    "types": ["node", "vite/client"]
   },
-  "include": ["vite.config.ts"]
+  "include": [
+    "vite.config.ts",
+    "prerender-plugin.ts",
+    "src/prerender/inject.ts",
+    "src/content/document.ts"
+  ]
 }

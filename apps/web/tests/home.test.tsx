@@ -140,21 +140,21 @@ describe('accepting the documents before an account exists', () => {
   it('gates the Google button too, not only the email form', () => {
     // The Google path never touches the form, so `required` does not cover it
     // — without an explicit gate it would create an account for someone who
-    // agreed to nothing.
+    // agreed to nothing. Google owns and draws that button, so it cannot be
+    // handed a `disabled` prop: the gate is that the slot it draws into is
+    // not in the DOM at all until the documents are accepted.
     render(<SignIn onSignedIn={vi.fn()} googleClientId="client-id.test" />)
 
-    expect(
-      screen.getByRole('button', { name: 'Continue with Google' })
-    ).toBeDisabled()
+    expect(screen.queryByTestId('google-button-slot')).not.toBeInTheDocument()
+    expect(screen.getByTestId('google-gated')).toBeInTheDocument()
   })
 
-  it('enables the Google button once the documents are accepted', () => {
+  it('offers Google its slot once the documents are accepted', () => {
     render(<SignIn onSignedIn={vi.fn()} googleClientId="client-id.test" />)
 
     fireEvent.click(screen.getByTestId('accept-legal'))
 
-    expect(
-      screen.getByRole('button', { name: 'Continue with Google' })
-    ).toBeEnabled()
+    expect(screen.getByTestId('google-button-slot')).toBeInTheDocument()
+    expect(screen.queryByTestId('google-gated')).not.toBeInTheDocument()
   })
 })

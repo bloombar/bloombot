@@ -102,10 +102,14 @@ describe('SignIn (WEB-2)', () => {
     }
   })
 
-  it('with a Google client id configured, shows the Google button', () => {
+  // Google renders its own button into this slot once its script loads, so
+  // there is no button in the DOM to assert on here — the slot's presence is
+  // what this app controls, and the script itself is deliberately never
+  // fetched in a test (QA-2).
+  it('with a Google client id configured and the documents accepted, offers Google its slot', () => {
     render(<SignIn googleClientId="test-client-id" onSignedIn={vi.fn()} />)
-    expect(
-      screen.getByRole('button', { name: 'Continue with Google' })
-    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('accept-legal'))
+
+    expect(screen.getByTestId('google-button-slot')).toBeInTheDocument()
   })
 })

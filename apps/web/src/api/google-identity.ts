@@ -14,13 +14,40 @@ export interface GoogleCredentialResponse {
   credential: string
 }
 
-interface GoogleIdentityServices {
+/** What `renderButton` accepts, narrowed to the options this app actually sets. */
+export interface GoogleButtonOptions {
+  type: 'standard'
+  theme: 'outline'
+  size: 'large'
+  text: 'continue_with'
+  shape: 'rectangular'
+  /** Google sizes its own button to this width in CSS pixels; it has a 400px ceiling of its own. */
+  width?: number
+  logo_alignment?: 'left' | 'center'
+}
+
+export interface GoogleIdentityServices {
   accounts: {
     id: {
       initialize: (config: {
         client_id: string
         callback: (response: GoogleCredentialResponse) => void
       }) => void
+      /**
+       * Draws Google's own sign-in button into `parent`.
+       *
+       * This is what the app uses, rather than `prompt()`. `prompt()` is One
+       * Tap, and One Tap is *designed* to do nothing silently — it is
+       * suppressed when third-party cookies are blocked (Safari and Firefox by
+       * default), for hours or days after a visitor dismisses it once
+       * ("exponential cooldown"), and whenever the origin is not an authorized
+       * JavaScript origin. Every one of those looks identical from the page:
+       * a click that does nothing, with the explanation only in the browser
+       * console. A rendered button has none of those failure modes, and it is
+       * also what Google's own sign-in branding guidelines ask for.
+       */
+      renderButton: (parent: HTMLElement, options: GoogleButtonOptions) => void
+      /** One Tap. Deliberately unused — see `renderButton` above. */
       prompt: () => void
     }
   }

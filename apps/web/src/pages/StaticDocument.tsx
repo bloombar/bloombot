@@ -54,7 +54,9 @@ const MARKDOWN_COMPONENTS: Components = {
       {children}
     </a>
   ),
-  // The draft notice, and the few places the documents raise their voice.
+  // Neither document currently uses a blockquote, but the sanitizer schema
+  // allows one and Markdown is hand-written prose — styled so a future
+  // callout does not fall back to unstyled default markup.
   blockquote: ({ children }) => (
     <blockquote className="mb-4 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 text-sm leading-6 text-neutral-800">
       {children}

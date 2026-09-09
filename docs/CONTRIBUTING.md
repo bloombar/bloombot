@@ -90,6 +90,29 @@ gives the SPEC and the code traceability in both directions.
   processes are still serving, and the deploy script's rollback reverts the _checkout_, not the data. Expand
   → migrate → contract, across two releases.
 
+## apps/web build-time configuration
+
+`apps/web` is a static Vite build with no server of its own (`vite.config.ts`'s own module
+comment), so a handful of settings are baked in at `npm run build --workspace apps/web` time
+through `import.meta.env`, from `apps/web/.env`/`apps/web/.env.production` — not from the
+repository root's `.env` (`packages/config`'s schema, which is `apps/api`'s own, has no reach into
+this build at all). `docs/DEPLOY_DROPLET.md` §4.3 has the production deployment sequence for
+these; this is the general list.
+
+| Variable | Read by | Default if unset |
+| --- | --- | --- |
+| `VITE_GOOGLE_CLIENT_ID` | `pages/SignIn.tsx` — the Google sign-in button. Omitted or wrong and the button silently does nothing (`docs/DEPLOY_DROPLET.md` §4.3 has the full reasoning). | none — Google sign-in is reported as "not configured" |
+| `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin `robots.txt`/`sitemap.xml` and the prerendered `/privacy`/`/terms` pages' `<link rel="canonical">` are written against. | `https://bloombot.wonkledge.com` |
+| `VITE_OPERATOR_NAME` | `content/document.ts`'s `OPERATOR` — the legal entity the privacy policy and terms name throughout. | `Bloombot` |
+| `VITE_OPERATOR_CONTACT_EMAIL` | `content/document.ts`'s `OPERATOR` — where a privacy or legal request should be sent. | `privacy@wonkledge.com` |
+| `VITE_OPERATOR_JURISDICTION` | `content/document.ts`'s `OPERATOR` — whose law governs the terms. | `New York, United States` |
+| `VITE_OPERATOR_POSTAL_ADDRESS` | `content/document.ts`'s `OPERATOR` — the Contact section's postal address line. | empty — the Contact section omits the line entirely rather than printing a placeholder |
+
+The four `VITE_OPERATOR_*` defaults are deliberately real values, not `[fill this in]`-style
+placeholders: Google's OAuth branding review rejects a privacy policy carrying a square-bracket
+placeholder as evidence it is not actually published (`content/document.ts`'s own module comment,
+`docs/DECISIONS.md` D-89).
+
 ## Agent-assisted development
 
 This repository is built with a supervisor/developer agent split defined in `.claude/agents/`. The

@@ -139,8 +139,7 @@ export function Home({ onSignedIn }: HomeProps) {
             <a href="/terms" className="text-brand-600 underline">
               terms &amp; conditions
             </a>{' '}
-            set out the agreement. Both are drafts pending legal review, and
-            both say so.
+            set out the agreement.
           </p>
         </section>
       </main>

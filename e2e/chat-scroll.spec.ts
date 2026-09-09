@@ -35,7 +35,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 /**
  * `window`/`document` — Node's own type lib (this repo's `tsconfig.base.json`
@@ -69,12 +69,7 @@ test('the composer stays reachable without scrolling the page once the thread ov
   //    the same two steps `chat.spec.ts` (WEB-10) already drives, reused
   //    here rather than duplicated as a fixture (that file's own choice,
   //    kept consistent).
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

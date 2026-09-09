@@ -13,7 +13,7 @@
 import { expect, test } from '@playwright/test'
 
 import { navigateTo, signOut } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { completeSignIn } from './support/sign-in.js'
 
 test('sign in by emailed link, land in an organization, sign out, and stay signed out', async ({
   page,
@@ -25,13 +25,9 @@ test('sign in by emailed link, land in an organization, sign out, and stay signe
   await expect(
     page.getByRole('heading', { name: 'Sign in to Bloombot' })
   ).toBeVisible()
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
 
   // 2. Redeem the link the API actually sent.
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await completeSignIn(page, email)
 
   // 3. Signed in: the shell renders, showing the organization this
   //    account's first sign-in created (TEN-1) — what a signed-in

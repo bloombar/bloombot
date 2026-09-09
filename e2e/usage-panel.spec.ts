@@ -58,7 +58,7 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
+import { signIn } from './support/sign-in.js'
 
 test("an instructor sees their course's spend and a student approaching its daily limit, from the Usage screen (COST-4)", async ({
   page,
@@ -76,12 +76,7 @@ test("an instructor sees their course's spend and a student approaching its dail
   //    daily allowance, comfortably over `listUsageNearLimit`'s own 80%
   //    threshold (`@bloombot/db`'s `usage.ts`), so this spec needs only one
   //    real conversation to reach both halves of COST-4 at once.
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
+  await signIn(page, email)
   await expect(page.getByTestId('organization-switcher')).toBeVisible()
 
   await navigateTo(page, 'Projects')

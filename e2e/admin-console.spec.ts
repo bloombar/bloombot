@@ -49,16 +49,7 @@ import {
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
-import { readSignInToken } from './support/read-sign-in-token.js'
-
-async function signIn(page: import('@playwright/test').Page, email: string) {
-  await page.goto('/')
-  await page.getByLabel('Email').fill(email)
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click()
-  await expect(page.getByTestId('link-requested')).toContainText(email)
-  const token = await readSignInToken(email)
-  await page.goto(`/sign-in/${token}`)
-}
+import { signIn } from './support/sign-in.js'
 
 /**
  * This spec's own seeding writes directly to `E2E_DATABASE_PATH`

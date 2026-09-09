@@ -11,17 +11,32 @@ import type { CourseSummary, Project } from '../src/api/types.js'
 import { Courses } from '../src/pages/Courses.js'
 import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
-const { listCourses, enableCourse, disableCourse } = vi.hoisted(() => ({
+const {
+  listCourses,
+  enableCourse,
+  disableCourse,
+  exportCourse,
+  downloadTextFile,
+} = vi.hoisted(() => ({
   listCourses: vi.fn(),
   enableCourse: vi.fn(),
   disableCourse: vi.fn(),
+  exportCourse: vi.fn(),
+  downloadTextFile: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, listCourses, enableCourse, disableCourse }
+  return {
+    ...actual,
+    listCourses,
+    enableCourse,
+    disableCourse,
+    exportCourse,
+    downloadTextFile,
+  }
 })
 
 const PROJECT: Project = {
@@ -235,5 +250,50 @@ describe('Courses (WEB-8)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Web Design' }))
     expect(onOpenCourse).toHaveBeenCalledWith('course-1')
+  })
+})
+
+/**
+ * WEB-39/PORT-1: a course row's own Export item — the action returns the
+ * file's text (PORT-8: an export is an action, not a download route), and
+ * this screen is what hands it to the browser to save.
+ */
+describe('Courses — export (WEB-39)', () => {
+  it("exports the row's course and saves the file the action named", async () => {
+    listCourses.mockResolvedValue([COURSE])
+    exportCourse.mockResolvedValue({
+      filename: 'web-design.course.yml',
+      content: 'bloombotCourseExport: 1\n',
+      notCarried: {
+        vectorStore: false,
+        storedPrompt: false,
+        attachments: 0,
+        discordServer: false,
+      },
+    })
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    openCourseMenu('Web Design')
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+
+    await waitFor(() =>
+      expect(exportCourse).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    await waitFor(() =>
+      expect(downloadTextFile).toHaveBeenCalledWith(
+        'web-design.course.yml',
+        'bloombotCourseExport: 1\n'
+      )
+    )
   })
 })

@@ -31,6 +31,7 @@ import type {
   Course,
   CourseAttachmentSummary,
   CourseEnrolment,
+  CourseExportResult,
   CourseInstructionRevisionSummary,
   CourseJoinLinkSummary,
   CourseSummary,
@@ -39,6 +40,7 @@ import type {
   DiscordPersonLinkPreviewResponse,
   DiscordServerBindingSummary,
   DuplicateProjectResult,
+  ImportCourseResult,
   InstallBeginResponse,
   InstallCallbackResponse,
   JobStatus,
@@ -474,6 +476,59 @@ export function disableCourse(
   courseId: string
 ): Promise<{ disabled: boolean }> {
   return dispatchAction(organizationId, 'courses.disable', { courseId })
+}
+
+/**
+ * PORT-1/PORT-8 — export one course's configuration. The file comes back as
+ * text in the ordinary action envelope rather than from a download route of
+ * its own: an export is a read like any other (PORT-8), and the panel is the
+ * thing that turns the text into a file (`downloadTextFile`, below).
+ */
+export function exportCourse(
+  organizationId: string,
+  courseId: string
+): Promise<CourseExportResult> {
+  return dispatchAction<CourseExportResult>(organizationId, 'courses.export', {
+    courseId,
+  })
+}
+
+/** PORT-4/PORT-7 — import a course export file's text into `projectId`. */
+export function importCourse(
+  organizationId: string,
+  projectId: string,
+  content: string
+): Promise<ImportCourseResult> {
+  return dispatchAction<ImportCourseResult>(organizationId, 'courses.import', {
+    projectId,
+    content,
+  })
+}
+
+/**
+ * Hand the browser a text file to save, from text this app already holds.
+ *
+ * A same-origin `blob:` URL and a synthetic click is the only way to do this
+ * without a download route on the API, which PORT-8 deliberately does not
+ * have — an export is an action, and its result arrives as JSON like every
+ * other action's. The object URL is revoked immediately afterwards: the
+ * browser has already taken its own reference by the time `click()` returns,
+ * and leaving it un-revoked pins the whole file in memory for the life of the
+ * document.
+ */
+export function downloadTextFile(
+  filename: string,
+  content: string,
+  contentType = 'application/yaml'
+): void {
+  const url = URL.createObjectURL(new Blob([content], { type: contentType }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 /**

@@ -28,3 +28,16 @@ export {
   normalizeWebSourceDomain,
   type WebSourceDomainResult,
 } from './web-source-domain.js'
+
+export {
+  courseExportFileSchema,
+  exportedCourseSchema,
+  notCarriedSchema,
+  readCourseExport,
+  COURSE_EXPORT_KIND,
+  COURSE_EXPORT_VERSION,
+  type CourseExportFile,
+  type CourseExportNotCarried,
+  type CourseExportReadResult,
+  type ExportedCourse,
+} from './course-export.js'

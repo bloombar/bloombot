@@ -319,3 +319,13 @@ export that writes it, and an import that reads it back into a chosen project �
 structure, never students.
 
 **In scope:** PORT-1, PORT-2, PORT-3, PORT-4, PORT-5, PORT-6, PORT-7, PORT-8, WEB-39
+
+## Phase 25 — A course decides who it enrols and who it answers
+
+A course taught through Discord categories rather than per-course roles has no self-enrolment path at
+all: its students are answered but never appear on its roll, and an enrolment an instructor ended
+does not actually stop a category-routed student from asking. This phase gives a course two
+independent settings — whether asking it enrols the asker, and whether it answers a student it has
+not enrolled — and the intent record that lets "message the bot, then connect" admit somebody.
+
+**In scope:** ENRL-13, ENRL-14

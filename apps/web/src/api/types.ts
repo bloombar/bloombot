@@ -248,6 +248,13 @@ export interface CourseSummary {
   vectorStoreId: string | null
   maxRequestsPerDay: number | null
   conversationScope: 'course' | 'course_surface'
+  // ENRL-13 — whether asking this course is itself a request to enrol
+  // (`pages/CourseEditor.tsx`'s own checkbox). Defaults `false` for a
+  // course that has never set it (`packages/db/src/schema.ts`).
+  selfEnrolFromDiscord: boolean
+  // ENRL-14 — whether this course answers a student it has never enrolled.
+  // Defaults `true` — "the behaviour every existing course already has."
+  answerUnenrolled: boolean
   // TEN-9 — which of the organization's (possibly several) Discord servers
   // this course routes in. `null` resolves through the organization's own
   // single active binding when it has exactly one (`repos/discord-servers.ts#resolveCourseDiscordServer`);
@@ -417,7 +424,9 @@ export interface CourseEnrolment {
   id: string
   personId: string
   displayName: string | null
-  source: 'join_link' | 'discord_role' | 'roster'
+  // ENRL-13 — 'self_enrolment' added by this slice; see
+  // `packages/db/src/schema.ts#ENROLMENT_SOURCES`.
+  source: 'join_link' | 'discord_role' | 'roster' | 'self_enrolment'
   createdAt: number
   endedAt: number | null
   reinstatedByAccountId: string | null

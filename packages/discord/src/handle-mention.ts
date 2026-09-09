@@ -25,6 +25,29 @@
  * actual refusal reaching the student — or, now, the instructor or
  * assistant — rather than an enrolment row quietly staying out of step with
  * whether the message was answered anyway. See `docs/DECISIONS.md` D-35.
+ *
+ * ENRL-13/ENRL-14: two more, independent, per-course settings, read here
+ * once the course is routed and unchanged by anything above. A course
+ * carrying `selfEnrolFromDiscord` admits (or records an intent for)
+ * whoever it just answered — `enrolViaSelfEnrolment`/
+ * `repos/self-enrolment.ts#recordSelfEnrolmentIntent` — *before* a course
+ * carrying `answerUnenrolled: false` gets to refuse them, so a student this
+ * message just admitted is answered, not refused for not yet being
+ * enrolled. Both default to today's behaviour for every existing course
+ * (`false`/`true` respectively, `schema.ts`'s own comment on why) — this
+ * file changes nothing until an instructor ticks one of the two checkboxes
+ * on the course's own General tab.
+ *
+ * **The `answerUnenrolled: false` refusal only fires for a connected
+ * person (must-fix 1, review round 1).** An unconnected person cannot be
+ * enrolled yet by definition, so this refusal would tell them only what
+ * they cannot act on — and, on a course also carrying `selfEnrolFromDiscord`,
+ * it pre-empted `answerQuestion`'s own LINK-1 `not-connected` result before
+ * that function ever ran, silencing the very connect invitation the intent
+ * this message just recorded depends on someone reading. An unconnected
+ * person falls through to `answerQuestion` and gets the ordinary connect
+ * invitation instead, exactly as they would on a course with this setting
+ * left on.
  */
 
 import {
@@ -40,6 +63,7 @@ import {
   discordServers,
   enrolments,
   people,
+  selfEnrolment,
   type Database,
 } from '@bloombot/db'
 import type { AdmissionGate } from '@bloombot/jobs'
@@ -117,6 +141,7 @@ export type HandleMentionResult =
   | { kind: 'not-configured' }
   | { kind: 'invited-to-connect' }
   | { kind: 'enrolment-ended' }
+  | { kind: 'not-enrolled' }
   | { kind: 'declined-over-limit' }
   | { kind: 'declined-over-cap' }
   | { kind: 'declined-busy' }
@@ -186,6 +211,11 @@ function connectInvitationText(
 /** ENRL-6/D-35 rework finding 5 — the same "reaches the student, not a silent drop or a silent revival" treatment every other refusal in this file already gets: an instructor's own `enrolments.end` sticks, and the student is told plainly rather than left guessing why holding the role no longer answers them. */
 function enrolmentEndedRefusalText(courseTitle: string): string {
   return `You are no longer enrolled in ${courseTitle}. See ${courseTitle} admins for help.`
+}
+
+/** ENRL-14 — the same register as `enrolmentEndedRefusalText`, just above: a course with `answerUnenrolled` off refuses a student it has never admitted, plainly, rather than answering around the gap ENRL-6's own refusal never covered for a category-routed course. */
+function notEnrolledRefusalText(courseTitle: string): string {
+  return `You are not enrolled in ${courseTitle}. See ${courseTitle} admins for help.`
 }
 
 /**
@@ -492,6 +522,90 @@ export async function handleMention(
       'handleMention: declined, this enrolment was ended and holding the role does not revive it'
     )
     return { kind: 'enrolment-ended' }
+  }
+
+  // ENRL-13/ENRL-14 — the full course row, for its own two settings:
+  // `routing.course` (`RoutableCourse`, `@bloombot/core`'s `routing.ts`)
+  // only ever carries what `routeMessage` itself reads — category names and
+  // the two role names — neither `selfEnrolFromDiscord` nor
+  // `answerUnenrolled` is on it, and widening it is out of scope for this
+  // slice (routing's own decision is unchanged). `courseId` already
+  // resolved inside `organizationId` (`routing.course.id`), so this cannot
+  // come back `undefined`.
+  const course = courses.getCourse(organizationId, courseId, db)
+
+  // ENRL-13 — a course that has opted into self-enrolment admits (or
+  // records an intent for) whoever it just routed, *before* the ENRL-14
+  // gate below runs: an already-connected person is enrolled on this very
+  // message (`enrolViaSelfEnrolment`, a no-op if they already hold an
+  // active enrolment); an unconnected one gets an intent recorded instead
+  // — `repos/self-enrolment.ts`'s own `recordSelfEnrolmentIntent`, redeemed
+  // later when they connect (`apps/api/src/routes/person-link.ts`). The
+  // invitation an unconnected person still gets, below at `not-connected`,
+  // is unchanged either way. A failed write here is logged, not fatal — the
+  // same "does not block the reply" treatment `enrolViaDiscordRole`'s own
+  // try/catch, above, already gives its own admission.
+  if (course?.selfEnrolFromDiscord) {
+    try {
+      if (person.connectedAt !== null) {
+        enrolments.enrolViaSelfEnrolment(
+          organizationId,
+          { courseId, personId: person.id },
+          db
+        )
+      } else {
+        selfEnrolment.recordSelfEnrolmentIntent(
+          organizationId,
+          { courseId, personId: person.id },
+          db
+        )
+      }
+    } catch (error) {
+      logger.error(
+        { err: error, organizationId, courseId, personId: person.id },
+        'handleMention: failed to record a self-enrolment admission or intent'
+      )
+    }
+  }
+
+  // ENRL-14 — a course that does not answer an unenrolled student is
+  // refused here, before `answerQuestion` is ever called: no model call, no
+  // allowance spent, the same "costs nothing" shape `enrolment-ended` above
+  // already takes. Run *after* the ENRL-13 admission above, not before — a
+  // student that admission just enrolled already holds an active enrolment
+  // by the time this checks, so they are answered, not refused for not yet
+  // being enrolled.
+  //
+  // **Gated on `person.connectedAt !== null` (must-fix 1, review round 1).**
+  // An unconnected person cannot hold an enrolment yet by definition — the
+  // only way ENRL-13 admits one is on a message from someone already
+  // connected (`enrolViaSelfEnrolment`, above) or on redeeming an intent
+  // *after* connecting (`repos/self-enrolment.ts`). Refusing them here for
+  // "not enrolled" told them the one thing they cannot act on, and — worse,
+  // on a course with `selfEnrolFromDiscord` also on — pre-empted
+  // `answerQuestion`'s own `not-connected` result entirely, so the connect
+  // invitation that is the only way they could *become* enrolled never
+  // reached them: the intent this same message just recorded, above, would
+  // never be redeemed by anyone who was never told to connect. Falling
+  // through here instead lets `answerQuestion` reach its own LINK-1 gate
+  // and send the ordinary connect invitation — the same reply an
+  // unconnected person on a course with this setting left on has always
+  // gotten (`not-connected`, below), unchanged by ENRL-14 either way.
+  if (course && !course.answerUnenrolled && person.connectedAt !== null) {
+    const activeEnrolment = enrolments.getActiveEnrolment(
+      organizationId,
+      courseId,
+      person.id,
+      db
+    )
+    if (!activeEnrolment) {
+      await sendReply(reply, notEnrolledRefusalText(courseTitle))
+      logger.info(
+        { organizationId, courseId, personId: person.id },
+        'handleMention: declined, this course only answers enrolled students and this person is not enrolled'
+      )
+      return { kind: 'not-enrolled' }
+    }
   }
 
   // BOT-6 — the raw mention token is rewritten to a readable name before

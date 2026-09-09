@@ -15,6 +15,15 @@
  * express. All three funnel through the module-private `admit`, the one
  * place the row is actually written.
  *
+ * ENRL-13 adds a fourth, `enrolViaSelfEnrolment` — admitting a person a
+ * course's own `selfEnrolFromDiscord` setting agreed, in advance, to enrol
+ * on being asked. Unlike the other three, it is never called directly on a
+ * Discord message: `repos/self-enrolment.ts` is what decides *when* (on the
+ * message itself for an already-connected person, or on redeeming a later
+ * intent for one who was not) — this file only ever writes the row, the
+ * same division of labour `enrolViaDiscordRole` already keeps from
+ * `@bloombot/discord`'s own routing decision.
+ *
  * ENRL-3's Discord-role path (`enrolViaDiscordRole`) is evaluated here, in
  * the repo layer, rather than in `@bloombot/core`'s `routing.ts` — see
  * `docs/DECISIONS.md`. It is a pure string-membership check against
@@ -717,6 +726,39 @@ export function enrolViaDiscordRole(
     input.courseId,
     input.personId,
     'discord_role',
+    false,
+    db
+  )
+}
+
+/**
+ * ENRL-13: enrol via a course's own `selfEnrolFromDiscord` setting —
+ * called by `repos/self-enrolment.ts`'s `recordSelfEnrolmentIntent` (for a
+ * person already connected when they message the course) and
+ * `redeemSelfEnrolmentIntents` (for a person who connects afterwards).
+ * Neither caller checks `selfEnrolFromDiscord` itself before calling this —
+ * see that file's own module comment for where the setting is actually
+ * read, and why it is re-read at redemption time, not only at record time.
+ *
+ * `reviveEnded: false`, the same choice every other `enrolVia*` in this file
+ * makes, for the identical reason: a course turning this setting on is not
+ * an instructor's decision to re-admit anyone in particular, so a person an
+ * instructor has explicitly ended (ENRL-6) stays ended regardless of how
+ * many more times they message the course or how long they wait to connect.
+ * `admit`'s own `reviveEnded: false` is what actually enforces this — this
+ * function adds no check of its own beyond calling it, the same as its three
+ * siblings.
+ */
+export function enrolViaSelfEnrolment(
+  organizationId: string,
+  input: { courseId: string; personId: string },
+  db: Executor
+): Enrolment | undefined {
+  return admit(
+    organizationId,
+    input.courseId,
+    input.personId,
+    'self_enrolment',
     false,
     db
   )

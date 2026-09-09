@@ -1185,6 +1185,52 @@ back a secret that admits nobody. A deployment with no key configured keeps toda
 exactly: the secret is shown once at creation and the reveal is refused, rather than the platform
 failing to start or silently storing a secret it cannot protect.
 
+#### ENRL-13 A course decides whether asking it enrols the asker
+
+Today a student becomes enrolled in exactly one way that does not involve an instructor: holding one
+of the course's two Discord roles (ENRL-7). A course taught through Discord *categories* rather than
+per-course roles has no such path — its students are answered, because answering is gated on a
+connected account (LINK-1) and not on an enrolment, but they never appear on the course's own roll.
+The instructor sees an empty People list for a course full of students who have been asking it
+questions all term.
+
+A course carries a setting deciding whether asking it is itself a request to enrol. When it is on, a
+student who messages the course and then connects their account becomes enrolled in it, and a student
+who is already connected becomes enrolled on the message itself — the two orderings a real class
+produces, admitted by the same rule. When it is off, nothing about enrolment changes: the course is
+taught through roles, a roster, or a join link, and messaging it grants nothing.
+
+The intent a student's message records is not itself an enrolment and never becomes one on its own.
+It names the course they asked in and waits, so that connecting — the deliberate act LINK-6 already
+requires, on a screen the student reaches themselves — is what admits them. It is redeemed once, and
+a course whose setting has since been turned off admits nobody with it.
+
+ENRL-6 is untouched, exactly as it is for every other admission path: an enrolment an instructor
+ended stays ended, and neither messaging a course nor connecting afterwards revives it. Reinstating
+remains ENRL-9's own instructor-initiated act.
+
+#### ENRL-14 A course decides whether it answers a student it has not enrolled
+
+Answering has never required an enrolment. A message routes to a course by its category or by the
+author's role (CORE-2), and a connected person whose message routes is answered whether or not the
+course has ever admitted them. For a course taught through categories that is the only thing that
+works — but it also means an instructor who ends a student's enrolment (ENRL-6) has not necessarily
+stopped them asking: the refusal that enforces ENRL-6 today only fires for a student who holds one of
+the course's own roles, so a category-routed student walks past it.
+
+A course carries a second setting deciding whether an unenrolled student is answered at all. When it
+is on, the course behaves as it always has — anyone whose message routes and who has connected an
+account gets an answer. When it is off, only an enrolled student is answered, and everybody else is
+told plainly that they are not enrolled and who to ask, the same way an ended enrolment is already
+refused. No model call is made and no allowance is spent on a refusal, whichever setting produced it.
+
+The two settings are independent and both are honest about what they do. A course may admit its
+askers automatically and answer everyone (ENRL-13 on, this on); admit them automatically but answer
+only the admitted (both on, with this one gating anyone the admission has not yet reached); admit
+nobody and answer everyone, which is today's behaviour and the default every existing course keeps;
+or admit nobody and answer only those an instructor, a roster or a role already enrolled, which is
+what closes ENRL-6's own gap for a course that wants it closed.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

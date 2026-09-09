@@ -19,6 +19,7 @@ import {
   personLinkChallenges,
   projects,
   rosterChannelAssignments,
+  selfEnrolment,
   usage,
   type Database,
 } from '@bloombot/db'
@@ -652,6 +653,93 @@ describe('people.ts#mergePeople (LINK-4)', () => {
         testDb.db
       )?.id
     ).toBe(loserEnrolment?.id)
+  })
+
+  // ENRL-13 — fails without `mergePeople`'s own new intent-migration block:
+  // `/discord/confirm`'s merge case (this is exactly its shape — a bare
+  // survivor merging into an identity that already recorded an intent) would
+  // otherwise leave the intent stranded on the loser, where nothing ever
+  // redeems it again.
+  it("moves the loser's unredeemed self-enrolment intent to the survivor when the survivor holds none for that course", () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const loserIntent = selfEnrolment.recordSelfEnrolmentIntent(
+      organizationId,
+      { courseId, personId: loser.id },
+      testDb.db
+    )
+    if (!loserIntent) throw new Error('setup failed')
+
+    people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+
+    const row = testDb.db.$client
+      .prepare(
+        'select person_id, redeemed_at from course_self_enrolment_intents where id = ?'
+      )
+      .get(loserIntent.id) as { person_id: string; redeemed_at: number | null }
+    expect(row.person_id).toBe(survivor.id)
+    expect(row.redeemed_at).toBeNull()
+  })
+
+  it('moves an already-redeemed self-enrolment intent to the survivor outright — no collision to avoid', () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const loserIntent = selfEnrolment.recordSelfEnrolmentIntent(
+      organizationId,
+      { courseId, personId: loser.id },
+      testDb.db
+    )
+    if (!loserIntent) throw new Error('setup failed')
+    selfEnrolment.redeemSelfEnrolmentIntents(
+      organizationId,
+      loser.id,
+      testDb.db
+    )
+
+    people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+
+    const row = testDb.db.$client
+      .prepare(
+        'select person_id, redeemed_at from course_self_enrolment_intents where id = ?'
+      )
+      .get(loserIntent.id) as { person_id: string; redeemed_at: number | null }
+    expect(row.person_id).toBe(survivor.id)
+    expect(row.redeemed_at).not.toBeNull()
+  })
+
+  it("leaves the loser's unredeemed intent behind when the survivor already holds an unredeemed one for the same course — moving it would collide with the partial unique index", () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId } = seedOrgWithCourse(testDb.db)
+    const survivor = people.createPerson(organizationId, {}, testDb.db)
+    const loser = people.createPerson(organizationId, {}, testDb.db)
+    const survivorIntent = selfEnrolment.recordSelfEnrolmentIntent(
+      organizationId,
+      { courseId, personId: survivor.id },
+      testDb.db
+    )
+    const loserIntent = selfEnrolment.recordSelfEnrolmentIntent(
+      organizationId,
+      { courseId, personId: loser.id },
+      testDb.db
+    )
+    if (!survivorIntent || !loserIntent) throw new Error('setup failed')
+
+    expect(() =>
+      people.mergePeople(organizationId, survivor.id, loser.id, testDb.db)
+    ).not.toThrow()
+
+    const row = testDb.db.$client
+      .prepare(
+        'select person_id from course_self_enrolment_intents where id = ?'
+      )
+      .get(loserIntent.id) as { person_id: string }
+    // Left on the (now tombstoned) loser — never redeemed, but the
+    // survivor's own row already names the same fact.
+    expect(row.person_id).toBe(loser.id)
   })
 
   it('refuses when the survivor has itself already been merged into someone else', () => {

@@ -300,13 +300,15 @@ describe('enrolments repo (ENRL-1..6)', () => {
   })
 
   it('there is no repo function that enrols with a caller-chosen source', () => {
-    // Structural: `enrolments.ts` exports exactly three admission functions,
-    // each with a fixed source, and no generic `enrol(..., { source })`.
+    // Structural: `enrolments.ts` exports exactly four admission functions
+    // (ENRL-13 added the fourth), each with a fixed source, and no generic
+    // `enrol(..., { source })`.
     expect(Object.keys(enrolments).sort()).toEqual(
       [
         'enrolViaDiscordRole',
         'enrolViaJoinLink',
         'enrolViaRoster',
+        'enrolViaSelfEnrolment',
         'endEnrolment',
         'reinstateEnrolment',
         'getActiveEnrolment',
@@ -465,6 +467,66 @@ describe('enrolments repo (ENRL-1..6)', () => {
     ).toBeUndefined()
     // The original row is still there, still ended — not deleted, not
     // reactivated.
+    expect(
+      enrolments.getEnrolment(organizationId, first.id, testDb.db)
+    ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })
+  })
+
+  // ENRL-13 — the fourth `enrolVia*`, exercised the same way its three
+  // siblings are above: records source `'self_enrolment'`, and refuses to
+  // revive a prior *ended* enrolment. Fails without the change: before
+  // `enrolViaSelfEnrolment` existed, this call did not compile at all, and
+  // before `'self_enrolment'` was added to `ENROLMENT_SOURCES` and to
+  // `enrolments_source_check`, the insert would have thrown a raw
+  // `SQLITE_CONSTRAINT_CHECK` rather than a source ever reading back this
+  // way.
+  it('enrolViaSelfEnrolment records source "self_enrolment"', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const enrolment = enrolments.enrolViaSelfEnrolment(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(enrolment).toMatchObject({ source: 'self_enrolment' })
+  })
+
+  // ENRL-6/ENRL-13 — the hard constraint the brief calls out explicitly: an
+  // instructor-ended enrolment stays ended, whether the next message came
+  // from a Discord-role holder (the test above, `enrolViaDiscordRole`) or
+  // from a course's own self-enrolment setting. Fails without
+  // `enrolViaSelfEnrolment`'s own `reviveEnded: false`.
+  it('enrolViaSelfEnrolment does not revive an ended enrolment', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    const first = enrolments.enrolViaSelfEnrolment(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!first) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, first.id, testDb.db)
+
+    const second = enrolments.enrolViaSelfEnrolment(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    expect(second).toBeUndefined()
+    expect(
+      enrolments.getActiveEnrolment(
+        organizationId,
+        course.id,
+        person.id,
+        testDb.db
+      )
+    ).toBeUndefined()
     expect(
       enrolments.getEnrolment(organizationId, first.id, testDb.db)
     ).toMatchObject({ id: first.id, endedAt: expect.any(Number) })

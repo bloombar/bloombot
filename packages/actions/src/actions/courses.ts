@@ -101,6 +101,12 @@ const saveInputSchema = z.strictObject({
   vectorStoreId: z.string().min(1).nullable().optional(),
   maxRequestsPerDay: z.number().int().positive().nullable().optional(),
   conversationScope: z.enum(schema.CONVERSATION_SCOPES).optional(),
+  // ENRL-13/ENRL-14 — the same "no clear state, omitted keeps whatever is
+  // stored" treatment `conversationScope` above already gets: neither is
+  // nullable (`schema.ts`'s own column defaults are `false`/`true`), so
+  // there is nothing for an explicit `null` to mean.
+  selfEnrolFromDiscord: z.boolean().optional(),
+  answerUnenrolled: z.boolean().optional(),
   // TEN-9 — which of the organization's Discord servers this course routes
   // in. Validated below, in the policy, as an *actively bound* server of the
   // caller's own organization — a caller naming another organization's
@@ -242,6 +248,21 @@ export const saveCourseAction: Action<
         ? { conversationScope: input.conversationScope }
         : entity.existingCourse
           ? { conversationScope: entity.existingCourse.conversationScope }
+          : {}),
+      // ENRL-13/ENRL-14 — the same "omitted keeps whatever is stored, or
+      // lets `createCourse` apply its own default" shape `conversationScope`
+      // above uses, checked against `undefined` rather than falsiness
+      // (`input.selfEnrolFromDiscord ? ... : ...` would treat an explicit
+      // `false` — a real, sent value — the same as "not sent at all").
+      ...(input.selfEnrolFromDiscord !== undefined
+        ? { selfEnrolFromDiscord: input.selfEnrolFromDiscord }
+        : entity.existingCourse
+          ? { selfEnrolFromDiscord: entity.existingCourse.selfEnrolFromDiscord }
+          : {}),
+      ...(input.answerUnenrolled !== undefined
+        ? { answerUnenrolled: input.answerUnenrolled }
+        : entity.existingCourse
+          ? { answerUnenrolled: entity.existingCourse.answerUnenrolled }
           : {}),
       // TEN-9 — `keepOrClear`, the same as `model`/`vectorStoreId` above:
       // omitted keeps whatever is already stored (or `null` on create, since

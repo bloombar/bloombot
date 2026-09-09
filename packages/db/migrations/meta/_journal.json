@@ -176,6 +176,13 @@
       "when": 1788689490708,
       "tag": "0024_bouncy_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1788966928548,
+      "tag": "0025_gray_dreaming_celestial",
+      "breakpoints": true
     }
   ]
 }

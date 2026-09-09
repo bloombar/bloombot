@@ -88,6 +88,8 @@ const SOURCE_LABELS: Record<CourseEnrolment['source'], string> = {
   join_link: 'Join link',
   discord_role: 'Discord role',
   roster: 'Roster import',
+  // ENRL-13 — admitted by messaging a course carrying `selfEnrolFromDiscord`.
+  self_enrolment: 'Self-enrolled',
 }
 
 /** What a row shows in place of a name — `displayName` when the person has one, `personId` otherwise (this file's own module comment on why never email). */

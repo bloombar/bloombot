@@ -69,6 +69,7 @@ describe('runMigrations', () => {
       'course_channels',
       'course_instruction_revisions',
       'course_join_links',
+      'course_self_enrolment_intents',
       'course_web_sources',
       'courses',
       'discord_install_states',
@@ -164,8 +165,11 @@ describe('runMigrations', () => {
       'name',
       'organization_id',
     ])
+    // ENRL-13/ENRL-14 — `self_enrol_from_discord`/`answer_unenrolled` added
+    // by this slice.
     expect(schema.courses).toEqual([
       'admins_role',
+      'answer_unenrolled',
       'conversation_scope',
       'created_at',
       'discord_server_id',
@@ -177,9 +181,19 @@ describe('runMigrations', () => {
       'organization_id',
       'project_id',
       'prompt_id',
+      'self_enrol_from_discord',
       'students_role',
       'title',
       'vector_store_id',
+    ])
+    // ENRL-13 — added by this slice.
+    expect(schema.course_self_enrolment_intents).toEqual([
+      'course_id',
+      'created_at',
+      'id',
+      'organization_id',
+      'person_id',
+      'redeemed_at',
     ])
     expect(schema.course_categories).toEqual([
       'course_id',
@@ -878,6 +892,94 @@ describe('runMigrations', () => {
       vector_store_id: 'vs-1',
       max_requests_per_day: 50,
       discord_server_id: null,
+    })
+  })
+
+  // ENRL-13/ENRL-14 — the same "seed what a real deployment already has,
+  // then apply the real migration on top" shape the 0023 test above uses:
+  // `self_enrol_from_discord`/`answer_unenrolled` are added by 0025 onto a
+  // `courses` table that may already hold rows, and every one of them has
+  // to come back reading as today's behaviour — `false`/`true` — not `null`
+  // or a failed migration. Fails without the database-level `DEFAULT` on
+  // each column (`schema.ts`'s own comment on why): a plain, undefaulted
+  // `ADD COLUMN NOT NULL` refuses outright the moment a table already has a
+  // row, the same class of defect the 0013 test elsewhere in this file
+  // pins for a different column.
+  it('applies 0025 to a database that already has a course, defaulting selfEnrolFromDiscord to false and answerUnenrolled to true', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0024 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 24
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0024) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0024,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    // No `self_enrol_from_discord`/`answer_unenrolled` column exists yet at
+    // this point — this is the pre-0025 shape a real deployment's `courses`
+    // table already has.
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, enabled, admins_role,
+           students_role, conversation_scope, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        1,
+        'admins-wd',
+        'students-wd',
+        'course',
+        now
+      )
+
+    // The migration under test: 0025, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const course = db.$client
+      .prepare('select * from courses where id = ?')
+      .get(courseId)
+    expect(course).toMatchObject({
+      id: courseId,
+      self_enrol_from_discord: 0,
+      answer_unenrolled: 1,
     })
   })
 })

@@ -130,6 +130,13 @@ export const exportCourseAction: Action<
         instructions: entity.instructions,
         maxRequestsPerDay: entity.maxRequestsPerDay,
         conversationScope: entity.conversationScope,
+        // ENRL-13/ENRL-14 (must-fix 4, review round 1) — carried, not
+        // dropped: both are course-level policy, the same kind of setting
+        // `conversationScope` already travels as, not an organization- or
+        // provider-specific identifier like `vectorStoreId`/`discordServerId`
+        // (`notCarried`, below) that means nothing in a different tenant.
+        selfEnrolFromDiscord: entity.selfEnrolFromDiscord,
+        answerUnenrolled: entity.answerUnenrolled,
         categories: entity.categories.map((category) => ({
           name: category.name,
           channels: category.channels.map((channel) => ({
@@ -259,6 +266,15 @@ export const importCourseAction: Action<
           model: exported.model,
           maxRequestsPerDay: exported.maxRequestsPerDay,
           conversationScope: exported.conversationScope,
+          // ENRL-13/ENRL-14 (must-fix 4, review round 1) — `?? false`/`?? true`
+          // match `schema.ts`'s own database defaults exactly: a file
+          // exported before this slice existed (`exportedCourseSchema`'s own
+          // comment on why both are `.optional()`) carries neither key, and
+          // an absent value has to mean "the behaviour this course had
+          // before either setting existed" — the same reading every other
+          // database-defaulted column in this platform already gets.
+          selfEnrolFromDiscord: exported.selfEnrolFromDiscord ?? false,
+          answerUnenrolled: exported.answerUnenrolled ?? true,
           categories: exported.categories,
         },
         tx

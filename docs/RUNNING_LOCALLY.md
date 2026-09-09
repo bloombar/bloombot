@@ -72,6 +72,15 @@ Also add the OAuth redirect in the developer portal (OAuth2 → Redirects) so in
 http://localhost:5173/discord/callback
 ```
 
+This has to be `${PUBLIC_APP_URL}/discord/callback` **exactly**, registered verbatim, for whichever
+application `BOT_APP_ID` names — `apps/api` builds this string itself and never checks it against what is
+actually registered. A trailing slash on `PUBLIC_APP_URL` (`http://localhost:5173/`) used to produce a
+doubled slash here (`http://localhost:5173//discord/callback`), which can never match; `PUBLIC_APP_URL` is
+now normalised before this is built, but the developer portal side of the match is still yours to get
+right. `Invalid OAuth2 redirect_uri` on Discord's own consent screen means this exact URI is **not
+registered** — not that it is malformed. `apps/api` logs the resolved value once at startup (`info`) so you
+can paste it into the portal rather than reconstruct it by hand.
+
 ## 3. Start it
 
 One command starts everything:

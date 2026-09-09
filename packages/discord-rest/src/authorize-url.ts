@@ -8,7 +8,7 @@
  * `docs/ARCHITECTURE.md` describes for `packages/openai`.
  */
 
-import { CONFIG } from '@bloombot/config'
+import { CONFIG, stripTrailingSlashes } from '@bloombot/config'
 
 export interface BuildDiscordAuthorizationUrlInput {
   /** Defaults to `CONFIG.DISCORD_OAUTH_BASE` (QA-2) — read here, at call time, not at module load (PLAT-5). */
@@ -35,10 +35,6 @@ export interface BuildDiscordAuthorizationUrlInput {
    * to verify it actually administers the one being installed into.
    */
   scope?: string
-}
-
-function stripTrailingSlashes(url: string): string {
-  return url.replace(/\/+$/, '')
 }
 
 /** Build the URL a signed-in caller is sent to Discord's own consent screen through. */

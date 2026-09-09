@@ -189,6 +189,19 @@ export interface DiscordServerBindingSummary {
   removedAt: number | null
 }
 
+/**
+ * SRV-6/TEN-9 — "active" means never removed, the one distinction
+ * `discordServerId: null` already encodes on a binding. Shared here so
+ * `pages/Shell.tsx`, `pages/CourseEditor.tsx` and `ScaffoldButton.tsx`
+ * narrow to active bindings the same way rather than each carrying its own
+ * copy of `removedAt === null`.
+ */
+export function isActiveDiscordBinding(
+  binding: DiscordServerBindingSummary
+): boolean {
+  return binding.removedAt === null
+}
+
 /** CFG-4: a channel inside one of a course's categories. */
 export interface CourseChannel {
   id: string

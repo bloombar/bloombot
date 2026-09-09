@@ -72,6 +72,25 @@ describe('parseEnv', () => {
     ).toThrow(EnvValidationError)
   })
 
+  // TEN-4 — `apps/api` builds `discordRedirectUri` and `buildSignInLink`,
+  // and `apps/bot` builds its own LINK-2 connect link, all by string
+  // concatenation onto `PUBLIC_APP_URL`; a trailing slash here used to
+  // survive into every one of them, producing a doubled slash
+  // (`https://host//discord/callback`) that can never match a redirect
+  // registered in the Discord Developer Portal. Normalising in the schema
+  // itself means every reader of `CONFIG.PUBLIC_APP_URL` is already safe.
+  it('strips a trailing slash from PUBLIC_APP_URL, so a redirect built from it never doubles the slash', () => {
+    const env = parseEnv({
+      ...VALID,
+      PUBLIC_APP_URL: 'https://bloombot.example.edu/',
+    })
+
+    expect(env.PUBLIC_APP_URL).toBe('https://bloombot.example.edu')
+    expect(`${env.PUBLIC_APP_URL}/discord/callback`).toBe(
+      'https://bloombot.example.edu/discord/callback'
+    )
+  })
+
   // The whole point of the schema: a broken environment is reported once, in
   // full, rather than one variable per restart.
   it('reports every missing variable at once, not just the first', () => {

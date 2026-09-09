@@ -121,6 +121,17 @@ async function main(): Promise<void> {
   const logsDir = CONFIG.LOGS_DIR
   const databasePath = CONFIG.DATABASE_PATH
   const port = CONFIG.API_PORT
+  // TEN-4 — `CONFIG.PUBLIC_APP_URL` is normalised in the schema itself
+  // now (`packages/config/src/env.ts`'s own `stripTrailingSlashes`
+  // transform), so every reader — this one, and `apps/bot`'s own LINK-2
+  // connect link — already gets a value with no trailing slash. Read
+  // directly, with no second local strip: an operator-supplied
+  // `PUBLIC_APP_URL` with a trailing slash (`https://host/`) used to
+  // survive unnormalised into `discordRedirectUri`, below, producing
+  // `https://host//discord/callback` — a URI that can never match one
+  // registered in the Discord Developer Portal, and fails on the consent
+  // screen with exactly `Invalid OAuth2 redirect_uri` (a URL that "looks
+  // correct" at a glance).
   const publicAppUrl = CONFIG.PUBLIC_APP_URL
   const nodeEnv = CONFIG.NODE_ENV
   // FILE-1..5 — read once here, alongside every other `CONFIG` value this
@@ -170,6 +181,13 @@ async function main(): Promise<void> {
   // reads at startup — `routes/discord-servers.ts` takes it as an explicit
   // dependency rather than reaching for `CONFIG` itself mid-request.
   const discordOauthBase = CONFIG.DISCORD_OAUTH_BASE
+  // TEN-4 — must be registered verbatim under OAuth2 → Redirects for this
+  // application (`BOT_APP_ID`) in the Discord Developer Portal; logged
+  // once at startup, below, so an operator can paste this exact resolved
+  // string rather than reconstruct it from `PUBLIC_APP_URL` by hand and
+  // risk the same trailing-slash mismatch this variable's own
+  // normalisation (`publicAppUrl`, above) now prevents.
+  const discordRedirectUri = `${publicAppUrl}/discord/callback`
   // WEB-10 — not `requireEnv`, deliberately: see `createUnconfiguredModelClient`'s
   // own doc comment just above for why a missing key degrades chat rather
   // than stopping this whole process from starting.
@@ -180,6 +198,17 @@ async function main(): Promise<void> {
   const joinLinkEncryptionKey = readJoinLinkEncryptionKey()
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
+  // TEN-4 — makes the resolved redirect URI discoverable without reading
+  // source: `Invalid OAuth2 redirect_uri` on the consent screen means this
+  // exact string is not registered under OAuth2 → Redirects for
+  // `BOT_APP_ID` in the Discord Developer Portal, not that it is
+  // malformed — logged once, here, alongside every other piece of startup
+  // config this process already logs, rather than left for an operator to
+  // reconstruct from `PUBLIC_APP_URL` by hand. No secret in it.
+  logger.info(
+    { discordRedirectUri },
+    'apps/api: this exact URI must be registered under OAuth2 → Redirects in the Discord Developer Portal for this application, or the install flow fails with "Invalid OAuth2 redirect_uri"'
+  )
   const db: Database = openDatabase(databasePath)
   runMigrations(db)
 
@@ -245,7 +274,7 @@ async function main(): Promise<void> {
     // Must exactly match a redirect URI registered with the Discord
     // application — the web shell's own callback page (next slice), read
     // off `code`/`state`/`guild_id` and posted here.
-    discordRedirectUri: `${publicAppUrl}/discord/callback`,
+    discordRedirectUri,
     discordOauthBase,
     model,
     admission,

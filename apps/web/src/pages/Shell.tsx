@@ -112,6 +112,7 @@ import {
   listDiscordServers,
   signOut,
 } from '../api/client.js'
+import { isActiveDiscordBinding } from '../api/types.js'
 import type {
   AccountSummary,
   DiscordServerBindingSummary,
@@ -381,7 +382,7 @@ function ShellInner({
   const installedServerIds: string[] =
     discordBindingState.status === 'ready'
       ? discordBindingState.bindings
-          .filter((binding) => binding.removedAt === null)
+          .filter(isActiveDiscordBinding)
           .map((binding) => binding.serverId)
       : discordBindingState.status === 'loading' &&
           justInstalled?.organizationId === activeOrganizationId &&

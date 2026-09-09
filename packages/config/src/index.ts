@@ -7,6 +7,7 @@ export {
   loadConfig,
   parseEnv,
   resetConfigCache,
+  stripTrailingSlashes,
   type Env,
 } from './env.js'
 export { adminEmails, isAdminEmail } from './admin.js'

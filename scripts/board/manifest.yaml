@@ -2127,6 +2127,21 @@
   phase: 10
   status: Done
   review: false
+- id: FILE-7
+  title: A course's files are uploaded together, within one budget
+  full: An instructor chooses, or drops, several files at once — a semester of
+    readings, not one upload per file — and the panel queues all of them and
+    uploads the lot in one action. There is no longer a limit on any single
+    file's own size; instead, a course's attachments are capped at 100 MB in
+    total, enforced where the platform can see every file a course already has,
+    not in the browser guessing at what the server would allow. Removing a file
+    is a single click, with no confirmation first — the undo is that the
+    instructor re-uploads.
+  section: §23 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: In review
+  review: false
 - id: MDL-8
   title: Instructions are how a course is configured; a stored prompt id is only
     inherited

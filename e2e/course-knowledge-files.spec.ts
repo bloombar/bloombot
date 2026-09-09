@@ -1,13 +1,14 @@
 /**
- * WEB-18/FILE-1..3: the knowledge-files screen, driven the way a real
- * instructor actually reaches it — sign in, open a course, upload a file,
- * watch it become ready, and see it listed; then a second file the
- * provider rejects, and the course must not read as configured while it
- * is ungrounded (FILE-2). `.claude/CLAUDE.md`'s own warning about this
- * project's history is the reason this spec exists at all: a test that
- * seeds data the way the implementation resolves it, rather than the way
- * production produces it, proves nothing about whether an instructor can
- * actually do this.
+ * WEB-18/FILE-1..3, FILE-7: the knowledge-files screen, driven the way a
+ * real instructor actually reaches it — sign in, open a course, choose two
+ * files at once and upload them both in one pass, watch them become ready,
+ * and see them listed; detach one with a single click and no confirmation;
+ * then a second upload the provider rejects, and the course must not read
+ * as configured while it is ungrounded (FILE-2). `.claude/CLAUDE.md`'s own
+ * warning about this project's history is the reason this spec exists at
+ * all: a test that seeds data the way the implementation resolves it,
+ * rather than the way production produces it, proves nothing about whether
+ * an instructor can actually do this.
  *
  * **What is real, and what is a harness stand-in — read this before
  * trusting what this test proves** (the same discipline
@@ -191,12 +192,22 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
     ).toBeVisible()
     await expect(page.getByText('No files attached yet.')).toBeVisible()
 
-    // 2. Upload a syllabus — a real multipart-free, base64 action call,
-    //    written to a real, throwaway AttachmentStorage directory.
+    // 2. FILE-7: choose two files at once and upload them both in one
+    //    pass — a real multipart-free, base64 action call per file,
+    //    written to a real, throwaway AttachmentStorage directory. The
+    //    provider's own file id is queued twice, once per upload; the
+    //    vector store is created once (the fake server's own default
+    //    stands in for the second file's own attach call, which reuses the
+    //    store the first one just created).
     openaiServer.respondToFiles({ status: 200, body: { id: 'file_syllabus' } })
+    openaiServer.respondToFiles({ status: 200, body: { id: 'file_schedule' } })
     openaiServer.respondToVectorStoreCreate({
       status: 200,
       body: { id: `vs_${suffix}` },
+    })
+    openaiServer.respondToVectorStoreFileAttach({
+      status: 200,
+      body: { status: 'completed' },
     })
     openaiServer.respondToVectorStoreFileAttach({
       status: 200,
@@ -209,33 +220,52 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
     // (`data-testid="course-attachments"`) since WEB-21's own roster-import
     // drop zone renders a second, identically-shaped `input[type=file]`
     // once this course exists — an unscoped locator is ambiguous the
-    // moment both are on screen.
+    // moment both are on screen. `setInputFiles` with an array is FILE-7's
+    // own multi-select — the same picker `<input multiple>` now accepts.
     await page
       .getByTestId('course-attachments')
       .locator('input[type="file"]')
-      .setInputFiles({
-        name: 'syllabus.pdf',
-        mimeType: 'application/pdf',
-        buffer: Buffer.from('%PDF-1.4 e2e fixture'),
-      })
-    await page.getByRole('button', { name: 'Attach file' }).click()
+      .setInputFiles([
+        {
+          name: 'syllabus.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from('%PDF-1.4 e2e fixture'),
+        },
+        {
+          name: 'schedule.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from('%PDF-1.4 schedule fixture'),
+        },
+      ])
+    await expect(
+      page.getByRole('button', { name: 'Attach 2 files' })
+    ).toBeVisible()
+    await page.getByRole('button', { name: 'Attach 2 files' }).click()
     await expect(page.getByText('syllabus.pdf')).toBeVisible()
-    await expect(page.getByText('Pending…')).toBeVisible()
+    await expect(page.getByText('schedule.pdf')).toBeVisible()
 
     // 3. This is where the browser's own part pauses — no live worker
     //    claims the job in this harness (this file's own module comment),
-    //    so this spec claims and runs it itself, once, the same handler
-    //    and runner `apps/worker` itself uses.
+    //    so this spec claims and runs it itself, once per file, the same
+    //    handler and runner `apps/worker` itself uses.
     const db = openDatabase(E2E_DATABASE_PATH)
     try {
-      const attachResult = await claimAndRunJob(db, openaiServer)
-      expect(attachResult.outcome).toBe('succeeded')
+      const firstAttachResult = await claimAndRunJob(db, openaiServer)
+      expect(firstAttachResult.outcome).toBe('succeeded')
+      const secondAttachResult = await claimAndRunJob(db, openaiServer)
+      expect(secondAttachResult.outcome).toBe('succeeded')
 
       // 4. Back in the browser: the panel's own poll picks up the change —
       //    nothing here forces a reload.
-      await expect(page.getByText('Ready — grounding answers.')).toBeVisible({
+      await expect(
+        page.getByText('Ready — grounding answers.').first()
+      ).toBeVisible({
         timeout: 10_000,
       })
+      await expect(page.getByText('Ready — grounding answers.')).toHaveCount(
+        2,
+        { timeout: 10_000 }
+      )
 
       // The account's own organization/course, read back directly — proves
       // the course actually adopted the freshly created store (D-3/D-32),
@@ -259,11 +289,11 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
         course.id,
         db
       )
-      expect(readyAttachments).toHaveLength(1)
-      expect(readyAttachments[0]?.status).toBe('ready')
+      expect(readyAttachments).toHaveLength(2)
+      expect(readyAttachments.every((a) => a.status === 'ready')).toBe(true)
 
-      // 5. Detach it — WEB-18: reaches the provider and cannot be undone,
-      //    so it confirms through the shared modal primitive.
+      // 5. FILE-7: detach syllabus.pdf — one click, no confirmation dialog.
+      //    schedule.pdf stays exactly as it was.
       openaiServer.respondToVectorStoreFileDelete({
         status: 200,
         body: { deleted: true },
@@ -271,26 +301,23 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
       openaiServer.respondToFileDelete({ status: 200, body: { deleted: true } })
 
       await page.getByRole('button', { name: 'Detach syllabus.pdf' }).click()
-      const detachDialog = page.getByRole('dialog', {
-        name: 'Detach "syllabus.pdf"?',
-      })
-      await expect(detachDialog).toBeVisible()
-      await detachDialog.getByRole('button', { name: 'Detach' }).click()
+      await expect(page.getByRole('dialog')).toHaveCount(0)
       await expect(page.getByText('Removing…')).toBeVisible()
 
       const detachResult = await claimAndRunJob(db, openaiServer)
       expect(detachResult.outcome).toBe('succeeded')
 
-      await expect(page.getByText('No files attached yet.')).toBeVisible({
+      await expect(page.getByText('syllabus.pdf')).not.toBeVisible({
         timeout: 10_000,
       })
-      expect(
-        courseAttachments.listAttachmentsForCourse(
-          organizationId,
-          course.id,
-          db
-        )
-      ).toHaveLength(0)
+      await expect(page.getByText('schedule.pdf')).toBeVisible()
+      const afterDetach = courseAttachments.listAttachmentsForCourse(
+        organizationId,
+        course.id,
+        db
+      )
+      expect(afterDetach).toHaveLength(1)
+      expect(afterDetach[0]?.filename).toBe('schedule.pdf')
 
       // 6. FILE-2: a second upload the provider rejects must not leave the
       //    course looking configured — it reads plainly as failed, with
@@ -312,7 +339,7 @@ test('an instructor uploads a file, watches it become ready, and sees it listed 
           mimeType: 'application/octet-stream',
           buffer: Buffer.from('not actually notes'),
         })
-      await page.getByRole('button', { name: 'Attach file' }).click()
+      await page.getByRole('button', { name: 'Attach 1 file' }).click()
       await expect(page.getByText('notes.exe')).toBeVisible()
 
       const failedResult = await claimAndRunJob(db, openaiServer)

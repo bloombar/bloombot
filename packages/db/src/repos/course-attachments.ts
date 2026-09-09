@@ -12,9 +12,9 @@
  * `@bloombot/openai`) — this file only ever reads or writes the row.
  */
 
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sum } from 'drizzle-orm'
 
-import type { Database } from '../client.js'
+import type { Database, Executor } from '../client.js'
 import { courseAttachments, type AttachmentStatus } from '../schema.js'
 
 export type CourseAttachment = typeof courseAttachments.$inferSelect
@@ -29,11 +29,11 @@ export interface NewCourseAttachment {
   sizeBytes: number
 }
 
-/** Insert a fresh attachment row, `status: 'pending'` (FILE-2) — the bytes are expected to already be on disk under this same id by the time this is called; `apps/worker`'s handler is what moves it to `ready` or `failed`. */
+/** Insert a fresh attachment row, `status: 'pending'` (FILE-2) — FILE-7's own write-transaction fix inserts this row *before* the bytes land on disk under this same id, inside `createAttachCourseAttachmentAction`'s own budget-checking transaction (`db` there is that transaction's own `tx`, hence `Executor` rather than the full `Database`, so a nested-transaction caller is not forced to pass something it does not have). `apps/worker`'s handler is what moves the row to `ready` or `failed` once the provider has actually seen the file. */
 export function createPendingAttachment(
   organizationId: string,
   input: NewCourseAttachment,
-  db: Database
+  db: Executor
 ): CourseAttachment {
   const now = Date.now()
   return db
@@ -193,6 +193,43 @@ export function deleteAttachment(
     )
     .run()
   return result.changes > 0
+}
+
+/**
+ * FILE-7 — the bytes a course's own attachments already account for, in
+ * total, so `courseAttachments.attach`'s 100 MiB budget can be checked
+ * against a real number rather than a JS `reduce` over every row (the same
+ * "let SQL do the summing" precedent `cost-ledger.ts#getOrganizationSpentMicros`
+ * already sets for a cumulative total, not a per-row scan the caller has to
+ * remember to re-run correctly). Counts a `pending` row exactly the same as
+ * a `ready` one — a `pending` row's own `sizeBytes` already reserved its
+ * share of the budget the moment that row was inserted (`packages/actions`'s
+ * own `createAttachCourseAttachmentAction`, FILE-7's own write-transaction
+ * fix), so filtering by status here would let an instructor's own in-flight
+ * uploads hide from the budget they are already consuming. `0` for a course
+ * with no attachments, the same "no rows summed" `null`-to-`0` coercion
+ * `sum()` already needs everywhere else in this package. Called from
+ * *inside* `createAttachCourseAttachmentAction`'s own write transaction
+ * (`db` there is the transaction's own `tx`, not the top-level connection)
+ * — this function does not care which it is handed, since both satisfy the
+ * same `Database`-shaped `select` this only ever calls.
+ */
+export function totalSizeBytesForCourse(
+  organizationId: string,
+  courseId: string,
+  db: Executor
+): number {
+  const row = db
+    .select({ total: sum(courseAttachments.sizeBytes) })
+    .from(courseAttachments)
+    .where(
+      and(
+        eq(courseAttachments.courseId, courseId),
+        eq(courseAttachments.organizationId, organizationId)
+      )
+    )
+    .get()
+  return Number(row?.total ?? 0)
 }
 
 export type { AttachmentStatus }

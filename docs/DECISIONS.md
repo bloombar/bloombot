@@ -9992,7 +9992,79 @@ playwright test` all green: 2557 vitest (no new files — `packages/db/tests/org
 own `seedFullTenant` and its existing assertions were extended in place, not given new `it` blocks), 90
 node, 38 Playwright e2e.
 
-## D-89 — `apps/web`: build-time prerendering of the public pages, and a privacy policy Google can actually verify
+## D-89 — `packages/schemas`/`packages/actions`/`packages/db`/`apps/web`: PORT-1..8/WEB-39 — a course's configuration as a file
+
+**Why a course, and not a project.** The obvious symmetry would have been to export a project the way
+PROJ-4 already duplicates one. This slice deliberately does only the course: a project file has to answer
+what happens when half its courses collide and half do not, and a partial result reported per course is a
+much larger surface than the one thing an instructor actually asked for — hand *this* course to a
+colleague. A project export is a strict superset of this format (a list of these documents plus a name)
+and can be added later without changing anything written here.
+
+**What the format is, and where each half lives.** The shape is zod in `@bloombot/schemas`
+(`course-export.ts`); YAML in and out of that shape is `@bloombot/actions`
+(`actions/course-portability.ts`). The split is not stylistic: `@bloombot/schemas` depends on zod alone so
+it can be bundled into the browser (PLAT-2, its own `package.json` says so), and a YAML parser is exactly
+the dependency that would end that. The panel never parses a course export — it uploads the text and
+downloads the text — so nothing is lost by keeping the parser server-side.
+
+**`z.strictObject` throughout, including the nested course.** A key this build does not recognize is
+refused, not dropped. This is what makes PORT-2 ("carries configuration, never people") a property of the
+*shape* rather than of a filter somebody has to remember to maintain: there is no field for a roster here,
+and a file carrying one is refused rather than imported with the roster quietly ignored. It also means a
+file written by a newer build is refused loudly instead of imported as a course silently missing whatever
+the unknown field meant.
+
+**Version checked separately from shape.** `readCourseExport` checks `bloombotCourseExport` before running
+the schema, so "this file is from a newer Bloombot" and "this file is malformed" are different sentences.
+Reporting them identically would send somebody hunting for a typo in a file that has none.
+
+**A refused file is an input failure, not a conflict.** The file *is* `courses.import`'s input, so a file
+that does not parse throws `ActionInputError` with an issue on `content` — a 400 naming the field, the same
+shape every other malformed input to this API produces. `ActionConflictError` stays for what it has always
+meant: a PROJ-3 collision the repository itself refused (a hand-edited file naming the same role for admins
+and students reaches exactly that).
+
+**The three things that cannot travel are named, never carried.** A vector store id, a stored prompt id and
+a Discord server id all name state outside the destination organization; the file records `notCarried`
+booleans and an attachment *count*, with no identifiers, and the import surfaces them as work still to do.
+Carrying the ids would invite an import to write a reference to something it cannot reach — the same
+reasoning D-23 already applied to PROJ-4's refusal to copy attachments.
+
+**PORT-5's suffix takes the lowest free number, not one past the highest.** `Intro to CS 2` deleted and
+re-imported refills that gap rather than jumping to `4`: the numbers describe what is in the project now,
+not how many imports have ever run. The comparison is case- and whitespace-insensitive (so `intro to cs`
+counts as taken) but the title handed back is the caller's own, only trimmed — matching leniently is not a
+licence to rewrite what somebody typed. Resolved inside the same transaction that writes the course, so two
+concurrent imports cannot both be told the same suffix is free.
+
+**An import records an instructions revision, unlike PROJ-4's duplicate.** `pages/CourseEditor.tsx`'s
+Instructions field is seeded from the *revision list* (`components/CourseInstructions.tsx`), not from
+`courses.instructions` — so a course created with the column set and no revision shows a blank instructions
+box while answering students from text nobody can see. The import therefore writes the first revision
+itself, in the same transaction, authored by the importing account, and refuses an import with no account
+to attribute it to (the same `requireAccountId` refusal `courseInstructions.save` makes). PROJ-4's
+duplicate has the same latent gap and is deliberately left alone here: fixing it is a separate change to a
+separate action, not something to smuggle into this slice's diff.
+
+**`<Modal>` grew a `body` slot rather than the panel growing a second dialog.** The import dialog holds
+state across several steps (a file chosen, an import in flight, a report to read, a refusal to correct and
+retry) and has a middle that is a control, not a sentence — none of which `ModalProvider`'s
+promise-per-question API can express. Rather than hand-rolling a second `<dialog>` (the duplication
+`ModalProvider`'s own module comment forbids), `Modal.tsx` gained an optional `body: ReactNode` rendered in
+a `<div>` (a drop zone is a button; a `<p>` may not contain one) and a `confirmDisabled` flag, and
+`CourseImportDialog.tsx` renders that same component directly.
+
+**Verification.** `npm run lint && npm run format:check && npm run typecheck && npm test && npm run e2e`
+all green: 2635 vitest across 199 files (16 new in `packages/actions/tests/course-portability.test.ts`, 8
+in `packages/schemas/tests/course-export.test.ts`, 6 in `packages/db/tests/course-title-suffix.test.ts`, 7
+in `apps/web/tests/course-import-dialog.test.tsx`, plus one export test on `pages/Courses.tsx` and two
+import tests on `pages/Projects.tsx`), and a new Playwright spec
+(`e2e/course-export-import.spec.ts`) that exports a course from the panel, reads the bytes the browser
+actually downloaded, drops that same file into the project's Import dialog, and asserts the copy arrives as
+`… 2`, disabled, with its roles, category and instructions intact.
+
+## D-90 — `apps/web`: build-time prerendering of the public pages, and a privacy policy Google can actually verify
 
 **Problem.** Google Cloud's OAuth branding verification rejected the privacy policy at
 `https://bloombot.wonkledge.com/privacy` outright — "does not have sufficient content." Confirmed directly:

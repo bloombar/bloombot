@@ -111,7 +111,7 @@ these; this is the general list.
 The four `VITE_OPERATOR_*` defaults are deliberately real values, not `[fill this in]`-style
 placeholders: Google's OAuth branding review rejects a privacy policy carrying a square-bracket
 placeholder as evidence it is not actually published (`content/document.ts`'s own module comment,
-`docs/DECISIONS.md` D-89).
+`docs/DECISIONS.md` D-90).
 
 ## Agent-assisted development
 

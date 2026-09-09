@@ -206,11 +206,11 @@ describe('apps/web bundle (WEB-6)', () => {
 
   // The public pages a signed-out visitor or crawler can reach are
   // prerendered into real HTML at build time (`prerender-plugin.ts`,
-  // `docs/DECISIONS.md` D-89) — nested in this same `describe` rather than
+  // `docs/DECISIONS.md` D-90) — nested in this same `describe` rather than
   // given its own top-level one so it reuses the one real `vite build` this
   // file's own `beforeAll` already pays for, instead of racing a second
   // build against the same `dist/` directory.
-  describe('prerendering the public pages (D-89)', () => {
+  describe('prerendering the public pages (D-90)', () => {
     it('is no longer an empty <div id="root"> at /', () => {
       const html = readFileSync(join(DIST_DIR, 'index.html'), 'utf8')
       expect(html).not.toContain('<div id="root"></div>')

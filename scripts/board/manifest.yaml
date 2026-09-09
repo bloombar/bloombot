@@ -1507,7 +1507,9 @@
     answer carrying the day's-last notice, a refusal when the allowance is
     spent, an apology when the model fails, and — for a course configured to
     answer nothing, or a message that matches no course — a log line naming the
-    cause rather than a silent drop the instructor cannot see."
+    cause rather than a silent drop the instructor cannot see. SURF-8 qualifies
+    this for the not-configured outcome: that one also gets a reply in the
+    channel, not just the log line."
   section: §32 Discord Surface
   family: SURF
   phase: 4
@@ -3659,4 +3661,21 @@
   family: ENRL
   phase: 25
   status: Done
+  review: false
+- id: SURF-8
+  title: A course that answers nothing says so, rather than saying nothing
+  full: "SURF-6 settled that every outcome reaches the student or the log. For one
+    outcome that split has turned out to be wrong in practice: a course with
+    neither a prompt nor instructions configured drops the message with a log
+    line and no reply at all. The reasoning was that a course configured to
+    answer nothing is an instructor's problem rather than a student's, and a
+    public channel is the wrong place to discuss it — sound as far as it goes,
+    but it makes the failure invisible to the one person who can fix it. An
+    instructor testing their own newly created course sees the bot ignore them,
+    with nothing to distinguish \"not configured\" from \"not running\", \"not
+    mentioned properly\", \"not routed to this…"
+  section: §32 Discord Surface
+  family: SURF
+  phase: 26
+  status: In progress
   review: false

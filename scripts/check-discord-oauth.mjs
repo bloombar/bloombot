@@ -86,15 +86,51 @@ function tryParseUrl(value) {
 }
 
 /**
- * The WHATWG `URL` parser lowercases the host on `.host`/`.href` (per the
- * URL spec), so a raw string is the only way left to see whether the
- * *original* string used a different letter case there — needed to tell
- * "host case differs" apart from "hosts are identical". Returns `null` if
- * the string does not look like `scheme://host...`.
+ * The WHATWG `URL` parser normalises the authority away from a form that
+ * still lets two, genuinely different URIs read as identical: it lowercases
+ * the hostname, and it *drops* an explicit default port (`https://host:443`
+ * serialises with the same `.host` as `https://host`) and userinfo is
+ * simply absent from `.host` entirely. `url.host` alone therefore cannot
+ * tell "the registered entry differs only by letter case" apart from "the
+ * registered entry adds an explicit default port" or "...adds userinfo" —
+ * rework round 1 found this the hard way: it let `:443` and `user:pw@`
+ * differences read as a case-only match. This parses the *raw* authority
+ * substring instead, keeping port and userinfo exactly as written, so
+ * `compareOne` below can tell all three apart. Returns `null` if `value`
+ * does not look like `scheme://authority...`.
  */
-function extractRawHost(value) {
+function parseRawAuthority(value) {
   const match = value.match(/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\/([^/?#]*)/)
-  return match ? match[1] : null
+  if (!match) return null
+  let rest = match[1]
+
+  let userinfo = null
+  const atIndex = rest.lastIndexOf('@')
+  if (atIndex !== -1) {
+    userinfo = rest.slice(0, atIndex)
+    rest = rest.slice(atIndex + 1)
+  }
+
+  // An IPv6 literal (`[::1]:443`) carries its own colons, so the port has
+  // to be split off after the closing bracket rather than at the first
+  // colon — Discord redirect URIs are never IPv6 in practice, but this
+  // keeps the split correct rather than merely "usually correct".
+  let hostname = rest
+  let port = null
+  if (rest.startsWith('[')) {
+    const closeBracket = rest.indexOf(']')
+    hostname = rest.slice(0, closeBracket + 1)
+    const afterBracket = rest.slice(closeBracket + 1)
+    if (afterBracket.startsWith(':')) port = afterBracket.slice(1)
+  } else {
+    const colonIndex = rest.indexOf(':')
+    if (colonIndex !== -1) {
+      hostname = rest.slice(0, colonIndex)
+      port = rest.slice(colonIndex + 1)
+    }
+  }
+
+  return { userinfo, hostname, port }
 }
 
 /**
@@ -120,11 +156,10 @@ function compareOne(expected, registered) {
   const registeredUrl = tryParseUrl(registered)
   if (!expectedUrl || !registeredUrl) return null
 
-  const rawExpectedHost = extractRawHost(expected)
-  const rawRegisteredHost = extractRawHost(registered)
+  const expectedAuthority = parseRawAuthority(expected)
+  const registeredAuthority = parseRawAuthority(registered)
   const hostsEqualCI =
     expectedUrl.host.toLowerCase() === registeredUrl.host.toLowerCase()
-  const rawHostsDiffer = rawExpectedHost !== rawRegisteredHost
   const pathsEqual =
     decodeSafe(expectedUrl.pathname) === decodeSafe(registeredUrl.pathname)
   const pathsEqualCI =
@@ -132,15 +167,66 @@ function compareOne(expected, registered) {
     decodeSafe(registeredUrl.pathname).toLowerCase()
   const schemesEqual = expectedUrl.protocol === registeredUrl.protocol
 
-  // Host case only — hosts are case-insensitive, so this is a match, but
-  // flagged with a warning rather than silently accepted, since it is still
-  // worth an operator's attention.
-  if (schemesEqual && hostsEqualCI && rawHostsDiffer && pathsEqual) {
+  // Everything the raw authority carries, compared against the case-
+  // insensitive hostname alone — real, per-field detail `url.host` itself
+  // throws away (rework round 1's own module comment on `parseRawAuthority`
+  // has the full reasoning for why this cannot use `url.host`/`.hostname`).
+  const hostnamesEqualCI =
+    expectedAuthority &&
+    registeredAuthority &&
+    expectedAuthority.hostname.toLowerCase() ===
+      registeredAuthority.hostname.toLowerCase()
+  const userinfoDiffers =
+    expectedAuthority &&
+    registeredAuthority &&
+    expectedAuthority.userinfo !== registeredAuthority.userinfo
+  const portDiffers =
+    expectedAuthority &&
+    registeredAuthority &&
+    expectedAuthority.port !== registeredAuthority.port
+
+  // Host case only, and nothing else about the authority differs — hosts
+  // are case-insensitive, so this is a match, but flagged with a warning
+  // rather than silently accepted, since it is still worth an operator's
+  // attention.
+  if (
+    schemesEqual &&
+    pathsEqual &&
+    hostnamesEqualCI &&
+    !userinfoDiffers &&
+    !portDiffers &&
+    expectedAuthority.hostname !== registeredAuthority.hostname
+  ) {
     return {
       kind: 'match',
       registered,
       warning:
         'the registered host differs only in letter case from the derived one; hosts are case-insensitive, so this still matches',
+    }
+  }
+
+  // Userinfo present on one side but not the other (or different) — a real
+  // difference in the URI Discord compares byte-for-byte, not something it
+  // normalises away, so this must never read as a match.
+  if (schemesEqual && pathsEqual && hostnamesEqualCI && userinfoDiffers) {
+    return {
+      kind: 'near-miss',
+      difference: 'userinfo',
+      registered,
+      message: `registered entry ${registeredAuthority.userinfo !== null ? 'includes' : 'omits'} userinfo (\`user:pass@\`) that the derived URI does not`,
+    }
+  }
+
+  // An explicit port — including one that merely repeats the scheme's own
+  // default, like `:443` on `https` — that `url.host` itself silently drops
+  // on normalisation. Still a literal difference in what gets registered
+  // and what gets sent, so still worth naming rather than waving through.
+  if (schemesEqual && pathsEqual && hostnamesEqualCI && portDiffers) {
+    return {
+      kind: 'near-miss',
+      difference: 'port',
+      registered,
+      message: `port differs (expected: ${expectedAuthority.port ?? 'none specified'}, registered: ${registeredAuthority.port ?? 'none specified'})`,
     }
   }
 
@@ -213,7 +299,14 @@ function compareOne(expected, registered) {
  *     close enough to explain as a near miss.
  */
 export function classifyRedirectMismatch(expected, registered) {
-  if (registered.length === 0) {
+  // `main()` only ever calls this after confirming `redirect_uris` is
+  // present (a `null`/`undefined` list is its own, earlier "could not
+  // verify" outcome — see that function below), so a non-array here is
+  // unreachable from the CLI. Still made total over its own documented
+  // input rather than left to throw: an exported pure function should
+  // degrade the same way for any caller, not only the one this script
+  // currently has.
+  if (!Array.isArray(registered) || registered.length === 0) {
     return { kind: 'empty' }
   }
 
@@ -230,9 +323,13 @@ export function classifyRedirectMismatch(expected, registered) {
 
 /**
  * `GET /applications/@me` with `Authorization: Bot <token>` — never throws;
- * every failure (a bad token, a network error, an unexpected shape) comes
- * back as `{ ok: false, ... }` so `main()` can print a readable line instead
- * of a stack trace. Never includes the token in the returned value.
+ * every failure (a bad token, a network error, an unexpected shape, or a
+ * 200 whose body cannot be parsed as JSON — rework round 1: this last one
+ * used to slip through as `{ ok: true, application: undefined }`, which
+ * `main()` then read `.id` off, an unhandled rejection instead of the
+ * readable degradation every other failure here gets) comes back as
+ * `{ ok: false, ... }` so a caller can print a readable line instead of a
+ * stack trace. Never includes the token in the returned value.
  */
 export async function fetchApplication(botToken, { fetchFn = fetch } = {}) {
   let response
@@ -248,10 +345,11 @@ export async function fetchApplication(botToken, { fetchFn = fetch } = {}) {
   }
 
   let body
+  let bodyParseFailed = false
   try {
     body = await response.json()
   } catch {
-    body = undefined
+    bodyParseFailed = true
   }
 
   if (!response.ok) {
@@ -259,6 +357,14 @@ export async function fetchApplication(botToken, { fetchFn = fetch } = {}) {
       ok: false,
       status: response.status,
       error: body && body.message ? body.message : `HTTP ${response.status}`,
+    }
+  }
+
+  if (bodyParseFailed || body === undefined || body === null) {
+    return {
+      ok: false,
+      status: response.status,
+      error: `Discord returned HTTP ${response.status} with a body that could not be parsed as JSON`,
     }
   }
 
@@ -289,36 +395,63 @@ function describeClassification(expected, classification) {
   }
 }
 
-async function main() {
-  const envCheck = readRequiredEnv(process.env)
+/**
+ * The whole outcome/exit-code mapping this script exists to produce, as a
+ * pure function of an environment object and an injectable `fetchFn` — no
+ * I/O of its own. Rework round 1: nothing pinned this mapping before,
+ * including the "could not verify" outcome the brief calls out as its own,
+ * distinct, non-failing result (exit 0, neither "verified" nor
+ * "mismatch") — a regression flipping any of these five outcomes would
+ * have passed the suite as it stood. `main()` below just prints `logs`,
+ * `warnings` and `errors` in order and exits with `exitCode`, so this is
+ * the only place the exit-code contract is decided.
+ */
+export async function determineOutcome(env, { fetchFn = fetch } = {}) {
+  const envCheck = readRequiredEnv(env)
   if (!envCheck.ok) {
-    console.error(
-      `Missing required environment variable(s): ${envCheck.missing.join(', ')}`
-    )
-    process.exitCode = 1
-    return
+    return {
+      exitCode: 1,
+      logs: [],
+      warnings: [],
+      errors: [
+        `Missing required environment variable(s): ${envCheck.missing.join(', ')}`,
+      ],
+    }
   }
   const { BOT_APP_ID, BOT_TOKEN, PUBLIC_APP_URL } = envCheck.values
 
   const expected = deriveRedirectUri(PUBLIC_APP_URL)
-  console.log(`Derived redirect URI: ${expected}`)
-  console.log(`BOT_APP_ID (expected application): ${BOT_APP_ID}`)
+  const logs = [
+    `Derived redirect URI: ${expected}`,
+    `BOT_APP_ID (expected application): ${BOT_APP_ID}`,
+  ]
 
-  const applicationResult = await fetchApplication(BOT_TOKEN)
+  const applicationResult = await fetchApplication(BOT_TOKEN, { fetchFn })
   if (!applicationResult.ok) {
-    console.error(
-      `Could not fetch the application from Discord: ${applicationResult.error}`
-    )
-    process.exitCode = 1
-    return
+    return {
+      exitCode: 1,
+      logs,
+      warnings: [],
+      errors: [
+        `Could not fetch the application from Discord: ${applicationResult.error}`,
+      ],
+    }
   }
 
   const { application } = applicationResult
-  console.log(
+  logs.push(
     `Discord application this token belongs to: ${application.id} (${application.name})`
   )
+  const warnings = []
+  // BOT_TOKEN and BOT_APP_ID naming different applications is common
+  // enough (cause 3 in this file's own module comment) to call out here —
+  // but note this warning does NOT change the exit code below: if the
+  // token's own application happens to have the derived URI registered,
+  // this still exits 0. A 0 here is "this token's application is fine," not
+  // "production, as configured with BOT_APP_ID, is fine" — see
+  // `docs/DECISIONS.md`'s D-93 entry.
   if (String(application.id) !== String(BOT_APP_ID)) {
-    console.warn(
+    warnings.push(
       `WARNING: this application id (${application.id}) does not match BOT_APP_ID (${BOT_APP_ID}) — ` +
         'BOT_TOKEN and BOT_APP_ID may name different applications.'
     )
@@ -326,19 +459,31 @@ async function main() {
 
   const registered = application.redirect_uris
   if (registered === undefined || registered === null) {
-    console.log(
+    logs.push(
       'Could not verify: the API response does not expose redirect_uris ' +
         "(Discord's documented GET /applications/@me response does not always include it). " +
         `The Developer Portal is the only source of truth: https://discord.com/developers/applications/${BOT_APP_ID}/oauth2 — ` +
         `paste this exact string there: ${expected}`
     )
-    process.exitCode = 0
-    return
+    return { exitCode: 0, logs, warnings, errors: [] }
   }
 
   const classification = classifyRedirectMismatch(expected, registered)
-  console.log(describeClassification(expected, classification))
-  process.exitCode = classification.kind === 'match' ? 0 : 1
+  logs.push(describeClassification(expected, classification))
+  return {
+    exitCode: classification.kind === 'match' ? 0 : 1,
+    logs,
+    warnings,
+    errors: [],
+  }
+}
+
+async function main() {
+  const outcome = await determineOutcome(process.env)
+  for (const line of outcome.logs) console.log(line)
+  for (const warning of outcome.warnings) console.warn(warning)
+  for (const error of outcome.errors) console.error(error)
+  process.exitCode = outcome.exitCode
 }
 
 // Only run when invoked directly, so importing this module for tests (or

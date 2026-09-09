@@ -14,6 +14,7 @@ import { stripTrailingSlashes as configStripTrailingSlashes } from '@bloombot/co
 import {
   classifyRedirectMismatch,
   deriveRedirectUri,
+  determineOutcome,
   fetchApplication,
   readRequiredEnv,
   stripTrailingSlashes,
@@ -129,10 +130,46 @@ test('classifyRedirectMismatch: host case difference is a match with a warning, 
     'https://Bloombot.Wonkledge.com/discord/callback',
   ])
   assert.equal(result.kind, 'match')
-  assert.ok(
-    result.warning,
-    'expected a warning explaining the host case difference'
+  // Strengthened per rework round 1: asserting only `result.warning` is
+  // truthy could not have caught the warning text being wrong (it was
+  // reused, verbatim, for the `:443`/userinfo false-match bug this round
+  // fixes) — assert the warning actually names a case difference.
+  assert.match(result.warning, /case/i)
+})
+
+// Rework round 1 — the reviewer reproduced a false MATCH: the WHATWG `URL`
+// parser drops a default port and strips userinfo when it normalises
+// `.host`, so the old `rawHostsDiffer` check (any difference between the
+// *raw* host substrings, which include userinfo and the port) treated an
+// explicit `:443`/userinfo difference as nothing more than a case
+// difference and reported a false `match`. These three cases pin the fix:
+// a real case difference still matches, but a port or userinfo difference
+// — even though `url.host` itself agrees after normalisation — is now its
+// own named near miss, never a silent match.
+
+test('classifyRedirectMismatch: an explicit default port (https:443) is a near miss, not a match', () => {
+  const result = classifyRedirectMismatch(EXPECTED, [
+    'https://bloombot.wonkledge.com:443/discord/callback',
+  ])
+  assert.equal(result.kind, 'near-miss')
+  assert.equal(result.difference, 'port')
+})
+
+test('classifyRedirectMismatch: an explicit default port (http:80) is a near miss, not a match', () => {
+  const result = classifyRedirectMismatch(
+    'http://host.example/discord/callback',
+    ['http://host.example:80/discord/callback']
   )
+  assert.equal(result.kind, 'near-miss')
+  assert.equal(result.difference, 'port')
+})
+
+test('classifyRedirectMismatch: userinfo on the registered side only is a near miss, not a match', () => {
+  const result = classifyRedirectMismatch(EXPECTED, [
+    'https://user:pw@bloombot.wonkledge.com/discord/callback',
+  ])
+  assert.equal(result.kind, 'near-miss')
+  assert.equal(result.difference, 'userinfo')
 })
 
 test('classifyRedirectMismatch: path case difference is a real mismatch', () => {
@@ -167,6 +204,17 @@ test('classifyRedirectMismatch: a completely unrelated URI is absent, not a near
 test('classifyRedirectMismatch: an empty registered list', () => {
   const result = classifyRedirectMismatch(EXPECTED, [])
   assert.equal(result.kind, 'empty')
+})
+
+// Cheap-fix 1 (rework round 1) — `classifyRedirectMismatch` is an exported
+// pure function and should be total over its documented input; `main()`
+// never passes a non-array (it only calls this after checking
+// `redirect_uris` is present), but a caller that does should get the same
+// non-failing shape an empty list gives, not a thrown TypeError.
+test('classifyRedirectMismatch: a non-array registered value degrades to the empty-list shape, not a throw', () => {
+  assert.equal(classifyRedirectMismatch(EXPECTED, null).kind, 'empty')
+  assert.equal(classifyRedirectMismatch(EXPECTED, undefined).kind, 'empty')
+  assert.equal(classifyRedirectMismatch(EXPECTED, 'not-an-array').kind, 'empty')
 })
 
 test('classifyRedirectMismatch: a near miss is named even among several registered entries', () => {
@@ -219,4 +267,90 @@ test('fetchApplication reports a network failure without throwing', async () => 
   const result = await fetchApplication('faketoken', { fetchFn })
   assert.equal(result.ok, false)
   assert.ok(result.error)
+})
+
+// Cheap-fix 2 (rework round 1) — a 200 whose body cannot be parsed as JSON
+// used to come back `{ ok: true, application: undefined }`, and `main()`
+// then read `application.id` off it: an unhandled rejection and a stack
+// trace, exactly the kind of failure this script exists to avoid.
+test('fetchApplication reports a 200 with an unparseable body as a failure, not a silent undefined application', async () => {
+  const fetchFn = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new SyntaxError('Unexpected token in JSON')
+    },
+  })
+  const result = await fetchApplication('faketoken', { fetchFn })
+  assert.equal(result.ok, false)
+  assert.ok(result.error)
+})
+
+// --- determineOutcome (main()'s exit-code contract) -------------------------
+
+// Cheap-fix 3 (rework round 1) — nothing pinned `main()`'s exit code before
+// this round, including the "could not verify" outcome the brief singles
+// out as its own, distinct, non-failing case (exit 0, neither "verified"
+// nor "mismatch"). A regression flipping any of these would have passed the
+// suite. `determineOutcome` is the pure outcome/exit-code mapping `main()`
+// itself now just prints and exits with.
+const BASE_ENV = {
+  BOT_APP_ID: '123',
+  BOT_TOKEN: 'faketoken',
+  PUBLIC_APP_URL: 'https://bloombot.wonkledge.com',
+}
+
+function fetchFnReturning(application) {
+  return async () => ({
+    ok: true,
+    status: 200,
+    json: async () => application,
+  })
+}
+
+test('determineOutcome: a verified match exits 0', async () => {
+  const outcome = await determineOutcome(BASE_ENV, {
+    fetchFn: fetchFnReturning({
+      id: '123',
+      name: 'Bloombot',
+      redirect_uris: ['https://bloombot.wonkledge.com/discord/callback'],
+    }),
+  })
+  assert.equal(outcome.exitCode, 0)
+})
+
+test('determineOutcome: a mismatch exits 1', async () => {
+  const outcome = await determineOutcome(BASE_ENV, {
+    fetchFn: fetchFnReturning({
+      id: '123',
+      name: 'Bloombot',
+      redirect_uris: ['https://totally-different.example/oauth'],
+    }),
+  })
+  assert.equal(outcome.exitCode, 1)
+})
+
+test('determineOutcome: could-not-verify (no redirect_uris in the response) exits 0, not 1', () => {
+  return (async () => {
+    const outcome = await determineOutcome(BASE_ENV, {
+      fetchFn: fetchFnReturning({ id: '123', name: 'Bloombot' }),
+    })
+    assert.equal(outcome.exitCode, 0)
+  })()
+})
+
+test('determineOutcome: missing environment variables exits 1', async () => {
+  const outcome = await determineOutcome({})
+  assert.equal(outcome.exitCode, 1)
+})
+
+test('determineOutcome: a failed Discord call exits 1', async () => {
+  const outcome = await determineOutcome(BASE_ENV, {
+    fetchFn: async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ message: '401: Unauthorized' }),
+    }),
+  })
+  assert.equal(outcome.exitCode, 1)
 })

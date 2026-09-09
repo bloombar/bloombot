@@ -10621,18 +10621,53 @@ production's actual cause is a missing or malformed entry under application `132
 → Redirects, an operator still has to add or correct it there by hand — no code change in this repository
 can do that for them.
 
+**Note on the exit code when `BOT_TOKEN` and `BOT_APP_ID` name different applications.** A mismatch there
+(cause 3 in the script's own module comment, and a common one in practice) only ever produces a `WARNING`
+line — it never by itself changes the exit code. If the *token's own* application happens to have the
+derived redirect URI registered, `determineOutcome` still reports `MATCH` and exits `0`, even though
+`BOT_APP_ID` (the application production actually installs against) may be misconfigured or unregistered
+entirely. Exit `0` here means "the application this `BOT_TOKEN` belongs to has the URI registered" — not
+"production, as configured with `BOT_APP_ID`, is fine." An operator seeing that warning should treat it as
+the more likely explanation and go fix which credential points at which application, not read the `0` as
+clean.
+
+**Round 1 rework — a false `MATCH` from the host-case branch, the worst failure this tool can produce.**
+The first pass distinguished "host differs only by case" from "hosts are identical" by comparing the raw
+substring after `scheme://` up to the next `/`/`?`/`#` (`rawHostsDiffer`) — but that substring also carries
+userinfo and the port, both of which the WHATWG `URL` parser's own `.host` silently drops (a default port)
+or never included in the first place (userinfo). `rawHostsDiffer` was therefore true for *any* difference
+in that substring, not only a case difference: `https://bloombot.wonkledge.com:443/discord/callback` and
+`https://user:pw@bloombot.wonkledge.com/discord/callback` both classified as `match` against the plain
+expected URI, with a warning claiming a case difference that was not there. Both are real mismatches
+Discord compares byte-for-byte and would still reject. Fixed by replacing the raw-substring comparison with
+`parseRawAuthority`, which splits the raw authority into userinfo/hostname/port explicitly; the case-only
+`match` branch now requires the hostname (case-insensitive) to agree *and* the port and userinfo to be
+identical, and an explicit port or userinfo difference is its own named `near-miss` (`'port'`/`'userinfo'`)
+rather than falling through to a match. `classifyRedirectMismatch` was also made total over a non-array
+`registered` (returns the same shape an empty list gives, rather than throwing — unreachable from `main()`
+today, but the exported pure function should not depend on that), `fetchApplication` now reports a 200 with
+an unparseable body as a failure instead of silently returning `{ application: undefined }`, and `main()`'s
+own print-and-exit logic was split into a pure `determineOutcome(env, { fetchFn })` so the exit-code
+contract itself — including the "could not verify" outcome's exit `0`, the one outcome this script exists
+to make distinct from both "verified" and "mismatch" — is pinned by a test rather than left to whatever
+`main()` happened to do.
+
 **Verification.** `npm run lint && npx prettier --check . && npm run typecheck && npm test`, plus
 `node scripts/check-discord-oauth.mjs` run against a deliberately bogus environment to confirm the
-missing-credential and failed-call paths degrade to a readable line rather than a stack trace. New: 19 cases
-in `scripts/check-discord-oauth.test.mjs` (`readRequiredEnv` reporting every missing variable at once;
+missing-credential and failed-call paths degrade to a readable line rather than a stack trace. 29 cases in
+`scripts/check-discord-oauth.test.mjs`: `readRequiredEnv` reporting every missing variable at once;
 `stripTrailingSlashes` pinned against `@bloombot/config`'s own transform; `deriveRedirectUri`;
 `classifyRedirectMismatch` covering exact match, a trailing slash on either side, `http` vs `https`, `www.`
-vs apex, host case as a match-with-warning, path case as a real mismatch, percent-encoding as a match, a
-completely unrelated URI as absent rather than a near miss, an empty list, and a near miss named correctly
-among several registered entries; `fetchApplication` covering a 200, a failed call, and a network failure,
-all against a stubbed `fetch` — no real Discord call is ever made in the test). All confirmed red first,
-against a module that did not exist yet (`ERR_MODULE_NOT_FOUND`), and again mid-implementation for the host
--case case specifically: the WHATWG `URL` parser lowercases `.host` per spec, so the first pass compared
-already-lowercased hosts and could never see a literal case difference, misclassifying that case as
-`absent`; fixed by extracting the raw host substring from the original string with a regex before Discord's
-own case-insensitivity rule is applied.
+vs apex, host case as a match-with-warning (its warning text asserted to actually mention "case", not merely
+truthy — round 1's own false-match bug would have passed the original, weaker assertion), an explicit
+default port on `https`/`http` as a near miss rather than a match, userinfo as a near miss rather than a
+match, path case as a real mismatch, percent-encoding as a match, a completely unrelated URI as absent
+rather than a near miss, an empty list, a non-array list degrading to the same shape, and a near miss named
+correctly among several registered entries; `fetchApplication` covering a 200, a failed call, a network
+failure, and a 200 with an unparseable body, all against a stubbed `fetch`; `determineOutcome` covering all
+five outcomes' exit codes (verified match → 0, mismatch → 1, could-not-verify → 0, missing environment → 1,
+failed Discord call → 1) — no real Discord call is ever made in the test. All confirmed red first: the
+round 1 cases against the pre-fix code reproduced the exact false-positive the reviewer found (`:443` and
+userinfo both classifying `match`, the host-case test passing on a warning whose text the old assertion
+never actually checked), the new `determineOutcome`/unparseable-body cases against `ERR_MODULE_NOT_FOUND` /
+`does not provide an export named 'determineOutcome'` since neither existed yet.

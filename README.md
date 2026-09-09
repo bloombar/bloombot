@@ -266,13 +266,36 @@ ids key the issues, so an existing id must never be renamed or renumbered.
 
 `ecosystem.config.cjs` also names the TypeScript platform's own processes — the API, the
 bot, the worker, the MCP server and the alerting monitor (OPS-8, OPS-12) — supervised the
-same way, each restarted independently. The commands below still work for the Python bot
-alone; see [docs/CUTOVER.md](docs/CUTOVER.md) for bringing up the whole platform, rehearsing
-the legacy import, and retiring the Python bot deliberately. For a full production
-deployment from an empty server, including nginx, TLS, the Discord/OpenAI/Google Cloud setup
-and every environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — and
+same way, each restarted independently. Every one of those five carries a `bloombot-` prefix
+(`bloombot-api`, `bloombot-bot`, `bloombot-worker`, `bloombot-mcp`, `bloombot-ops-monitor`,
+OPS-15) — the droplet is shared with unrelated projects, and a bare name like `api` or
+`worker` is one another project on the same box could plausibly claim too. The legacy Python
+bot's own `bloombot` name is unchanged; the commands below still work for it alone. See
+[docs/CUTOVER.md](docs/CUTOVER.md) for bringing up the whole platform, rehearsing the legacy
+import, and retiring the Python bot deliberately. For a full production deployment from an
+empty server, including nginx, TLS, the Discord/OpenAI/Google Cloud setup and every
+environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — and
 [docs/DEPLOY_APP_PLATFORM.md](docs/DEPLOY_APP_PLATFORM.md) for why DigitalOcean's App
 Platform is not (yet) a fit for this platform's single-SQLite-file architecture.
+
+**A droplet already running this platform under the old, bare names needs a one-time
+migration, run in this exact order — checkout, then migration, then deploy:**
+
+1. Update the droplet's checkout to the commit that renamed the processes (this one) **by
+   hand** — `git fetch` plus a `git reset --hard` to that commit — rather than by triggering
+   an ordinary deploy. `scripts/deploy.sh`'s own half-migrated guard refuses, before it ever
+   touches the checkout, while pm2 still knows any of the old names, so a deploy cannot do
+   this step for you yet.
+2. Run `scripts/migrate-pm2-names.sh` by hand, once (see that script's own header for exactly
+   what it does and why a deploy cannot safely do it unattended). It refuses outright, and
+   deletes nothing, if the checkout is still on the commit *before* the rename — running it
+   first, against the *old* `ecosystem.config.cjs`, would delete every old process and then
+   start none of the new ones, since `--only bloombot-api` (etc.) matches nothing in a file
+   that has never heard of that name.
+3. Only then let (or trigger) the next ordinary deploy — the guard is silent once no old name
+   is left, and reloads every process under its new name normally.
+
+A droplet being set up for the first time never had the old names and can skip this entirely.
 
 ### Install pm2
 

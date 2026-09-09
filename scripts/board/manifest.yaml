@@ -2812,6 +2812,22 @@
   phase: 15
   status: Done
   review: false
+- id: OPS-15
+  title: Every process this platform owns is identifiable as its own on a shared
+    droplet
+  full: "The droplet is shared with unrelated projects, so a supervised process's
+    name says which platform it belongs to rather than a bare, generic word
+    another project on the same box could plausibly claim too. Renaming a
+    supervised process is itself a deliberate, one-time migration, not merely a
+    config edit: an ordinary deploy reloads a name it already knows and
+    otherwise starts a new one from scratch, so deploying a rename without
+    migrating first would leave both the old and the new process running at
+    once, which is worse than the problem the rename fixes."
+  section: §27 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
 - id: ENRL-7
   title: Anyone a course is taught through is enrolled by asking it
   full: CORE-2 routes a message to a course when its author holds either of that

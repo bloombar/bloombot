@@ -21,20 +21,38 @@ const ecosystem = require(
 
 // OPS-8's own process list: the legacy Python bot plus the four PLAT-4
 // processes plus OPS-12's monitor — the exact set `scripts/deploy.sh`
-// reloads by name.
+// reloads by name. OPS-15 — every one of these except the legacy Python
+// bot's own entry carries a `bloombot-` prefix.
 const EXPECTED_NAMES = [
   'bloombot',
-  'api',
-  'bot',
-  'worker',
-  'mcp',
-  'ops-monitor',
+  'bloombot-api',
+  'bloombot-bot',
+  'bloombot-worker',
+  'bloombot-mcp',
+  'bloombot-ops-monitor',
 ]
 
 test('names every process OPS-8/OPS-12 requires, and nothing else', () => {
   assert.deepEqual(
     ecosystem.apps.map((app) => app.name),
     EXPECTED_NAMES
+  )
+})
+
+// OPS-15 — the requirement this rename exists to keep true: nothing gets
+// added to this file later without carrying the platform's own prefix. The
+// legacy Python bot's `bloombot` entry is the one deliberate exception
+// (it is keyed by `scripts/deploy.sh`'s own `PM2_APP` and is being retired
+// separately, not renamed) — everything else must start with `bloombot-`.
+test('every process except the legacy Python bot carries the bloombot- prefix', () => {
+  const notPrefixed = ecosystem.apps
+    .filter((app) => app.name !== 'bloombot')
+    .map((app) => app.name)
+    .filter((name) => !name.startsWith('bloombot-'))
+  assert.deepEqual(
+    notPrefixed,
+    [],
+    `these processes are not identifiable as this platform's own on a shared droplet: ${notPrefixed.join(', ')}`
   )
 })
 
@@ -50,7 +68,7 @@ test('every Node process runs its own built entry point', () => {
 
 test("the four PLAT-4 processes each run their own dist/index.js, not each other's", () => {
   for (const name of ['api', 'bot', 'worker', 'mcp']) {
-    const app = ecosystem.apps.find((a) => a.name === name)
+    const app = ecosystem.apps.find((a) => a.name === `bloombot-${name}`)
     assert.equal(app.script, `apps/${name}/dist/index.js`)
   }
 })

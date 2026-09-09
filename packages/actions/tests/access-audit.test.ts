@@ -55,6 +55,11 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'courses.list': { resource: 'project', access: 'read' },
   // PROJ-5: resolves the course itself, read.
   'courses.get': { resource: 'course', access: 'read' },
+  // PORT-8 — an export is a read of the course it exports; an import is a
+  // write on the project it lands in, the same descriptor `courses.save`
+  // carries.
+  'courses.export': { resource: 'course', access: 'read' },
+  'courses.import': { resource: 'project', access: 'write' },
   // TEN-6: marks a binding inactive; deletes nothing. Installing is not an
   // action at all (`actions/discord-servers.ts`'s own module comment) — it
   // needs the caller's account id, which nothing in this package's dispatch

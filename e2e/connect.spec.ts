@@ -181,3 +181,88 @@ test('the connect screen asks a signed-out visitor to sign in, then redeems an M
     closeDatabase(verifyDb)
   }
 })
+
+/**
+ * LINK-7 (polish slice): the durable connect status. Before this slice,
+ * `Connect.tsx` always rendered the "Connect Discord" button, even on a
+ * return visit after a real connect had already completed — nothing on the
+ * server was ever asked. `GET .../person-link/status` is what fixes that,
+ * and this spec proves it the way `e2e/join-link.spec.ts`'s own cross-tab
+ * test proves durability generally: a *fresh* page load, not the one-time
+ * navigation `App.tsx#onConnected` already makes right after confirming.
+ *
+ * The Discord identity itself is seeded directly against the database
+ * (`people.connectIdentity`), not driven through a real OAuth round trip —
+ * this file's own module comment already explains why a real browser
+ * cannot reach Discord's own consent screen in this harness; the sequence
+ * reproduced here (a survivor with a `discord` identity, then the
+ * account's own `web` identity attached to it) is exactly what
+ * `routes/person-link.ts#attachWebIdentityOrMerge` performs once a genuine
+ * `/discord/confirm` succeeds.
+ */
+test('a completed Discord connect shows the connected status on a later visit, not the button (LINK-7)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `connect-discord-${suffix}@example.edu`
+  const institutionOrganizationId = randomUUID()
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      institutionOrganizationId,
+      { name: `Institution ${suffix}`, isPersonal: false },
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await page.goto(`/connect/${institutionOrganizationId}`)
+  const token = await requestSignInLink(page, email)
+  await page.goto(`/sign-in/${token}`)
+  await expect(
+    page.getByRole('heading', { name: 'Connect your account' })
+  ).toBeVisible()
+  // Before the Discord identity below exists, the ordinary button.
+  await expect(
+    page.getByRole('button', { name: 'Connect Discord' })
+  ).toBeVisible()
+
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const account = accounts.getAccountByEmail(email, db)
+    if (!account) throw new Error('setup failed: account not found')
+    const survivor = people.createPerson(institutionOrganizationId, {}, db)
+    const discordConnected = people.connectIdentity(
+      institutionOrganizationId,
+      survivor.id,
+      { surface: 'discord', externalId: `snowflake-${suffix}` },
+      db
+    )
+    if (!discordConnected) {
+      throw new Error('setup failed: connectIdentity refused (discord)')
+    }
+    const webConnected = people.connectIdentity(
+      institutionOrganizationId,
+      survivor.id,
+      { surface: 'web', externalId: account.id },
+      db
+    )
+    if (!webConnected) {
+      throw new Error('setup failed: connectIdentity refused (web)')
+    }
+  } finally {
+    closeDatabase(db)
+  }
+
+  // A later, unrelated visit to the same URL — not the one-time navigation
+  // `App.tsx` makes right after OAuth — still shows "connected": LINK-7's
+  // own durability requirement, answered by the server rather than a
+  // transient flag.
+  await page.reload()
+  await expect(page.getByText(/Discord connected/)).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Connect Discord' })
+  ).toHaveCount(0)
+})

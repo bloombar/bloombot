@@ -113,6 +113,18 @@ export interface McpPersonLinkPreviewResponse {
 }
 
 /**
+ * `GET /organizations/:organizationId/person-link/status` (LINK-7) — the
+ * durable status `Connect.tsx` reads on mount so a returning visit shows
+ * "connected" even without the post-OAuth navigation that first proved it.
+ * `username` is omitted rather than `undefined` when the server has none to
+ * report (`person_identities` keeps a Discord snowflake, not a display
+ * name — `routes/person-link.ts`'s own doc comment on why).
+ */
+export interface PersonLinkStatusResponse {
+  discord: { connected: boolean; username?: string }
+}
+
+/**
  * The one shape every action dispatched through
  * `POST /organizations/:organizationId/actions/:name` returns on success
  * (`routes/actions.ts`) — `result` is whatever that particular action's own

@@ -53,6 +53,7 @@ import type {
   OrganizationMembership,
   OrganizationUsageReport,
   PersonLinkBeginResponse,
+  PersonLinkStatusResponse,
   Project,
   RevealedCourseJoinLink,
   SetSpendingCapResult,
@@ -280,6 +281,15 @@ export function confirmDiscordPersonLink(
   return request<{ connected: true }>(
     `/organizations/${organizationId}/person-link/discord/confirm`,
     { method: 'POST', body: { state } }
+  )
+}
+
+/** LINK-7: the caller's own durable connect status for `organizationId` — read on mount by `Connect.tsx` so a later visit still shows "connected" without relying on the one-time navigation `App.tsx` makes right after Discord's OAuth redirect. */
+export function getPersonLinkStatus(
+  organizationId: string
+): Promise<PersonLinkStatusResponse> {
+  return request<PersonLinkStatusResponse>(
+    `/organizations/${organizationId}/person-link/status`
   )
 }
 

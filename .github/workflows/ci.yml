@@ -186,6 +186,13 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          # Optional. Set it when sshd does not listen on 22 — this
+          # deployment moved SSH to a non-standard port because automated
+          # scanning of 22 was pushing sshd past MaxStartups and getting
+          # legitimate connections refused, which for a deploy job that makes
+          # exactly one attempt with no retry is a failed deploy that looks
+          # like a code problem. Empty means 22, ssh's own default.
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           # Set this repository variable to any non-empty value on a droplet
           # that has finished the cutover and no longer runs the legacy Python
@@ -216,8 +223,14 @@ jobs:
             remote="APP_DIR='$DEPLOY_PATH' $remote"
           fi
 
-          echo "Deploying $TARGET_SHA to $DEPLOY_USER@$DEPLOY_HOST"
+          port_args=()
+          if [ -n "$DEPLOY_PORT" ]; then
+            port_args=(-p "$DEPLOY_PORT")
+          fi
+
+          echo "Deploying $TARGET_SHA to $DEPLOY_USER@$DEPLOY_HOST${DEPLOY_PORT:+:$DEPLOY_PORT}"
           ssh -i ~/.ssh/deploy_key \
+            "${port_args[@]}" \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             -o ConnectTimeout=15 \

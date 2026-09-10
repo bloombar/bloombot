@@ -18,6 +18,7 @@
     "board:status": "node scripts/board/status.mjs",
     "check:discord": "node scripts/check-discord-oauth.mjs",
     "discord:reparent": "node scripts/reparent-orphan-channels.mjs",
+    "files:prune-orphans": "node scripts/prune-orphan-openai-files.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

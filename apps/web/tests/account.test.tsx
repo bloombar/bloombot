@@ -4,6 +4,12 @@
  * comes from the same `AccountSummary` `pages/Shell.tsx` already holds
  * (`GET /auth/me`) — no request of this component's own, so this file
  * mounts it directly rather than through `Shell.tsx`'s own async fetches.
+ *
+ * WEB-41 — each row's own name is also a link to that organization's main
+ * page; `navigate` below is a bare `vi.fn()` for every test that does not
+ * itself assert on it, the same "supply what the type requires, assert on
+ * it only where the test is about it" convention this file already holds
+ * for `onSwitchOrganization`.
  */
 
 import { fireEvent, render, screen } from '@testing-library/react'
@@ -35,6 +41,7 @@ describe('Account (WEB-30)', () => {
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     expect(screen.getByText('instructor@example.edu')).toBeInTheDocument()
@@ -47,6 +54,7 @@ describe('Account (WEB-30)', () => {
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     expect(screen.getByText(/Org One/)).toHaveTextContent('(owner)')
@@ -62,6 +70,7 @@ describe('Account (WEB-30)', () => {
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     const activeRow = screen.getByText(/Org One/).closest('li')
@@ -85,6 +94,7 @@ describe('Account (WEB-30)', () => {
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={onSwitchOrganization}
+        navigate={vi.fn()}
       />
     )
     const inactiveRow = screen.getByText(/Org Two/).closest('li')
@@ -99,10 +109,90 @@ describe('Account (WEB-30)', () => {
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={onSwitchOrganization}
+        navigate={vi.fn()}
       />
     )
     const connectedRow = screen.getByText(/A University/).closest('li')
     fireEvent.click(connectedRow!.querySelector('button') as HTMLButtonElement)
     expect(onSwitchOrganization).toHaveBeenCalledWith('org-3')
   })
+
+  // --- WEB-41: each row's own name is a real link ---------------------
+
+  it('renders each organization row as a link to that organization’s main page', () => {
+    render(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    // A real `href`, built the same way `buildPath` builds every other
+    // address in this app — visible on hover, and "copy link" works. The
+    // link's accessible name carries the trailing role label alongside the
+    // name (`Account.tsx`'s own comment on why it is one link, not two
+    // adjoining pieces of clickable text), so this matches on a prefix.
+    expect(screen.getByRole('link', { name: /^Org One/ })).toHaveAttribute(
+      'href',
+      '/o/org-1/projects'
+    )
+    expect(screen.getByRole('link', { name: /^Org Two/ })).toHaveAttribute(
+      'href',
+      '/o/org-2/projects'
+    )
+    expect(screen.getByRole('link', { name: /^A University/ })).toHaveAttribute(
+      'href',
+      '/o/org-3/projects'
+    )
+  })
+
+  it('an ordinary click navigates client-side rather than reloading the page', () => {
+    const navigate = vi.fn()
+    render(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={navigate}
+      />
+    )
+    const link = screen.getByRole('link', { name: /^Org Two/ })
+    const event = fireEvent.click(link)
+    // `fireEvent.click` returns `false` when the event's default was
+    // prevented — the actual assertion that this is a client-side
+    // navigation, not merely that `navigate` happened to run.
+    expect(event).toBe(false)
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'projects',
+      organizationId: 'org-2',
+    })
+  })
+
+  it.each([
+    ['a cmd/ctrl-click', { metaKey: true }],
+    ['a shift-click', { shiftKey: true }],
+    ['an alt-click', { altKey: true }],
+    ['a middle click', { button: 1 }],
+  ])(
+    '%s on an organization link falls through to the browser — no navigate, default not prevented',
+    (_label, eventInit) => {
+      const navigate = vi.fn()
+      render(
+        <Account
+          account={ACCOUNT}
+          activeOrganizationId="org-1"
+          onSwitchOrganization={vi.fn()}
+          navigate={navigate}
+        />
+      )
+      const link = screen.getByRole('link', { name: /^Org Two/ })
+      const event = fireEvent.click(link, eventInit)
+      // Not prevented — a modified or non-primary click has to reach the
+      // browser's own "open in a new tab" handling, which only happens if
+      // this component leaves the event alone.
+      expect(event).toBe(true)
+      expect(navigate).not.toHaveBeenCalled()
+    }
+  )
 })

@@ -26,15 +26,26 @@
  * the header are the same operation, not two independently maintained
  * paths that could drift (`pages/Shell.tsx`'s own `setActiveOrganizationId`
  * is the one place either ever lands).
+ *
+ * WEB-41 — each row's own name is now also a link to that organization's
+ * main page (`{ kind: 'projects', organizationId }`), via the shared
+ * `AppLink` — this adds a way to *open* an organization, alongside (not
+ * instead of) the existing switch control: switching changes which
+ * organization this whole shell is acting in, opening the link only reads
+ * that organization's projects without disturbing the active one at all.
  */
 
 import type { AccountSummary } from '../api/types.js'
+import { AppLink } from '../components/AppLink.js'
 import { Button } from '../components/Button.js'
+import type { Route } from '../routing/route.js'
 
 export interface AccountProps {
   account: AccountSummary
   activeOrganizationId: string
   onSwitchOrganization: (organizationId: string) => void
+  /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, threaded down the same way `pages/Shell.tsx` already threads it to every other screen it renders. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 /** One row this screen can render — a membership's own role, or `undefined` for a connected-only relationship, the same `Option` shape `OrganizationSwitcher.tsx` already draws from the identical two fields. */
@@ -48,6 +59,7 @@ export function Account({
   account,
   activeOrganizationId,
   onSwitchOrganization,
+  navigate,
 }: AccountProps) {
   const rows: OrganizationRow[] = [
     ...account.memberships.map((membership) => ({
@@ -89,10 +101,27 @@ export function Account({
               >
                 <div>
                   <p className="text-sm font-medium text-neutral-900">
-                    {row.organizationName}{' '}
-                    <span className="font-normal text-neutral-500">
-                      ({row.role ?? 'connected'})
-                    </span>
+                    {/* WEB-41 — the organization's own main page, not a
+                        switch: opening this does not change which
+                        organization is active (`onSwitchOrganization`,
+                        below, still owns that). The role label stays
+                        inside the same link as the name, rather than as a
+                        separate trailing element — one link per row, not
+                        two adjoining clickable pieces of text that read as
+                        one. */}
+                    <AppLink
+                      to={{
+                        kind: 'projects',
+                        organizationId: row.organizationId,
+                      }}
+                      navigate={navigate}
+                      className="hover:underline"
+                    >
+                      {row.organizationName}{' '}
+                      <span className="font-normal text-neutral-500">
+                        ({row.role ?? 'connected'})
+                      </span>
+                    </AppLink>
                   </p>
                   {isActive && (
                     <p className="text-sm text-neutral-500">Active</p>

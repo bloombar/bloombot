@@ -2684,3 +2684,15 @@ dropped onto it or the zone can be clicked to choose one. The modal names the pr
 into and says that imported courses arrive disabled before the import runs, not after. On success it
 shows the PORT-7 report — the title the course was given, and anything the file could not carry — and
 the course appears in that project's list. A refused file leaves the modal open with the reason.
+
+#### WEB-41 Navigation targets are real links, and a nav control shows a pointer cursor
+
+Every place the panel names a destination a person might reasonably want to open in a new tab — an
+organization's name on `/account` and in the fixed header — renders a real anchor with a real `href`
+(built the same way every other address in this app is built, never a hand-concatenated string), not a
+`<button onClick={...}>`. An ordinary click still navigates client-side, with no full-page reload; a
+modified click (cmd/ctrl, shift, alt) or a non-primary mouse button (middle-click) falls through to the
+browser untouched, so "open in a new tab" and "copy link" both work the way they do for any other link on
+the web. Every button-based navigation control in the panel shows a pointer cursor on hover, fixed once as
+a base-layer rule rather than a `cursor-pointer` utility repeated at each call site; a disabled control
+keeps its `cursor: not-allowed` treatment.

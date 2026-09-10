@@ -615,6 +615,7 @@ function ShellInner({
           onChange={(organizationId) =>
             changeActiveOrganization(organizationId)
           }
+          navigate={navigate}
         />
       }
       // WEB-30: the header's trailing edge holds the profile control alone
@@ -816,6 +817,7 @@ function ShellInner({
           onSwitchOrganization={(organizationId) =>
             changeActiveOrganization(organizationId)
           }
+          navigate={navigate}
         />
       ) : isProjectsRoute(route) ? (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

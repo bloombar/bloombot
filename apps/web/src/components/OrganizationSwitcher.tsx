@@ -30,18 +30,31 @@
  * organization's name for the multi-organization case. The `role ?? 'connected'`
  * labelling (this file's own module comment, LINK-10) is unchanged either
  * way.
+ *
+ * WEB-41 — the single-organization case's plain-text name is now also a
+ * link, to that organization's main page (`{ kind: 'projects',
+ * organizationId }`), via the shared `AppLink`. The multi-organization
+ * `<select>` is untouched: it already navigates the moment a different
+ * option is chosen (`onChange`), and a link inside an `<option>` is not a
+ * thing HTML has. Same classes as before either way (this file's own
+ * "no design change" — WEB-41's brief states this explicitly for the
+ * header).
  */
 
 import type {
   ConnectedOrganizationSummary,
   MembershipSummary,
 } from '../api/types.js'
+import type { Route } from '../routing/route.js'
+import { AppLink } from './AppLink.js'
 
 export interface OrganizationSwitcherProps {
   memberships: MembershipSummary[]
   connectedOrganizations: ConnectedOrganizationSummary[]
   activeOrganizationId: string
   onChange: (organizationId: string) => void
+  /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, threaded down the same way `pages/Shell.tsx` already threads it everywhere else; only the single-organization plain-text case (below) uses it. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 /** One organization this switcher can offer — a membership's own role, or `undefined` for a connected-only relationship (this file's own module comment). */
@@ -56,6 +69,7 @@ export function OrganizationSwitcher({
   connectedOrganizations,
   activeOrganizationId,
   onChange,
+  navigate,
 }: OrganizationSwitcherProps) {
   const options: Option[] = [
     ...memberships.map((membership) => ({
@@ -83,7 +97,23 @@ export function OrganizationSwitcher({
         className="text-sm font-medium text-neutral-900"
         data-testid="organization-switcher"
       >
-        {active?.organizationName ?? activeOrganizationId}
+        {/* WEB-41 — a link to this organization's main page. No classes of
+            its own: Tailwind's Preflight already resets an anchor's color
+            and text-decoration to `inherit`, and font-size/weight are
+            inherited by any element regardless, so this reads exactly as
+            the plain text it replaces (the brief's own "same font, size,
+            weight, color, spacing" — no underline, no brand color to
+            resist adding here). */}
+        {active ? (
+          <AppLink
+            to={{ kind: 'projects', organizationId: active.organizationId }}
+            navigate={navigate}
+          >
+            {active.organizationName}
+          </AppLink>
+        ) : (
+          activeOrganizationId
+        )}
         {active ? (
           <span className="font-normal text-neutral-500">
             {' '}

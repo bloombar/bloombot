@@ -8,6 +8,12 @@
  * WEB-30: restyled for the header's leading edge — no "Acting in" prose,
  * either case (`components/OrganizationSwitcher.tsx`'s own module comment
  * on why there is no longer room to spare for it).
+ *
+ * WEB-41 — the single-organization (plain-text) case's name is also a real
+ * link, to that organization's main page. The multi-organization
+ * `<select>` case is untouched (`OrganizationSwitcher.tsx`'s own module
+ * comment on why); `navigate` below is a bare `vi.fn()` for the tests that
+ * do not assert on it.
  */
 
 import { fireEvent, render, screen } from '@testing-library/react'
@@ -29,6 +35,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         connectedOrganizations={[]}
         activeOrganizationId="org-1"
         onChange={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     // Finding 4 (rework pass): the name, not the raw id — TEN-7's own point.
@@ -68,6 +75,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         connectedOrganizations={[]}
         activeOrganizationId="org-1"
         onChange={onChange}
+        navigate={vi.fn()}
       />
     )
     const select = screen.getByRole('combobox', { name: 'Organization' })
@@ -100,6 +108,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         ]}
         activeOrganizationId="org-1"
         onChange={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     const switcher = screen.getByTestId('organization-switcher')
@@ -126,6 +135,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         ]}
         activeOrganizationId="org-1"
         onChange={onChange}
+        navigate={vi.fn()}
       />
     )
     const select = screen.getByRole('combobox', { name: 'Organization' })
@@ -135,4 +145,91 @@ describe('OrganizationSwitcher (WEB-3)', () => {
     fireEvent.change(select, { target: { value: 'org-2' } })
     expect(onChange).toHaveBeenCalledWith('org-2')
   })
+
+  // --- WEB-41: the single-organization case's name is also a real link ----
+
+  it('renders the single organization’s name as an anchor to its main page', () => {
+    render(
+      <OrganizationSwitcher
+        memberships={[
+          {
+            organizationId: 'org-1',
+            organizationName: 'Acme U',
+            role: 'owner',
+          },
+        ]}
+        connectedOrganizations={[]}
+        activeOrganizationId="org-1"
+        onChange={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    // A real `href` — visible on hover, and "copy link" works. The
+    // accessible name carries the trailing role label too (this file's own
+    // `Acme U (owner)` — `Account.tsx`'s identical choice, its own module
+    // comment on why one link, not two adjoining pieces of clickable text).
+    expect(screen.getByRole('link', { name: /^Acme U/ })).toHaveAttribute(
+      'href',
+      '/o/org-1/projects'
+    )
+  })
+
+  it('an ordinary click on the header’s organization link navigates client-side, not a page reload', () => {
+    const navigate = vi.fn()
+    render(
+      <OrganizationSwitcher
+        memberships={[
+          {
+            organizationId: 'org-1',
+            organizationName: 'Acme U',
+            role: 'owner',
+          },
+        ]}
+        connectedOrganizations={[]}
+        activeOrganizationId="org-1"
+        onChange={vi.fn()}
+        navigate={navigate}
+      />
+    )
+    const link = screen.getByRole('link', { name: /^Acme U/ })
+    const event = fireEvent.click(link)
+    // `false` means the click's default was prevented — the actual proof
+    // this is a client-side navigation, not merely that `navigate` ran.
+    expect(event).toBe(false)
+    expect(navigate).toHaveBeenCalledWith({
+      kind: 'projects',
+      organizationId: 'org-1',
+    })
+  })
+
+  it.each([
+    ['a cmd/ctrl-click', { metaKey: true }],
+    ['a shift-click', { shiftKey: true }],
+    ['an alt-click', { altKey: true }],
+    ['a middle click', { button: 1 }],
+  ])(
+    '%s on the header’s organization link falls through to the browser',
+    (_label, eventInit) => {
+      const navigate = vi.fn()
+      render(
+        <OrganizationSwitcher
+          memberships={[
+            {
+              organizationId: 'org-1',
+              organizationName: 'Acme U',
+              role: 'owner',
+            },
+          ]}
+          connectedOrganizations={[]}
+          activeOrganizationId="org-1"
+          onChange={vi.fn()}
+          navigate={navigate}
+        />
+      )
+      const link = screen.getByRole('link', { name: /^Acme U/ })
+      const event = fireEvent.click(link, eventInit)
+      expect(event).toBe(true)
+      expect(navigate).not.toHaveBeenCalled()
+    }
+  )
 })

@@ -184,6 +184,20 @@ const CONNECTED_NON_MEMBER_ACCOUNT: AccountSummary = {
   ],
 }
 
+// WEB-41 — exactly one option total (one membership, no connections), so
+// the header's own `OrganizationSwitcher` renders the plain-text,
+// single-organization case (a link, as of this slice) rather than the
+// `<select>` `MULTI_MEMBERSHIP_ACCOUNT`/`CONNECTED_NON_MEMBER_ACCOUNT`
+// above both exercise.
+const SINGLE_MEMBERSHIP_ACCOUNT: AccountSummary = {
+  id: 'account-3',
+  email: 'owner@example.edu',
+  memberships: [
+    { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' },
+  ],
+  connectedOrganizations: [],
+}
+
 beforeEach(() => {
   // The default `ProjectsPanel` mount on every test (finding 10's new
   // 'projects' default) needs *some* resolved value, or `Projects.tsx`'s
@@ -1233,6 +1247,37 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         await screen.findByRole('combobox', { name: 'Organization' })
       ).toHaveValue('personal-org')
+    })
+
+    // --- WEB-41: the header's organization name is a real link ------------
+
+    it('the header’s single-organization name is a link to that organization’s main page', () => {
+      renderShell({ account: SINGLE_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+      const header = screen.getByRole('banner')
+      expect(
+        within(header).getByRole('link', { name: /^Org One/ })
+      ).toHaveAttribute('href', '/o/org-1/projects')
+    })
+
+    // WEB-41's own carve-out: `/account` deliberately names no
+    // organization (WEB-30's `'account'` route), but the header still
+    // shows one — `Shell.tsx`'s own `rememberedOrganizationId`, the
+    // organization that was active immediately before `/account` was
+    // opened. Decision for this slice: the header's link stays correct
+    // for that remembered organization rather than disappearing —
+    // opening it does not disturb `/account` itself (the same "does not
+    // change which organization is active" `Account.tsx`'s own rows
+    // already hold to), and it is a real destination, not a guess.
+    it('on /account, the header’s organization link still points at the organization that was active beforehand', () => {
+      renderShell({
+        account: SINGLE_MEMBERSHIP_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
+      const header = screen.getByRole('banner')
+      expect(
+        within(header).getByRole('link', { name: /^Org One/ })
+      ).toHaveAttribute('href', '/o/org-1/projects')
     })
   })
 

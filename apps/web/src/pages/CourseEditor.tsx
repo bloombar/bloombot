@@ -488,10 +488,18 @@ export function CourseEditor({
   // "Save changes" wrote the instructions and then the form was refused.
   const [halfSaved, setHalfSaved] = useState(false)
   // WEB-43: true for the stretch after a successful `handleSave` during
-  // which the `Saved` confirmation shows beside the button — set only on
-  // that success path (never on a refusal or a half-saved outcome, below),
-  // and cleared either by `savedTimeoutRef`'s own timer or immediately by
-  // the `isDirty` effect further down, whichever comes first.
+  // which the `Saved` confirmation is eligible to show beside the button —
+  // set only on that success path (never on a refusal or a half-saved
+  // outcome, below), and cleared by `savedTimeoutRef`'s own timer.
+  // "Eligible" rather than "shows": the render below reads
+  // `justSaved && !isDirty`, not `justSaved` alone (review round 1,
+  // must-fix 2) — a save that leaves `isDirty` true (an Instructions edit
+  // this particular save never touched, or a `courses.save` response that
+  // does not exactly echo what was typed) must not claim `Saved` beside a
+  // form that still has unsaved work, and an effect keyed on `isDirty`'s
+  // own *transition* cannot catch that, because `isDirty` never transitions
+  // in either case — it was already `true` before the save completed, and
+  // still is after.
   const [justSaved, setJustSaved] = useState(false)
   const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
@@ -520,18 +528,6 @@ export function CourseEditor({
       savedTimeoutRef.current = undefined
     }, savedClearAfterMs)
   }, [savedClearAfterMs])
-  // WEB-43: a `Saved` sitting beside a form the person has since edited is
-  // a lie — cleared the moment `isDirty` goes true again, not only once the
-  // timer above happens to fire, so an edit made a second into the window
-  // still removes it immediately.
-  useEffect(() => {
-    if (!isDirty) return
-    setJustSaved(false)
-    if (savedTimeoutRef.current !== undefined) {
-      clearTimeout(savedTimeoutRef.current)
-      savedTimeoutRef.current = undefined
-    }
-  }, [isDirty])
   // TEN-9 — every binding this organization has ever held (active or
   // removed, `discordServers.list`'s own shape), fetched once per
   // organization. Only the active ones (`activeBindings`, below) decide
@@ -614,6 +610,17 @@ export function CourseEditor({
     activeTabRef.current = initialTab
     setActiveTab(initialTab)
     setVisitedTabs(new Set([initialTab]))
+    // WEB-43 (review round 1, note): `pages/ProjectsPanel.tsx` renders this
+    // component with no `key`, so switching which course is being edited
+    // (a Back/Forward between two course-editor routes) changes `courseId`
+    // without remounting — without this, a `Saved` earned on one course
+    // could still be showing, for the rest of its timer, beside a
+    // completely different course that was never saved.
+    setJustSaved(false)
+    if (savedTimeoutRef.current !== undefined) {
+      clearTimeout(savedTimeoutRef.current)
+      savedTimeoutRef.current = undefined
+    }
     if (courseId === undefined) {
       const blank = blankForm()
       setForm(blank)
@@ -1840,21 +1847,33 @@ export function CourseEditor({
         >
           Save course
         </Button>
-        {/* WEB-43: `saving`/`switchSaving` both count as "a save is
-            happening" — a tab-switch save is a save, and must not look like
-            nothing is going on next to a button that has gone quiet.
-            `justSaved` only ever reads true once neither is, so the two
-            messages never show at once. */}
-        {(saving || switchSaving) && (
-          <p role="status" className="text-sm text-neutral-600">
-            Saving…
-          </p>
-        )}
-        {!saving && !switchSaving && justSaved && (
-          <p role="status" className="text-sm text-neutral-600">
-            Saved
-          </p>
-        )}
+        {/* WEB-43 (review round 1, must-fix 3): one `role="status"` node,
+            always present, whose *text* changes between idle/saving/saved —
+            not three separately mounted-and-unmounted paragraphs. A live
+            region generally has to already be in the accessibility tree
+            before its content changes for a screen reader to announce the
+            change; a region inserted at the same moment as the text it
+            carries is commonly missed entirely — which is why the old
+            relabelled button (an existing node's accessible name changing)
+            announced, and the three-paragraph version would not have.
+            `justSaved && !isDirty` (must-fix 2): `justSaved` alone does not
+            mean the form is actually clean — an edit on the Instructions
+            tab that was never part of this save, or a `courses.save`
+            response that does not exactly echo what was typed, both leave
+            `isDirty` true straight through a "successful" save, and `Saved`
+            beside a still-dirty, still-enabled button is exactly the lie
+            the brief warned against. Reading this off a value on every
+            render, rather than an effect that only fires on `isDirty`'s own
+            *transition* (removed), is what covers both — `useEffect(() =>
+            ..., [isDirty])` never re-runs while `isDirty` stays `true`, so
+            it could never have cleared this. */}
+        <p role="status" className="text-sm text-neutral-600">
+          {saving || switchSaving
+            ? 'Saving…'
+            : justSaved && !isDirty
+              ? 'Saved'
+              : ''}
+        </p>
       </div>
     </section>
   )

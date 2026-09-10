@@ -64,6 +64,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
+import { LoadingStatus, Skeleton } from './components/Skeleton.js'
 import { Admin } from './pages/Admin.js'
 import { Connect } from './pages/Connect.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
@@ -406,10 +407,15 @@ export function App() {
   }
 
   if (session.kind === 'loading') {
+    // WEB-45: a simple centred skeleton, not a fake replica of a page
+    // nobody has seen yet — this gate covers every route in the app,
+    // signed in or out, before `session` is known at all.
     return (
-      <p className="p-6 text-sm text-neutral-500" role="status">
-        Loading…
-      </p>
+      <div className="flex flex-col gap-3 p-6">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-4 w-24" />
+        <LoadingStatus />
+      </div>
     )
   }
 
@@ -524,9 +530,11 @@ export function App() {
     // (the effect above) — this is only the one render in between.
     if (route.kind === 'home') {
       return (
-        <p className="p-6 text-sm text-neutral-500" role="status">
-          Loading…
-        </p>
+        <div className="flex flex-col gap-3 p-6">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-4 w-24" />
+          <LoadingStatus />
+        </div>
       )
     }
 

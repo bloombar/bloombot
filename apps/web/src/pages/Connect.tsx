@@ -60,6 +60,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
 import { Logo } from '../components/Logo.js'
+import { LoadingStatus, SkeletonLine } from '../components/Skeleton.js'
 import { describePersonLinkOutcome } from '../person-link-outcome.js'
 import { SignIn } from './SignIn.js'
 
@@ -290,12 +291,14 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
         </h2>
         {discordStatus === undefined ? (
           // LINK-7 — a quiet loading state while `getPersonLinkStatus`
-          // resolves, the same `role="status"` device `pages/Courses.tsx`
-          // already uses: never flash the button only to replace it with
-          // the connected line a moment later.
-          <p role="status" className="text-sm text-neutral-500">
-            Loading…
-          </p>
+          // resolves: never flash the button only to replace it with the
+          // connected line a moment later. WEB-45: a single text-line
+          // skeleton — this becomes one line either way (`Discord
+          // connected…` or the `Connect Discord` button), never a list.
+          <div className="flex flex-col gap-2">
+            <SkeletonLine className="h-4 w-40" />
+            <LoadingStatus />
+          </div>
         ) : discordStatus.connected ? (
           <p className="text-sm text-neutral-700">
             Discord connected

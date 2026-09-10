@@ -145,6 +145,11 @@ import { JoinLinks } from '../components/JoinLinks.js'
 import { useModal } from '../components/modal/ModalProvider.js'
 import { RosterImport } from '../components/RosterImport.js'
 import { ScaffoldButton } from '../components/ScaffoldButton.js'
+import {
+  LoadingStatus,
+  Skeleton,
+  SkeletonLine,
+} from '../components/Skeleton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
 import { AddIcon, DeleteIcon, WarningIcon } from '../icons.js'
@@ -1454,10 +1459,30 @@ export function CourseEditor({
   )
 
   if (loading) {
+    // WEB-45: a field's worth of skeleton lines — a label-height line over
+    // a taller value-height one, repeated for a few fields — rather than a
+    // full replica of every tab this form eventually grows (WEB-35's own
+    // tabs are not known yet at this point; which ones a course even has
+    // depends on `courseId`, resolved by the same read this gate is
+    // covering).
     return (
-      <p role="status" className="text-sm text-neutral-500">
-        Loading…
-      </p>
+      <section
+        aria-label="Course"
+        data-testid="course-editor"
+        className="flex flex-col gap-6"
+      >
+        <SkeletonLine className="h-4 w-24" />
+        <Skeleton className="h-8 w-64" />
+        <div className="grid gap-4 sm:grid-cols-2">
+          {[0, 1, 2, 3].map((index) => (
+            <div key={index} className="flex flex-col gap-2">
+              <SkeletonLine className="h-3 w-32" />
+              <Skeleton className="h-9 w-full" />
+            </div>
+          ))}
+        </div>
+        <LoadingStatus />
+      </section>
     )
   }
 

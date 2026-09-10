@@ -107,6 +107,31 @@ beforeEach(() => {
 })
 
 describe('App (WEB-1..4)', () => {
+  // WEB-45: the whole-screen session gate — a simple skeleton (this covers
+  // every route before `session` is known at all, not any one page's own
+  // content), still announced to assistive technology.
+  it('shows a skeleton while the session is unknown, announces it to assistive technology, and swaps it for the sign-in screen once fetchMe resolves', async () => {
+    let resolveMe: ((value: { account: null }) => void) | undefined
+    fetchMe.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMe = resolve
+        })
+    )
+
+    const { container } = renderWithModal(<App />)
+
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+
+    resolveMe?.({ account: null })
+
+    expect(await screen.findByText('Sign in')).toBeInTheDocument()
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
   it('an install that completed for a second organization lands the panel acting in that organization, not the account first membership (finding 2 of the WEB-1..6 rework)', async () => {
     // The account belongs to two organizations — `org-1` is first, but the
     // install this test drives through was begun for `org-2`

@@ -123,6 +123,46 @@ describe('Admin (ADMIN-4)', () => {
     expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
   })
 
+  // WEB-45: row-shaped skeletons while the read is in flight, gone once the
+  // real organization rows take their place.
+  it('shows row-shaped skeletons while loading, announced to assistive technology, and swaps them for the real list once fetchAdminOrganizations resolves', async () => {
+    let resolveOrganizations:
+      | ((value: {
+          organizations: unknown[]
+          platformHealth: typeof PLATFORM_HEALTH
+        }) => void)
+      | undefined
+    fetchAdminOrganizations.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOrganizations = resolve
+        })
+    )
+
+    const { container } = renderAdmin()
+
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+
+    resolveOrganizations?.({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 0,
+          estimatedCostMicros: 0,
+          callCount: 0,
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+
+    expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
   // Also-fix of the ADMIN-1..5 rework: this screen's own module comment
   // claimed every read went through `fetchTenantDeletions`, but nothing
   // ever called it — dead code masquerading as a documented one.
@@ -159,7 +199,7 @@ describe('Admin (ADMIN-4)', () => {
       new ApiError(403, { error: 'not_platform_administrator' })
     )
 
-    renderAdmin()
+    const { container } = renderAdmin()
 
     expect(
       await screen.findByText(/platform-administrator access/i)
@@ -169,6 +209,10 @@ describe('Admin (ADMIN-4)', () => {
     // permanent "Loading…" underneath it — a screen claiming to still be
     // fetching something it has already been refused.
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // WEB-45: the same guard means a refusal never shows a skeleton either
+    // — `failed` is what a skeleton call site checks first, same as the
+    // old placeholder did.
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
   })
 
   // The same finding on each of the two screens the split created — a

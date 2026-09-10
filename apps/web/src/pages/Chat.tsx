@@ -29,6 +29,7 @@ import type {
 import { Button } from '../components/Button.js'
 import { ChatMessage } from '../components/ChatMessage.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { LoadingStatus, Skeleton } from '../components/Skeleton.js'
 import { SendIcon, SuccessIcon } from '../icons.js'
 import { NotFound } from './NotFound.js'
 
@@ -358,10 +359,14 @@ export function Chat({
   }
 
   if (courses === undefined) {
+    // WEB-45: whichever course ends up selected is not known yet — a
+    // simple skeleton, not a replica of the thread below.
     return (
-      <p className="text-sm text-neutral-500" role="status">
-        Loading…
-      </p>
+      <div className="flex flex-col gap-3 p-6">
+        <Skeleton className="h-6 w-32" />
+        <Skeleton className="h-4 w-48" />
+        <LoadingStatus />
+      </div>
     )
   }
 
@@ -516,9 +521,18 @@ export function Chat({
         {messagesError ? (
           <ErrorMessage error={messagesError} />
         ) : messages === undefined ? (
-          <p className="text-sm text-neutral-500" role="status">
-            Loading…
-          </p>
+          // WEB-45: shaped like the message bubbles `ChatMessage` renders
+          // once `messages` resolves — one from each side, since a thread
+          // is never all one speaker.
+          <div className="flex flex-col gap-2">
+            <div className="flex justify-start">
+              <Skeleton className="h-8 w-2/3 rounded-lg" />
+            </div>
+            <div className="flex justify-end">
+              <Skeleton className="h-8 w-1/2 rounded-lg" />
+            </div>
+            <LoadingStatus />
+          </div>
         ) : messages.length === 0 ? (
           <p className="text-sm text-neutral-500">
             No messages yet — ask something below.

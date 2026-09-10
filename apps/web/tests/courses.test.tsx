@@ -97,6 +97,62 @@ describe('Courses (WEB-8)', () => {
     expect(listCourses).toHaveBeenCalledWith('org-1', 'project-1')
   })
 
+  // WEB-45: the list/collection shape — a row-shaped skeleton, gone once
+  // the real course rows take its place.
+  it('shows row-shaped skeletons while loading, announces them to assistive technology, and swaps them for the real list once courses.list resolves', async () => {
+    let resolveCourses: ((courses: CourseSummary[]) => void) | undefined
+    listCourses.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCourses = resolve
+        })
+    )
+
+    const { container } = renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+    expect(screen.queryByText('Web Design')).not.toBeInTheDocument()
+
+    resolveCourses?.([COURSE])
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
+  // WEB-45 (Admin.tsx-style regression): a refused courses.list must not
+  // also show a skeleton claiming this is still loading — the same
+  // `!error` guard `Admin.tsx`'s own `failed` check already holds every
+  // one of its own three screens to.
+  it('a failed load renders only the failure, never a skeleton pulsing underneath it', async () => {
+    listCourses.mockRejectedValue(
+      new ApiError(403, { error: 'action_refused' })
+    )
+
+    const { container } = renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
   // WEB-26: Disable/Enable moved behind the row's own kebab menu — this
   // pins that the item is reachable *there*, not merely that the text
   // "Disable" exists somewhere on the page.

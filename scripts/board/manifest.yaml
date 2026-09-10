@@ -3555,6 +3555,23 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-45
+  title: Skeleton loaders for the panel's dynamic content
+  full: "Every place the panel waits on an async read showed the same plain
+    Loading… text. A skeleton that pulses in the loaded content's own rough
+    shape — a card-per-row list, a form's fields, or a whole-screen gate before
+    anything about the destination is known — reads better than a line of grey
+    text, and is the conventional way to do this: Tailwind's own animate-pulse
+    utility, already in this app's one styling system (WEB-11), needs no new
+    dependency. A purely visual skeleton says nothing to a screen reader, which
+    the role=\"status\" paragraph it replaces did — so every skeleton pairs its
+    decorative shapes (aria-hidden=\"true\") with a visually-hidden
+    role=\"status\" element still announcing the same…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
   full: "A per-student channel is named after the local part of the student's

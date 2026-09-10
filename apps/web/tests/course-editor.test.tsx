@@ -382,10 +382,54 @@ describe('CourseEditor (WEB-8)', () => {
     expect(saveCourse).not.toHaveBeenCalled()
   })
 
+  // WEB-45: the form/detail shape — a skeleton that resembles the field
+  // grid below it, not merely the base pulsing block `App.tsx`'s
+  // whole-screen gate uses.
+  it('shows a field-shaped skeleton while loading, announces it to assistive technology, and swaps it for the real form once courses.get resolves', async () => {
+    let resolveCourse: ((course: Course) => void) | undefined
+    getCourse.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCourse = resolve
+        })
+    )
+
+    const { container } = renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    // The decorative shapes are there (`aria-hidden`, so a screen reader
+    // never sees them) alongside the one accessible announcement.
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(
+      0
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+    expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+
+    resolveCourse?.(COURSE)
+
+    expect(await screen.findByDisplayValue('Web Design')).toBeInTheDocument()
+    // The skeleton is gone once the real form has taken its place — the
+    // same `.animate-pulse` check its sibling suites use, not a `role`
+    // query: the loaded form renders several other `role="status"` nodes
+    // of its own (WEB-20/WEB-22/WEB-43), so `getByRole('status')` would
+    // throw on more than one match, and `queryByRole('status')` returning
+    // any one of them would make `not.toHaveTextContent('Loading…')` pass
+    // for the wrong reason.
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
   it('a failed load renders only the failure, never an editable blank form over a real course (finding 3)', async () => {
     getCourse.mockRejectedValue(new ApiError(404, { error: 'action_refused' }))
 
-    renderWithModal(
+    const { container } = renderWithModal(
       <CourseEditor
         navigate={vi.fn()}
         organizationId="org-1"
@@ -405,6 +449,9 @@ describe('CourseEditor (WEB-8)', () => {
     expect(
       screen.queryByRole('button', { name: 'Save course' })
     ).not.toBeInTheDocument()
+    // WEB-45 (Admin.tsx-style regression): a refusal never also shows a
+    // skeleton claiming this is still loading.
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
   })
 
   // The immediate Enable/Disable button that used to sit beside this

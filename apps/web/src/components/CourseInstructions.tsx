@@ -80,6 +80,7 @@ import { ErrorMessage } from './ErrorMessage.js'
 import { textInputClasses } from './fieldStyles.js'
 import { FormField } from './FormField.js'
 import { useModal } from './modal/ModalProvider.js'
+import { LoadingStatus, SkeletonRow } from './Skeleton.js'
 
 /**
  * The two things `CourseEditor`'s own per-tab unsaved-changes prompt needs
@@ -367,9 +368,12 @@ export function CourseInstructions({
               History
             </h3>
             {revisions === undefined && !loadError && (
-              <p role="status" className="text-sm text-neutral-500">
-                Loading…
-              </p>
+              // WEB-45: shaped like the `<li>` revisions just below.
+              <div className="flex flex-col gap-2">
+                <SkeletonRow />
+                <SkeletonRow />
+                <LoadingStatus />
+              </div>
             )}
             {revisions && revisions.length === 0 && (
               <p className="text-sm text-neutral-500">

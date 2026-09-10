@@ -28,6 +28,7 @@ import { ApiError, listProjects } from '../api/client.js'
 import type { Course, Project } from '../api/types.js'
 import type { ProjectsRoute, Route } from '../routing/route.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { LoadingStatus, Skeleton } from '../components/Skeleton.js'
 import { CourseEditor } from './CourseEditor.js'
 import { Courses } from './Courses.js'
 import { NotFound } from './NotFound.js'
@@ -133,10 +134,15 @@ export function ProjectsPanel({
   }
 
   if (resolution.status === 'loading') {
+    // WEB-45: this is resolving which project the route names, not any one
+    // page's own content — a simple skeleton, not a replica of whichever
+    // screen (`Courses`/`CourseEditor`) turns out to be next.
     return (
-      <p role="status" className="text-sm text-neutral-500">
-        Loading…
-      </p>
+      <div className="flex flex-col gap-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+        <LoadingStatus />
+      </div>
     )
   }
 

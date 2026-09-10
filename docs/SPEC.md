@@ -2630,6 +2630,22 @@ that address, unchanged. WEB-32's own no-leak guarantee is untouched: an address
 navigates to or types, naming an organization they cannot reach, still shows the not-found screen —
 this only changes what a sign-in delivers, never what typing an address does.
 
+#### WEB-45 Skeleton loaders for the panel's dynamic content
+
+Every place the panel waits on an async read showed the same plain `Loading…` text. A skeleton
+that pulses in the loaded content's own rough shape — a card-per-row list, a form's fields, or a
+whole-screen gate before anything about the destination is known — reads better than a line of
+grey text, and is the conventional way to do this: Tailwind's own `animate-pulse` utility, already
+in this app's one styling system (WEB-11), needs no new dependency.
+
+A purely visual skeleton says nothing to a screen reader, which the `role="status"` paragraph it
+replaces did — so every skeleton pairs its decorative shapes (`aria-hidden="true"`) with a
+visually-hidden `role="status"` element still announcing the same "Loading…" text. A screen whose
+own error guard already refused to show the old placeholder alongside a refusal (a past bug on the
+admin console) keeps refusing to show a skeleton there either — a skeleton is never an error state
+wearing a different shape. `prefers-reduced-motion: reduce` suppresses the pulse everywhere it
+appears, once, in the stylesheet's own global rules.
+
 ### 35. Course Portability
 
 #### PORT-1 A course exports to a single portable file

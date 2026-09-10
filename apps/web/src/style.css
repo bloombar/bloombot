@@ -115,3 +115,19 @@
     cursor: pointer;
   }
 }
+
+/*
+ * WEB-45: `prefers-reduced-motion: reduce` suppresses every skeleton's
+ * pulse, once, here — rather than a `motion-reduce:animate-none` repeated
+ * at each of `components/Skeleton.tsx`'s own call sites. `@layer utilities`
+ * keeps this alongside Tailwind's own utility classes in the cascade, so it
+ * reliably wins over the `animate-pulse` utility it is overriding rather
+ * than depending on source order against a class Tailwind itself generates.
+ */
+@layer utilities {
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pulse {
+      animation: none;
+    }
+  }
+}

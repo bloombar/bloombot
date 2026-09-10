@@ -67,6 +67,7 @@ import type {
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { useModal } from '../components/modal/ModalProvider.js'
+import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { DeleteIcon, FailureIcon, SuccessIcon } from '../icons.js'
 import type { AdminRoute, Route } from '../routing/route.js'
 import { NotFound } from './NotFound.js'
@@ -287,9 +288,15 @@ function OrganizationsList({
     <>
       {data === undefined ? (
         failed ? null : (
-          <p role="status" className="text-sm text-neutral-500">
-            Loading…
-          </p>
+          // WEB-45: shaped like the `<li>` organizations just below.
+          // `failed` above is what keeps this from reappearing under a
+          // refusal `Admin`'s own `ErrorMessage` already shows (`failed`'s
+          // own doc comment on the past bug this guards against).
+          <div className="flex flex-col gap-3">
+            <SkeletonRow />
+            <SkeletonRow />
+            <LoadingStatus />
+          </div>
         )
       ) : data.organizations.length === 0 ? (
         <p className="text-sm text-neutral-500">No organizations yet.</p>
@@ -364,10 +371,12 @@ function OrganizationDetail({
 }) {
   if (data === undefined) {
     if (failed) return null
+    // WEB-45: shaped like the card just below, once `organization` resolves.
     return (
-      <p role="status" className="text-sm text-neutral-500">
-        Loading…
-      </p>
+      <div className="flex flex-col gap-3">
+        <SkeletonRow />
+        <LoadingStatus />
+      </div>
     )
   }
 
@@ -438,9 +447,15 @@ function DeletionsView({
       </h2>
       {deletions === undefined ? (
         failed ? null : (
-          <p role="status" className="text-sm text-neutral-500">
-            Loading…
-          </p>
+          // WEB-45: shaped like the `<li>` deletions just below. `failed`
+          // above is the same guard `OrganizationsList`'s own doc comment
+          // explains — the refusal is already on screen, this must not
+          // also claim to still be loading.
+          <div className="flex flex-col gap-2">
+            <SkeletonRow />
+            <SkeletonRow />
+            <LoadingStatus />
+          </div>
         )
       ) : deletions.length === 0 ? (
         <p className="text-sm text-neutral-500">No deletions yet.</p>

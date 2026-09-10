@@ -147,6 +147,7 @@ import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
+import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import {
   DownloadIcon,
   FailureIcon,
@@ -876,9 +877,13 @@ export function Transcripts({
           )}
 
           {entries === undefined ? (
-            <p role="status" className="text-sm text-neutral-500">
-              Loading…
-            </p>
+            // WEB-45: shaped like the `<li>` entries just below.
+            <div className="flex flex-col gap-2">
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+              <LoadingStatus />
+            </div>
           ) : entries.length === 0 ? (
             <p className="text-sm text-neutral-500">
               No messages match these filters.

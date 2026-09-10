@@ -28,6 +28,7 @@ import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseRows } from '../components/CourseRows.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { AddIcon } from '../icons.js'
 
 export interface CoursesScreenProps {
@@ -110,9 +111,14 @@ export function Courses({
       {error && <ErrorMessage error={error} />}
 
       {courses === undefined ? (
-        <p role="status" className="text-sm text-neutral-500">
-          Loading…
-        </p>
+        // WEB-45: shaped like the cards `CourseRows` renders once `courses`
+        // resolves.
+        <div className="flex flex-col gap-3">
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+          <LoadingStatus />
+        </div>
       ) : courses.length === 0 ? (
         <p className="text-sm text-neutral-500">
           No courses in this project yet.

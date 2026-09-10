@@ -54,6 +54,7 @@ import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { checkboxClasses } from '../components/fieldStyles.js'
+import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import {
   AddIcon,
   ArchiveIcon,
@@ -470,9 +471,14 @@ export function Projects({
       {error && <ErrorMessage error={error} />}
 
       {projects === undefined ? (
-        <p role="status" className="text-sm text-neutral-500">
-          Loading…
-        </p>
+        // WEB-45: shaped like the cards this becomes once `projects`
+        // resolves — the `<ul>` of project rows just below.
+        <div className="flex flex-col gap-3">
+          <SkeletonRow />
+          <SkeletonRow />
+          <SkeletonRow />
+          <LoadingStatus />
+        </div>
       ) : projects.length === 0 ? (
         <p className="text-sm text-neutral-500">No projects yet.</p>
       ) : (
@@ -560,9 +566,13 @@ export function Projects({
                 <div className="border-l border-neutral-200 pl-4 sm:pl-6">
                   {courseState === undefined ||
                   courseState.status === 'loading' ? (
-                    <p role="status" className="text-sm text-neutral-500">
-                      Loading…
-                    </p>
+                    // WEB-45: unbordered — this list has no card of its own
+                    // (the `border-l` above already draws the nesting), so
+                    // its skeleton row does not draw one either.
+                    <div className="flex flex-col gap-2">
+                      <SkeletonRow bordered={false} />
+                      <LoadingStatus />
+                    </div>
                   ) : courseState.status === 'error' ? (
                     <ErrorMessage error={courseState.error} />
                   ) : courseState.courses.length === 0 ? (

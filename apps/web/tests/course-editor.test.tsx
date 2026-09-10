@@ -127,6 +127,24 @@ afterEach(() => {
   vi.resetAllMocks()
 })
 
+/**
+ * WEB-43: the single, always-present `role="status"` node beside `Save
+ * course` (review round 1, must-fix 3: one node whose *text* changes, not
+ * three that mount and unmount) — scoped to the button's own wrapper `div`
+ * rather than queried by accessible name (`role="status"` does not compute
+ * one from its own text content, unlike a `button`, so `getByRole('status',
+ * { name: … })` never matches regardless of what the status actually says),
+ * and rather than by text, since other sections on this same screen
+ * (`JoinLinks`, `CoursePeople`, …) render their own `role="status"` nodes
+ * that would otherwise collide with an unscoped query. Returns the element
+ * itself — assert against it with `toHaveTextContent`, not `findByText`,
+ * since it exists (with empty text) even in the idle state.
+ */
+function saveCourseStatus(): HTMLElement {
+  const button = screen.getByRole('button', { name: 'Save course' })
+  return within(button.parentElement as HTMLElement).getByRole('status')
+}
+
 describe('CourseEditor (WEB-8)', () => {
   it("a new course shows the routing-relevant fields prominently, and starts disabled (D-23's own default)", () => {
     renderWithModal(
@@ -718,6 +736,10 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
       'aria-selected',
       'true'
     )
+    // WEB-43: an edit is what makes the button clickable at all.
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
 
@@ -732,6 +754,421 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
     expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
       'This role no longer exists on the bound Discord server.'
     )
+  })
+})
+
+/**
+ * WEB-43: `Save course` reflects whether there is anything to save —
+ * disabled on an unmodified form, enabled the moment either half of the
+ * shared `isDirty` goes dirty, and accompanied by a `Saving…`/`Saved`
+ * status beside it rather than a relabelled button. Every test here fails
+ * without the change: before it, the button was only ever gated on
+ * `saving`/`switchSaving`, live on a form nobody had touched.
+ *
+ * Review round 1: the "shows Saved" case below is split into an
+ * appears-case (a long `savedClearAfterMs`, so the assertion cannot lose a
+ * race against the clearing timer) and a clears-case (a short one, which
+ * only has to observe the eventual return to the idle state — see that
+ * test's own comment for why it does not also assert the appearance).
+ */
+describe('CourseEditor Save button reflects dirtiness (WEB-43)', () => {
+  it('is disabled on first render of an unmodified, already-loaded form', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+  })
+
+  it('editing a field on the form enables it', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+  })
+
+  // The cross-tab case the shared `isDirty` exists for (`formDirty ||
+  // instructionsDirty`, `pages/CourseEditor.tsx`) — and the easiest to
+  // break, since the form's own fields never change at all here.
+  it('an edit on the Instructions tab, via the dirty bridge, also enables it', async () => {
+    getCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+  })
+
+  it('shows Saving… beside the button while a save is in flight, and the button keeps its own label', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    let releaseSave: (course: Course) => void = () => {}
+    saveCourse.mockReturnValue(
+      new Promise<Course>((resolve) => {
+        releaseSave = resolve
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saving…'))
+    // The button itself never says "Saving…" any more — only the status
+    // beside it does.
+    expect(
+      screen.queryByRole('button', { name: 'Saving…' })
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+
+    releaseSave({ ...COURSE, title: 'Web Design II' })
+    await waitFor(() =>
+      expect(saveCourseStatus().textContent).not.toBe('Saving…')
+    )
+  })
+
+  it('shows Saving… beside the button for a tab-switch save too', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    let releaseSave: (course: Course) => void = () => {}
+    saveCourse.mockReturnValue(
+      new Promise<Course>((resolve) => {
+        releaseSave = resolve
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="general"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saving…'))
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+
+    releaseSave({ ...COURSE, title: 'Web Design II' })
+    await waitFor(() =>
+      expect(saveCourseStatus().textContent).not.toBe('Saving…')
+    )
+  })
+
+  it('shows Saved and disables the button again after a successful save', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, title: 'Web Design II' })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+        // Review round 1, must-fix 1: deliberately long — this case is
+        // only about whether `Saved` appears at all, and a short timer
+        // here raced the clearing timer against the assertion below
+        // (`findByText`/`waitFor` polling is not instantaneous), failing
+        // this file under load without any real regression. The clearing
+        // half of the behaviour has its own case, below, with its own
+        // short timer.
+        savedClearAfterMs={60_000}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saved'))
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+  })
+
+  it('clears Saved once the timer elapses', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, title: 'Web Design II' })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+        // Review round 1, must-fix 1: short, and deliberately not also
+        // asserted as having shown "Saved" first (the case above already
+        // covers that) — asserting both in one test, with one short timer,
+        // is exactly the race that made the original version of this test
+        // flaky under load. This only has to observe the eventual return
+        // to idle, which a mutation that stops the timer from firing at
+        // all (leaving "Saved" up forever) still catches.
+        savedClearAfterMs={20}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe(''))
+  })
+
+  it('clears Saved immediately if the form is edited again before the timer elapses', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue({ ...COURSE, title: 'Web Design II' })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+        // A long timer — long enough that reaching the assertion below
+        // before it would fire is not a race, so this failing would mean
+        // the immediate-clear path, not the timer, cleared it.
+        savedClearAfterMs={60_000}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saved'))
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design III' },
+    })
+
+    expect(saveCourseStatus().textContent).toBe('')
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+  })
+
+  it('never shows Saved after a failed save', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          message:
+            'Category name "GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(saveCourseStatus().textContent).not.toBe('Saved')
+  })
+
+  // The half-saved path (`halfSaved`, `pages/CourseEditor.tsx`) already has
+  // its own message; a "Saved" beside the button at the same time would
+  // claim a form half that was actually refused.
+  it('never shows Saved on the half-saved path, which keeps its own message', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourseInstructions.mockResolvedValue({ saved: true })
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: { message: 'Category name "GLOBAL" is already used.' },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'gpt-4o-mini' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(
+      await screen.findByText(/instructions were saved before this was refused/)
+    ).toBeInTheDocument()
+    expect(saveCourseStatus().textContent).not.toBe('Saved')
+  })
+
+  // Review round 1, must-fix 2: a click on `Save course` while only the
+  // *Instructions* half is dirty still runs `handleSave` (it always saves
+  // the form, unconditionally) and that save genuinely succeeds — but the
+  // Instructions edit itself is untouched by it, so `isDirty` is still
+  // true afterward (`instructionsDirty` alone), and the button is still
+  // enabled. `Saved` here would be exactly the lie the brief warned
+  // against: a confirmation beside a form that still has unsaved work.
+  // Fails without the fix: `justSaved` alone (no `!isDirty`) goes true on
+  // this same successful save.
+  it('does not show Saved when an Instructions edit is still unsaved after this save', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    // Enabled by the dirty bridge alone — no form field was touched.
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+
+    // The form half saved cleanly, but the Instructions half — which this
+    // click never sent — is still unsaved, and the button is still
+    // enabled to prove it.
+    expect(saveCourseStatus().textContent).not.toBe('Saved')
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
+  })
+
+  // Not asked for in the brief, and deliberately left as-is: a tab-switch
+  // save where *only* the Instructions half is dirty never calls
+  // `handleSave` at all (`saveDirtyWork`'s own `if (formDirty)` guard), so
+  // it shows `Saving…` (`switchSaving` covers it) but never `Saved` —
+  // there is no "the form saved" to confirm, since the form never sent
+  // anything. Recorded here as the documented, chosen behaviour rather
+  // than an oversight, so a future change to it is deliberate.
+  it('a tab-switch save where only Instructions is dirty shows no Saved at all', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourseInstructions.mockResolvedValue({ saved: true })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="ai"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByLabelText('Instructions')
+
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Cite the syllabus.' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    await screen.findByRole('dialog', { name: 'Save your changes?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalledTimes(1))
+    expect(saveCourse).not.toHaveBeenCalled()
+    expect(saveCourseStatus().textContent).not.toBe('Saved')
   })
 })
 
@@ -949,7 +1386,10 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
       target: { value: 'Web Design II' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
-    await screen.findByRole('button', { name: 'Saving…' })
+    // WEB-43: the label stays `Save course` in every state now — `Saving…`
+    // moved beside the button, as its own `role="status"`.
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saving…'))
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('tab', { name: 'AI' }))
     // No prompt, no navigation, and above all no second request.
@@ -958,9 +1398,15 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
     expect(onNavigateTab).not.toHaveBeenCalled()
 
     releaseSave({ ...COURSE, title: 'Web Design II' })
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
-    )
+    // WEB-43 (review round 1, must-fix 4): waiting on `toBeDisabled()`
+    // alone is satisfied the instant this synchronous check runs — the
+    // button is already disabled because `saving` is still true, so this
+    // never actually waits for the save to settle. `Saved` only appears
+    // once `saving` has cleared *and* the resolved save left the form
+    // clean, so waiting for it is what proves the promise above actually
+    // resolved and was applied, not merely disproved.
+    await waitFor(() => expect(saveCourseStatus().textContent).toBe('Saved'))
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
     expect(saveCourse).toHaveBeenCalledTimes(1)
   })
 
@@ -997,17 +1443,38 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(saveCourseInstructions).toHaveBeenCalled())
-    // Two "Saving…" buttons at this moment — the instructions section's
-    // own, and the form's, which is the one this case is about; before the
-    // fix the second still read "Save course" and was clickable.
-    const savingButtons = screen.getAllByRole('button', { name: 'Saving…' })
-    expect(savingButtons).toHaveLength(2)
-    for (const button of savingButtons) expect(button).toBeDisabled()
+    // WEB-43: the form's own button no longer relabels itself — it stays
+    // `Save course`, disabled, with its own `Saving…` status beside it. One
+    // "Saving…" *button* remains: the instructions section's own, which
+    // this component does not touch.
+    expect(screen.getAllByRole('button', { name: 'Saving…' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+    expect(saveCourseStatus().textContent).toBe('Saving…')
 
     releaseInstructions({ saved: true })
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save course' })).toBeEnabled()
-    )
+    // WEB-43 (review round 1, must-fix 4): `toBeDisabled()` alone is
+    // satisfied by the very next synchronous check — the button is
+    // already disabled because `switchSaving` has not cleared yet, so a
+    // bare `waitFor` here never actually waits for the release above to be
+    // applied. Only the instructions half was ever dirty — the form itself
+    // was clean the whole time, so `handleSave` never ran and there is
+    // still nothing for `Save course` to save.
+    //
+    // Both assertions belong in the *same* `waitFor` callback, not two
+    // separate ones run back to back: `switchSaving` clearing and
+    // `instructionsDirty` clearing are two different pieces of state,
+    // set from two different promise continuations (this component's own
+    // `finally` versus `CourseInstructions`'s own save callback), and
+    // nothing guarantees they commit in the same React render. Checking
+    // the status text and the button disabled state as two sequential
+    // `waitFor`s let the first succeed on a render where the text has
+    // already cleared but `isDirty` has not yet, which read as flaky.
+    // One `waitFor` that requires both at once only resolves once React
+    // has actually settled into the final state.
+    await waitFor(() => {
+      expect(saveCourseStatus().textContent).toBe('')
+      expect(screen.getByRole('button', { name: 'Save course' })).toBeDisabled()
+    })
   })
 
   // Round 2, finding 4: the half-commit notice must not outlive the
@@ -1292,6 +1759,12 @@ describe('CourseEditor Discord server selector (TEN-9)', () => {
     )
     await screen.findByDisplayValue('Web Design')
 
+    // WEB-43: the button is disabled on an unmodified form now — an edit
+    // (irrelevant to what this case actually asserts) is what makes it
+    // clickable at all.
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
 
     await waitFor(() => expect(saveCourse).toHaveBeenCalled())
@@ -1408,7 +1881,11 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
 
     // The deprecation must not blank an inherited value on the next
     // unrelated save — a course answered through a hand-typed store keeps
-    // being answered through it.
+    // being answered through it. WEB-43: an edit is what makes the button
+    // clickable at all, on an otherwise-unmodified form.
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
     fireEvent.click(screen.getByRole('button', { name: /Save course/ }))
     await waitFor(() => expect(saveCourse).toHaveBeenCalled())
     // Never sent, rather than sent back: `courses.save`'s own "omitted
@@ -1489,6 +1966,10 @@ describe('CourseEditor stored-prompt notice (MDL-8)', () => {
       />
     )
     await screen.findByDisplayValue('Web Design')
+    // WEB-43: an edit is what makes the button clickable at all.
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
 
     await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))

@@ -3538,6 +3538,23 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-43
+  title: '"Save course" reflects whether there is anything to save'
+  full: "The course editor's Save course button (WEB-8) is enabled whenever there
+    is unsaved work — either half of the shared isDirty (WEB-16/WEB-19: the form
+    itself, or an edit on the Instructions tab) — and disabled otherwise,
+    including immediately after a save lands and the form once again agrees with
+    the server. Progress and confirmation are shown beside the button, not
+    inside its label: Save course is what the button says in every state, and a
+    Saving… status appears next to it while a save (the button's own, or the tab
+    prompt's own \"Save changes,\" which is a save too) is in flight. Once a
+    save succeeds, Saved appears beside the button and then clears itself, on a
+    short timer or immediately if…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
   full: "A per-student channel is named after the local part of the student's

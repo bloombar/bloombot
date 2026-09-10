@@ -858,6 +858,16 @@ order it does it in. **The rename does not roll back.** If that same run's healt
 fails and it rolls the checkout back, the pm2 names stay renamed — a rollback undoes code, not
 a name migration.
 
+### Pruning orphaned OpenAI files from CI, dry run by default (OPS-17)
+
+`scripts/prune-orphan-openai-files.mjs` cleans up the duplicate OpenAI files FILE-8's retry bug
+created, but it needs the production database and `OPENAI_API_KEY` — both only on the droplet.
+Dispatch `.github/workflows/droplet-ops.yml` from Actions → Droplet operations → Run workflow;
+it SSHes in with the same channel the `deploy` job uses and runs the pruner from the existing
+checkout at `DEPLOY_PATH`. **It is a dry run unless `apply` is checked** — read the run's own
+plan output (which files it found, and why each is or is not deletable) before ever checking
+that box, since setting it deletes files from the live OpenAI account permanently.
+
 ### What this deployment actually uses
 
 Recorded because every one of these was got wrong once, and the failures were not

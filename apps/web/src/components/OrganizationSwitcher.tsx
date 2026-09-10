@@ -30,18 +30,31 @@
  * organization's name for the multi-organization case. The `role ?? 'connected'`
  * labelling (this file's own module comment, LINK-10) is unchanged either
  * way.
+ *
+ * WEB-41 — the single-organization case's plain-text name is now also a
+ * link, to that organization's main page (`{ kind: 'projects',
+ * organizationId }`), via the shared `AppLink`. The multi-organization
+ * `<select>` is untouched: it already navigates the moment a different
+ * option is chosen (`onChange`), and a link inside an `<option>` is not a
+ * thing HTML has. Same classes as before either way (this file's own
+ * "no design change" — WEB-41's brief states this explicitly for the
+ * header).
  */
 
 import type {
   ConnectedOrganizationSummary,
   MembershipSummary,
 } from '../api/types.js'
+import { routeForTab, type Route } from '../routing/route.js'
+import { AppLink } from './AppLink.js'
 
 export interface OrganizationSwitcherProps {
   memberships: MembershipSummary[]
   connectedOrganizations: ConnectedOrganizationSummary[]
   activeOrganizationId: string
   onChange: (organizationId: string) => void
+  /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, already wrapped in `pages/Shell.tsx`'s own `guardedNavigate` (WEB-16) before it reaches here — the same guarding `changeActiveOrganization`'s own call to this component's `onChange` already gets, so a dirty form elsewhere in the tree gets the same say before this link is honoured that it gets before every other navigation this shell starts. Only the single-organization plain-text case (below) uses it. */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 /** One organization this switcher can offer — a membership's own role, or `undefined` for a connected-only relationship (this file's own module comment). */
@@ -56,6 +69,7 @@ export function OrganizationSwitcher({
   connectedOrganizations,
   activeOrganizationId,
   onChange,
+  navigate,
 }: OrganizationSwitcherProps) {
   const options: Option[] = [
     ...memberships.map((membership) => ({
@@ -78,12 +92,45 @@ export function OrganizationSwitcher({
   // (this file's own module comment) — just the name, and the role/
   // "connected" label LINK-10 already required.
   if (options.length <= 1) {
+    // WEB-41 — a member reaches this organization's Projects tab; a
+    // connected-only person (this option's own `role === undefined`,
+    // exactly how "connected" above is already decided) is forced to Chat
+    // by `Shell.tsx`'s own `effectiveTab` the moment they land anywhere
+    // else in that organization, and it replaces the address to match
+    // (`Shell.tsx`'s own module comment on that rule) — a link to Projects
+    // would hover- and cmd-click-advertise a screen this account never
+    // actually reaches, and a plain click would flash it before the
+    // replace corrected it. `routeForTab` is the same mapping
+    // `Shell.tsx#onHome` already uses one line above `isMember`'s own
+    // definition there.
+    const activeRoute = active
+      ? routeForTab(
+          active.role !== undefined ? 'projects' : 'chat',
+          active.organizationId
+        )
+      : undefined
     return (
       <p
         className="text-sm font-medium text-neutral-900"
         data-testid="organization-switcher"
       >
-        {active?.organizationName ?? activeOrganizationId}
+        {/* WEB-41 — a link to this organization's main page. No classes of
+            its own: Tailwind's Preflight already resets an anchor's color
+            and text-decoration to `inherit`, and font-size/weight are
+            inherited by any element regardless, so this reads exactly as
+            the plain text it replaces (the brief's own "same font, size,
+            weight, color, spacing" — no underline, no brand color to
+            resist adding here). The role label stays outside the link
+            (`Account.tsx`'s own rows now match this, WEB-41 rework) — one
+            clickable name, one non-clickable label, not a link whose
+            accessible name announces the account's own relationship. */}
+        {active && activeRoute ? (
+          <AppLink to={activeRoute} navigate={navigate}>
+            {active.organizationName}
+          </AppLink>
+        ) : (
+          activeOrganizationId
+        )}
         {active ? (
           <span className="font-normal text-neutral-500">
             {' '}

@@ -90,3 +90,28 @@
   outline: 2px solid var(--color-brand-600);
   outline-offset: 2px;
 }
+
+/*
+ * WEB-41: a pointer cursor on every navigation control, once, rather than
+ * `cursor-pointer` sprinkled at dozens of call sites (this file's own
+ * module comment above on why a rule-per-call-site is exactly the drift
+ * to avoid). Tailwind v4's Preflight no longer gives `button` a pointer
+ * cursor by default (an intentional change from v3 — Tailwind's own
+ * release notes), and nothing in this app had ever set one back, so every
+ * button-based nav control showed the default arrow. `[role='button']` and
+ * `summary` are included for the same reason a real `<button>` needs it —
+ * an interactive control that is not a link. `@layer base` keeps this
+ * beneath Tailwind's own utility layer, so a utility class on a specific
+ * element — `disabled:cursor-not-allowed` (`Button.tsx`) — still wins
+ * there; `:not(:disabled)`/`:not([aria-disabled='true'])` below mean this
+ * rule does not even try to compete for a disabled control in the first
+ * place, which is the safer way to keep "disabled looks disabled" than
+ * relying on layer order alone.
+ */
+@layer base {
+  button:not(:disabled),
+  summary,
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+}

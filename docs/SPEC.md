@@ -2434,6 +2434,18 @@ History is collapsed by default behind a real button carrying `aria-expanded`/`a
 (WEB-17), labelled with how many revisions there are once that count is known, expanding to the same
 list, restore control and confirmation as before.
 
+#### WEB-41 Navigation targets are real links, and a nav control shows a pointer cursor
+
+Every place the panel names a destination a person might reasonably want to open in a new tab — an
+organization's name on `/account` and in the fixed header — renders a real anchor with a real `href`
+(built the same way every other address in this app is built, never a hand-concatenated string), not a
+`<button onClick={...}>`. An ordinary click still navigates client-side, with no full-page reload; a
+modified click (cmd/ctrl, shift, alt) or a non-primary mouse button (middle-click) falls through to the
+browser untouched, so "open in a new tab" and "copy link" both work the way they do for any other link on
+the web. Every button-based navigation control in the panel shows a pointer cursor on hover, fixed once as
+a base-layer rule rather than a `cursor-pointer` utility repeated at each call site; a disabled control
+keeps its `cursor: not-allowed` treatment.
+
 #### ROST-14 Two students whose emails share a local part both get a channel
 
 A per-student channel is named after the local part of the student's email address (ROST-3), which

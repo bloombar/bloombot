@@ -3323,6 +3323,24 @@
   phase: 19
   status: Done
   review: false
+- id: WEB-44
+  title: A sign-in destination that names an unreachable organization falls back,
+    rather than showing Not found
+  full: "A reported bug: signing in landed on /o/<organizationId/projects and
+    rendered the not-found screen, for an organization id the reporter believed
+    did not exist. The actual cause is a sign-in redemption navigating to the
+    destination carried on its token before the account's own memberships and
+    connected identities are known — a stale or captured destination then names
+    an organization the account cannot reach, and WEB-32's own no-leak check
+    (correct for a genuinely mistyped address) answers with the not-found screen
+    for a delivery this app made itself. A sign-in destination naming an
+    organization the account cannot reach now resolves to the account's own
+    default organization instead — the same…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 19
+  status: Backlog
+  review: false
 - id: FILE-6
   title: A course's knowledge also includes websites an instructor names
   full: "Some of a course's material never becomes a file: a department's syllabus

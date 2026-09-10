@@ -33,7 +33,12 @@
  *    the one place AUTH-4 is actually enforced.
  *  - a `ShellRoute` (`routing/route.ts`) naming an organization or the
  *    account screen — the signed-in shell (`pages/Shell.tsx`), once this
- *    account's own accessibility to it is checked (below).
+ *    account's own accessibility to it is checked (below). WEB-44: a
+ *    `ShellRoute` carried on a sign-in redemption (`returnToShell`, below)
+ *    is checked before it is ever rendered, not after — an unreachable
+ *    destination there resolves to the account's own default organization
+ *    instead, since the reason is a stale delivery, not a person's own
+ *    typed address.
  *  - `route.kind === 'home'` — resolved, once the session is known, to the
  *    account's own canonical landing address and replaced (WEB-34) rather
  *    than rendered directly.
@@ -78,6 +83,7 @@ import {
   isShellRoute,
   parseRoute,
   type Route,
+  type ShellRoute,
 } from './routing/route.js'
 import { useRoute } from './routing/useRoute.js'
 
@@ -136,6 +142,30 @@ type SessionState =
  * cannot name `''`, so this slice's own judgement call (recorded in
  * `docs/DECISIONS.md`) is to fall back one step further for that one case.
  */
+// WEB-44 — the one reachability rule both call sites below need: whether a
+// signed-in account has *any* relationship (a membership or a connected
+// identity) to the organization a `ShellRoute` names, `'account'` always
+// included since it names no organization to check. Shared rather than
+// duplicated so the sign-in destination check (`App`'s own pending-sign-in
+// effect, below) and the WEB-32 no-leak check (`isShellRoute` branch,
+// below) agree on exactly the same definition of "cannot reach" — the
+// no-leak guarantee this app makes for `NotFound` is only as good as the
+// two checks staying identical.
+function isReachableShellRoute(
+  route: ShellRoute,
+  account: AccountSummary
+): boolean {
+  if (route.kind === 'account') return true
+  return (
+    account.memberships.some(
+      (membership) => membership.organizationId === route.organizationId
+    ) ||
+    account.connectedOrganizations.some(
+      (connection) => connection.organizationId === route.organizationId
+    )
+  )
+}
+
 function resolveHomeRoute(
   account: AccountSummary,
   joinedCourse: { organizationId: string; courseId: string } | undefined,
@@ -198,6 +228,16 @@ export function App() {
     | { organizationId: string; courseId: string; alreadyEnrolled: boolean }
     | undefined
   >(undefined)
+  // WEB-44 — a same-origin sign-in destination (`returnToShell`, below)
+  // that names a `ShellRoute`, held here rather than navigated to
+  // immediately: at the moment a sign-in redemption hands this function a
+  // destination, this app does not yet know the account's own memberships
+  // or connections (`refreshSession()` has not resolved), so there is
+  // nothing yet to check reachability against. The effect just below is
+  // what actually resolves it, once `session` has caught up.
+  const [pendingSignInDestination, setPendingSignInDestination] = useState<
+    Route | undefined
+  >(undefined)
 
   // Returns the underlying promise (WEB-25's own need, below) — every
   // existing caller (`onSignedIn` handed straight to a child as a prop,
@@ -244,6 +284,31 @@ export function App() {
     })
   }, [session, route.kind, joinedCourse, justInstalled, navigate])
 
+  // WEB-44 — resolves a pending sign-in destination once the account's own
+  // memberships and connections are actually known, replacing the address
+  // rather than pushing it: a stale or captured destination (a sign-in
+  // link made against a database that has since reset, or issued to a
+  // different account) named an organization this account cannot reach,
+  // and reaching it unresolved rendered `NotFound` — correct for a
+  // genuinely mistyped address (WEB-32's no-leak guarantee, unchanged
+  // below), wrong for one sign-in itself delivered. `isReachableShellRoute`
+  // is the identical check the WEB-32 branch below makes, so this and that
+  // branch never disagree about what "cannot reach" means. A destination
+  // naming something other than a `ShellRoute` (an admin screen, or a
+  // signed-out-reachable address like `/connect/:id`) is not this bug's
+  // shape and is taken exactly as given.
+  useEffect(() => {
+    if (session.kind !== 'signed-in' || !pendingSignInDestination) return
+    const destination = pendingSignInDestination
+    setPendingSignInDestination(undefined)
+    const target =
+      isShellRoute(destination) &&
+      !isReachableShellRoute(destination, session.account)
+        ? resolveHomeRoute(session.account, joinedCourse, justInstalled)
+        : destination
+    navigate(target, { replace: true })
+  }, [session, pendingSignInDestination, joinedCourse, justInstalled, navigate])
+
   // AUTH-6: a sign-in redemption (an emailed link, `RedeemLink`'s own
   // `onRedeemed`) used to always return to the shell unless a visitor who
   // arrived signed out at `/connect/:organizationId`, `/join/:secret` or
@@ -269,10 +334,19 @@ export function App() {
   // unchanged) — `parseRoute` is what turns it into a `Route` this app's own
   // router can navigate to, rather than a second, parallel `window.history`
   // call living here.
+  //
+  // WEB-44: a same-origin destination is held as `pendingSignInDestination`
+  // rather than navigated to immediately — the effect above is what
+  // actually takes it, once `refreshSession()` (started here, not awaited)
+  // has resolved and this account's memberships/connections are known to
+  // check it against. Navigating first and validating after was the bug:
+  // a `ShellRoute` this account cannot reach — a stale destination, most
+  // often — rendered the WEB-32 no-leak `NotFound` screen meant for a typed
+  // bad address, not a delivery this app itself made.
   const returnToShell = useCallback(
     (destination?: string) => {
       if (destination && isSameOriginPath(destination)) {
-        navigate(parseRoute(destination), { replace: true })
+        setPendingSignInDestination(parseRoute(destination))
         refreshSession()
         return
       }
@@ -456,17 +530,13 @@ export function App() {
       // relationship to at all (neither a membership nor a connected
       // identity) is exactly the "anything else... names something this
       // account cannot see" case the brief calls out: a not-found screen,
-      // never a leak of whether the organization even exists.
-      // `'account'` names no organization to check.
-      if (
-        route.kind !== 'account' &&
-        !session.account.memberships.some(
-          (membership) => membership.organizationId === route.organizationId
-        ) &&
-        !session.account.connectedOrganizations.some(
-          (connection) => connection.organizationId === route.organizationId
-        )
-      ) {
+      // never a leak of whether the organization even exists. This is for
+      // an address the person actually navigated to or typed — WEB-44's
+      // own pending-sign-in effect (above) is what keeps a stale sign-in
+      // destination from ever reaching this branch unresolved, so this
+      // check's only job stays "was this address reachable", the same
+      // `isReachableShellRoute` that effect already used.
+      if (!isReachableShellRoute(route, session.account)) {
         return (
           <NotFound
             onHome={() => navigate({ kind: 'home' }, { replace: true })}

@@ -11002,3 +11002,44 @@ sourced file's own top level runs `command -v pm2 node` and `[ -f ecosystem.conf
 `fail` (`exit 1`) with no rollback if they ever failed at that earlier point — not reachable for a real,
 already-renamed target commit, but every step between the checkout update and the first reload already has
 its own rollback, and there is no reason for this one line not to sit behind all of them too.
+
+## D-99 — `apps/web`: WEB-44 — a sign-in destination is validated against the resolved session, not before it
+
+**Problem.** A reported bug: signing in landed on `/o/<organizationId>/projects` and rendered the not-found
+screen, for an organization id the reporter believed did not exist. Two mechanisms turned out to be in play.
+`App.tsx`'s WEB-32 branch rendering `NotFound` for a `ShellRoute` naming an organization the account has no
+relationship to is deliberate — it must not leak whether an organization exists, so it is correct behaviour
+for a genuinely mistyped address. The actual defect is `returnToShell`: it navigated to the destination
+carried on a sign-in token after checking only that the destination was same-origin (`isSameOriginPath`),
+never that the destination's organization was one the freshly signed-in account could actually reach. A
+stale or captured destination — the reporter's own case fits a locally reset database producing an
+organization id no longer in anyone's memberships or connections — then named an address WEB-32's own check
+correctly refuses, but for the wrong reason: the account never asked to go there, this app delivered it.
+
+**Choice: hold the destination as pending state, and resolve it only once the session is known — never
+navigate to it "optimistically" and correct afterwards.** `returnToShell` cannot check reachability itself:
+at the moment a sign-in redemption calls it, `refreshSession()` has not yet resolved, so this account's own
+memberships and connected identities are not yet in hand. The alternative — navigate immediately, as before,
+and let the WEB-32 branch redirect home instead of rendering `NotFound` when the current entry is a
+post-sign-in landing — was rejected: it would have needed that branch to know *why* it was reached (typed
+address vs. delivered destination), turning a single, simple no-leak check into one with a mode, and risking
+a genuinely mistyped URL silently redirecting home instead of saying so. Holding the parsed destination in
+`pendingSignInDestination` and resolving it in an effect gated on `session.kind === 'signed-in'` keeps the
+two concerns apart: `RedeemLink` keeps showing "Signing you in…" for the extra tick this adds, then the
+effect either takes the destination (reachable) or falls back to `resolveHomeRoute`'s own account-default
+address (unreachable) — the identical fallback `/` already uses for an account with nothing else to land on.
+
+**Choice: one shared `isReachableShellRoute`, not two copies of the same check.** The WEB-32 branch's own
+inline membership/connection check and the new pending-destination effect need to agree on exactly the same
+definition of "cannot reach" — the no-leak guarantee is only as strong as the weaker of two checks, if they
+were allowed to drift. Both now call one function; `'account'` is always reachable (it names no
+organization), and everything else is a membership or a connected identity, matching what `resolveHomeRoute`
+already treats as reachable for `/`'s own resolution.
+
+**Not touched: `NotFound` is unchanged for an address a person actually navigates to or types.** The WEB-32
+branch's job stays exactly what it was — refuse an unreachable `ShellRoute`, without saying whether the
+organization exists — for every route reached by ordinary navigation. Only `returnToShell`'s own delivery
+gets the new fallback; `pages/Connect.tsx`/`pages/JoinLink.tsx`/`pages/Invitation.tsx` remain untouched, since
+none of their own `onRedeemed` callbacks ever pass `returnToShell` a destination naming a `ShellRoute` (they
+hand it none at all, letting it fall through to the ordinary home resolution the WEB-34 rework already
+covers).

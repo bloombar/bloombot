@@ -450,6 +450,185 @@ describe('App — a redeemed destination that is not a same-origin path is refus
   )
 })
 
+// WEB-44 — a reported production bug: signing in landed on
+// `/o/<organizationId>/projects` and rendered `NotFound`, for an
+// organization id the reporter believed did not exist. The actual cause is
+// `returnToShell` navigating to a sign-in token's own carried destination
+// before this account's memberships/connections are known — a stale
+// destination (the reporter's case: a locally reset database) then named an
+// organization this account cannot reach, and WEB-32's own no-leak check
+// (correct for a typed bad address) rendered `NotFound` for it instead.
+// These pin the fix: the destination is now resolved against the session
+// once it is actually known, falling back to the account's own default
+// organization rather than showing `NotFound` for a delivery this app
+// itself made.
+describe('App — WEB-44: a sign-in destination naming an organization this account cannot reach', () => {
+  it('falls back to the account own default organization, not NotFound', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      // Stands in for the reported case exactly: an organization id absent
+      // from this account's own memberships and connections, indistinguishable
+      // to this app from one that never existed (TEN-5).
+      destination: '/o/stale-org/projects',
+    })
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+    // `resolveHomeRoute`'s own default — the account's first membership.
+    expect(window.location.pathname).toBe('/o/personal-org/projects')
+  })
+
+  it('an account with no memberships and no connections at all lands on /account, exactly as resolveHomeRoute already arranges', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/o/stale-org/projects',
+    })
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    await screen.findByRole('heading', { name: 'Account' })
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/account')
+  })
+
+  it('still lands on exactly the destination when the account can reach it — the existing behaviour, unregressed', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/o/org-2/projects',
+    })
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org Two')
+    expect(window.location.pathname).toBe('/o/org-2/projects')
+  })
+
+  // The reachable-via-connection-only case `resolveHomeRoute` already
+  // treats specially (this file's own module comment on why it falls back
+  // one step further than a membership): a destination naming Projects for
+  // an organization this account only has a connected identity for is
+  // reachable (no NotFound), but `Shell`'s own `effectiveTab` restriction —
+  // unchanged by this slice — forces it to Chat, and moves the address on
+  // to match, exactly like `resolveHomeRoute` picks Chat, not Projects, for
+  // a connected-only organization.
+  it('a destination naming an organization the account only has a connected identity for resolves to Chat, not Projects', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/o/institution-org/projects',
+    })
+    listChatCourses.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [],
+        connectedOrganizations: [
+          {
+            organizationId: 'institution-org',
+            organizationName: 'A University',
+          },
+        ],
+      },
+    })
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByText(
+        'You are not enrolled in a course here yet. Ask your instructor to add you.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('not-found-page')).not.toBeInTheDocument()
+    expect(window.location.pathname).toBe('/o/institution-org/chat')
+  })
+
+  // The WEB-32 no-leak guarantee itself, asserted at this level: an address
+  // a signed-in person *navigates to* (not one delivered by a sign-in
+  // redemption) naming an organization they cannot reach must still render
+  // `NotFound` — this fix only changes what a sign-in redemption does with
+  // an unreachable destination, not what `isShellRoute`'s own check does
+  // for anything else.
+  it('navigating directly to an unreachable organization address still renders NotFound, not a silent redirect', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'student@example.edu',
+        memberships: [
+          {
+            organizationId: 'personal-org',
+            organizationName: 'Student',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/o/stale-org/projects')
+
+    renderWithModal(<App />)
+
+    expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('organization-switcher')
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe('App — /join/:secret (ENRL-8)', () => {
   it('signed out, renders the join-link screen own sign-in prompt rather than the ordinary shell', async () => {
     fetchMe.mockResolvedValue({ account: null })

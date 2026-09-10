@@ -257,7 +257,7 @@ install was recorded and then ignored. TEN-9 closes it by having a course name t
 routes in — which is what PROJ-3 already assumed when it scoped course-name uniqueness "in
 that server".
 
-**In scope:** WEB-26, WEB-27, WEB-28, WEB-29, WEB-30, WEB-41, PROJ-6, TEN-9, WEB-42
+**In scope:** WEB-26, WEB-27, WEB-28, WEB-29, WEB-30, WEB-41, PROJ-6, TEN-9, WEB-42, WEB-44
 
 ## Phase 20 — Websites as course knowledge
 

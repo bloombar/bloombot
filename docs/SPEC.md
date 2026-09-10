@@ -2601,6 +2601,22 @@ opens the course editor, **Chat** opens a chat session for it, and its kebab off
 failed fetch renders that failure without blanking the others, and a project with no courses shows the
 same empty state its own page already uses.
 
+#### WEB-44 A sign-in destination that names an unreachable organization falls back, rather than showing Not found
+
+A reported bug: signing in landed on `/o/<organizationId>/projects` and rendered the not-found screen,
+for an organization id the reporter believed did not exist. The actual cause is a sign-in redemption
+navigating to the destination carried on its token before the account's own memberships and connected
+identities are known — a stale or captured destination then names an organization the account cannot
+reach, and WEB-32's own no-leak check (correct for a genuinely mistyped address) answers with the
+not-found screen for a delivery this app made itself.
+
+A sign-in destination naming an organization the account cannot reach now resolves to the account's own
+default organization instead — the same address `resolveHomeRoute` already picks for `/` — checked once
+the session is actually known, not before. A destination the account can reach still lands on exactly
+that address, unchanged. WEB-32's own no-leak guarantee is untouched: an address a signed-in person
+navigates to or types, naming an organization they cannot reach, still shows the not-found screen —
+this only changes what a sign-in delivers, never what typing an address does.
+
 ### 35. Course Portability
 
 #### PORT-1 A course exports to a single portable file

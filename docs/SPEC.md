@@ -2601,6 +2601,19 @@ opens the course editor, **Chat** opens a chat session for it, and its kebab off
 failed fetch renders that failure without blanking the others, and a project with no courses shows the
 same empty state its own page already uses.
 
+#### WEB-43 "Save course" reflects whether there is anything to save
+
+The course editor's **Save course** button (WEB-8) is enabled whenever there is unsaved work — either
+half of the shared `isDirty` (WEB-16/WEB-19: the form itself, or an edit on the Instructions tab) — and
+disabled otherwise, including immediately after a save lands and the form once again agrees with the
+server. Progress and confirmation are shown beside the button, not inside its label: `Save course` is
+what the button says in every state, and a `Saving…` status appears next to it while a save (the
+button's own, or the tab prompt's own "Save changes," which is a save too) is in flight. Once a save
+succeeds, `Saved` appears beside the button and then clears itself, on a short timer or immediately if
+the form is edited again first — whichever comes first, since a `Saved` message beside a form someone
+has since changed would be a lie. `Saved` never appears after a refusal, and never alongside the
+half-saved notice (WEB-38): a save that did not fully land does not also claim it did.
+
 #### WEB-44 A sign-in destination that names an unreachable organization falls back, rather than showing Not found
 
 A reported bug: signing in landed on `/o/<organizationId>/projects` and rendered the not-found screen,

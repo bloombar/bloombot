@@ -1,0 +1,153 @@
+# Droplet operations, dispatched by hand (OPS-17).
+#
+# scripts/prune-orphan-openai-files.mjs (merged) cleans up the duplicate
+# OpenAI files FILE-8's retry bug created, but it needs the production
+# database and OPENAI_API_KEY — both of which exist only on the droplet.
+# Nobody has shell access to that droplet in this workflow, so this is a
+# dispatchable way to run it there, over the same SSH channel ci.yml's
+# `deploy` job already uses (OPS-16 proved a `workflow_dispatch` input
+# driving that channel is enough).
+#
+# Deliberately its own workflow, not another input on the deploy job: this
+# runs commands as the deploy user against live data, so it exposes exactly
+# one operation and nothing else — never an input that is interpolated into
+# a remote shell command as free text.
+
+name: Droplet operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: >-
+          Actually delete the orphaned OpenAI files this run finds. Leave
+          unchecked (the default) for a dry run that only reports what it
+          would delete — read that report before ever checking this box.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  prune-orphan-openai-files:
+    name: Prune orphaned OpenAI files on the droplet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Same scoping as ci.yml's `deploy` job: DEPLOY_SSH_KEY / DEPLOY_KNOWN_HOSTS
+    # live on this environment, and any reviewer requirement it carries
+    # applies here too.
+    environment: production
+    # Same group as ci.yml's `deploy` job, so a prune can never run while a
+    # deploy is mid-flight (or vice versa).
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      # Verbatim in shape with ci.yml's own "Configure SSH" step — same
+      # secret, same variable, same pinned host key, same missing-value
+      # guards. Two conventions for the same SSH channel is one too many.
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          # A variable, not a secret: host keys are public, and leaving this
+          # unmasked keeps a fingerprint mismatch debuggable from the log.
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "::error::secret DEPLOY_SSH_KEY must be set in the production environment"
+            exit 1
+          fi
+          if [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::variable DEPLOY_KNOWN_HOSTS must be set (ssh-keygen -F <host> -f ~/.ssh/known_hosts)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # The host key is pinned, so a redirected or spoofed host fails the
+          # run instead of being trusted on first sight.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Prune orphaned OpenAI files
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          # Optional. See ci.yml's own "Deploy" step for why this has no
+          # fallback the other way.
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          # Required — the checkout on the droplet, absolute. Same
+          # "no fallback" reasoning as ci.yml's own "Deploy" step: a wrong
+          # default here would run the pruner, `.env` and all, against the
+          # wrong checkout instead of failing loudly.
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          # A `workflow_dispatch` input, never a repository variable: this is
+          # a per-run choice ("actually delete on this one run"), not a
+          # standing default. GitHub renders an unset boolean input as the
+          # string "false", which is truthy in shell, so the gate below is an
+          # exact-string compare against "true" and nothing looser.
+          APPLY_INPUT: ${{ inputs.apply }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
+            echo "::error::repository variables DEPLOY_HOST and DEPLOY_USER must be set"
+            exit 1
+          fi
+          # Required, not optional with a fallback — see ci.yml's own
+          # "Deploy" step for the incident that made DEPLOY_PATH required
+          # there. The same reasoning applies here: a missing value must fail
+          # fast, not run the pruner against whatever directory happens to be
+          # the deploy user's home.
+          if [ -z "$DEPLOY_PATH" ]; then
+            echo "::error::repository variable DEPLOY_PATH must be set to the checkout on the droplet (e.g. /home/amos/bloombot-platform)"
+            exit 1
+          fi
+
+          # Runs from the droplet's existing checkout, unlike deploy.sh,
+          # which is piped over stdin — the pruner is a Node module that
+          # reads .env relative to its own location, so it has to run in
+          # place rather than as a detached script.
+          prune_cmd="cd \"$DEPLOY_PATH\" && node scripts/prune-orphan-openai-files.mjs"
+          if [ "$APPLY_INPUT" = "true" ]; then
+            prune_cmd="$prune_cmd --apply"
+          fi
+
+          # A log a human reads later must make it obvious whether this run
+          # deleted anything, before it ever runs.
+          if [ "$APPLY_INPUT" = "true" ]; then
+            echo "Mode: APPLY — this run will delete orphaned OpenAI files it finds."
+          else
+            echo "Mode: DRY RUN — this run only reports what it would delete."
+          fi
+
+          port_args=()
+          if [ -n "$DEPLOY_PORT" ]; then
+            port_args=(-p "$DEPLOY_PORT")
+          fi
+
+          echo "Running the orphan-file pruner on $DEPLOY_USER@$DEPLOY_HOST${DEPLOY_PORT:+:$DEPLOY_PORT}"
+          ssh -i ~/.ssh/deploy_key \
+            "${port_args[@]}" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$prune_cmd"
+
+      - name: Summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          APPLY_INPUT: ${{ inputs.apply }}
+        run: |
+          {
+            echo "### Orphan-file prune \`$RESULT\`"
+            echo
+            if [ "$APPLY_INPUT" = "true" ]; then
+              echo "Mode: **apply** — orphaned files matched were deleted."
+            else
+              echo "Mode: **dry run** — nothing was deleted."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

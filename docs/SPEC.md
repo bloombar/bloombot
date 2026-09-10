@@ -1568,6 +1568,16 @@ leaves the old-named processes untouched. The rename does not roll back with the
 deploy that migrates and then fails its health check restores the previous commit, but the
 renamed pm2 processes stay renamed.
 
+#### OPS-17 The orphan-file prune runs on the droplet from CI, dry run by default
+
+`scripts/prune-orphan-openai-files.mjs` (FILE-8's own follow-up cleanup) needs the production
+database and `OPENAI_API_KEY`, both of which exist only on the droplet, and nobody has shell
+access to it in this workflow. A dedicated `workflow_dispatch` — narrower than the deploy job,
+exposing exactly one operation and no general-purpose escape hatch — runs it there over the same
+SSH channel OPS-16 already proved sufficient. It defaults to a dry run: an `apply` input, gated
+by an exact-string comparison, is what actually deletes anything, because GitHub renders an unset
+boolean input as the string `false`, which is truthy in shell if compared carelessly.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

@@ -7,9 +7,21 @@
  * no action of its own.
  *
  * `onOpenProject` hands the chosen project up to `pages/ProjectsPanel.tsx`,
- * which switches to `pages/Courses.tsx` for it — this component only ever
- * knows about projects, the same split `courses.list`'s own policy draws
- * between "list a project" and "list a project's courses."
+ * which switches to `pages/Courses.tsx` for a full, drill-in view of it.
+ *
+ * WEB-42: this screen is no longer only about projects — each one lists its
+ * own courses beneath it, indented to show the hierarchy, with the same
+ * Chat/Export/Disable-Enable controls `pages/Courses.tsx` offers, so
+ * reaching a course's tools no longer requires opening its project first.
+ * `courses.list` still takes one `projectId` at a time (no batched "every
+ * project's courses" action, and this slice does not add one), so this
+ * screen fetches each listed project's courses itself, in parallel, once
+ * the projects themselves have loaded — see `fetchCourses`/`courseStates`,
+ * below, for how an out-of-order or failed fetch for one project is kept
+ * from touching any other. The row itself — title, metadata, Chat, kebab —
+ * is `components/CourseRows.tsx`, shared with `pages/Courses.tsx` rather
+ * than reimplemented here, so Export and Disable/Enable have exactly one
+ * implementation between the two screens.
  *
  * WEB-26/WEB-27: each row's own Archive/Restore, Duplicate and Rename
  * controls live behind one `KebabMenu` (`components/KebabMenu.tsx`) rather
@@ -22,20 +34,22 @@
  * row.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   archiveProject,
   createProject,
   duplicateProject,
+  listCourses,
   listProjects,
   renameProject,
   unarchiveProject,
 } from '../api/client.js'
 import { ApiError } from '../api/client.js'
-import type { Project } from '../api/types.js'
+import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { CourseImportDialog } from '../components/CourseImportDialog.js'
+import { CourseRows } from '../components/CourseRows.js'
 import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
 import { useModal } from '../components/modal/ModalProvider.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
@@ -52,7 +66,23 @@ import {
 export interface ProjectsScreenProps {
   organizationId: string
   onOpenProject: (project: Project) => void
+  /** WEB-42 — opens a course listed beneath one of this screen's own projects, straight into the course editor. Takes the project alongside the course id: unlike `pages/Courses.tsx`, which already knows its one project, this screen lists courses from more than one at a time. */
+  onOpenCourse: (project: Project, courseId: string) => void
+  /** WEB-42/WEB-28 — the same Chat handoff `pages/Courses.tsx` already threads through, reused unchanged for a course listed here. */
+  onOpenChat: (courseId: string) => void
 }
+
+/**
+ * WEB-42 — the three shapes a project's own courses fetch can be in, one
+ * entry per listed project (`courseStates`, below) — mirrors
+ * `pages/Shell.tsx`'s own `DiscordBindingState` (TEN-8): `'loading'` must
+ * never be mistaken for "no courses," and a failed fetch says so rather
+ * than rendering an empty list that looks like the answer.
+ */
+type CourseFetchState =
+  | { status: 'loading' }
+  | { status: 'ready'; courses: CourseSummary[] }
+  | { status: 'error'; error: ApiError }
 
 /**
  * D-23's reasoning, said in one sentence a person can act on: a duplicate's
@@ -84,6 +114,8 @@ function requireName(value: string): string | undefined {
 export function Projects({
   organizationId,
   onOpenProject,
+  onOpenCourse,
+  onOpenChat,
 }: ProjectsScreenProps) {
   const [projects, setProjects] = useState<Project[] | undefined>(undefined)
   const [includeArchived, setIncludeArchived] = useState(false)
@@ -130,6 +162,129 @@ export function Projects({
     setProjects(undefined)
     refresh()
   }, [refresh])
+
+  // WEB-42: each listed project's own `courses.list`, kept independently —
+  // `courseStates` is keyed by project id, rather than one array/error pair
+  // for the whole page, so one project's failed fetch renders as *that*
+  // project's own failure while the rest of the page (including every
+  // other project's courses) renders normally. `courseFetchIds` is the same
+  // "tag each request, only the most recent tag may write state" device
+  // `pages/Shell.tsx#discordFetchId` uses for its own Discord fetch — kept
+  // per project id here rather than a single ref, since a project's own
+  // fetch can be reissued on its own (after that project's course changes,
+  // below) independently of every other project's — review finding: this
+  // guard is exercised by `tests/projects.test.tsx`'s own "two fetches for
+  // the same project" case, which fails if the id comparison below is
+  // removed.
+  const [courseStates, setCourseStates] = useState<
+    Record<string, CourseFetchState>
+  >({})
+  const courseFetchIds = useRef<Record<string, number>>({})
+  const fetchCourses = useCallback(
+    (project: Project) => {
+      const id = (courseFetchIds.current[project.id] ?? 0) + 1
+      courseFetchIds.current[project.id] = id
+      setCourseStates((previous) => {
+        // Only start as `'loading'` (hiding whatever this project's own
+        // row already shows) when there is nothing to show yet — a
+        // refetch after a course action (`onChanged`, below) or a project
+        // mutation keeps rendering the previous list/error until the new
+        // one resolves, the same way `Courses.tsx#refresh` already never
+        // blanks its own list except on its very first fetch.
+        if (previous[project.id] !== undefined) return previous
+        return { ...previous, [project.id]: { status: 'loading' } }
+      })
+      listCourses(organizationId, project.id).then(
+        (result) => {
+          if (courseFetchIds.current[project.id] !== id) return
+          setCourseStates((previous) => ({
+            ...previous,
+            [project.id]: { status: 'ready', courses: result },
+          }))
+        },
+        (caught: unknown) => {
+          if (courseFetchIds.current[project.id] !== id) return
+          if (caught instanceof ApiError) {
+            setCourseStates((previous) => ({
+              ...previous,
+              [project.id]: { status: 'error', error: caught },
+            }))
+          } else throw caught
+        }
+      )
+    },
+    [organizationId]
+  )
+
+  // Review finding: this used to key off `projects` itself, so *any*
+  // project-level mutation — rename, archive, create, duplicate, even
+  // ticking "Show archived" — produced a new array reference and reset
+  // every listed project's own `courseStates` to `'loading'`, discarding
+  // correct lists and re-announcing N `role="status"` regions for a
+  // mutation that touched at most one project's own row. `projectIds` is a
+  // primitive derived from the *set* of ids alone, compared by value
+  // (`Object.is` on a string) rather than by the array's own identity, so a
+  // rename (same ids) leaves it unchanged and the effect below does not
+  // refire at all.
+  const projectIds = useMemo(
+    () => (projects ?? []).map((project) => project.id).join(','),
+    [projects]
+  )
+
+  // Fires once the projects themselves have loaded (mount, an
+  // includeArchived toggle, or any other `refresh()` that actually changes
+  // *which* projects are listed) and issues every newly-listed project's
+  // own `courses.list` in parallel — N requests for N projects, there
+  // being no batched "every project's courses" action to issue instead
+  // (see this file's own module comment). Only a project this effect has
+  // not already fetched (`courseFetchIds.current[project.id] ===
+  // undefined`) is fetched here — a project already fetched keeps its own
+  // state exactly as `fetchCourses`/`onChanged` below left it, rather than
+  // being refetched merely because some *other* project's id joined or
+  // left the list. A project that leaves the list (archived out of view,
+  // deleted) has its own `courseStates`/`courseFetchIds` entry pruned
+  // below too, rather than growing forever.
+  useEffect(() => {
+    if (projects === undefined) return
+    const currentIds = new Set(projects.map((project) => project.id))
+    for (const project of projects) {
+      if (courseFetchIds.current[project.id] === undefined) {
+        fetchCourses(project)
+      }
+    }
+    for (const id of Object.keys(courseFetchIds.current)) {
+      if (!currentIds.has(id)) delete courseFetchIds.current[id]
+    }
+    setCourseStates((previous) => {
+      let changed = false
+      const next: Record<string, CourseFetchState> = {}
+      for (const [id, state] of Object.entries(previous)) {
+        if (currentIds.has(id)) {
+          next[id] = state
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : previous
+    })
+    // `projectIds` (not `projects`) is the trigger — see its own comment
+    // above; `projects` itself is still read fresh from the closure, which
+    // is fine here since nothing below reads any field but each project's
+    // own stable `id`.
+  }, [projectIds, fetchCourses])
+
+  // Review finding: `courseStates`/`courseFetchIds` are keyed by project
+  // id alone, with nothing scoping either to *this* organization — a
+  // caller that changed `organizationId` on an already-mounted `Projects`
+  // (rather than remounting it, which is how `pages/Shell.tsx` actually
+  // does it today, via its own `key={activeOrganizationId}`) would
+  // otherwise keep growing both maps for every organization and project
+  // visited in one session. Cheap to close either way: a fresh
+  // organization starts with neither map holding anything.
+  useEffect(() => {
+    setCourseStates({})
+    courseFetchIds.current = {}
+  }, [organizationId])
 
   // WEB-27: "New project" opens a modal asking for the name rather than the
   // old always-present inline input — `.trim()` (finding 7 of the WEB-7
@@ -360,29 +515,83 @@ export function Projects({
                 onSelect: () => void handleRename(project),
               },
             ]
+            const courseState = courseStates[project.id]
             return (
+              // WEB-42/WEB-13: `flex-col` unconditionally (not `sm:flex-row`
+              // on the item itself, as this row used to be) — the header
+              // below still lays out side by side from `sm:` up, but the
+              // course list beneath it always stacks under the header,
+              // never beside it, on every viewport.
               <li
                 key={project.id}
                 data-testid={`project-${project.id}`}
-                className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
               >
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onOpenProject(project)}
-                    className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-                  >
-                    {project.name}
-                  </button>
-                  {project.archivedAt !== null && (
-                    <span className="text-xs text-neutral-500">(archived)</span>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onOpenProject(project)}
+                      className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+                    >
+                      {project.name}
+                    </button>
+                    {project.archivedAt !== null && (
+                      <span className="text-xs text-neutral-500">
+                        (archived)
+                      </span>
+                    )}
+                  </div>
+                  <KebabMenu
+                    label={`Actions for "${project.name}"`}
+                    items={items}
+                    disabled={busy}
+                  />
+                </div>
+
+                {/* WEB-42: this project's own courses, indented beneath it
+                    through real nesting (a `<ul>` inside this `<li>`,
+                    from `CourseRows` below) rather than padding alone, so
+                    the hierarchy reaches assistive technology as well as
+                    the eye. The left border carries the indent visually;
+                    `pl-4`/`sm:pl-6` is modest on purpose (WEB-13) — enough
+                    to read as "beneath," never enough to push a course
+                    row's own Chat button or kebab off a phone screen. */}
+                <div className="border-l border-neutral-200 pl-4 sm:pl-6">
+                  {courseState === undefined ||
+                  courseState.status === 'loading' ? (
+                    <p role="status" className="text-sm text-neutral-500">
+                      Loading…
+                    </p>
+                  ) : courseState.status === 'error' ? (
+                    <ErrorMessage error={courseState.error} />
+                  ) : courseState.courses.length === 0 ? (
+                    <p className="text-sm text-neutral-500">
+                      No courses in this project yet.
+                    </p>
+                  ) : (
+                    <CourseRows
+                      organizationId={organizationId}
+                      courses={courseState.courses}
+                      onOpenCourse={(courseId) =>
+                        onOpenCourse(project, courseId)
+                      }
+                      onOpenChat={onOpenChat}
+                      // WEB-42: refreshing only *this* project's courses
+                      // after a toggle — the same "not every project's"
+                      // requirement `Courses.tsx#refresh` already meets
+                      // for its own single project.
+                      onChanged={() => fetchCourses(project)}
+                      // WEB-42 review finding — this project's own name,
+                      // threaded into the row's Chat/kebab labels
+                      // (`CourseRows`' own doc comment on why): unlike
+                      // `Courses.tsx`, this screen lists more than one
+                      // project's courses side by side, and nothing else
+                      // makes a title unique across them.
+                      projectName={project.name}
+                    />
                   )}
                 </div>
-                <KebabMenu
-                  label={`Actions for "${project.name}"`}
-                  items={items}
-                  disabled={busy}
-                />
               </li>
             )
           })}

@@ -7,6 +7,7 @@
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '../src/api/client.js'
 import type { CourseSummary, Project } from '../src/api/types.js'
 import { Courses } from '../src/pages/Courses.js'
 import { renderWithModal, withModal } from './helpers/render-with-modal.js'
@@ -252,6 +253,67 @@ describe('Courses (WEB-8)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Web Design' }))
     expect(onOpenCourse).toHaveBeenCalledWith('course-1')
+  })
+
+  // WEB-42 review finding: a successful row action's own `refresh()` — this
+  // screen's own fetch, not `CourseRows`' own row-action errors — could
+  // fail transiently and leave `error` set with nothing left to clear it,
+  // once the toggle/export handlers (and their own `setError(undefined)`)
+  // moved into `CourseRows`. Fails without `refresh`'s own `setError(undefined)`:
+  // the banner from the first, failed refresh would still be on screen
+  // after the second action's refresh succeeds.
+  it("a failed refresh's error banner clears once a later action's own refresh succeeds", async () => {
+    listCourses
+      .mockResolvedValueOnce([COURSE])
+      .mockRejectedValueOnce(new ApiError(500, { error: 'internal_error' }))
+      .mockResolvedValueOnce([COURSE])
+    disableCourse.mockResolvedValue({ disabled: true })
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    // First action: succeeds, but the refresh after it fails.
+    openCourseMenu('Web Design')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Web Design"' })
+      ).getByRole('button', { name: 'Disable' })
+    )
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Disable',
+      })
+    )
+    await waitFor(() => expect(disableCourse).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+
+    // Second action: the row still reads "enabled" (the failed refresh
+    // above never updated it), so the same menu item is clicked again —
+    // this time its own refresh succeeds.
+    openCourseMenu('Web Design')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Web Design"' })
+      ).getByRole('button', { name: 'Disable' })
+    )
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Disable',
+      })
+    )
+    await waitFor(() => expect(disableCourse).toHaveBeenCalledTimes(2))
+
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    )
   })
 })
 

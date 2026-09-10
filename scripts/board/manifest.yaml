@@ -2158,6 +2158,23 @@
   phase: 10
   status: Done
   review: false
+- id: FILE-10
+  title: A file that cannot be read at upload time says so, per file
+  full: "Files are queued as browser references and their bytes are read only when
+    the instructor clicks Attach — not at drop time, since a full 100 MB queue
+    held as base64 in tab memory the whole time is worse than a clear error. A
+    file's reference can go stale in that gap (moved, deleted, or modified on
+    disk since it was dropped); reading it then fails, and the panel says which
+    file and what to do about it, rather than a silent, unhandled failure. One
+    unreadable file does not strand the rest of the batch: the others are still
+    attached, and the panel says how many went through and which did not.
+    Choosing a file already queued under the same name and size replaces the
+    queued reference rather than…"
+  section: §23 Knowledge Files & Instructions
+  family: FILE
+  phase: 10
+  status: Backlog
+  review: false
 - id: MDL-8
   title: Instructions are how a course is configured; a stored prompt id is only
     inherited

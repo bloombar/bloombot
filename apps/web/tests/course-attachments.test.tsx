@@ -50,9 +50,58 @@ function attachment(
   }
 }
 
+let restoreFileReader: (() => void) | undefined
+
 afterEach(() => {
   vi.resetAllMocks()
+  restoreFileReader?.()
+  restoreFileReader = undefined
 })
+
+/**
+ * FILE-10: `fileToBase64`'s own `FileReader#readAsDataURL` never fails in
+ * jsdom, so a stale `File` reference (the reported bug — the file changed
+ * or moved on disk between drop and Attach) has to be simulated. Every
+ * file *not* named in `failing` still reads through a real `FileReader`,
+ * so a test mixing a bad file with good ones exercises the same
+ * `fileToBase64` a passing file does.
+ */
+function stubFlakyFileReader(failing: Set<string>): () => void {
+  const OriginalFileReader = globalThis.FileReader
+  class FlakyFileReader {
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    result: string | ArrayBuffer | null = null
+    error: DOMException | null = null
+
+    readAsDataURL(file: File): void {
+      if (failing.has(file.name)) {
+        // Async, the same way a real read failure surfaces — not thrown
+        // synchronously out of `readAsDataURL` itself.
+        queueMicrotask(() => {
+          this.error = new DOMException(
+            'A requested file or directory could not be found.',
+            'NotFoundError'
+          )
+          this.onerror?.()
+        })
+        return
+      }
+      const real = new OriginalFileReader()
+      real.onload = () => {
+        this.result = real.result
+        this.onload?.()
+      }
+      real.onerror = () => {
+        this.error = real.error
+        this.onerror?.()
+      }
+      real.readAsDataURL(file)
+    }
+  }
+  vi.stubGlobal('FileReader', FlakyFileReader)
+  return () => vi.stubGlobal('FileReader', OriginalFileReader)
+}
 
 /**
  * Choose one or several files the way a person does — dropping them on the
@@ -284,14 +333,17 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     expect(screen.getByText('b.pdf')).toBeInTheDocument()
   })
 
-  // FILE-7: a failure part-way through the queue stops the upload, shows
-  // the error, and leaves the files that were never sent still queued —
-  // nothing is silently discarded.
-  it('a failure part-way leaves the unsent files queued and shows the error', async () => {
+  // FILE-10: a mid-batch failure no longer stops the upload — the rework
+  // this replaces (this test used to assert the opposite: that `c.pdf`
+  // was "never attempted"). One bad file must not silently strand the
+  // rest, so the loop continues past `b.pdf`'s failure and still attempts
+  // `c.pdf`; only the failed file stays queued.
+  it('a mid-batch failure does not strand the rest — the batch continues, and the failure still shows', async () => {
     listCourseAttachments.mockResolvedValue([])
     attachCourseFile
       .mockResolvedValueOnce({ attachmentId: 'att-1', jobId: 'job-1' })
       .mockRejectedValueOnce(new ApiError(413, { error: 'invalid_request' }))
+      .mockResolvedValueOnce({ attachmentId: 'att-3', jobId: 'job-3' })
 
     renderWithModal(
       <CourseAttachments organizationId="org-1" courseId="course-1" />
@@ -305,20 +357,186 @@ describe('CourseAttachments (WEB-18, FILE-7)', () => {
     ])
     fireEvent.click(screen.getByRole('button', { name: 'Attach 3 files' }))
 
-    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(2))
+    // All three were attempted — not stopped at the second.
+    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(3))
     expect(await screen.findByRole('alert')).toBeInTheDocument()
 
-    // `a.pdf` was sent (and removed from the queue); `b.pdf` failed; `c.pdf`
-    // was never attempted — both `b.pdf` and `c.pdf` are still queued so
-    // the instructor can retry without re-choosing them.
+    // `a.pdf` and `c.pdf` were sent (and removed from the queue); only
+    // `b.pdf`, the one that failed, is still queued.
     expect(
       screen.queryByText('a.pdf', { exact: false })
     ).not.toBeInTheDocument()
-    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
-    expect(screen.getByText('c.pdf', { exact: false })).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Attach 2 files' })
+      screen.queryByText('c.pdf', { exact: false })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('b.pdf', { exact: false })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Attach 1 file' })
     ).toBeInTheDocument()
+  })
+
+  // FILE-10 — the reported bug: `fileToBase64` rejects with a
+  // `DOMException` (`NotFoundError`), not an `ApiError`, when a queued
+  // file's bytes no longer match what the browser saw at drop time. The
+  // old `catch` re-threw anything that was not an `ApiError`, out of an
+  // async click handler with no caller to catch it — "Uncaught (in
+  // promise)" in the console, nothing in the UI.
+  it('a file whose read fails surfaces a message naming it, with no unhandled rejection', async () => {
+    listCourseAttachments.mockResolvedValue([])
+    restoreFileReader = stubFlakyFileReader(new Set(['stale.pdf']))
+
+    const rejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => rejections.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([new File(['a'], 'stale.pdf', { type: 'application/pdf' })])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 1 file' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    // `stale.pdf` appears twice — once in the still-queued entry, once
+    // named in the failure message — so this counts both rather than
+    // asserting on the ambiguous singular query.
+    expect(
+      screen.getAllByText('stale.pdf', { exact: false }).length
+    ).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText(/remove it and add it again/)).toBeInTheDocument()
+    // The unreadable file's own queue entry is left as-is (this file's own
+    // chosen behaviour) so the instructor can remove and re-add it without
+    // re-choosing anything else — it never silently disappears.
+    expect(
+      screen.getByRole('button', { name: 'Remove stale.pdf from the queue' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Attach 1 file' })
+    ).toBeInTheDocument()
+
+    // Give any unhandled rejection a turn of the event loop to surface
+    // before asserting none did — this is the assertion that would still
+    // fail today even once the message above renders correctly in some
+    // setups, per the brief.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    process.off('unhandledRejection', onUnhandledRejection)
+    expect(rejections).toEqual([])
+  })
+
+  // FILE-10: one unreadable file among several must not strand the rest —
+  // the summary names how many were attached and which failed.
+  it('other queued files are still attached despite one unreadable file, and the summary says so', async () => {
+    listCourseAttachments.mockResolvedValue([])
+    attachCourseFile.mockResolvedValue({
+      attachmentId: 'att-x',
+      jobId: 'job-x',
+    })
+    restoreFileReader = stubFlakyFileReader(new Set(['b.pdf']))
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([
+      new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['b'], 'b.pdf', { type: 'application/pdf' }),
+      new File(['c'], 'c.pdf', { type: 'application/pdf' }),
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 3 files' }))
+
+    // Only `a.pdf` and `c.pdf` ever reach `attachCourseFile` — `b.pdf`
+    // fails inside `fileToBase64`, before that call.
+    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Attached 2 of 3 files\. 1 failed/)
+    ).toBeInTheDocument()
+
+    expect(
+      screen.queryByText('a.pdf', { exact: false })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('c.pdf', { exact: false })
+    ).not.toBeInTheDocument()
+    // `b.pdf` is named twice — once still queued, once in the failure
+    // detail — so this asserts the remove button (unique to the queue
+    // entry) rather than the ambiguous text query.
+    expect(
+      screen.getByRole('button', { name: 'Remove b.pdf from the queue' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Attach 1 file' })
+    ).toBeInTheDocument()
+  })
+
+  // FILE-10 — regression: a single server (`ApiError`) failure still
+  // renders exactly as it did before this rework, not as a batch summary.
+  it('a single server (ApiError) failure still renders as it does today', async () => {
+    listCourseAttachments.mockResolvedValue([])
+    attachCourseFile.mockRejectedValue(
+      new ApiError(413, { error: 'invalid_request' })
+    )
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    chooseFiles([new File(['x'], 'huge.pdf', { type: 'application/pdf' })])
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 1 file' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.getByText('That did not look right.')).toBeInTheDocument()
+    expect(
+      screen.queryByText(/Attached \d+ of \d+ files?/)
+    ).not.toBeInTheDocument()
+  })
+
+  // FILE-10 — dedupe kept the older, more likely stale `File` reference.
+  // Re-adding a file with the same name and size now replaces the queued
+  // entry, so uploading sends the newly-added file's bytes, not the old
+  // one's.
+  it('re-adding a file with the same name and size replaces the queued entry, and uploads the new bytes', async () => {
+    listCourseAttachments.mockResolvedValue([])
+    attachCourseFile.mockResolvedValue({
+      attachmentId: 'att-1',
+      jobId: 'job-1',
+    })
+
+    renderWithModal(
+      <CourseAttachments organizationId="org-1" courseId="course-1" />
+    )
+    await screen.findByText('No files attached yet.')
+
+    // Same name, same byte length (8 bytes each) — the dedupe key matches,
+    // but the content differs, the way an edited file re-dropped with an
+    // unchanged size would.
+    chooseFiles([
+      new File(['aaaaaaaa'], 'notes.pdf', { type: 'application/pdf' }),
+    ])
+    await screen.findByRole('button', { name: 'Attach 1 file' })
+
+    chooseFiles([
+      new File(['bbbbbbbb'], 'notes.pdf', { type: 'application/pdf' }),
+    ])
+    // Still one queued entry — replaced, not appended alongside the first.
+    expect(
+      screen.getByRole('button', { name: 'Attach 1 file' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach 1 file' }))
+
+    await waitFor(() => expect(attachCourseFile).toHaveBeenCalledTimes(1))
+    expect(attachCourseFile).toHaveBeenCalledWith(
+      'org-1',
+      'course-1',
+      expect.objectContaining({
+        filename: 'notes.pdf',
+        contentBase64: Buffer.from('bbbbbbbb').toString('base64'),
+      })
+    )
   })
 
   // FILE-7: the client-side budget pre-check refuses before ever calling

@@ -57,8 +57,8 @@ function courseSaveInput(
     id: string
     title: string
     enabled: boolean
-    adminsRole: string
-    studentsRole: string
+    adminsRole: string | null
+    studentsRole: string | null
     promptId: string | null
     instructions: string | null
     model: string | null
@@ -76,8 +76,12 @@ function courseSaveInput(
     projectId,
     title: overrides.title ?? 'Web Design',
     enabled: overrides.enabled ?? true,
-    adminsRole: overrides.adminsRole ?? 'admins-wd-fa26',
-    studentsRole: overrides.studentsRole ?? 'students-wd-fa26',
+    // PROJ-7: `'adminsRole' in overrides`, not `??` — a test that overrides
+    // with an explicit `null` (naming no role) must keep that `null`, not
+    // have it silently replaced by the default the way `??` would.
+    adminsRole: 'adminsRole' in overrides ? overrides.adminsRole : 'admins-wd-fa26',
+    studentsRole:
+      'studentsRole' in overrides ? overrides.studentsRole : 'students-wd-fa26',
     categories: overrides.categories ?? [
       {
         name: 'Web Design - GLOBAL',
@@ -382,6 +386,86 @@ describe('courses.save', () => {
 
     expect(course).toMatchObject({ title: 'Web Design', projectId })
     expect(course.categories).toHaveLength(1)
+  })
+
+  // PROJ-7: both roles are optional — a course may name neither, and the
+  // stored value is `null`, not an omitted column falling back to some
+  // other default.
+  it('PROJ-7: creates a course with both roles absent, storing null for each', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { adminsRole: null, studentsRole: null }),
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.adminsRole).toBeNull()
+    expect(course.studentsRole).toBeNull()
+  })
+
+  // The empty-string half of the same rule: an instructor clearing the
+  // field in the panel must never store `''` — `pages/CourseEditor.tsx`
+  // itself normalizes a blank input to `null` before this ever sees it, but
+  // `saveInputSchema`'s own `.min(1)` is what refuses `''` outright for any
+  // other caller (an MCP agent, a hand-rolled HTTP body) that tries to send
+  // it directly.
+  it("PROJ-7: refuses an explicit empty string for a role — an instructor's blank field must arrive as null, never ''", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        saveCourseAction,
+        courseSaveInput(projectId, { adminsRole: '' }),
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow()
+  })
+
+  // A course naming only one role — the other stays absent, not defaulted
+  // to anything, and the one it does name still works as a role match
+  // (`routing.test.ts`'s own coverage of the routing half of this).
+  it('PROJ-7: creates a course naming only one role, leaving the other null', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { studentsRole: null }),
+      { organizationId, db: testDb.db }
+    )
+
+    expect(course.adminsRole).toBe('admins-wd-fa26')
+    expect(course.studentsRole).toBeNull()
+  })
+
+  // Omitted (not sent at all) preserves whatever is already stored, on an
+  // update — the same rule `model`/`vectorStoreId` already get.
+  it('PROJ-7: an update omitting a role field keeps whatever is already stored', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { adminsRole: null, studentsRole: null }),
+      { organizationId, db: testDb.db }
+    )
+
+    const input = courseSaveInput(projectId, { id: created.id })
+    // Sent through `dispatch`'s own `rawInput: unknown` so the two role
+    // keys can be genuinely omitted, past `courseSaveInput`'s own always-
+    // present defaults (`courseSaveInput`'s own module comment on why the
+    // helper cannot omit them the ordinary way).
+    const { adminsRole: _admins, studentsRole: _students, ...withoutRoles } =
+      input
+    const updated = await dispatch(saveCourseAction, withoutRoles, {
+      organizationId,
+      db: testDb.db,
+    })
+
+    expect(updated.adminsRole).toBeNull()
+    expect(updated.studentsRole).toBeNull()
   })
 
   // MDL-8: a stored prompt id is only ever inherited from the Python era

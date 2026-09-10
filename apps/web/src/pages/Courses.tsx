@@ -12,30 +12,23 @@
  * own module comment for how that handoff actually works) — and a kebab
  * holding Disable/Enable, matching the row-menu shape `pages/Projects.tsx`
  * already uses.
+ *
+ * WEB-42: the row itself — title, metadata, Chat, kebab, and the
+ * Export/Disable-Enable handlers behind it — now lives in
+ * `components/CourseRows.tsx`, shared with `pages/Projects.tsx`'s own
+ * beneath-each-project listing, so this screen owns only the fetch (its
+ * one project's `courses.list`) and the loading/empty states around it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import {
-  disableCourse,
-  downloadTextFile,
-  enableCourse,
-  exportCourse,
-  listCourses,
-} from '../api/client.js'
+import { listCourses } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary, Project } from '../api/types.js'
 import { Button } from '../components/Button.js'
+import { CourseRows } from '../components/CourseRows.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
-import { KebabMenu, type KebabMenuItem } from '../components/KebabMenu.js'
-import { useModal } from '../components/modal/ModalProvider.js'
-import {
-  AddIcon,
-  ChatIcon,
-  DisableIcon,
-  DownloadIcon,
-  EnableIcon,
-} from '../icons.js'
+import { AddIcon } from '../icons.js'
 
 export interface CoursesScreenProps {
   organizationId: string
@@ -55,10 +48,6 @@ export function Courses({
 }: CoursesScreenProps) {
   const [courses, setCourses] = useState<CourseSummary[] | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
-  const [busyCourseId, setBusyCourseId] = useState<string | undefined>(
-    undefined
-  )
-  const { confirm } = useModal()
 
   // Finding 8 (WEB-7 rework): `refresh` is called both from the effect
   // below (on mount, and whenever `project.id` changes) and directly after
@@ -70,6 +59,13 @@ export function Courses({
   const refreshId = useRef(0)
   const refresh = useCallback(() => {
     const id = ++refreshId.current
+    // A previous `refresh()` (this screen's own fetch, not `CourseRows`'
+    // own row-action errors) may have failed and left `error` set — review
+    // finding: without this, a transient failure here outlived every
+    // subsequent successful refresh for the life of the screen, since
+    // nothing else ever cleared it once the toggle/export handlers (and
+    // their own `setError(undefined)`) moved into `CourseRows`.
+    setError(undefined)
     listCourses(organizationId, project.id).then(
       (result) => {
         if (id !== refreshId.current) return
@@ -87,58 +83,6 @@ export function Courses({
     setCourses(undefined)
     refresh()
   }, [refresh])
-
-  const handleToggle = async (course: CourseSummary) => {
-    // WEB-15: disabling a live course is destructive (students stop being
-    // answered) and confirms first, through the one modal this panel
-    // shares (`components/modal/`) — the same treatment
-    // `pages/CourseEditor.tsx`'s own toggle gives it. Enabling is not
-    // destructive and runs immediately.
-    if (course.enabled) {
-      const confirmed = await confirm({
-        title: `Disable ${course.title}?`,
-        description:
-          'Students stop being answered here until it is enabled again.',
-        confirmLabel: 'Disable',
-        destructive: true,
-      })
-      if (!confirmed) return
-    }
-    setError(undefined)
-    setBusyCourseId(course.id)
-    try {
-      if (course.enabled) {
-        await disableCourse(organizationId, course.id)
-      } else {
-        await enableCourse(organizationId, course.id)
-      }
-      refresh()
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyCourseId(undefined)
-    }
-  }
-
-  /**
-   * WEB-39/PORT-1 — export this course's configuration and hand the file to
-   * the browser. The action returns the file's text (PORT-8: an export is an
-   * action like any other, not a download route), so the saving happens here.
-   */
-  const handleExport = async (course: CourseSummary) => {
-    setError(undefined)
-    setBusyCourseId(course.id)
-    try {
-      const result = await exportCourse(organizationId, course.id)
-      downloadTextFile(result.filename, result.content)
-    } catch (caught) {
-      if (caught instanceof ApiError) setError(caught)
-      else throw caught
-    } finally {
-      setBusyCourseId(undefined)
-    }
-  }
 
   return (
     <section
@@ -174,87 +118,13 @@ export function Courses({
           No courses in this project yet.
         </p>
       ) : (
-        // WEB-13: a card per course, stacked — never a wide table row a
-        // phone would have to scroll horizontally to read.
-        <ul className="flex flex-col gap-3">
-          {courses.map((course) => {
-            const busy = busyCourseId === course.id
-            // WEB-26: a kebab holding Disable/Enable — destructive-styled
-            // only for Disable, matching the danger treatment the button
-            // this replaces used to carry only while the course was
-            // enabled.
-            const items: KebabMenuItem[] = [
-              {
-                key: 'export',
-                label: 'Export',
-                icon: <DownloadIcon aria-hidden="true" className="size-4" />,
-                onSelect: () => void handleExport(course),
-              },
-              {
-                key: 'toggle',
-                label: course.enabled ? 'Disable' : 'Enable',
-                icon: course.enabled ? (
-                  <DisableIcon aria-hidden="true" className="size-4" />
-                ) : (
-                  <EnableIcon aria-hidden="true" className="size-4" />
-                ),
-                destructive: course.enabled,
-                onSelect: () => void handleToggle(course),
-              },
-            ]
-            return (
-              <li
-                key={course.id}
-                data-testid={`course-${course.id}`}
-                className="flex flex-col gap-2 rounded-md border border-neutral-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onOpenCourse(course.id)}
-                    className="text-left text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-                  >
-                    {course.title}
-                  </button>
-                  <p className="text-xs text-neutral-500">
-                    routes on roles{' '}
-                    <code className="rounded bg-neutral-100 px-1">
-                      {course.adminsRole}
-                    </code>{' '}
-                    /{' '}
-                    <code className="rounded bg-neutral-100 px-1">
-                      {course.studentsRole}
-                    </code>{' '}
-                    — {course.enabled ? 'enabled' : 'disabled'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* WEB-28: the one action on this row worth its own
-                      control — opens a chat session for this course
-                      directly. `aria-label` names the row, the same
-                      reason the kebab beside it does (`KebabMenu.tsx`'s
-                      own module comment) — a six-course list otherwise
-                      reads as six identically-named "Chat" buttons to a
-                      screen reader, and to `getByRole('button', { name:
-                      'Chat' })` in a test. */}
-                  <Button
-                    variant="secondary"
-                    icon={<ChatIcon aria-hidden="true" className="size-4" />}
-                    aria-label={`Chat about "${course.title}"`}
-                    onClick={() => onOpenChat(course.id)}
-                  >
-                    Chat
-                  </Button>
-                  <KebabMenu
-                    label={`Actions for "${course.title}"`}
-                    items={items}
-                    disabled={busy}
-                  />
-                </div>
-              </li>
-            )
-          })}
-        </ul>
+        <CourseRows
+          organizationId={organizationId}
+          courses={courses}
+          onOpenCourse={onOpenCourse}
+          onOpenChat={onOpenChat}
+          onChanged={refresh}
+        />
       )}
     </section>
   )

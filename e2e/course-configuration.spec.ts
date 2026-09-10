@@ -473,8 +473,13 @@ test("a channel row's name input, checkbox and remove button stay on one line, a
   // fit rather than overflowing horizontally.
   await page.setViewportSize({ width: 320, height: 800 })
   const narrowOverflows = await page.evaluate(() => {
-    const doc = (globalThis as unknown as { document: Document }).document
-    return doc.documentElement.scrollWidth > doc.documentElement.clientWidth
+    const win = globalThis as unknown as {
+      document: {
+        documentElement: { scrollWidth: number; clientWidth: number }
+      }
+    }
+    const { scrollWidth, clientWidth } = win.document.documentElement
+    return scrollWidth > clientWidth
   })
   expect(narrowOverflows).toBe(false)
 })

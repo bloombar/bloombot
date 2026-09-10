@@ -51,6 +51,20 @@ case "${1:-}" in
       prev="$arg"
     done
     ;;
+  delete)
+    # OPS-16 — `pm2 delete <name>`, the migration's own delete half.
+    # FAKE_PM2_DELETE_FAIL names the one process this stub refuses to
+    # delete, so a test can exercise a partway failure; anything else is
+    # removed from PM2_REGISTERED so a later `jlist` reflects it as gone.
+    name="${2:-}"
+    if [ "${FAKE_PM2_DELETE_FAIL:-}" = "$name" ]; then
+      exit 1
+    fi
+    if [ -f "$PM2_REGISTERED" ]; then
+      grep -vFx "$name" "$PM2_REGISTERED" > "$PM2_REGISTERED.tmp" 2>/dev/null || : > "$PM2_REGISTERED.tmp"
+      mv "$PM2_REGISTERED.tmp" "$PM2_REGISTERED"
+    fi
+    ;;
 esac
 exit 0
 """
@@ -132,7 +146,29 @@ def world(tmp_path):
 
     (upstream / "requirements.txt").write_text("discord==2.7.1\n", encoding="utf-8")
     (upstream / "Pipfile.lock").write_text('{"_meta": {}}\n', encoding="utf-8")
-    (upstream / "ecosystem.config.cjs").write_text("module.exports = {};\n", encoding="utf-8")
+    # OPS-16 — named apps, not the empty `{}` this used to be: `deploy.sh`'s
+    # own MIGRATE_PM2_NAMES path sources scripts/migrate-pm2-names.sh, whose
+    # `assert_ecosystem_has_new_names` reads this file's own `apps` array
+    # before deleting anything. Every other test in this file never looks at
+    # its contents at all — the fake pm2 stub above never reads it either.
+    (upstream / "ecosystem.config.cjs").write_text(
+        """module.exports = { apps: [
+      { name: "bloombot-api" }, { name: "bloombot-bot" },
+      { name: "bloombot-worker" }, { name: "bloombot-mcp" },
+      { name: "bloombot-ops-monitor" },
+    ] };
+""",
+        encoding="utf-8",
+    )
+    # OPS-16 — a real copy of the migration script itself, since
+    # `deploy.sh` `source`s `scripts/migrate-pm2-names.sh` from the checkout
+    # it is deploying (not from wherever `deploy.sh` itself runs) under
+    # MIGRATE_PM2_NAMES.
+    (upstream / "scripts").mkdir(exist_ok=True)
+    (upstream / "scripts" / "migrate-pm2-names.sh").write_text(
+        (REPO_ROOT / "scripts" / "migrate-pm2-names.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     # The real droplet is an npm workspace as well as a Python checkout, and
     # `deploy.sh` now builds it; without this the script aborts before it ever
     # reaches the part these tests are about.
@@ -491,3 +527,111 @@ def test_first_deploy_starts_the_app_from_the_ecosystem_config(world):
         call.startswith("start ecosystem.config.cjs --only ") for call in pm2
     ), pm2
     assert not any(call.startswith("reload") for call in pm2)
+
+
+# OPS-16 — MIGRATE_PM2_NAMES turns a deploy into the OPS-15 migration itself,
+# so CI can dispatch it instead of an operator running
+# scripts/migrate-pm2-names.sh by hand.
+
+
+def test_migrate_pm2_names_deletes_old_names_and_starts_new_ones(world):
+    """On an unmigrated droplet, MIGRATE_PM2_NAMES deletes every old bare
+    name pm2 knows, then lets the ordinary reload start the new,
+    bloombot-prefixed ones — and pm2 save runs once the process list is
+    right."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only, MIGRATE_PM2_NAMES="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    pm2 = world.calls("pm2")
+    for old in ("api", "bot", "worker", "mcp", "ops-monitor"):
+        assert f"delete {old}" in pm2, pm2
+    assert "save" in pm2
+    known = set(world.registered.read_text(encoding="utf-8").split())
+    assert known == {
+        "bloombot",
+        "bloombot-api",
+        "bloombot-bot",
+        "bloombot-worker",
+        "bloombot-mcp",
+        "bloombot-ops-monitor",
+    }
+
+
+def test_migrate_pm2_names_never_touches_an_unrelated_process(world):
+    """`scabbot`, on the same shared droplet, is never a candidate for
+    deletion no matter what MIGRATE_PM2_NAMES does."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\nscabbot\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only, MIGRATE_PM2_NAMES="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "scabbot" in world.registered.read_text(encoding="utf-8").split()
+    assert "delete scabbot" not in world.calls("pm2")
+
+
+def test_migrate_pm2_names_ordering_a_build_failure_deletes_nothing(world):
+    """The ordering guarantee this slice exists for: the old names must not
+    be deleted until the build has proven the new ones can actually start.
+    A build failure happens well before the reload step, so nothing is
+    deleted and the old-named processes are left exactly as they were."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only, MIGRATE_PM2_NAMES="1", FAKE_NPM_EXIT="1")
+
+    assert result.returncode != 0
+    pm2 = world.calls("pm2")
+    assert not any(call.startswith("delete ") for call in pm2), pm2
+    assert not any(call.startswith("reload ") for call in pm2), pm2
+    known = set(world.registered.read_text(encoding="utf-8").split())
+    assert known == {"bloombot", "api", "bot", "worker", "mcp", "ops-monitor"}
+
+
+def test_migrate_pm2_names_guard_does_not_abort_when_flag_is_set(world):
+    """With the flag off (the default), an old bare name aborts the deploy —
+    `test_unmigrated_pm2_names_abort_before_anything_is_reloaded` above pins
+    that. With it on, the same droplet must not abort at all."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only, MIGRATE_PM2_NAMES="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pre-OPS-15 names" not in (result.stdout + result.stderr)
+
+
+def test_migrate_pm2_names_partial_delete_failure_escalates(world):
+    """A delete that fails partway through must be reported and escalated —
+    the same shape a reload failure already gets — never silently reported
+    as success."""
+    world.registered.write_text(
+        "bloombot\napi\nbot\nworker\nmcp\nops-monitor\n", encoding="utf-8"
+    )
+
+    result = world.run(
+        world.code_only, MIGRATE_PM2_NAMES="1", FAKE_PM2_DELETE_FAIL="bot"
+    )
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "failed to reload" in output
+    assert "deployed" not in output
+
+
+def test_migrate_pm2_names_is_a_noop_on_an_already_migrated_droplet(world):
+    """MIGRATE_PM2_NAMES set on a droplet that already has only the new
+    names is a no-op for the migration itself — the deploy still runs
+    normally."""
+    result = world.run(world.code_only, MIGRATE_PM2_NAMES="1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    pm2 = world.calls("pm2")
+    assert not any(call.startswith("delete ") for call in pm2), pm2

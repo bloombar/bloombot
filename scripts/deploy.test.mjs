@@ -95,12 +95,18 @@ function writeDefaultStubs({
   failMigration = false,
   failNpmCi = false,
   failInstallDeps = false,
+  // OPS-16 — a pm2 name this fake refuses to `delete`, once, the same
+  // one-time shape `failReload` already uses above: a transient failure
+  // partway through the migration's own delete loop, not a permanently
+  // broken pm2.
+  failDeleteOnce = null,
 } = {}) {
   const reloadMarker = join(base, 'reload-failed-once')
   const buildMarker = join(base, 'build-failed-once')
   const npmCiMarker = join(base, 'npm-ci-failed-once')
   const installDepsMarker = join(base, 'install-deps-failed-once')
   const retryCountFile = join(base, 'reload-retry-count')
+  const deleteMarker = join(base, 'delete-failed-once')
   // Cleared on every call — each test starts from "the one-time failure has
   // not happened yet", regardless of what an earlier test in this file left
   // behind.
@@ -109,6 +115,7 @@ function writeDefaultStubs({
   rmSync(npmCiMarker, { force: true })
   rmSync(installDepsMarker, { force: true })
   rmSync(retryCountFile, { force: true })
+  rmSync(deleteMarker, { force: true })
 
   writeStub(
     'pm2',
@@ -193,6 +200,20 @@ case "$cmd" in
       if (app) app.pm2_env.status = status;
       fs.writeFileSync(file, JSON.stringify(apps));
     ' "$STATE_FILE" "$name" "$status"
+    ;;
+  delete)
+    name="$1"
+    if [ "$name" = "${failDeleteOnce ?? ''}" ] && [ -n "${failDeleteOnce ?? ''}" ] && [ ! -f "${deleteMarker}" ]; then
+      touch "${deleteMarker}"
+      echo "[fake pm2] refusing to delete $name (test scenario, once)" >&2
+      exit 1
+    fi
+    "$REAL_NODE_PATH" -e '
+      const fs = require("fs");
+      const [file, name] = process.argv.slice(1);
+      const apps = JSON.parse(fs.readFileSync(file, "utf8"));
+      fs.writeFileSync(file, JSON.stringify(apps.filter((a) => a.name !== name)));
+    ' "$STATE_FILE" "$name"
     ;;
   save) : ;;
   logs) echo "[fake pm2] (no logs in this test)" ;;
@@ -325,6 +346,15 @@ async function setUpRepo({
     '// stub\n'
   )
   writeFileSync(join(workDir, 'scripts', 'health-check.mjs'), '// stub\n')
+  // OPS-16 — deploy.sh `source`s this file under MIGRATE_PM2_NAMES, from the
+  // checkout it is deploying (not from wherever deploy.sh itself lives), so
+  // the throwaway repo needs its own real copy — the repository's actual,
+  // current one, not a stub, since `delete_old_pm2_names` is exactly the
+  // logic under test here.
+  writeFileSync(
+    join(workDir, 'scripts', 'migrate-pm2-names.sh'),
+    readFileSync(join(REPO_ROOT, 'scripts', 'migrate-pm2-names.sh'))
+  )
   writeFileSync(
     join(workDir, 'ecosystem.config.cjs'),
     `module.exports = { apps: [
@@ -801,4 +831,201 @@ test('deploy.sh: no BUILD_HEAP_MB means the builds run under V8 own default', as
   for (const line of readFileSync(envLog, 'utf8').trim().split('\n')) {
     assert.doesNotMatch(line, /--max-old-space-size/)
   }
+})
+
+// OPS-16 — MIGRATE_PM2_NAMES turns this script into the OPS-15 migration
+// itself, so an unattended deploy can run it instead of an operator running
+// scripts/migrate-pm2-names.sh by hand. Seeds pm2 with every pre-rename bare
+// name (plus an unrelated `scabbot`) and confirms the migration deletes
+// exactly the five old ones, starts the five new ones, saves, and the
+// deploy still reports success.
+test('deploy.sh: MIGRATE_PM2_NAMES set on an unmigrated droplet deletes the old names, starts the new ones, saves, and succeeds', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-migrate-${Date.now()}-${Math.random()}.json`
+  )
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      ['api', 'bot', 'worker', 'mcp', 'ops-monitor', 'scabbot'].map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+    MIGRATE_PM2_NAMES: '1',
+  })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /deployed .* — every process is online/)
+  const names = JSON.parse(readFileSync(pm2State, 'utf8'))
+    .map((a) => a.name)
+    .sort()
+  assert.deepEqual(
+    names,
+    [
+      'bloombot',
+      'bloombot-api',
+      'bloombot-bot',
+      'bloombot-mcp',
+      'bloombot-ops-monitor',
+      'bloombot-worker',
+      'scabbot',
+    ].sort()
+  )
+})
+
+// The ordering guarantee this whole slice exists for: the old names must
+// not be deleted until the deploy is certain it can start the new ones. A
+// build failure happens well before the reload step (and so before
+// `delete_old_pm2_names` is ever called), so the old-named processes must
+// still be exactly as they were — nothing deleted, nothing started.
+test('deploy.sh: MIGRATE_PM2_NAMES set — a build failure deletes nothing and leaves the old names alone', async () => {
+  writeDefaultStubs({ failBuildWeb: true })
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-migrate-buildfail-${Date.now()}-${Math.random()}.json`
+  )
+  const seeded = ['api', 'bot', 'worker', 'mcp', 'ops-monitor', 'scabbot']
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      seeded.map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+    MIGRATE_PM2_NAMES: '1',
+  })
+
+  assert.notEqual(result.code, 0)
+  assert.match(result.stdout + result.stderr, /control panel failed to build/)
+  // Nothing was ever reloaded — the reload step, and therefore the delete
+  // step that lives inside it, never ran.
+  assert.doesNotMatch(result.stdout, /reloading every supervised process/)
+  const names = JSON.parse(readFileSync(pm2State, 'utf8'))
+    .map((a) => a.name)
+    .sort()
+  assert.deepEqual(
+    names,
+    seeded.sort(),
+    'the old-named processes must be untouched after a build failure'
+  )
+})
+
+test('deploy.sh: MIGRATE_PM2_NAMES set — the old-name guard does not abort, unlike the flag being off', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-migrate-noabort-${Date.now()}-${Math.random()}.json`
+  )
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      ['api', 'bot', 'worker', 'mcp', 'ops-monitor'].map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+    MIGRATE_PM2_NAMES: '1',
+  })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.doesNotMatch(
+    result.stdout + result.stderr,
+    /pm2 still knows these pre-OPS-15 names/
+  )
+})
+
+// A partway delete failure — one of the five old names refuses to delete —
+// must escalate exactly like a reload failure, not report success or fail
+// silently.
+test('deploy.sh: MIGRATE_PM2_NAMES set — a delete failing partway through escalates rather than reporting success', async () => {
+  writeDefaultStubs({ failDeleteOnce: 'bot' })
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-migrate-deletefail-${Date.now()}-${Math.random()}.json`
+  )
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      ['api', 'bot', 'worker', 'mcp', 'ops-monitor'].map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+    MIGRATE_PM2_NAMES: '1',
+  })
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /pm2 delete bot failed/)
+  assert.match(output, /failed to reload/)
+  assert.doesNotMatch(output, /deployed .* — every process is online/)
+})
+
+// A droplet that has already run the migration (only the new names present)
+// is a no-op for the migration itself — MIGRATE_PM2_NAMES set on it must
+// still deploy normally, not fail or double-start anything.
+test('deploy.sh: MIGRATE_PM2_NAMES set on an already-migrated droplet is a no-op that still deploys normally', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const pm2State = join(
+    base,
+    `pm2-state-migrate-noop-${Date.now()}-${Math.random()}.json`
+  )
+  writeFileSync(
+    pm2State,
+    JSON.stringify(
+      [
+        'bloombot-api',
+        'bloombot-bot',
+        'bloombot-worker',
+        'bloombot-mcp',
+        'bloombot-ops-monitor',
+      ].map((name) => ({
+        name,
+        pm2_env: { status: 'online', restart_time: 0 },
+      }))
+    )
+  )
+  const result = await runDeploy(checkoutDir, target, {
+    PM2_STATE_FILE: pm2State,
+    MIGRATE_PM2_NAMES: '1',
+  })
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /deployed .* — every process is online/)
+  // No old name was ever a candidate for deletion — nothing to delete, only
+  // ordinary reloads.
+  const names = JSON.parse(readFileSync(pm2State, 'utf8'))
+    .map((a) => a.name)
+    .sort()
+  assert.deepEqual(
+    names,
+    [
+      'bloombot',
+      'bloombot-api',
+      'bloombot-bot',
+      'bloombot-mcp',
+      'bloombot-ops-monitor',
+      'bloombot-worker',
+    ].sort()
+  )
 })

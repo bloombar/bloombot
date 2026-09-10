@@ -122,6 +122,7 @@ import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { DiscordServerRow, InstallButton } from '../components/InstallButton.js'
 import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
+import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { Team } from '../components/Team.js'
 import {
   NavigationGuardProvider,
@@ -663,12 +664,12 @@ function ShellInner({
             // TEN-8: the lookup is in flight and `justInstalled` did not
             // already answer for this organization — rendering
             // `InstallButton` here would default to "Install," the exact
-            // bug being fixed, only momentary. `role="status"` matches
-            // `Projects.tsx`'s own loading text (`pages/Projects.tsx`), the
-            // same pattern this panel already uses for an async read.
-            <p role="status" className="text-sm text-neutral-500">
-              Loading…
-            </p>
+            // bug being fixed, only momentary. WEB-45: shaped like the row
+            // this becomes once resolved (`DiscordServerRow`, below).
+            <div className="flex flex-col gap-2">
+              <SkeletonRow />
+              <LoadingStatus />
+            </div>
           ) : discordBindingState.status === 'error' ? (
             // TEN-8: say the lookup failed rather than silently falling
             // back to "not installed," which would offer Install for a

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, listJobs } from '../api/client.js'
 import type { JobStatus } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { SkeletonRow } from '../components/Skeleton.js'
 import { FailureIcon, PendingIcon, SpinnerIcon, SuccessIcon } from '../icons.js'
 
 export interface JobsScreenProps {
@@ -140,9 +141,14 @@ export function Jobs({ organizationId }: JobsScreenProps) {
       {error && <ErrorMessage error={error} />}
 
       {jobs === undefined && !error ? (
-        <p role="status" className="text-sm text-neutral-500">
-          Loading…
-        </p>
+        // WEB-45: the sr-only `role="status"` paragraph above already
+        // announces "Loading jobs…" for the whole of this state — a second,
+        // separately-mounted status region here would duplicate that
+        // announcement, so this is decorative shapes only.
+        <div className="flex flex-col gap-2">
+          <SkeletonRow />
+          <SkeletonRow />
+        </div>
       ) : jobs && jobs.length === 0 ? (
         <p className="text-sm text-neutral-500">
           No jobs have run in this organization yet.

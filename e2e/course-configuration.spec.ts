@@ -124,6 +124,9 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByRole('tab', { name: 'AI' }).click()
   await page.getByLabel('Instructions').fill(courseInstructions)
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-40: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 4. This is where the browser's own part ends. Everything from here
@@ -413,4 +416,70 @@ test("a course's settings tabs are real addresses — switching, reloading and s
   // selected — leaving the next Left/Right to move from somewhere the
   // reader is not.
   await expect(page.getByRole('tab', { name: 'AI' })).toBeFocused()
+})
+
+/**
+ * WEB-40: the channel row's name input, "Admins only" checkbox and remove
+ * button used to wrap onto three lines because `textInputClasses`'s own
+ * `w-full` let the name input claim the whole row — no unit test can see
+ * this (`apps/web/tests/course-editor.test.tsx`'s own comment on why:
+ * jsdom has no layout engine, so the DOM shape is identical whether the
+ * row wraps or not). A real bounding box, at more than one width, is the
+ * only way to prove the fix rather than merely describe it.
+ */
+test("a channel row's name input, checkbox and remove button stay on one line, at a wide viewport and a narrow one (WEB-40)", async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web40-${suffix}@example.edu`
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await navigateTo(page, 'Projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog
+    .getByLabel('Project name')
+    .fill(`Fall 2026 — ${suffix}`)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page
+    .getByRole('button', { name: `Fall 2026 — ${suffix}`, exact: true })
+    .click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
+  await page.getByLabel('Admins role').fill(`admins-wd-${suffix}`)
+  await page.getByLabel('Students role').fill(`students-wd-${suffix}`)
+  await page.getByRole('button', { name: 'Add category' }).click()
+  await page.getByLabel('Category name').fill(`Web Design - GLOBAL - ${suffix}`)
+  await page.getByRole('button', { name: 'Add channel' }).click()
+  await page.getByLabel('Channel name').fill('announcements')
+
+  const channelRow = page.getByLabel('Channel name').locator('xpath=..')
+
+  // A wide viewport first — the row's own natural width, well above the
+  // panel's own narrowest breakpoint.
+  await page.setViewportSize({ width: 1200, height: 800 })
+  const wideBox = await channelRow.boundingBox()
+  if (!wideBox) throw new Error('expected the channel row to have a layout box')
+  // One line of text plus its own padding is nowhere near the ~82px three
+  // stacked controls used to take — 60px is comfortably below that and
+  // comfortably above one real line.
+  expect(wideBox.height).toBeLessThan(60)
+
+  // A narrow viewport — `flex-wrap` stays on the row, so if this ever
+  // needs to wrap again at some width, it still can; the row must still
+  // fit rather than overflowing horizontally.
+  await page.setViewportSize({ width: 320, height: 800 })
+  const narrowOverflows = await page.evaluate(() => {
+    const win = globalThis as unknown as {
+      document: {
+        documentElement: { scrollWidth: number; clientWidth: number }
+      }
+    }
+    const { scrollWidth, clientWidth } = win.document.documentElement
+    return scrollWidth > clientWidth
+  })
+  expect(narrowOverflows).toBe(false)
 })

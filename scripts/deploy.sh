@@ -302,8 +302,21 @@ reload_everything() {
   # also the one-way half of the migration: a rollback further down resets
   # the *checkout*, not pm2's process names — once deleted here, the old
   # names do not come back even if this deploy is later rolled back.
+  #
+  # Rework finding — a partway delete failure used to fall through into the
+  # reload loop below regardless, on the theory that a delete failure is
+  # "just another entry in `failed`," the same as a reload failure. It is
+  # not: `start_or_reload` for a name pm2 does not know yet STARTS it fresh
+  # from `ecosystem.config.cjs`, so a `bot` that refused to delete was left
+  # running side by side with a freshly started `bloombot-bot` — two
+  # Discord gateways, or with `worker` in its place, two processes claiming
+  # jobs (PLAT-4's own single-instance guarantee). Reported and returned
+  # immediately here instead: a delete failure is pure downside to compound
+  # with a reload attempt, so nothing below this point runs until it is
+  # fixed.
   if [ -n "$MIGRATE_PM2_NAMES" ] && ! delete_old_pm2_names; then
-    failed+=("pm2 rename migration (deleting the old bare names)")
+    echo "ERROR: failed to reload: pm2 rename migration (deleting the old bare names)" >&2
+    return 1
   fi
   # SUPERVISED_APPS already omits the Python bot on a cut-over droplet — see
   # its own comment at the top of this script.
@@ -535,22 +548,6 @@ fi
 log "deploying ${PREV_SHA:0:8} -> ${TARGET_SHA:0:8} in $APP_DIR"
 git reset --hard "$TARGET_SHA"
 
-# OPS-16 — sourced from the checkout just updated to $TARGET_SHA (not from
-# deploy.sh's own location, since this whole script is piped in over stdin
-# and has no fixed path of its own) so `delete_old_pm2_names` always matches
-# the OLD_NAMES/NEW_NAMES the commit actually being deployed defines. Only
-# needed — and only sourced — when this run is a migration; an ordinary
-# deploy never touches this file. `main` itself is never invoked here — see
-# `scripts/migrate-pm2-names.sh`'s own `BASH_SOURCE` guard — so this only
-# defines `delete_old_pm2_names` and its own small dependencies
-# (`assert_ecosystem_has_new_names`, `OLD_NAMES`, `NEW_NAMES`); its `log`,
-# `fail`, `pm2_field` and `pm2_knows_app` are identical, harmless
-# redefinitions of this file's own.
-if [ -n "$MIGRATE_PM2_NAMES" ]; then
-  # shellcheck source=scripts/migrate-pm2-names.sh
-  source scripts/migrate-pm2-names.sh
-fi
-
 if [ -z "$PM2_APP" ]; then
   # No Python bot on this droplet (see PM2_APP's own comment): installing its
   # dependencies and probing its interpreter would both fail the deploy over a
@@ -638,6 +635,33 @@ if ! node packages/db/dist/run-migrate.js --i-know; then
 restarted and the checkout was put back — but see this file's own header
 comment: a migration that fails partway through is not itself rolled back.
 Check the database before retrying."
+fi
+
+# OPS-16 — sourced from the checkout just updated to $TARGET_SHA (not from
+# deploy.sh's own location, since this whole script is piped in over stdin
+# and has no fixed path of its own) so `delete_old_pm2_names` always matches
+# the OLD_NAMES/NEW_NAMES the commit actually being deployed defines. Only
+# needed — and only sourced — when this run is a migration; an ordinary
+# deploy never touches this file. `main` itself is never invoked here — see
+# `scripts/migrate-pm2-names.sh`'s own `BASH_SOURCE` guard — so this only
+# defines `delete_old_pm2_names` and its own small dependencies
+# (`assert_ecosystem_has_new_names`, `OLD_NAMES`, `NEW_NAMES`); its `log`,
+# `fail`, `pm2_field` and `pm2_knows_app` are identical, harmless
+# redefinitions of this file's own.
+#
+# Rework finding — this used to be sourced immediately after `git reset
+# --hard "$TARGET_SHA"`, before `npm ci` and both builds. The sourced
+# file's own top level runs `command -v pm2 node` and
+# `[ -f ecosystem.config.cjs ]`, both of which `fail` (`exit 1`) with the
+# checkout already reset to `$TARGET_SHA` and none of the forward path's
+# own rollback machinery having run yet — not reachable for a real,
+# post-OPS-15 target commit (both are already guaranteed by the time a
+# deploy gets this far), but sourcing it only once every step that DOES
+# roll back on failure has already succeeded costs nothing and removes the
+# gap entirely rather than relying on that being true forever.
+if [ -n "$MIGRATE_PM2_NAMES" ]; then
+  # shellcheck source=scripts/migrate-pm2-names.sh
+  source scripts/migrate-pm2-names.sh
 fi
 
 log "reloading every supervised process"

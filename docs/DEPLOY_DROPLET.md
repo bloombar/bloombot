@@ -206,7 +206,7 @@ what breaks when it is wrong or missing:
 | `OPENAI_API_KEY` | **yes** | the model provider credential | every model call fails; `apps/api`'s own web chat degrades to an apology (WEB-10) rather than refusing to start, but `apps/bot` refuses to start without it |
 | `DISCORD_CLIENT_SECRET` | **yes** | the install flow's OAuth2 client secret | the install flow (and, once landed, the account-connect flow — see §4.1) fails |
 | `OPS_ALERT_WEBHOOK_URL` | strongly recommended (OPS-12) | a Discord or Slack incoming-webhook URL `scripts/ops-monitor.mjs` posts to on a health transition | unset means a transition is still written to `logs/pm2-ops-monitor-out.log`/`logs/pm2-ops-monitor-error.log` (pm2's own redirect for that process, `ecosystem.config.cjs`) but nobody is paged — see `docs/CUTOVER.md`'s own §5 |
-| `OPS_ALERT_POLL_INTERVAL_MS` | no (`30000` default) | how often `ops-monitor` polls | lower is faster to notice, and more requests against every process's own `/health` |
+| `OPS_ALERT_POLL_INTERVAL_MS` | no (`30000` default) | how often `bloombot-ops-monitor` polls | lower is faster to notice, and more requests against every process's own `/health` |
 | `MAIL_FILE` | **must stay unset in production** | development-only sign-in-link file | refused outright when `NODE_ENV=production`, whether set or not — see the callout at the top of this document |
 
 `PUBLIC_APP_URL` (and the Discord/Google origins registered against it in §4) must match the

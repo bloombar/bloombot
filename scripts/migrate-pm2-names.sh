@@ -160,15 +160,33 @@ pm2_knows_app() { pm2_field "$1" status >/dev/null 2>&1; }
 # happen before its own reload loop, not the start.
 #
 # Safe to call with no old names present (the ordinary case once a droplet
-# is migrated, including every call after the first in a single run): it
-# recomputes which old names pm2 currently knows every time, so it is a
-# no-op rather than an error. Returns non-zero, never exits directly, if any
-# individual delete failed — both callers (this file's own `main`, and
-# `scripts/deploy.sh`'s `reload_everything`) decide separately what that
-# means at that point, the same "report, don't exit-from-inside" shape
-# `scripts/deploy.sh`'s own `start_or_reload` already uses.
+# is migrated, including every call after the first in a single run — in
+# particular, `scripts/deploy.sh`'s own rollback path calls this a second
+# time, after `restore_previous_checkout` has reset the checkout to
+# whatever commit preceded the migration, which on an unmigrated droplet is
+# necessarily pre-OPS-15 and so has no `bloombot-` names in its own
+# `ecosystem.config.cjs` at all): it recomputes which old names pm2
+# currently knows every time, so it is a no-op rather than an error.
+#
+# Rework finding — the "nothing old is present" check below used to run
+# AFTER `assert_ecosystem_has_new_names`, so that assert (which `fail`s,
+# i.e. `exit 1`s the whole script) ran unconditionally on every call. On the
+# rollback path above, that meant the rollback's own `reload_everything`
+# exited the entire deploy before reloading a single process — no CRITICAL
+# message, no `confirm_rolled_back_online`, nothing but this function's own
+# assert text, on an unmigrated droplet's first health-check failure. The
+# check for "is there actually anything to delete" must come first: once
+# the old names are gone (including because this exact function already
+# deleted them earlier in the same run), there is nothing left to assert
+# the *current* checkout's `ecosystem.config.cjs` against, because nothing
+# below this point would read it.
+#
+# Returns non-zero, never exits directly, if any individual delete failed —
+# both callers (this file's own `main`, and `scripts/deploy.sh`'s
+# `reload_everything`) decide separately what that means at that point, the
+# same "report, don't exit-from-inside" shape `scripts/deploy.sh`'s own
+# `start_or_reload` already uses.
 delete_old_pm2_names() {
-  assert_ecosystem_has_new_names
   local present_old=()
   local old
   for old in "${OLD_NAMES[@]}"; do
@@ -179,6 +197,41 @@ delete_old_pm2_names() {
   if [ ${#present_old[@]} -eq 0 ]; then
     return 0
   fi
+  assert_ecosystem_has_new_names
+
+  # OPS-16 — the one safeguard this had as a human prompt (the plan
+  # printout below warns an operator to run `pm2 describe <name>` before
+  # confirming, because `api`/`bot`/`worker`/`mcp`/`ops-monitor` are generic
+  # enough that an unrelated project on this shared droplet could plausibly
+  # own one) has no human to show it to when `scripts/deploy.sh` calls this
+  # unattended. Replace it with a real check: an old name is only this
+  # deploy's own process if pm2's own `pm_cwd` for it is this checkout's own
+  # directory — the same directory this script insists on being run from
+  # (see the `ecosystem.config.cjs` existence check at the top of this
+  # file). Anything else is left alone and reported loudly rather than
+  # deleted; a skipped name is not a failure of THIS deploy (the process is,
+  # by definition, not this deploy's own), but it does mean the OPS-15
+  # rename is not fully complete on this droplet, which whoever reads the
+  # log needs to know, not have silently swallowed.
+  local own_cwd
+  own_cwd="$(pwd)"
+  local to_delete=() skipped=()
+  for old in "${present_old[@]}"; do
+    local cwd
+    cwd="$(pm2_field "$old" pm_cwd || true)"
+    if [ "$cwd" = "$own_cwd" ]; then
+      to_delete+=("$old")
+    else
+      skipped+=("$old")
+      echo "WARNING: pm2 knows '$old' but its pm_cwd ('${cwd:-unknown}') does
+not match this checkout ('$own_cwd') — leaving it alone rather than risk
+deleting a process an unrelated project on this shared droplet owns. The
+OPS-15 rename is NOT complete for '$old' until this is investigated by
+hand; it will keep showing up here on every future migration run until it
+either is renamed or is confirmed to genuinely belong to something else." >&2
+    fi
+  done
+
   local failed=()
   # `"${ARR[@]}"` on an EMPTY array under `set -u` is an unbound-variable
   # error on bash 3.2 (macOS's own `/bin/bash`, still bash 3.2 by license —
@@ -186,7 +239,7 @@ delete_old_pm2_names() {
   # has long since fixed this, but the `${ARR[@]+"${ARR[@]}"}` form below
   # costs nothing and keeps a local, macOS-run rehearsal of this script from
   # failing for a reason that has nothing to do with what it is testing.
-  for old in ${present_old[@]+"${present_old[@]}"}; do
+  for old in ${to_delete[@]+"${to_delete[@]}"}; do
     log "pm2 delete $old"
     if ! pm2 delete "$old"; then
       echo "ERROR: pm2 delete $old failed" >&2
@@ -217,7 +270,14 @@ main() {
     esac
   done
 
-  assert_ecosystem_has_new_names
+  # `assert_ecosystem_has_new_names` is not called here — `delete_old_pm2_names`
+  # below already calls it itself, only when there is actually an old name
+  # present to delete (its own comment explains why that order matters).
+  # Calling it here too would be a second, redundant check with the same
+  # false-negative gap this file used to have: it says nothing about whether
+  # the "start missing new names" loop further down can succeed if
+  # `PRESENT_OLD` is empty, which is the ordinary first-boot shape (no old
+  # names ever existed) this script is also used for.
 
   # What this run would actually do — computed before anything is printed or
   # touched, so the plan below and the actions further down never disagree.

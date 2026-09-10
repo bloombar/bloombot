@@ -111,14 +111,19 @@ export function Courses({
       {error && <ErrorMessage error={error} />}
 
       {courses === undefined ? (
-        // WEB-45: shaped like the cards `CourseRows` renders once `courses`
-        // resolves.
-        <div className="flex flex-col gap-3">
-          <SkeletonRow />
-          <SkeletonRow />
-          <SkeletonRow />
-          <LoadingStatus />
-        </div>
+        error ? null : (
+          // WEB-45: shaped like the cards `CourseRows` renders once
+          // `courses` resolves. `error ? null :` — same guard `Admin.tsx`'s
+          // own `failed` check exists for: a refusal must not also claim to
+          // still be loading, and a pulsing skeleton reads as active
+          // progress even more than the plain text it replaced.
+          <div className="flex flex-col gap-3">
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
+            <LoadingStatus />
+          </div>
+        )
       ) : courses.length === 0 ? (
         <p className="text-sm text-neutral-500">
           No courses in this project yet.

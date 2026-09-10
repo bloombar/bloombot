@@ -416,8 +416,14 @@ describe('CourseEditor (WEB-8)', () => {
     resolveCourse?.(COURSE)
 
     expect(await screen.findByDisplayValue('Web Design')).toBeInTheDocument()
-    // The skeleton is gone once the real form has taken its place.
-    expect(screen.queryByRole('status')).not.toHaveTextContent('Loading…')
+    // The skeleton is gone once the real form has taken its place — the
+    // same `.animate-pulse` check its sibling suites use, not a `role`
+    // query: the loaded form renders several other `role="status"` nodes
+    // of its own (WEB-20/WEB-22/WEB-43), so `getByRole('status')` would
+    // throw on more than one match, and `queryByRole('status')` returning
+    // any one of them would make `not.toHaveTextContent('Loading…')` pass
+    // for the wrong reason.
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
   })
 
   it('a failed load renders only the failure, never an editable blank form over a real course (finding 3)', async () => {

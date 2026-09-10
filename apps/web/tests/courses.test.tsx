@@ -130,6 +130,29 @@ describe('Courses (WEB-8)', () => {
     expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
   })
 
+  // WEB-45 (Admin.tsx-style regression): a refused courses.list must not
+  // also show a skeleton claiming this is still loading — the same
+  // `!error` guard `Admin.tsx`'s own `failed` check already holds every
+  // one of its own three screens to.
+  it('a failed load renders only the failure, never a skeleton pulsing underneath it', async () => {
+    listCourses.mockRejectedValue(
+      new ApiError(403, { error: 'action_refused' })
+    )
+
+    const { container } = renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(container.querySelectorAll('.animate-pulse').length).toBe(0)
+  })
+
   // WEB-26: Disable/Enable moved behind the row's own kebab menu — this
   // pins that the item is reachable *there*, not merely that the text
   // "Disable" exists somewhere on the page.

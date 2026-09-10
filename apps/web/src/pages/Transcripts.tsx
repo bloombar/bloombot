@@ -877,13 +877,19 @@ export function Transcripts({
           )}
 
           {entries === undefined ? (
-            // WEB-45: shaped like the `<li>` entries just below.
-            <div className="flex flex-col gap-2">
-              <SkeletonRow />
-              <SkeletonRow />
-              <SkeletonRow />
-              <LoadingStatus />
-            </div>
+            error ? null : (
+              // WEB-45: shaped like the `<li>` entries just below. `error ?
+              // null :` — same guard `Admin.tsx`'s own `failed` check
+              // exists for: a refusal must not also claim to still be
+              // loading, and a pulsing skeleton reads as active progress
+              // even more than the plain text it replaced.
+              <div className="flex flex-col gap-2">
+                <SkeletonRow />
+                <SkeletonRow />
+                <SkeletonRow />
+                <LoadingStatus />
+              </div>
+            )
           ) : entries.length === 0 ? (
             <p className="text-sm text-neutral-500">
               No messages match these filters.

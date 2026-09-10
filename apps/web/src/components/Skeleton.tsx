@@ -14,8 +14,19 @@
  * `LoadingStatus`, a visually-hidden (`sr-only`, the same convention
  * `FileDropZone.tsx` and `CourseEditor.tsx` already use for text sighted
  * users do not need) `role="status"` paragraph carrying the identical
- * "Loading…" text the old placeholder announced. The shape changed; the
- * announcement did not.
+ * "Loading…" text the old placeholder announced — preserved exactly as it
+ * was, no worse than before this slice. Whether that announcement is
+ * actually *heard* is a separate question `LoadingStatus` does not itself
+ * answer: WEB-43's own finding (`pages/CourseEditor.tsx`'s `Save course`
+ * status, further down this file's own call sites) is that a `role="status"`
+ * region mounted at the same moment as the text it carries is commonly
+ * missed entirely, and every one of `LoadingStatus`'s sixteen call sites
+ * (`Jobs.tsx`'s own persistent live region is the one exception) mounts
+ * exactly that way — conditionally, together with its text, on the same
+ * render as the rest of the skeleton. Making it reliable means the
+ * always-mounted-and-only-the-text-changes pattern `Jobs.tsx` already uses;
+ * that is a follow-up across all sixteen sites, not something this file
+ * alone can fix.
  *
  * `prefers-reduced-motion: reduce` suppressing the pulse lives once in
  * `style.css`, rather than a `motion-reduce:` variant repeated at every call

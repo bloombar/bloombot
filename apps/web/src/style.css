@@ -120,9 +120,13 @@
  * WEB-45: `prefers-reduced-motion: reduce` suppresses every skeleton's
  * pulse, once, here — rather than a `motion-reduce:animate-none` repeated
  * at each of `components/Skeleton.tsx`'s own call sites. `@layer utilities`
- * keeps this alongside Tailwind's own utility classes in the cascade, so it
- * reliably wins over the `animate-pulse` utility it is overriding rather
- * than depending on source order against a class Tailwind itself generates.
+ * puts this rule in the same cascade layer as Tailwind's own `.animate-pulse`
+ * utility — equal specificity, so source order is the only thing deciding
+ * between them, not the layer. This rule wins because it is emitted after
+ * `.animate-pulse` in the built stylesheet (this block sits below `@import
+ * 'tailwindcss'`, where Tailwind's own generated utilities land). That is a
+ * real, load-bearing ordering, not a coincidence of the layer name: move
+ * this block above the import and it silently stops winning.
  */
 @layer utilities {
   @media (prefers-reduced-motion: reduce) {

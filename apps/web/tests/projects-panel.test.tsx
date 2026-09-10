@@ -146,6 +146,17 @@ describe('ProjectsPanel (WEB-32, WEB-34)', () => {
         />
       )
     )
+
+    // WEB-42: `Projects` itself now fetches every listed project's own
+    // courses, to list them beneath each row — a legitimate `project-1`
+    // call this test is not about. Waited for and cleared here, the same
+    // way the fetch above already was, so it cannot be mistaken by the
+    // loop below for the *next* transition's stale-resolution defect.
+    await waitFor(() =>
+      expect(listCourses).toHaveBeenCalledWith(expect.anything(), 'project-1')
+    )
+    listCourses.mockClear()
+
     rerender(
       withModal(
         <ProjectsPanel

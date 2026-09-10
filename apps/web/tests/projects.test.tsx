@@ -12,10 +12,10 @@
  */
 
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
-import type { Project } from '../src/api/types.js'
+import type { CourseSummary, Project } from '../src/api/types.js'
 import { Projects } from '../src/pages/Projects.js'
 import { renderWithModal } from './helpers/render-with-modal.js'
 
@@ -26,6 +26,11 @@ const {
   unarchiveProject,
   renameProject,
   duplicateProject,
+  listCourses,
+  disableCourse,
+  enableCourse,
+  exportCourse,
+  downloadTextFile,
 } = vi.hoisted(() => ({
   listProjects: vi.fn(),
   createProject: vi.fn(),
@@ -33,6 +38,17 @@ const {
   unarchiveProject: vi.fn(),
   renameProject: vi.fn(),
   duplicateProject: vi.fn(),
+  // WEB-42 — `Projects` now fetches each listed project's own courses, and
+  // its shared `CourseRows` row offers the same Export/Disable-Enable
+  // `pages/Courses.tsx` does — every test in this file needs all four of
+  // these mocked too, not only the ones that assert on them below; a real
+  // implementation would otherwise dispatch an actual, unmocked action
+  // from under every one of them.
+  listCourses: vi.fn(),
+  disableCourse: vi.fn(),
+  enableCourse: vi.fn(),
+  exportCourse: vi.fn(),
+  downloadTextFile: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -47,6 +63,11 @@ vi.mock('../src/api/client.js', async () => {
     unarchiveProject,
     renameProject,
     duplicateProject,
+    listCourses,
+    disableCourse,
+    enableCourse,
+    exportCourse,
+    downloadTextFile,
   }
 })
 
@@ -65,6 +86,13 @@ function openProjectMenu(projectName: string) {
   )
 }
 
+beforeEach(() => {
+  // Default: no courses under any project — the tests below that care
+  // about the courses listing override this per case; the rest just need
+  // it to resolve at all.
+  listCourses.mockResolvedValue([])
+})
+
 afterEach(() => {
   vi.resetAllMocks()
 })
@@ -73,7 +101,14 @@ describe('Projects (WEB-7)', () => {
   it("lists the organization's active projects, excluding archived by default", async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
 
     expect(await screen.findByText('Fall 2026')).toBeInTheDocument()
     expect(listProjects).toHaveBeenCalledWith('org-1', false)
@@ -82,7 +117,14 @@ describe('Projects (WEB-7)', () => {
   it('toggling "show archived" re-lists with includeArchived: true', async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     fireEvent.click(screen.getByLabelText('Show archived'))
@@ -109,7 +151,14 @@ describe('Projects (WEB-7)', () => {
           })
       )
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     fireEvent.click(screen.getByLabelText('Show archived'))
 
     // The later request (includeArchived: true) resolves first, and the
@@ -138,7 +187,14 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([])
     createProject.mockResolvedValue(PROJECT)
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('No projects yet.')
 
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
@@ -161,7 +217,14 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([])
     createProject.mockResolvedValue(PROJECT)
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('No projects yet.')
 
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
@@ -183,7 +246,14 @@ describe('Projects (WEB-7)', () => {
   it('a whitespace-only name is refused by the "New project" modal, not silently accepted', async () => {
     listProjects.mockResolvedValue([])
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('No projects yet.')
 
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
@@ -203,7 +273,14 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([PROJECT])
     archiveProject.mockResolvedValue({ archived: true })
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
@@ -234,7 +311,14 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([archivedProject])
     unarchiveProject.mockResolvedValue({ archived: false })
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     // The archived marker, and the item's own label for an archived
@@ -258,7 +342,14 @@ describe('Projects (WEB-7)', () => {
     listProjects.mockResolvedValue([PROJECT])
     renameProject.mockResolvedValue({ ...PROJECT, name: 'Autumn 2026' })
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
@@ -300,7 +391,14 @@ describe('Projects (WEB-7)', () => {
       })
     )
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
@@ -327,7 +425,14 @@ describe('Projects (WEB-7)', () => {
       coursesDisabled: true,
     })
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
@@ -366,7 +471,14 @@ describe('Projects (WEB-7)', () => {
       })
     )
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('No projects yet.')
 
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
@@ -386,7 +498,12 @@ describe('Projects (WEB-7)', () => {
     const onOpenProject = vi.fn()
 
     renderWithModal(
-      <Projects organizationId="org-1" onOpenProject={onOpenProject} />
+      <Projects
+        organizationId="org-1"
+        onOpenProject={onOpenProject}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
     )
     await screen.findByText('Fall 2026')
 
@@ -405,7 +522,14 @@ describe('Projects — import a course (WEB-39)', () => {
   it('opens the import dialog for the row it was chosen from', async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     openProjectMenu('Fall 2026')
@@ -421,11 +545,338 @@ describe('Projects — import a course (WEB-39)', () => {
   it('shows no import dialog until the item is chosen', async () => {
     listProjects.mockResolvedValue([PROJECT])
 
-    renderWithModal(<Projects organizationId="org-1" onOpenProject={vi.fn()} />)
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
     await screen.findByText('Fall 2026')
 
     expect(
       screen.queryByText('Import a course into "Fall 2026"')
     ).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * WEB-42: each project row also lists that project's own courses, beneath
+ * it, with the same controls `pages/Courses.tsx` offers — sharing
+ * `components/CourseRows.tsx` rather than a second implementation of
+ * Export/Disable-Enable grown here. `courses.list` takes one project at a
+ * time, so this screen issues one request per listed project, in parallel.
+ */
+describe('Projects — courses beneath each project (WEB-42)', () => {
+  const PROJECT_TWO: Project = {
+    id: 'project-2',
+    organizationId: 'org-1',
+    name: 'Spring 2027',
+    archivedAt: null,
+    createdAt: 0,
+  }
+
+  const COURSE_ONE: CourseSummary = {
+    id: 'course-1',
+    organizationId: 'org-1',
+    projectId: 'project-1',
+    title: 'Web Design',
+    enabled: true,
+    adminsRole: 'admins-wd-fa26',
+    studentsRole: 'students-wd-fa26',
+    promptId: null,
+    instructions: 'Be helpful.',
+    model: null,
+    vectorStoreId: null,
+    maxRequestsPerDay: null,
+    conversationScope: 'course',
+    selfEnrolFromDiscord: false,
+    answerUnenrolled: true,
+    discordServerId: null,
+    createdAt: 0,
+  }
+
+  const COURSE_TWO: CourseSummary = {
+    ...COURSE_ONE,
+    id: 'course-2',
+    projectId: 'project-2',
+    title: 'Data Structures',
+  }
+
+  /** Every `Chat` control on the page is named after its own course (WEB-28), so this reaches the row scoped to one project rather than by button text alone — the same reason `courses.test.tsx#openCourseMenu` scopes by row. */
+  function courseRow(courseId: string) {
+    return screen.getByTestId(`course-${courseId}`)
+  }
+
+  it("lists each project's own courses beneath it, under the correct project", async () => {
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) =>
+        Promise.resolve(projectId === 'project-1' ? [COURSE_ONE] : [COURSE_TWO])
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+    expect(await screen.findByText('Data Structures')).toBeInTheDocument()
+    expect(listCourses).toHaveBeenCalledWith('org-1', 'project-1')
+    expect(listCourses).toHaveBeenCalledWith('org-1', 'project-2')
+
+    // The assertion out-of-order resolution would fail: each course
+    // nested under its *own* project's `<li>`, not merely present
+    // somewhere on the page.
+    expect(
+      within(courseRow('course-1')).getByText('Web Design')
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-1')).getByText('Web Design')
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-2')).getByText(
+        'Data Structures'
+      )
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-1')).queryByText(
+        'Data Structures'
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  it('a course appears under the right project even when the slower project resolves first', async () => {
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    let resolveProjectOne: (value: CourseSummary[]) => void = () => {}
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) => {
+        if (projectId === 'project-1') {
+          return new Promise((resolve) => {
+            resolveProjectOne = resolve
+          })
+        }
+        return Promise.resolve([COURSE_TWO])
+      }
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    // project-2's own courses resolve well before project-1's.
+    expect(await screen.findByText('Data Structures')).toBeInTheDocument()
+    resolveProjectOne([COURSE_ONE])
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+
+    expect(
+      within(screen.getByTestId('project-project-1')).getByText('Web Design')
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-2')).getByText(
+        'Data Structures'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('a project with no courses renders the empty state Courses.tsx already uses', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([])
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    expect(
+      await screen.findByText('No courses in this project yet.')
+    ).toBeInTheDocument()
+  })
+
+  it("one project's failed courses fetch renders that failure without blanking the other project's own courses", async () => {
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) =>
+        projectId === 'project-1'
+          ? Promise.reject(new ApiError(500, { error: 'internal_error' }))
+          : Promise.resolve([COURSE_TWO])
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Data Structures')).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-1')).getByRole('alert')
+    ).toBeInTheDocument()
+  })
+
+  it('the courses beneath a project are real nested markup — a list inside the project item, not merely indented text', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE_ONE])
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    const projectItem = screen.getByTestId('project-project-1')
+    // The project item is itself a listitem (its own `<ul>` in `Projects`);
+    // the courses beneath it are a *second*, nested list — not merely a
+    // padded `<div>` of course text.
+    expect(projectItem.tagName).toBe('LI')
+    const nestedList = within(projectItem).getByRole('list')
+    expect(within(nestedList).getByRole('listitem')).toContainElement(
+      courseRow('course-1')
+    )
+  })
+
+  it('a course title opens the course editor for the right project', async () => {
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) =>
+        Promise.resolve(projectId === 'project-1' ? [COURSE_ONE] : [COURSE_TWO])
+    )
+    const onOpenCourse = vi.fn()
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={onOpenCourse}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Data Structures')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Data Structures' }))
+
+    expect(onOpenCourse).toHaveBeenCalledWith(PROJECT_TWO, 'course-2')
+  })
+
+  it('Chat on a course row beneath a project hands its id up to onOpenChat', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE_ONE])
+    const onOpenChat = vi.fn()
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={onOpenChat}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Chat about "Web Design"' })
+    )
+
+    expect(onOpenChat).toHaveBeenCalledWith('course-1')
+  })
+
+  it('disables a course from its kebab menu beneath a project, through the same confirmation, and refreshes only that project', async () => {
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) =>
+        Promise.resolve(projectId === 'project-1' ? [COURSE_ONE] : [COURSE_TWO])
+    )
+    disableCourse.mockResolvedValue({ disabled: true })
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+    await screen.findByText('Data Structures')
+    listCourses.mockClear()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for "Web Design"' })
+    )
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    fireEvent.click(within(menu).getByRole('button', { name: 'Disable' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
+
+    await waitFor(() =>
+      expect(disableCourse).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    // Only the affected project's own courses refresh — not project-2's.
+    await waitFor(() =>
+      expect(listCourses).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    expect(listCourses).not.toHaveBeenCalledWith('org-1', 'project-2')
+  })
+
+  it('exports a course from its kebab menu beneath a project, and hands the file to the browser', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    listCourses.mockResolvedValue([COURSE_ONE])
+    exportCourse.mockResolvedValue({
+      filename: 'web-design.course.yml',
+      content: 'bloombotCourseExport: 1\n',
+      notCarried: {
+        vectorStore: false,
+        storedPrompt: false,
+        attachments: 0,
+        discordServer: false,
+      },
+    })
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for "Web Design"' })
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+
+    await waitFor(() =>
+      expect(exportCourse).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    await waitFor(() =>
+      expect(downloadTextFile).toHaveBeenCalledWith(
+        'web-design.course.yml',
+        'bloombotCourseExport: 1\n'
+      )
+    )
   })
 })

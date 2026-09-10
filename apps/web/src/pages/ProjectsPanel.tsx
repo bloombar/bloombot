@@ -113,6 +113,21 @@ export function ProjectsPanel({
             projectId: project.id,
           })
         }
+        // WEB-42: a course listed beneath one of `Projects`' own rows opens
+        // straight into the course editor, the same address
+        // `onOpenCourse` below builds for `Courses` — `Projects` hands the
+        // project back alongside the course id since it lists more than
+        // one project's courses at a time and this address needs both.
+        onOpenCourse={(project, courseId) =>
+          navigate({
+            kind: 'course-editor',
+            organizationId,
+            projectId: project.id,
+            courseId,
+            tab: 'general',
+          })
+        }
+        onOpenChat={onOpenChat}
       />
     )
   }

@@ -97,6 +97,58 @@ describe('Courses (WEB-8)', () => {
     expect(listCourses).toHaveBeenCalledWith('org-1', 'project-1')
   })
 
+  // PROJ-7: a role-less course's own metadata line must read sensibly
+  // rather than printing an empty `<code>` tag either role's absence
+  // would otherwise leave behind. Fails without the fix: the row used to
+  // render "routes on roles [empty] / [empty]" for a course naming
+  // neither.
+  it("a role-less course's row says it does not route on a role, rather than showing empty role tags", async () => {
+    const roleless: CourseSummary = {
+      ...COURSE,
+      adminsRole: null,
+      studentsRole: null,
+    }
+    listCourses.mockResolvedValue([roleless])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+    expect(
+      screen.getByText(/does not route on a role/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText('admins-wd-fa26')).not.toBeInTheDocument()
+    expect(screen.queryByText('students-wd-fa26')).not.toBeInTheDocument()
+  })
+
+  // A course naming only one of the two roles still shows that one, rather
+  // than reading as fully role-less.
+  it('a course naming only one role shows just that role, not the other as empty', async () => {
+    const adminsOnly: CourseSummary = { ...COURSE, studentsRole: null }
+    listCourses.mockResolvedValue([adminsOnly])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+    expect(screen.getByText('admins-wd-fa26')).toBeInTheDocument()
+    expect(screen.queryByText(/does not route on a role/)).not.toBeInTheDocument()
+  })
+
   // WEB-45: the list/collection shape — a row-shaped skeleton, gone once
   // the real course rows take its place.
   it('shows row-shaped skeletons while loading, announces them to assistive technology, and swaps them for the real list once courses.list resolves', async () => {

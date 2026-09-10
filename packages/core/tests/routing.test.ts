@@ -151,4 +151,70 @@ describe('routeMessage (CORE-2)', () => {
     })
     expect(result).toEqual({ kind: 'matched', course: webDesign })
   })
+
+  // PROJ-7: a course may name no role at all — the platform then does not
+  // attempt role-based identification for it. These three cases are exactly
+  // where a mistake is dangerous (this slice's own brief): `roleNames.has(null)`
+  // happening to be falsy is not a substitute for checking explicitly, since a
+  // course whose role is `''` rather than `null` would otherwise match every
+  // author, and two role-less courses would otherwise force every message
+  // without a category into `ambiguous`.
+  it('a role-less course is never a role match, even for an author holding no role at all', () => {
+    const roleless: RoutableCourse = {
+      id: 'course-roleless',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([roleless], {
+      categoryName: null,
+      channelName: null,
+      roleNames: [],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  it('a role-less course does not make an otherwise-unambiguous message ambiguous', () => {
+    const rolelessOne: RoutableCourse = {
+      id: 'course-roleless-one',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const rolelessTwo: RoutableCourse = {
+      id: 'course-roleless-two',
+      categoryNames: ['Yet Another'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    // Fails without the fix: two role-less courses, compared the naive way
+    // (`roleNames.has(course.adminsRole)` with no `!== null` guard), would
+    // both "match" whichever author holds no relevant role, reporting an
+    // ambiguity nobody named a colliding role for.
+    const result = routeMessage([rolelessOne, rolelessTwo, webDesign], {
+      categoryName: null,
+      channelName: null,
+      roleNames: ['admins-wd'],
+    })
+    expect(result).toEqual({ kind: 'matched', course: webDesign })
+  })
+
+  it('a course with only one role set still matches on that one', () => {
+    const adminsOnly: RoutableCourse = {
+      id: 'course-admins-only',
+      categoryNames: ['Something Else'],
+      adminsRole: 'admins-only-course',
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([adminsOnly], {
+      categoryName: null,
+      channelName: null,
+      roleNames: ['admins-only-course'],
+    })
+    expect(result).toEqual({ kind: 'matched', course: adminsOnly })
+  })
 })

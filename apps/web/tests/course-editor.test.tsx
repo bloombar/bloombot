@@ -798,8 +798,11 @@ describe('CourseEditor settings tabs (WEB-35)', () => {
         'true'
       )
     )
+    // PROJ-7: the field's own "leave blank" help text is still part of its
+    // accessible description alongside the refusal — both ids are in
+    // `aria-describedby` (`FormField.tsx`'s own `describedBy`).
     expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
-      'This role no longer exists on the bound Discord server.'
+      'Leave blank if this course should not route on a role. This role no longer exists on the bound Discord server.'
     )
   })
 })
@@ -1398,8 +1401,11 @@ describe('CourseEditor unsaved-changes prompt on a tab switch', () => {
         'true'
       )
     )
+    // PROJ-7: see the other `toHaveAccessibleDescription` case's own
+    // comment above — the field's "leave blank" help text is still part
+    // of its accessible description alongside the refusal.
     expect(screen.getByLabelText('Admins role')).toHaveAccessibleDescription(
-      'This role no longer exists on the bound Discord server.'
+      'Leave blank if this course should not route on a role. This role no longer exists on the bound Discord server.'
     )
     // Not the tab the click asked for — though where a refusal lands is
     // the refused *field's* tab, which can coincide with the clicked one

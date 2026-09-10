@@ -715,10 +715,15 @@ export function enrolViaDiscordRole(
   if (!course) return undefined
   // ENRL-7: either of the course's two roles admits — see this function's
   // own doc comment for why `adminsRole` is no longer excluded.
-  if (
-    !input.roleNames.includes(course.studentsRole) &&
-    !input.roleNames.includes(course.adminsRole)
-  ) {
+  // PROJ-7: a role that is absent (`null`) can never be held, so it is
+  // never a match — `roleNames` is always `string[]`, never containing
+  // `null`, so this is not merely a type guard.
+  const holdsStudentsRole =
+    course.studentsRole !== null &&
+    input.roleNames.includes(course.studentsRole)
+  const holdsAdminsRole =
+    course.adminsRole !== null && input.roleNames.includes(course.adminsRole)
+  if (!holdsStudentsRole && !holdsAdminsRole) {
     return undefined
   }
   return admit(

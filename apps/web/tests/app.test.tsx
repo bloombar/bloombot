@@ -627,6 +627,211 @@ describe('App — WEB-44: a sign-in destination naming an organization this acco
       screen.queryByTestId('organization-switcher')
     ).not.toBeInTheDocument()
   })
+
+  // Review finding 1 — a `refreshSession()` that does not resolve
+  // `signed-in` (an API restart between the redemption itself succeeding
+  // and the follow-up `/auth/me`, here) used to leave the address at
+  // `/sign-in/:token` forever: `RedeemLink` kept rendering "Signing you
+  // in…" over a token this very redemption already spent, with no error
+  // and no way to retry — a permanent spinner, not merely a slow one. Fails
+  // without the fix: the destination navigation used to be gated on
+  // `session.kind === 'signed-in'`, which this outcome never reaches.
+  it('a failing /auth/me right after redemption shows the unreachable retry screen, not a permanent "Signing you in…"', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-1',
+      destination: '/o/org-1/projects',
+    })
+    // The mount's own `refreshSession()` (App.tsx's first effect) runs
+    // before the token is ever redeemed — signed out, the ordinary case for
+    // a cold `/sign-in/:token` load — and the *second* call, the one
+    // `returnToShell` starts once redemption succeeds, is the one that
+    // fails.
+    fetchMe.mockResolvedValueOnce({ account: null })
+    fetchMe.mockRejectedValueOnce(new ApiError(0, { error: 'network_error' }))
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByText(
+        'Could not reach Bloombot. Check your connection and try again.'
+      )
+    ).toBeInTheDocument()
+    // The address still moved on from the spent token — matching what this
+    // screen already does regardless of route (it is not scoped to one).
+    expect(window.location.pathname).toBe('/o/org-1/projects')
+  })
+
+  // Review finding 2 — the reported bug's own exact shape, reproduced
+  // directly: a *second* account's sign-in token, redeemed in a tab that
+  // already held a *first* account's live session. The ordering is forced
+  // rather than hoped for: account A's own session (the mount's own
+  // `refreshSession()`) is allowed to resolve and land *before* the
+  // redemption's own `refreshSession()` call — its `fetchMe` is held open
+  // on a promise this test resolves by hand — so any code that reads
+  // ambient `session` state instead of the value this exact call produced
+  // has every opportunity to read A. Fails without the fix: resolving the
+  // destination against whichever session happened to already be sitting
+  // in this component (A's, unrelated to the token just redeemed) rather
+  // than the one this redemption's own `/auth/me` call produced (B)
+  // rendered `NotFound` for an address B could reach perfectly well — the
+  // exact symptom this slice exists to eliminate.
+  it('a sign-in token for a different account than the one already loaded in this tab lands on that account own organization, not NotFound', async () => {
+    redeemSignInLink.mockResolvedValue({
+      accountId: 'account-b',
+      destination: '/o/org-b/projects',
+    })
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+
+    let resolveSecondFetchMe:
+      ((value: { account: unknown }) => void) | undefined
+    fetchMe
+      // First call — the mount's own `refreshSession()` — account A,
+      // already signed in in this tab, a member of `org-a` only. Resolves
+      // immediately, deliberately, so A's session has every chance to land
+      // before B's own call below ever does.
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          account: {
+            id: 'account-a',
+            email: 'a@example.edu',
+            memberships: [
+              {
+                organizationId: 'org-a',
+                organizationName: 'Org A',
+                role: 'owner',
+              },
+            ],
+            connectedOrganizations: [],
+          },
+        })
+      )
+      // Second call — `returnToShell`'s own, once redemption succeeds —
+      // account B, a member of `org-b` only; the two accounts share no
+      // organization at all. Held open until this test resolves it below,
+      // by hand, well after A's own session has already committed.
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecondFetchMe = resolve
+          })
+      )
+    window.history.pushState(null, '', '/sign-in/a-token')
+
+    renderWithModal(<App />)
+
+    // The redemption itself has run (`redeemSignInLink` called), and A's
+    // own session — the mount's `refreshSession()`, the first `fetchMe`
+    // call above — has had every microtask turn available to it to land,
+    // before B's own `fetchMe` (the second call, still held open) is ever
+    // allowed to resolve.
+    await vi.waitFor(() => expect(redeemSignInLink).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    resolveSecondFetchMe!({
+      account: {
+        id: 'account-b',
+        email: 'b@example.edu',
+        memberships: [
+          { organizationId: 'org-b', organizationName: 'Org B', role: 'owner' },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org B')
+    expect(window.location.pathname).toBe('/o/org-b/projects')
+  })
+
+  // "Also fix" — both branches of `returnToShell`'s own destination
+  // handling replace the current history entry rather than pushing one, so
+  // Back from the shell never lands on the spent, single-use token
+  // (`/sign-in/:token`) — the same WEB-34 discipline every other entry
+  // point above `ShellRoute`/`'home'` already holds itself to.
+  describe('replace discipline (WEB-34)', () => {
+    it('a reachable destination replaces the sign-in address rather than pushing a new entry', async () => {
+      redeemSignInLink.mockResolvedValue({
+        accountId: 'account-1',
+        destination: '/o/personal-org/projects',
+      })
+      listProjects.mockResolvedValue([])
+      listDiscordServers.mockResolvedValue([])
+      fetchMe.mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'student@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Student',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      // `replaceState` here, not `pushState` — this is establishing the
+      // cold-load address the test starts from, not the navigation under
+      // test, and a lingering `pushState` spy from an earlier test in this
+      // file (`vi.spyOn` returns the same spy on a second call against an
+      // already-spied method, so an *unspied* call here would be silently
+      // attributed to whichever test spied first) must never be able to
+      // record it.
+      window.history.replaceState(null, '', '/sign-in/a-token')
+      const pushState = vi.spyOn(window.history, 'pushState')
+      const replaceState = vi.spyOn(window.history, 'replaceState')
+
+      renderWithModal(<App />)
+
+      await screen.findByTestId('organization-switcher')
+      expect(window.location.pathname).toBe('/o/personal-org/projects')
+      expect(pushState).not.toHaveBeenCalled()
+      expect(replaceState).toHaveBeenCalled()
+    })
+
+    it('an unreachable destination falling back to the default organization also replaces, not pushes', async () => {
+      redeemSignInLink.mockResolvedValue({
+        accountId: 'account-1',
+        destination: '/o/stale-org/projects',
+      })
+      listProjects.mockResolvedValue([])
+      listDiscordServers.mockResolvedValue([])
+      fetchMe.mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'student@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Student',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      // `replaceState` here, not `pushState` — this is establishing the
+      // cold-load address the test starts from, not the navigation under
+      // test, and a lingering `pushState` spy from an earlier test in this
+      // file (`vi.spyOn` returns the same spy on a second call against an
+      // already-spied method, so an *unspied* call here would be silently
+      // attributed to whichever test spied first) must never be able to
+      // record it.
+      window.history.replaceState(null, '', '/sign-in/a-token')
+      const pushState = vi.spyOn(window.history, 'pushState')
+      const replaceState = vi.spyOn(window.history, 'replaceState')
+
+      renderWithModal(<App />)
+
+      await screen.findByTestId('organization-switcher')
+      expect(window.location.pathname).toBe('/o/personal-org/projects')
+      expect(pushState).not.toHaveBeenCalled()
+      expect(replaceState).toHaveBeenCalled()
+    })
+  })
 })
 
 describe('App — /join/:secret (ENRL-8)', () => {

@@ -11016,21 +11016,43 @@ stale or captured destination — the reporter's own case fits a locally reset d
 organization id no longer in anyone's memberships or connections — then named an address WEB-32's own check
 correctly refuses, but for the wrong reason: the account never asked to go there, this app delivered it.
 
-**Choice: hold the destination as pending state, and resolve it only once the session is known — never
-navigate to it "optimistically" and correct afterwards.** `returnToShell` cannot check reachability itself:
-at the moment a sign-in redemption calls it, `refreshSession()` has not yet resolved, so this account's own
-memberships and connected identities are not yet in hand. The alternative — navigate immediately, as before,
-and let the WEB-32 branch redirect home instead of rendering `NotFound` when the current entry is a
-post-sign-in landing — was rejected: it would have needed that branch to know *why* it was reached (typed
-address vs. delivered destination), turning a single, simple no-leak check into one with a mode, and risking
-a genuinely mistyped URL silently redirecting home instead of saying so. Holding the parsed destination in
-`pendingSignInDestination` and resolving it in an effect gated on `session.kind === 'signed-in'` keeps the
-two concerns apart: `RedeemLink` keeps showing "Signing you in…" for the extra tick this adds, then the
-effect either takes the destination (reachable) or falls back to `resolveHomeRoute`'s own account-default
-address (unreachable) — the identical fallback `/` already uses for an account with nothing else to land on.
+**Choice: `returnToShell` awaits its own `refreshSession()` call and decides from what it resolved to,
+directly — never from ambient `session` state.** `returnToShell` cannot check reachability at the moment a
+sign-in redemption calls it: `refreshSession()` has not yet resolved, so this account's own memberships and
+connected identities are not yet in hand. `refreshSession` was widened to resolve with the `SessionState` it
+just produced (rather than only setting it), so its caller can branch on exactly that value: `next.kind ===
+'signed-in' && isShellRoute(destination) && !isReachableShellRoute(destination, next.account)` falls back to
+`resolveHomeRoute`; anything else — `next.kind` unreachable/signed-out, or a reachable/non-`ShellRoute`
+destination — navigates to the destination itself, which is exactly what the app's own ordinary
+session-state rendering already knows how to answer (the `unreachable` retry screen, or `SignIn` reoffered
+with that same destination, neither of which cares what the address bar names).
+
+**Rejected first: holding the destination as pending state, resolved by a *separate* effect gated on
+`session.kind === 'signed-in'`.** Adversarial review, reproduced with probe tests rather than reasoned about,
+found this shape carries two bugs of its own, both on the path this slice exists to fix:
+
+1. **Gating on `session.kind === 'signed-in'` reads whichever session happens to already be sitting in this
+   component, not the one this redemption's own `/auth/me` call produced.** A tab already holding a live
+   session for account A, given a sign-in token for a different account B whose destination names an
+   organization only B belongs to, resolved the pending destination against A the moment the effect first
+   saw `session.kind === 'signed-in'` — which was A, still, since B's own `refreshSession()` call had not
+   yet resolved. The effect took the (wrong) verdict immediately, navigated to A's own default organization,
+   and then rendered `NotFound` once B's session actually arrived and the ordinary WEB-32 check ran against
+   the now-stale address — the exact symptom this slice was written to eliminate, reintroduced by the fix
+   meant to remove it.
+2. **The effect only ever fired for `session.kind === 'signed-in'`**, so a `refreshSession()` that resolved
+   `unreachable` (an API restart) or `signed-out` (a dropped cookie) never fired it at all. The address stayed
+   at `/sign-in/:token`, `RedeemLink` still rendering "Signing you in…" over a token already spent by the
+   redemption that got there — forever, with no error and no retry, and a reload re-redeeming a single-use
+   token that 401s.
+
+Awaiting the refresh directly, in `returnToShell` itself, closes both: the account checked is always the one
+this exact call produced, never an ambient one that might be stale or belong to someone else, and every
+outcome — not only `signed-in` — navigates the address on from `'sign-in'`, so the ordinary render logic
+gets a turn regardless of what the refresh resolved to.
 
 **Choice: one shared `isReachableShellRoute`, not two copies of the same check.** The WEB-32 branch's own
-inline membership/connection check and the new pending-destination effect need to agree on exactly the same
+inline membership/connection check and `returnToShell`'s own resolution need to agree on exactly the same
 definition of "cannot reach" — the no-leak guarantee is only as strong as the weaker of two checks, if they
 were allowed to drift. Both now call one function; `'account'` is always reachable (it names no
 organization), and everything else is a membership or a connected identity, matching what `resolveHomeRoute`

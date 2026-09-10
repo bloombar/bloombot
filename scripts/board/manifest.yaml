@@ -3570,7 +3570,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel

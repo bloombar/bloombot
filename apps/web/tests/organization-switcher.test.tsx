@@ -164,11 +164,12 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         navigate={vi.fn()}
       />
     )
-    // A real `href` — visible on hover, and "copy link" works. The
-    // accessible name carries the trailing role label too (this file's own
-    // `Acme U (owner)` — `Account.tsx`'s identical choice, its own module
-    // comment on why one link, not two adjoining pieces of clickable text).
-    expect(screen.getByRole('link', { name: /^Acme U/ })).toHaveAttribute(
+    // A real `href` — visible on hover, and "copy link" works. The role
+    // label sits *outside* the anchor (`OrganizationSwitcher.tsx`'s own
+    // module comment on why — `Account.tsx`'s rows now match this too), so
+    // the accessible name is the organization's name alone, not "Acme U
+    // (owner)".
+    expect(screen.getByRole('link', { name: 'Acme U' })).toHaveAttribute(
       'href',
       '/o/org-1/projects'
     )
@@ -191,7 +192,7 @@ describe('OrganizationSwitcher (WEB-3)', () => {
         navigate={navigate}
       />
     )
-    const link = screen.getByRole('link', { name: /^Acme U/ })
+    const link = screen.getByRole('link', { name: 'Acme U' })
     const event = fireEvent.click(link)
     // `false` means the click's default was prevented — the actual proof
     // this is a client-side navigation, not merely that `navigate` ran.
@@ -226,10 +227,34 @@ describe('OrganizationSwitcher (WEB-3)', () => {
           navigate={navigate}
         />
       )
-      const link = screen.getByRole('link', { name: /^Acme U/ })
+      const link = screen.getByRole('link', { name: 'Acme U' })
       const event = fireEvent.click(link, eventInit)
       expect(event).toBe(true)
       expect(navigate).not.toHaveBeenCalled()
     }
   )
+
+  // WEB-41 rework (finding 3, coordinator review) — a connected-only
+  // relationship links to Chat, not Projects: `Shell.tsx`'s own
+  // `effectiveTab` forces such an account to Chat the moment it lands
+  // anywhere else in that organization and replaces the address to match,
+  // so a Projects link would hover- and cmd-click-advertise a screen this
+  // account can never actually reach there.
+  it('a single connected-only organization’s link points at Chat, not Projects', () => {
+    render(
+      <OrganizationSwitcher
+        memberships={[]}
+        connectedOrganizations={[
+          { organizationId: 'org-1', organizationName: 'A University' },
+        ]}
+        activeOrganizationId="org-1"
+        onChange={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('link', { name: 'A University' })).toHaveAttribute(
+      'href',
+      '/o/org-1/chat'
+    )
+  })
 })

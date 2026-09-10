@@ -28,17 +28,21 @@
  * is the one place either ever lands).
  *
  * WEB-41 — each row's own name is now also a link to that organization's
- * main page (`{ kind: 'projects', organizationId }`), via the shared
- * `AppLink` — this adds a way to *open* an organization, alongside (not
- * instead of) the existing switch control: switching changes which
- * organization this whole shell is acting in, opening the link only reads
- * that organization's projects without disturbing the active one at all.
+ * main page, via the shared `AppLink` — this adds a way to *open* an
+ * organization, alongside (not instead of) the existing switch control:
+ * switching changes which organization this whole shell is acting in,
+ * opening the link only reads that organization's own screen without
+ * disturbing the active one at all. That screen is Projects for a
+ * membership and Chat for a connected-only relationship (`routeForTab`,
+ * the same member-vs-connected split `Shell.tsx#effectiveTab` already
+ * enforces server-side-adjacent — a connected-only row's link must not
+ * advertise a screen that account can never actually reach there).
  */
 
 import type { AccountSummary } from '../api/types.js'
 import { AppLink } from '../components/AppLink.js'
 import { Button } from '../components/Button.js'
-import type { Route } from '../routing/route.js'
+import { routeForTab, type Route } from '../routing/route.js'
 
 export interface AccountProps {
   account: AccountSummary
@@ -101,27 +105,43 @@ export function Account({
               >
                 <div>
                   <p className="text-sm font-medium text-neutral-900">
-                    {/* WEB-41 — the organization's own main page, not a
-                        switch: opening this does not change which
+                    {/* WEB-41 rework — the organization's own main page, not
+                        a switch: opening this does not change which
                         organization is active (`onSwitchOrganization`,
-                        below, still owns that). The role label stays
-                        inside the same link as the name, rather than as a
-                        separate trailing element — one link per row, not
-                        two adjoining clickable pieces of text that read as
-                        one. */}
+                        below, still owns that). The role label sits
+                        *outside* the link, matching the header's own
+                        `OrganizationSwitcher.tsx` (that file's own module
+                        comment on why) — a link's accessible name should
+                        not announce the account's own relationship to the
+                        destination, and the role label is not itself a
+                        second destination to click. A membership's own
+                        `projects` and a connected-only relationship's
+                        `chat` mirror `Shell.tsx#effectiveTab`'s own
+                        member-vs-connected split (`OrganizationSwitcher.tsx`'s
+                        identical fix) — a connected-only row would otherwise
+                        advertise, and briefly open, a Projects screen this
+                        account can never actually reach there. */}
+                    {/* WEB-41 rework (finding 6) — a hover underline
+                        here, deliberately: this settings list is not the
+                        header, which the brief for this slice explicitly
+                        froze ("same font, size, weight, color, spacing" —
+                        `OrganizationSwitcher.tsx`'s own link stays bare for
+                        that reason alone), so there is no reason to leave
+                        this row's own link with no hover affordance at
+                        all. */}
                     <AppLink
-                      to={{
-                        kind: 'projects',
-                        organizationId: row.organizationId,
-                      }}
+                      to={routeForTab(
+                        row.role !== undefined ? 'projects' : 'chat',
+                        row.organizationId
+                      )}
                       navigate={navigate}
                       className="hover:underline"
                     >
-                      {row.organizationName}{' '}
-                      <span className="font-normal text-neutral-500">
-                        ({row.role ?? 'connected'})
-                      </span>
-                    </AppLink>
+                      {row.organizationName}
+                    </AppLink>{' '}
+                    <span className="font-normal text-neutral-500">
+                      ({row.role ?? 'connected'})
+                    </span>
                   </p>
                   {isActive && (
                     <p className="text-sm text-neutral-500">Active</p>

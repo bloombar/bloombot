@@ -45,7 +45,7 @@ import type {
   ConnectedOrganizationSummary,
   MembershipSummary,
 } from '../api/types.js'
-import type { Route } from '../routing/route.js'
+import { routeForTab, type Route } from '../routing/route.js'
 import { AppLink } from './AppLink.js'
 
 export interface OrganizationSwitcherProps {
@@ -53,7 +53,7 @@ export interface OrganizationSwitcherProps {
   connectedOrganizations: ConnectedOrganizationSummary[]
   activeOrganizationId: string
   onChange: (organizationId: string) => void
-  /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, threaded down the same way `pages/Shell.tsx` already threads it everywhere else; only the single-organization plain-text case (below) uses it. */
+  /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, already wrapped in `pages/Shell.tsx`'s own `guardedNavigate` (WEB-16) before it reaches here — the same guarding `changeActiveOrganization`'s own call to this component's `onChange` already gets, so a dirty form elsewhere in the tree gets the same say before this link is honoured that it gets before every other navigation this shell starts. Only the single-organization plain-text case (below) uses it. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
@@ -92,6 +92,23 @@ export function OrganizationSwitcher({
   // (this file's own module comment) — just the name, and the role/
   // "connected" label LINK-10 already required.
   if (options.length <= 1) {
+    // WEB-41 — a member reaches this organization's Projects tab; a
+    // connected-only person (this option's own `role === undefined`,
+    // exactly how "connected" above is already decided) is forced to Chat
+    // by `Shell.tsx`'s own `effectiveTab` the moment they land anywhere
+    // else in that organization, and it replaces the address to match
+    // (`Shell.tsx`'s own module comment on that rule) — a link to Projects
+    // would hover- and cmd-click-advertise a screen this account never
+    // actually reaches, and a plain click would flash it before the
+    // replace corrected it. `routeForTab` is the same mapping
+    // `Shell.tsx#onHome` already uses one line above `isMember`'s own
+    // definition there.
+    const activeRoute = active
+      ? routeForTab(
+          active.role !== undefined ? 'projects' : 'chat',
+          active.organizationId
+        )
+      : undefined
     return (
       <p
         className="text-sm font-medium text-neutral-900"
@@ -103,12 +120,12 @@ export function OrganizationSwitcher({
             inherited by any element regardless, so this reads exactly as
             the plain text it replaces (the brief's own "same font, size,
             weight, color, spacing" — no underline, no brand color to
-            resist adding here). */}
-        {active ? (
-          <AppLink
-            to={{ kind: 'projects', organizationId: active.organizationId }}
-            navigate={navigate}
-          >
+            resist adding here). The role label stays outside the link
+            (`Account.tsx`'s own rows now match this, WEB-41 rework) — one
+            clickable name, one non-clickable label, not a link whose
+            accessible name announces the account's own relationship. */}
+        {active && activeRoute ? (
+          <AppLink to={activeRoute} navigate={navigate}>
             {active.organizationName}
           </AppLink>
         ) : (

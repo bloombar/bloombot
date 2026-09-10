@@ -57,11 +57,23 @@ describe('Account (WEB-30)', () => {
         navigate={vi.fn()}
       />
     )
-    expect(screen.getByText(/Org One/)).toHaveTextContent('(owner)')
-    expect(screen.getByText(/Org Two/)).toHaveTextContent('(assistant)')
+    // WEB-41 rework (finding 2, coordinator review) — scoped from the
+    // row's own `<p>` rather than the matched text node directly: the
+    // organization's name is now a link (`Account.tsx`'s own module
+    // comment on why the role label sits outside it), so `getByText`
+    // alone matches only the anchor, not the trailing role label beside
+    // it.
+    expect(screen.getByText(/Org One/).closest('p')).toHaveTextContent(
+      '(owner)'
+    )
+    expect(screen.getByText(/Org Two/).closest('p')).toHaveTextContent(
+      '(assistant)'
+    )
     // LINK-3: connecting proves an identity, it grants nothing — no role to
     // show, so this reads "connected" rather than inventing one.
-    expect(screen.getByText(/A University/)).toHaveTextContent('(connected)')
+    expect(screen.getByText(/A University/).closest('p')).toHaveTextContent(
+      '(connected)'
+    )
   })
 
   it('marks which organization is active, and offers no switch control for it', () => {
@@ -119,7 +131,7 @@ describe('Account (WEB-30)', () => {
 
   // --- WEB-41: each row's own name is a real link ---------------------
 
-  it('renders each organization row as a link to that organization’s main page', () => {
+  it('renders each membership row as a link to that organization’s Projects page', () => {
     render(
       <Account
         account={ACCOUNT}
@@ -130,20 +142,37 @@ describe('Account (WEB-30)', () => {
     )
     // A real `href`, built the same way `buildPath` builds every other
     // address in this app — visible on hover, and "copy link" works. The
-    // link's accessible name carries the trailing role label alongside the
-    // name (`Account.tsx`'s own comment on why it is one link, not two
-    // adjoining pieces of clickable text), so this matches on a prefix.
-    expect(screen.getByRole('link', { name: /^Org One/ })).toHaveAttribute(
+    // role label sits outside the anchor (`Account.tsx`'s own module
+    // comment, WEB-41 rework finding 2), so the accessible name is the
+    // organization's name alone.
+    expect(screen.getByRole('link', { name: 'Org One' })).toHaveAttribute(
       'href',
       '/o/org-1/projects'
     )
-    expect(screen.getByRole('link', { name: /^Org Two/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Org Two' })).toHaveAttribute(
       'href',
       '/o/org-2/projects'
     )
-    expect(screen.getByRole('link', { name: /^A University/ })).toHaveAttribute(
+  })
+
+  // WEB-41 rework (finding 3, coordinator review) — a connected-only
+  // relationship (no membership) links to Chat, not Projects: `Shell.tsx`'s
+  // own `effectiveTab` forces such an account to Chat the moment it lands
+  // anywhere else in that organization and replaces the address to match,
+  // so a Projects link would advertise, and briefly open, a screen this
+  // account can never actually reach there.
+  it('renders a connected-only row as a link to that organization’s Chat page, not Projects', () => {
+    render(
+      <Account
+        account={ACCOUNT}
+        activeOrganizationId="org-1"
+        onSwitchOrganization={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('link', { name: 'A University' })).toHaveAttribute(
       'href',
-      '/o/org-3/projects'
+      '/o/org-3/chat'
     )
   })
 
@@ -157,7 +186,7 @@ describe('Account (WEB-30)', () => {
         navigate={navigate}
       />
     )
-    const link = screen.getByRole('link', { name: /^Org Two/ })
+    const link = screen.getByRole('link', { name: 'Org Two' })
     const event = fireEvent.click(link)
     // `fireEvent.click` returns `false` when the event's default was
     // prevented — the actual assertion that this is a client-side
@@ -186,7 +215,7 @@ describe('Account (WEB-30)', () => {
           navigate={navigate}
         />
       )
-      const link = screen.getByRole('link', { name: /^Org Two/ })
+      const link = screen.getByRole('link', { name: 'Org Two' })
       const event = fireEvent.click(link, eventInit)
       // Not prevented — a modified or non-primary click has to reach the
       // browser's own "open in a new tab" handling, which only happens if

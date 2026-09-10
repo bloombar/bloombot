@@ -1255,7 +1255,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       renderShell({ account: SINGLE_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
       const header = screen.getByRole('banner')
       expect(
-        within(header).getByRole('link', { name: /^Org One/ })
+        within(header).getByRole('link', { name: 'Org One' })
       ).toHaveAttribute('href', '/o/org-1/projects')
     })
 
@@ -1276,8 +1276,56 @@ describe('Shell (WEB-3, WEB-4)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
       const header = screen.getByRole('banner')
       expect(
-        within(header).getByRole('link', { name: /^Org One/ })
+        within(header).getByRole('link', { name: 'Org One' })
       ).toHaveAttribute('href', '/o/org-1/projects')
+    })
+
+    // WEB-41 rework (must-fix 1, coordinator review) — the header's own
+    // link is a navigation this shell starts, exactly like the drawer's
+    // items, the home control and the multi-org `<select>`
+    // (`changeActiveOrganization`) — all of which already go through
+    // `guardedNavigate` (WEB-16). Before this fix, `Shell.tsx` passed the
+    // raw `navigate` straight to `OrganizationSwitcher`, so this one path
+    // bypassed the guard and discarded a dirty form's edits with no
+    // prompt at all — the same class of gap the Sign-out rework above
+    // this `describe` block already closed for a different control.
+    it('a dirty course form asks first, even though the click that would discard it is the header’s organization link', async () => {
+      const projectOrg1: Project = {
+        id: 'project-1',
+        organizationId: 'org-1',
+        name: 'Fall 2026',
+        archivedAt: null,
+        createdAt: 0,
+      }
+      listProjects.mockResolvedValue([projectOrg1])
+      listCourses.mockResolvedValue([])
+
+      renderShell({ account: SINGLE_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+      await screen.findByText('Fall 2026')
+      fireEvent.click(screen.getByRole('button', { name: 'Fall 2026' }))
+      await screen.findByRole('button', { name: 'New course' })
+      fireEvent.click(screen.getByRole('button', { name: 'New course' }))
+      fireEvent.change(screen.getByLabelText('Title'), {
+        target: { value: 'A course I never saved' },
+      })
+
+      const header = screen.getByRole('banner')
+      fireEvent.click(within(header).getByRole('link', { name: 'Org One' }))
+
+      // Blocked until confirmed — still on the dirty form, title intact.
+      const dialog = await screen.findByRole('dialog', {
+        name: 'Discard unsaved changes?',
+      })
+      expect(screen.getByLabelText('Title')).toHaveValue(
+        'A course I never saved'
+      )
+
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: 'Discard changes' })
+      )
+      // Confirmed — now it actually navigates, to the address the link
+      // named all along.
+      await screen.findByRole('heading', { name: 'Projects' })
     })
   })
 

@@ -3300,7 +3300,7 @@
     untouched, so "open in a new tab" and "copy link" both work the way they do
     for any other link on the web. Every button-based navigation control in the
     panel shows a pointer cursor on hover…
-  section: §35 Course Portability
+  section: §34 Web Control Panel
   family: WEB
   phase: 19
   status: Backlog

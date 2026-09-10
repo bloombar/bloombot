@@ -606,7 +606,13 @@ function ShellInner({
       // WEB-30: the acting organization's name sits at the header's leading
       // edge, in the space the nav row vacated — every navigation it starts
       // still goes through `guardedNavigate` (WEB-16), unchanged from before
-      // this slice.
+      // this slice. WEB-41 rework (must-fix 1) — that includes the new
+      // link itself: `navigate` is wrapped here, not passed through raw, so
+      // a dirty form elsewhere in the tree gets the same say before this
+      // click is honoured that it already gets before `changeActiveOrganization`
+      // (immediately below) and every other navigation this shell starts.
+      // Before this fix, the header's own link was the one path in this
+      // shell that bypassed the guard and silently discarded unsaved edits.
       headerStart={
         <OrganizationSwitcher
           memberships={account.memberships}
@@ -615,7 +621,7 @@ function ShellInner({
           onChange={(organizationId) =>
             changeActiveOrganization(organizationId)
           }
-          navigate={navigate}
+          navigate={(route) => guardedNavigate(() => navigate(route))}
         />
       }
       // WEB-30: the header's trailing edge holds the profile control alone
@@ -811,13 +817,20 @@ function ShellInner({
         // altogether now (WEB-32 — `changeActiveOrganization` moves to the
         // new organization's own screen), so there is no mid-switch remount
         // for a key to protect against in the first place.
+        // WEB-41 rework — `navigate` guarded the same way `headerStart`'s
+        // own `OrganizationSwitcher` now is (this file's own comment there,
+        // must-fix 1), for the same reason: a row's link is a navigation
+        // like any other this shell starts. No dirty form is reachable
+        // from `/account` itself today, so this is currently a no-op
+        // guard — kept anyway, so this file holds one convention for
+        // "how `navigate` reaches a link" rather than two.
         <Account
           account={account}
           activeOrganizationId={activeOrganizationId}
           onSwitchOrganization={(organizationId) =>
             changeActiveOrganization(organizationId)
           }
-          navigate={navigate}
+          navigate={(route) => guardedNavigate(() => navigate(route))}
         />
       ) : isProjectsRoute(route) ? (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

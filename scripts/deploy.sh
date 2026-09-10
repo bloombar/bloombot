@@ -33,17 +33,33 @@
 # un-migrate" note for what an operator does about that case.
 #
 # Environment overrides (all optional):
-#   APP_DIR          checkout to deploy       (default $HOME/discord-channel-manager)
-#   PM2_APP          pm2 process name for the Python bot (default bloombot).
-#                    Set it EMPTY (PM2_APP=) on a droplet that has finished the
-#                    cutover: the Python bot, its dependency install and its
-#                    interpreter check are then all skipped.
-#   PM2_INTERPRETER  python the bot runs under (default: the pipenv virtualenv's
-#                    python if this checkout has one, else python3)
-#   GIT_REMOTE       remote to fetch from     (default origin)
-#   HEALTH_WAIT      seconds to watch a process after reload (default 15)
-#   BUILD_HEAP_MB    V8 old-space ceiling for the two builds, in MB (default:
-#                    1536 on a host with under 2 GB of RAM, else V8's own)
+#   APP_DIR             checkout to deploy    (default $HOME/discord-channel-manager)
+#   PM2_APP             pm2 process name for the Python bot (default bloombot).
+#                        Set it EMPTY (PM2_APP=) on a droplet that has finished
+#                        the cutover: the Python bot, its dependency install
+#                        and its interpreter check are then all skipped.
+#   PM2_INTERPRETER     python the bot runs under (default: the pipenv
+#                        virtualenv's python if this checkout has one, else
+#                        python3)
+#   GIT_REMOTE          remote to fetch from  (default origin)
+#   HEALTH_WAIT         seconds to watch a process after reload (default 15)
+#   BUILD_HEAP_MB       V8 old-space ceiling for the two builds, in MB
+#                        (default: 1536 on a host with under 2 GB of RAM,
+#                        else V8's own)
+#   MIGRATE_PM2_NAMES   OPS-16 — off by default (empty/unset). Any non-empty
+#                        value turns this run into the OPS-15 pm2 rename
+#                        migration itself: the old-name guard below does not
+#                        abort, and once the build has succeeded — never
+#                        before — this deploy deletes the five old bare-named
+#                        pm2 processes and lets the ordinary reload start
+#                        their `bloombot-` prefixed replacements. A migration
+#                        is ONE-WAY: renamed pm2 processes are not part of
+#                        what a rollback undoes (see `restore_previous_checkout`'s
+#                        own scope, and `reload_everything`'s comment below).
+#                        Set this for exactly one deploy — the one that
+#                        migrates an unmigrated droplet — never as a standing
+#                        default; see `scripts/migrate-pm2-names.sh`'s own
+#                        header for the hazard a rename carries.
 
 set -euo pipefail
 
@@ -60,6 +76,9 @@ APP_DIR="${APP_DIR:-$HOME/discord-channel-manager}"
 PM2_APP="${PM2_APP-bloombot}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 HEALTH_WAIT="${HEALTH_WAIT:-15}"
+# OPS-16 — empty/unset means "off"; see this file's own header for what a
+# non-empty value does.
+MIGRATE_PM2_NAMES="${MIGRATE_PM2_NAMES:-}"
 # Heap ceiling for the two builds below, in MB. V8 sizes its old-space from
 # total system memory, and on a 1 GB droplet it settles around 480 MB — far
 # under what `tsc --build` needs across this workspace, so the build dies with
@@ -267,6 +286,38 @@ start_or_reload() {
 # restart.
 reload_everything() {
   local failed=()
+  # OPS-16 — when this deploy is migrating pm2's names (MIGRATE_PM2_NAMES),
+  # the old bare-named processes are deleted here, first, immediately before
+  # the reload loop below — never earlier, since the build above this call
+  # is what proves the new names are safe to start at all. `start_or_reload`
+  # then sees "pm2 does not know bloombot-api yet" for each one and starts
+  # it fresh from ecosystem.config.cjs, rather than reloading a lingering
+  # bare-named process that is about to be replaced. `delete_old_pm2_names`
+  # (sourced from scripts/migrate-pm2-names.sh above) is idempotent — once
+  # the old names are gone, including on the rollback path's own retry of
+  # this same function below, it finds nothing to do. A delete failure is
+  # treated exactly like a reload failure: collected into `failed` and
+  # reported the same way, never exiting this function directly, so the
+  # caller's own rollback-and-report path handles both identically. This is
+  # also the one-way half of the migration: a rollback further down resets
+  # the *checkout*, not pm2's process names — once deleted here, the old
+  # names do not come back even if this deploy is later rolled back.
+  #
+  # Rework finding — a partway delete failure used to fall through into the
+  # reload loop below regardless, on the theory that a delete failure is
+  # "just another entry in `failed`," the same as a reload failure. It is
+  # not: `start_or_reload` for a name pm2 does not know yet STARTS it fresh
+  # from `ecosystem.config.cjs`, so a `bot` that refused to delete was left
+  # running side by side with a freshly started `bloombot-bot` — two
+  # Discord gateways, or with `worker` in its place, two processes claiming
+  # jobs (PLAT-4's own single-instance guarantee). Reported and returned
+  # immediately here instead: a delete failure is pure downside to compound
+  # with a reload attempt, so nothing below this point runs until it is
+  # fixed.
+  if [ -n "$MIGRATE_PM2_NAMES" ] && ! delete_old_pm2_names; then
+    echo "ERROR: failed to reload: pm2 rename migration (deleting the old bare names)" >&2
+    return 1
+  fi
   # SUPERVISED_APPS already omits the Python bot on a cut-over droplet — see
   # its own comment at the top of this script.
   for name in "${SUPERVISED_APPS[@]}"; do
@@ -293,7 +344,14 @@ reload_everything() {
 # Restores the checkout (and, if they were reinstalled, the dependencies and
 # the TypeScript build) to the commit that was deployed before this run.
 # Does not attempt to undo a database migration — see this file's own header
-# comment for why.
+# comment for why. It also does not, and cannot, undo an OPS-16 pm2 rename:
+# a migration is one-way. If `MIGRATE_PM2_NAMES` deleted the old bare-named
+# pm2 processes before this rollback ran, this function rolls the *checkout*
+# back to the previous commit, and `reload_everything` below then reloads
+# the *new*, bloombot-prefixed names onto it — they exist by then, so
+# `start_or_reload` reloads rather than starts them. The process names stay
+# renamed even though the code just rolled back; `MIGRATE_PM2_NAMES` migrates
+# names, a rollback rolls back code, and the two are independent.
 #
 # Rehearsal finding (OPS-10) — every step here used to run as a plain
 # statement, so a failure partway through this function (the rebuild in
@@ -453,6 +511,11 @@ OLD_BARE_NAMES=(api bot worker mcp ops-monitor)
 # processes crash-looping because the old ones already hold their health
 # ports. After a correct migration none of the old names exist any more,
 # so this is silent from then on; before one, every deploy refuses.
+#
+# OPS-16 — the caller below skips this guard entirely when MIGRATE_PM2_NAMES
+# is set: migrating is the whole point of that run, so refusing here would
+# deadlock it against the exact thing it exists to fix (this file's own
+# header, and `scripts/migrate-pm2-names.sh`'s own, describe the deadlock).
 check_pm2_names_migrated() {
   local still_old=()
   local old
@@ -475,8 +538,12 @@ header for what it does and the order it must run in."
 # Deploy
 # ---------------------------------------------------------------------------
 
-log "checking for a half-migrated pm2 rename"
-check_pm2_names_migrated
+if [ -n "$MIGRATE_PM2_NAMES" ]; then
+  log "MIGRATE_PM2_NAMES is set — a pre-OPS-15 name here migrates instead of aborting this deploy"
+else
+  log "checking for a half-migrated pm2 rename"
+  check_pm2_names_migrated
+fi
 
 log "deploying ${PREV_SHA:0:8} -> ${TARGET_SHA:0:8} in $APP_DIR"
 git reset --hard "$TARGET_SHA"
@@ -568,6 +635,33 @@ if ! node packages/db/dist/run-migrate.js --i-know; then
 restarted and the checkout was put back — but see this file's own header
 comment: a migration that fails partway through is not itself rolled back.
 Check the database before retrying."
+fi
+
+# OPS-16 — sourced from the checkout just updated to $TARGET_SHA (not from
+# deploy.sh's own location, since this whole script is piped in over stdin
+# and has no fixed path of its own) so `delete_old_pm2_names` always matches
+# the OLD_NAMES/NEW_NAMES the commit actually being deployed defines. Only
+# needed — and only sourced — when this run is a migration; an ordinary
+# deploy never touches this file. `main` itself is never invoked here — see
+# `scripts/migrate-pm2-names.sh`'s own `BASH_SOURCE` guard — so this only
+# defines `delete_old_pm2_names` and its own small dependencies
+# (`assert_ecosystem_has_new_names`, `OLD_NAMES`, `NEW_NAMES`); its `log`,
+# `fail`, `pm2_field` and `pm2_knows_app` are identical, harmless
+# redefinitions of this file's own.
+#
+# Rework finding — this used to be sourced immediately after `git reset
+# --hard "$TARGET_SHA"`, before `npm ci` and both builds. The sourced
+# file's own top level runs `command -v pm2 node` and
+# `[ -f ecosystem.config.cjs ]`, both of which `fail` (`exit 1`) with the
+# checkout already reset to `$TARGET_SHA` and none of the forward path's
+# own rollback machinery having run yet — not reachable for a real,
+# post-OPS-15 target commit (both are already guaranteed by the time a
+# deploy gets this far), but sourcing it only once every step that DOES
+# roll back on failure has already succeeded costs nothing and removes the
+# gap entirely rather than relying on that being true forever.
+if [ -n "$MIGRATE_PM2_NAMES" ]; then
+  # shellcheck source=scripts/migrate-pm2-names.sh
+  source scripts/migrate-pm2-names.sh
 fi
 
 log "reloading every supervised process"

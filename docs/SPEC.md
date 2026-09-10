@@ -1558,6 +1558,16 @@ not merely a config edit: an ordinary deploy reloads a name it already knows and
 starts a new one from scratch, so deploying a rename without migrating first would leave both
 the old and the new process running at once, which is worse than the problem the rename fixes.
 
+#### OPS-16 A pm2 rename migrates itself, from CI, with no hands on the droplet
+
+Renaming a supervised process (OPS-15) is a deliberate, one-time migration, but it does not
+require an operator to run anything by hand on the droplet: dispatching the deploy workflow
+with a migration flag set updates the checkout, builds it, and only then — never before —
+deletes the old-named processes and starts their replacements, in the one run. A build failure
+leaves the old-named processes untouched. The rename does not roll back with the code: a
+deploy that migrates and then fails its health check restores the previous commit, but the
+renamed pm2 processes stay renamed.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

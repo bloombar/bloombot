@@ -18,6 +18,7 @@ import {
   chmodSync,
   rmSync,
   readFileSync,
+  realpathSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -100,9 +101,18 @@ esac
  * default — the ordinary case this script runs against is a checkout
  * already updated to the commit that renamed them; `setUpPreRenameCheckout`
  * below is the one exception.
+ *
+ * Returned via `realpathSync`, not the raw `mkdtempSync` path — OPS-16's
+ * own `delete_old_pm2_names` compares pm2's `pm_cwd` against this script's
+ * `$(pwd)`, and on macOS `mkdtempSync(os.tmpdir())` returns a path through
+ * `/var/folders`, a symlink to `/private/var/folders`; spawning `bash` with
+ * this directory as its own `cwd` resolves through that symlink before
+ * `bash` ever starts, so its `pwd` builtin reports the `/private/...` form.
+ * Resolving here once keeps every use of this path — the spawned process's
+ * own `cwd`, and the `pm_cwd` a test seeds pm2 with — the same string.
  */
 function setUpCheckout() {
-  const dir = mkdtempSync(join(base, 'checkout-'))
+  const dir = realpathSync(mkdtempSync(join(base, 'checkout-')))
   writeFileSync(
     join(dir, 'ecosystem.config.cjs'),
     `module.exports = { apps: [
@@ -120,7 +130,7 @@ function setUpCheckout() {
  * shape that must refuse rather than delete anything (must-fix 1).
  */
 function setUpPreRenameCheckout() {
-  const dir = mkdtempSync(join(base, 'checkout-pre-rename-'))
+  const dir = realpathSync(mkdtempSync(join(base, 'checkout-pre-rename-')))
   writeFileSync(
     join(dir, 'ecosystem.config.cjs'),
     `module.exports = { apps: [
@@ -131,12 +141,22 @@ function setUpPreRenameCheckout() {
   return dir
 }
 
-/** Seeds the fake pm2's own state file with a given list of `{ name }` apps. */
-function seedPm2State(pm2State, names) {
+/**
+ * Seeds the fake pm2's own state file with a given list of `{ name }` apps.
+ * `pmCwd` defaults to `checkoutDir` — OPS-16's `delete_old_pm2_names` only
+ * deletes an old name whose own `pm_cwd` matches the checkout it is run
+ * from, so every existing scenario here (this script's own process) needs
+ * that to match by default; the mismatched-cwd case gets its own test with
+ * an explicit override.
+ */
+function seedPm2State(pm2State, names, pmCwd) {
   writeFileSync(
     pm2State,
     JSON.stringify(
-      names.map((name) => ({ name, pm2_env: { status: 'online' } }))
+      names.map((name) => ({
+        name,
+        pm2_env: { status: 'online', pm_cwd: pmCwd },
+      }))
     )
   )
 }
@@ -174,14 +194,11 @@ test('migrate-pm2-names.sh: deletes exactly the old names it knows and starts ex
   // Every old bare name is running, plus an unrelated process on the same
   // shared droplet that must never be a candidate for anything this script
   // does.
-  seedPm2State(pm2State, [
-    'api',
-    'bot',
-    'worker',
-    'mcp',
-    'ops-monitor',
-    'scabbot',
-  ])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor', 'scabbot'],
+    checkoutDir
+  )
 
   const result = await runMigrate(checkoutDir, pm2State)
 
@@ -208,14 +225,18 @@ test('migrate-pm2-names.sh: an unrelated process pm2 knows is never touched, eve
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
   writePm2Stub(pm2State, saveMarker)
-  seedPm2State(pm2State, [
-    'bloombot-api',
-    'bloombot-bot',
-    'bloombot-worker',
-    'bloombot-mcp',
-    'bloombot-ops-monitor',
-    'wikistreets',
-  ])
+  seedPm2State(
+    pm2State,
+    [
+      'bloombot-api',
+      'bloombot-bot',
+      'bloombot-worker',
+      'bloombot-mcp',
+      'bloombot-ops-monitor',
+      'wikistreets',
+    ],
+    checkoutDir
+  )
 
   const result = await runMigrate(checkoutDir, pm2State)
 
@@ -240,7 +261,11 @@ test('migrate-pm2-names.sh: is idempotent — a second run on an already-migrate
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
   writePm2Stub(pm2State, saveMarker)
-  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor'],
+    checkoutDir
+  )
 
   const first = await runMigrate(checkoutDir, pm2State)
   assert.equal(first.code, 0, first.stdout + first.stderr)
@@ -258,7 +283,11 @@ test('migrate-pm2-names.sh: does nothing without confirmation, and does not call
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
   writePm2Stub(pm2State, saveMarker)
-  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor'],
+    checkoutDir
+  )
 
   // No --yes flag, and stdin answers anything but "yes".
   const result = await runMigrate(checkoutDir, pm2State, {
@@ -281,7 +310,11 @@ test("migrate-pm2-names.sh: 'yes' typed at the confirmation prompt proceeds", as
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
   writePm2Stub(pm2State, saveMarker)
-  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor'],
+    checkoutDir
+  )
 
   const result = await runMigrate(checkoutDir, pm2State, {
     args: [],
@@ -306,7 +339,11 @@ test('migrate-pm2-names.sh: does not save if a delete fails partway through', as
   const checkoutDir = setUpCheckout()
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
-  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor'],
+    checkoutDir
+  )
   writeStub(
     'pm2',
     `#!/usr/bin/env bash
@@ -370,7 +407,11 @@ test('migrate-pm2-names.sh: refuses, and deletes nothing, when the checkout is s
   const pm2State = join(base, `pm2-state-${Date.now()}-${Math.random()}.json`)
   const saveMarker = join(base, `save-${Date.now()}-${Math.random()}.marker`)
   writePm2Stub(pm2State, saveMarker)
-  seedPm2State(pm2State, ['api', 'bot', 'worker', 'mcp', 'ops-monitor'])
+  seedPm2State(
+    pm2State,
+    ['api', 'bot', 'worker', 'mcp', 'ops-monitor'],
+    checkoutDir
+  )
 
   const result = await runMigrate(checkoutDir, pm2State)
 

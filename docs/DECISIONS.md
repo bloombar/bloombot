@@ -10907,3 +10907,98 @@ told a stuck user to run `npm run worker:dev` — the only thing the panel said 
 production too, where that command means nothing. Replaced with copy that reads true for both audiences
 ("still processing… taking longer than expected"), with no behaviour change to the threshold, the
 `role="status"` region, or `stillQueuedIds`.
+
+---
+
+## D-98 — `scripts/deploy.sh`/`scripts/migrate-pm2-names.sh`: OPS-16 — the build proves the new names before the old ones are deleted, and a name migration does not roll back
+
+**Problem.** OPS-15 left a deadlock: `scripts/deploy.sh`'s own `check_pm2_names_migrated` aborts a deploy
+while pm2 still knows any pre-rename bare name, and `scripts/migrate-pm2-names.sh` refuses to run until the
+checkout it is run from already names the renamed processes — but a deploy is what updates the checkout, and
+the guard aborts before that ever happens. The only documented way through was an operator running two
+commands on the droplet, by hand, in the right order. FILE-8 was sitting on `master` undeployed behind this.
+
+**Choice: build before delete, always — the old names are deleted only immediately before the reload step,
+never earlier.** `MIGRATE_PM2_NAMES` reuses the forward path's own existing sequence unchanged: update the
+checkout, install dependencies, build the TypeScript workspace and the control panel — every one of which
+already aborts and restores the previous checkout on failure, untouched, before this slice existed. Only once
+every one of those has actually succeeded does `reload_everything` delete the five old bare-named pm2
+processes, immediately before it starts (or reloads) their `bloombot-` prefixed replacements. A build failure
+therefore never reaches the delete at all: the droplet is left running the old-named processes exactly as
+they were, and the checkout is restored the same way an ordinary build failure already restores it. The
+alternative — deleting the old names first, on the theory that the guard already proved the target commit's
+`ecosystem.config.cjs` has the new ones — would leave the droplet with nothing running at all for the
+duration of the build if that build then failed, which is a worse failure than the deadlock this slice fixes.
+
+**Choice: the delete is reused from `scripts/migrate-pm2-names.sh` by sourcing it, not by reimplementing the
+loop.** `delete_old_pm2_names` is defined once, in `scripts/migrate-pm2-names.sh`, and is the only place
+either script deletes a process by one of the five old bare names — the exact-string match against
+`OLD_NAMES` that keeps `scabbot`/`wikistreets`/the legacy `bloombot` untouchable cannot drift between the two
+scripts because there is only one copy of it. `scripts/deploy.sh` `source`s the file (from the checkout it is
+deploying, since deploy.sh itself is piped in over stdin and has no fixed location of its own) rather than
+invoking it as a subprocess with `--yes`: the migration script's own `main` also *starts* whichever new names
+are missing, and `scripts/deploy.sh`'s existing `start_or_reload` already does that — reusing the whole
+script would either start every new process twice (once from the migration's own start loop, once from the
+ordinary reload immediately after) or require the migration script to somehow skip that half of itself when
+called this way. A `BASH_SOURCE`-vs-`$0` guard at the bottom of `scripts/migrate-pm2-names.sh` means sourcing
+it only defines functions and arrays; `main` (the argument parsing, the printed plan, the confirmation prompt)
+runs only when the file is executed directly, so `scripts/deploy.sh`'s own arguments — the commit SHA — are
+never mistaken for `--yes`.
+
+**Choice: a delete failure is checked inside `reload_everything`, before the reload loop, and short-circuits
+it.** `delete_old_pm2_names` is called as the first thing inside `reload_everything`; if it fails, the
+function returns immediately, without running the ordinary reload loop at all. The retry is still safe:
+`delete_old_pm2_names` recomputes which old names are still present every time it runs, so calling it again
+during the rollback's own retry (with `MIGRATE_PM2_NAMES` still set for the rest of this process) is a no-op
+once the first call already deleted them, and the reload loop runs normally on that later, successful call.
+
+**A migration is one-way, and this is stated in three places on purpose.** If the post-reload health check
+fails, `restore_previous_checkout` rolls the *checkout* back to the previous commit — it does not, and
+cannot, restore a pm2 process under a name that no longer exists to be reloaded. The rollback's own
+`reload_everything` then reloads the `bloombot-` prefixed names (which exist, by then) onto the rolled-back
+code. `MIGRATE_PM2_NAMES` migrates names; a rollback rolls back code; the two are independent, and conflating
+them — assuming a rollback also un-renames — is the mistake this is written down to prevent. Stated in
+`scripts/deploy.sh`'s own header, in `restore_previous_checkout`'s own comment, and in
+`docs/DEPLOY_DROPLET.md`'s new migration note, rather than only here.
+
+**Rework finding — an adversarial review found the rollback path broken in exactly the droplet
+configuration this feature exists to serve, and reproduced it.** Four bugs, all only reachable from a real
+migrating deploy, none caught by the first round of tests because every one of them seeded pm2 already
+migrated or the checkout already renamed — the one state a migration is ever run from was never actually
+under test.
+
+1. **The rollback exited before reloading anything, on an unmigrated droplet.** `delete_old_pm2_names` called
+   `assert_ecosystem_has_new_names` unconditionally, as its first statement, before the "nothing to delete"
+   early return. `PREV_SHA` on an unmigrated droplet is necessarily pre-OPS-15 (the guard refuses every
+   deploy before this one), so `restore_previous_checkout`'s own reset lands the checkout back on a commit
+   whose `ecosystem.config.cjs` has no `bloombot-` names — and the rollback's own retry of
+   `reload_everything` hit that assert's `fail` (`exit 1`) before a single process reloaded. No CRITICAL
+   message, no `confirm_rolled_back_online`, nothing but the migration script's own, flatly false "Nothing was
+   deleted." Fixed by moving the assert to *after* the early return: once the old names this exact function
+   already deleted are gone, there is nothing left to assert the checkout's `ecosystem.config.cjs` against,
+   because nothing below that point would read it.
+2. **A partway delete failure started a duplicate and stranded it.** When `delete_old_pm2_names` failed, the
+   old code still ran the ordinary reload loop afterwards — pure downside, since `start_or_reload` starts a
+   name pm2 does not know fresh, so a `bot` that refused to delete was left running beside a freshly started
+   `bloombot-bot` (two Discord gateways; two job-claiming `worker`s with PLAT-4's guarantee in the other
+   direction). Fixed: a delete failure now returns from `reload_everything` immediately, before the reload
+   loop runs at all.
+3. **The safeguard for a shared droplet had no unattended equivalent.** The human-run script's own plan
+   printout asks an operator to check `pm2 describe <name>` before confirming, because the five old names are
+   generic enough that an unrelated project on the same shared droplet could plausibly own one. Nothing
+   replaced that check when `scripts/deploy.sh` started calling `delete_old_pm2_names` unattended. Fixed:
+   `delete_old_pm2_names` now reads each old name's own `pm_cwd` (from `pm2 jlist`) and only deletes one whose
+   `pm_cwd` is this checkout's own directory; anything else is left alone and reported loudly (a skipped name
+   is not a failure of *this* deploy, but it does mean the rename is not complete on this droplet).
+4. **The test fixture made the production shape unreachable.** `setUpRepo`/`world` wrote the renamed
+   `ecosystem.config.cjs` into every commit, so no test could observe a rollback whose `PREV_SHA` predates
+   OPS-15 — the only state a migrating deploy is ever run from — which is exactly what let finding 1 ship.
+   Fixed by giving both suites a variant whose first commit is pre-rename and second commit is the rename
+   itself, and adding the rollback, ownership and duplicate-start cases directly against it.
+
+Also moved where `scripts/migrate-pm2-names.sh` is `source`d in `scripts/deploy.sh` — after `npm ci` and both
+builds, immediately before the first `reload_everything` call, not immediately after `git reset --hard`. The
+sourced file's own top level runs `command -v pm2 node` and `[ -f ecosystem.config.cjs ]`, both of which
+`fail` (`exit 1`) with no rollback if they ever failed at that earlier point — not reachable for a real,
+already-renamed target commit, but every step between the checkout update and the first reload already has
+its own rollback, and there is no reason for this one line not to sit behind all of them too.

@@ -161,7 +161,7 @@ identity.
 
 ## Phase 15 — Production hardening
 
-**In scope:** OPS-8..15, AUTH-5
+**In scope:** OPS-8..16, AUTH-5
 
 AUTH-5 lands here rather than with the rest of authentication because it was found here:
 production hardening is what surfaced that `apps/api` cannot start under `NODE_ENV=production`

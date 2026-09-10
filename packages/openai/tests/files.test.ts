@@ -331,8 +331,19 @@ describe('files.ts (FILE-1..3)', () => {
       })
 
       const polls = server.requests.filter((r) => r.method === 'GET')
-      // ceil(500 / 50) = 10 — bounded, not unbounded.
-      expect(polls).toHaveLength(10)
+      // ceil(500 / 50) = 10 is the attempt-count cap (`maxPolls`) — the
+      // upper bound this test exists to pin: exceeding it would mean the
+      // count-only cap regressed to unbounded. The lower bound is not
+      // exactly 10 under real request overhead: the wall-clock deadline is
+      // checked before every poll, so a slow round under full-suite load
+      // can legitimately land the deadline one poll early (flaky at
+      // exactly 10 under load — reproduced) without either bound being
+      // broken. `toBeGreaterThan(0)` is not a real assertion of anything
+      // this test is about; it only guards against a `polls.length` of `0`
+      // silently turning into a false pass if the request loop never even
+      // started.
+      expect(polls.length).toBeLessThanOrEqual(10)
+      expect(polls.length).toBeGreaterThan(0)
     })
 
     // FILE-8: the *other* bound. A poll that runs slow (here, deliberately

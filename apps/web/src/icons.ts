@@ -73,8 +73,6 @@ export const EditIcon = Pencil
 export const AddIcon = Plus
 /** Permanently remove a record — always paired with a confirmation (WEB-15). */
 export const DeleteIcon = Trash2
-/** Remove one item from a list without deleting the record it names (e.g. a channel from a category being edited, before saving). */
-export const RemoveFromListIcon = X
 /** Turn a course, a membership or a binding off. */
 export const DisableIcon = Ban
 /** Turn a course, a membership or a binding on. */

@@ -118,6 +118,9 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly and concisely.')
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-40: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 2. WEB-22: before anyone has asked, People shows the empty state.

@@ -100,6 +100,9 @@ test('a project is created through the "New project" modal, renamed through its 
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly.')
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-40: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 4. Seed this account's own enrolment (the same harness stand-in

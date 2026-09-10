@@ -52,7 +52,7 @@ function revision(
   }
 }
 
-// WEB-20 — the History section is now collapsed by default, so any test
+// WEB-40 — the History section is now collapsed by default, so any test
 // that reaches into it (the revision list, "Current", a restore control)
 // has to open it first, the same way an actual instructor would.
 function expandHistory() {
@@ -460,9 +460,9 @@ describe('CourseInstructions (WEB-19)', () => {
   })
 })
 
-// WEB-20: the History section is collapsed by default, behind a real
+// WEB-40: the History section is collapsed by default, behind a real
 // `<button>` toggle rather than always-rendered content.
-describe('CourseInstructions history toggle (WEB-20)', () => {
+describe('CourseInstructions history toggle (WEB-40)', () => {
   it('is collapsed on first render, and its toggle reports that in aria-expanded', async () => {
     listCourseInstructionRevisions.mockResolvedValue([
       revision({ instructions: 'Be helpful.' }),

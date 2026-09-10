@@ -104,6 +104,9 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
     .getByLabel('Instructions')
     .fill('Answer student questions about the course clearly.')
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-40: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 2. Seed the one fact the panel has no screen for yet — this account's

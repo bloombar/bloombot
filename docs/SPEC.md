@@ -2415,6 +2415,25 @@ here" are different answers, and folding them together loses the edit for the pe
 other one. The shared modal grows a three-way choice, one more mode of the single dialog component
 this panel already uses rather than a second dialog implementation.
 
+#### WEB-40 Three maintainer-reported corrections to the course settings screen
+
+The Categories fieldset removed a category or a channel with a `RemoveFromListIcon` plus visible
+"Remove category"/"Remove channel" text — the only remove controls in this panel still spelling
+themselves out rather than using the same icon-only `DeleteIcon` treatment `CourseAttachments.tsx`
+already gives a detach button. A channel row's name input carried `textInputClasses`'s own `w-full`,
+so on any width it claimed the whole row and pushed the "Admins only" checkbox and the remove button
+onto a line of their own, even though the row's own layout (`flex flex-wrap items-center gap-2`) was
+built to hold all three. And the AI tab's History section rendered its full revision list, and the
+confirmation-gated restore control for each entry, unconditionally — a course with any history at all
+showed it whether or not anyone asked to see it.
+
+All three are now: the category and channel remove controls are icon-only, `aria-label` retained, no
+visible label text; the channel-name input takes only the row's own leftover space (`flex-1` plus
+`min-w-0`), so the checkbox and the remove button stay beside it rather than wrapping below; and
+History is collapsed by default behind a real button carrying `aria-expanded`/`aria-controls`
+(WEB-17), labelled with how many revisions there are once that count is known, expanding to the same
+list, restore control and confirmation as before.
+
 #### ROST-14 Two students whose emails share a local part both get a channel
 
 A per-student channel is named after the local part of the student's email address (ROST-3), which
@@ -2654,22 +2673,3 @@ dropped onto it or the zone can be clicked to choose one. The modal names the pr
 into and says that imported courses arrive disabled before the import runs, not after. On success it
 shows the PORT-7 report — the title the course was given, and anything the file could not carry — and
 the course appears in that project's list. A refused file leaves the modal open with the reason.
-
-#### WEB-40 Three maintainer-reported corrections to the course settings screen
-
-The Categories fieldset removed a category or a channel with a `RemoveFromListIcon` plus visible
-"Remove category"/"Remove channel" text — the only remove controls in this panel still spelling
-themselves out rather than using the same icon-only `DeleteIcon` treatment `CourseAttachments.tsx`
-already gives a detach button. A channel row's name input carried `textInputClasses`'s own `w-full`,
-so on any width it claimed the whole row and pushed the "Admins only" checkbox and the remove button
-onto a line of their own, even though the row's own layout (`flex flex-wrap items-center gap-2`) was
-built to hold all three. And the AI tab's History section rendered its full revision list, and the
-confirmation-gated restore control for each entry, unconditionally — a course with any history at all
-showed it whether or not anyone asked to see it.
-
-All three are now: the category and channel remove controls are icon-only, `aria-label` retained, no
-visible label text; the channel-name input takes only the row's own leftover space (`flex-1` plus
-`min-w-0`), so the checkbox and the remove button stay beside it rather than wrapping below; and
-History is collapsed by default behind a real button carrying `aria-expanded`/`aria-controls`
-(WEB-17), labelled with how many revisions there are once that count is known, expanding to the same
-list, restore control and confirmation as before.

@@ -57,6 +57,9 @@ test('a course is exported to a file and imported back into a project, numbered 
   await page.getByRole('tab', { name: 'AI' }).click()
   await page.getByLabel('Instructions').fill(instructions)
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-40: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 2. WEB-39/PORT-1: export it from the course row's own kebab menu, and

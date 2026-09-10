@@ -1199,7 +1199,7 @@ export function CourseEditor({
               }
               className={textInputClasses}
             />
-            {/* WEB-20 — icon-only delete, matching CourseAttachments' own
+            {/* WEB-40 — icon-only delete, matching CourseAttachments' own
                 treatment of a detach button: the `aria-label` still names
                 the category, so the accessible name is unchanged even
                 though the visible "Remove category" text is gone. The
@@ -1216,7 +1216,7 @@ export function CourseEditor({
               key={channel.key}
               className="flex flex-wrap items-center gap-2 pl-4"
             >
-              {/* WEB-20 — `min-w-0` lets this input shrink below its
+              {/* WEB-40 — `min-w-0` lets this input shrink below its
                   content width so `flex-1` can actually divide the row
                   with the checkbox and delete button instead of the
                   `w-full` in `textInputClasses` claiming the whole row

@@ -3480,7 +3480,7 @@
     own, even though the row's own layout (flex flex-wrap items-center gap-2)
     was built to hold all three. And the AI tab's History section rendered its
     full revision list, and the…
-  section: §35 Course Portability
+  section: §34 Web Control Panel
   family: WEB
   phase: 22
   status: Backlog

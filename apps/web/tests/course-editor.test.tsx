@@ -1636,7 +1636,7 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
     expect(screen.getByLabelText('Channel name')).toHaveValue('general')
   })
 
-  // WEB-20: the remove controls are icon-only now — findable by their
+  // WEB-40: the remove controls are icon-only now — findable by their
   // accessible name (unchanged, above), but with no visible "Remove
   // category"/"Remove channel" text sitting next to the icon.
   it('the category and channel remove controls are icon-only — no visible label text', async () => {
@@ -1663,33 +1663,14 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
     expect(removeChannelButton).toHaveTextContent('')
   })
 
-  // WEB-20: the channel-name input, the "Admins only" checkbox and the
-  // delete control all sit in one row container — a structural check
-  // (shared parent), not a Tailwind class-string assertion.
-  it('the channel row keeps its name input, "Admins only" checkbox and remove control together', async () => {
-    renderWithModal(
-      <CourseEditor
-        navigate={vi.fn()}
-        organizationId="org-1"
-        project={PROJECT}
-        courseId={undefined}
-        onSaved={vi.fn()}
-        onCancel={vi.fn()}
-      />
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
-
-    const channelNameInput = screen.getByLabelText('Channel name')
-    const adminsOnlyCheckbox = screen.getByLabelText('Admins only')
-    const removeChannelButton = screen.getByRole('button', {
-      name: /Remove channel/,
-    })
-
-    const row = channelNameInput.parentElement
-    expect(row).toContainElement(adminsOnlyCheckbox)
-    expect(row).toContainElement(removeChannelButton)
-  })
+  // WEB-40: the channel-name input, the "Admins only" checkbox and the
+  // delete control were already siblings under one row container before
+  // this fix — jsdom has no layout engine, so it cannot tell a row that
+  // wraps onto three lines from one that does not; the DOM shape here is
+  // identical either way. The actual fix (`flex-1`/`min-w-0` making the
+  // input give up the width `textInputClasses`'s own `w-full` used to
+  // claim) is proven where layout actually exists — a real bounding-box
+  // check in `e2e/course-configuration.spec.ts`, not here.
 })
 
 /**

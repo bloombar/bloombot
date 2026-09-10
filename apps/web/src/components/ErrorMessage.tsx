@@ -120,6 +120,25 @@ export function describeApiError(error: ApiError): {
       }
     case 'origin_refused':
       return { headline: 'That request was refused.', details: [] }
+    // FILE-10: synthetic, client-only — `apps/api` never sends this.
+    // `CourseAttachments.tsx`'s own `buildAttachmentFailuresError` builds
+    // one of these when one or more files in the same upload batch failed
+    // (a stale `File` reference or a server refusal), the same
+    // "synthesize an `ApiError` for a failure `apps/api` never sent"
+    // precedent `network_error` (above) and `clipboard_unavailable`
+    // (below) already use, so this still renders through the one place
+    // that turns an `ApiError` into words rather than bypassing it with
+    // bespoke markup. `conflict.message` carries the summary sentence
+    // ("Attached 2 of 3 files. 1 failed:"); `issues` carries one line per
+    // failed file, reusing the same field-level rendering
+    // `action_input_invalid`/`invalid_request` use above.
+    case 'client_attachment_failures': {
+      const conflict = error.body.conflict as { message?: string } | undefined
+      return {
+        headline: conflict?.message ?? 'Some files could not be attached.',
+        details: issueLines(error),
+      }
+    }
     case 'network_error':
       // `api/client.ts`'s own code for a `fetch` that never got a response
       // at all — this app's own diagnosis of a proxy or network failure,

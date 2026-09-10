@@ -1395,6 +1395,17 @@ The provider's own attach call is accepted, then processed in the background —
 by an explicit budget, and only a retry that outlives that budget is treated as worth another attempt.
 A retry never re-uploads a file the provider already has: the id it was given the first time is reused.
 
+#### FILE-10 A file that cannot be read at upload time says so, per file
+
+Files are queued as browser references and their bytes are read only when the instructor clicks
+Attach — not at drop time, since a full 100 MB queue held as base64 in tab memory the whole time
+is worse than a clear error. A file's reference can go stale in that gap (moved, deleted, or
+modified on disk since it was dropped); reading it then fails, and the panel says which file and
+what to do about it, rather than a silent, unhandled failure. One unreadable file does not strand
+the rest of the batch: the others are still attached, and the panel says how many went through and
+which did not. Choosing a file already queued under the same name and size replaces the queued
+reference rather than keeping the older, more likely stale one.
+
 ### 24. Cost Ledger, Caps & Monitoring
 
 #### COST-1 Every model call is recorded with what it cost

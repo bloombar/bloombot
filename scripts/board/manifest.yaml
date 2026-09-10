@@ -3288,6 +3288,23 @@
   phase: 19
   status: Done
   review: false
+- id: WEB-41
+  title: Navigation targets are real links, and a nav control shows a pointer cursor
+  full: Every place the panel names a destination a person might reasonably want
+    to open in a new tab — an organization's name on /account and in the fixed
+    header — renders a real anchor with a real href (built the same way every
+    other address in this app is built, never a hand-concatenated string), not a
+    <button onClick={...}. An ordinary click still navigates client-side, with
+    no full-page reload; a modified click (cmd/ctrl, shift, alt) or a
+    non-primary mouse button (middle-click) falls through to the browser
+    untouched, so "open in a new tab" and "copy link" both work the way they do
+    for any other link on the web. Every button-based navigation control in the
+    panel shows a pointer cursor on hover…
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 19
+  status: Backlog
+  review: false
 - id: WEB-42
   title: The projects page shows each project's courses
   full: "The organization's main page (/o/:organizationId/projects) lists each

@@ -11002,3 +11002,66 @@ sourced file's own top level runs `command -v pm2 node` and `[ -f ecosystem.conf
 `fail` (`exit 1`) with no rollback if they ever failed at that earlier point — not reachable for a real,
 already-renamed target commit, but every step between the checkout update and the first reload already has
 its own rollback, and there is no reason for this one line not to sit behind all of them too.
+
+## D-99 — `apps/web`: WEB-44 — a sign-in destination is validated against the resolved session, not before it
+
+**Problem.** A reported bug: signing in landed on `/o/<organizationId>/projects` and rendered the not-found
+screen, for an organization id the reporter believed did not exist. Two mechanisms turned out to be in play.
+`App.tsx`'s WEB-32 branch rendering `NotFound` for a `ShellRoute` naming an organization the account has no
+relationship to is deliberate — it must not leak whether an organization exists, so it is correct behaviour
+for a genuinely mistyped address. The actual defect is `returnToShell`: it navigated to the destination
+carried on a sign-in token after checking only that the destination was same-origin (`isSameOriginPath`),
+never that the destination's organization was one the freshly signed-in account could actually reach. A
+stale or captured destination — the reporter's own case fits a locally reset database producing an
+organization id no longer in anyone's memberships or connections — then named an address WEB-32's own check
+correctly refuses, but for the wrong reason: the account never asked to go there, this app delivered it.
+
+**Choice: `returnToShell` awaits its own `refreshSession()` call and decides from what it resolved to,
+directly — never from ambient `session` state.** `returnToShell` cannot check reachability at the moment a
+sign-in redemption calls it: `refreshSession()` has not yet resolved, so this account's own memberships and
+connected identities are not yet in hand. `refreshSession` was widened to resolve with the `SessionState` it
+just produced (rather than only setting it), so its caller can branch on exactly that value: `next.kind ===
+'signed-in' && isShellRoute(destination) && !isReachableShellRoute(destination, next.account)` falls back to
+`resolveHomeRoute`; anything else — `next.kind` unreachable/signed-out, or a reachable/non-`ShellRoute`
+destination — navigates to the destination itself, which is exactly what the app's own ordinary
+session-state rendering already knows how to answer (the `unreachable` retry screen, or `SignIn` reoffered
+with that same destination, neither of which cares what the address bar names).
+
+**Rejected first: holding the destination as pending state, resolved by a *separate* effect gated on
+`session.kind === 'signed-in'`.** Adversarial review, reproduced with probe tests rather than reasoned about,
+found this shape carries two bugs of its own, both on the path this slice exists to fix:
+
+1. **Gating on `session.kind === 'signed-in'` reads whichever session happens to already be sitting in this
+   component, not the one this redemption's own `/auth/me` call produced.** A tab already holding a live
+   session for account A, given a sign-in token for a different account B whose destination names an
+   organization only B belongs to, resolved the pending destination against A the moment the effect first
+   saw `session.kind === 'signed-in'` — which was A, still, since B's own `refreshSession()` call had not
+   yet resolved. The effect took the (wrong) verdict immediately, navigated to A's own default organization,
+   and then rendered `NotFound` once B's session actually arrived and the ordinary WEB-32 check ran against
+   the now-stale address — the exact symptom this slice was written to eliminate, reintroduced by the fix
+   meant to remove it.
+2. **The effect only ever fired for `session.kind === 'signed-in'`**, so a `refreshSession()` that resolved
+   `unreachable` (an API restart) or `signed-out` (a dropped cookie) never fired it at all. The address stayed
+   at `/sign-in/:token`, `RedeemLink` still rendering "Signing you in…" over a token already spent by the
+   redemption that got there — forever, with no error and no retry, and a reload re-redeeming a single-use
+   token that 401s.
+
+Awaiting the refresh directly, in `returnToShell` itself, closes both: the account checked is always the one
+this exact call produced, never an ambient one that might be stale or belong to someone else, and every
+outcome — not only `signed-in` — navigates the address on from `'sign-in'`, so the ordinary render logic
+gets a turn regardless of what the refresh resolved to.
+
+**Choice: one shared `isReachableShellRoute`, not two copies of the same check.** The WEB-32 branch's own
+inline membership/connection check and `returnToShell`'s own resolution need to agree on exactly the same
+definition of "cannot reach" — the no-leak guarantee is only as strong as the weaker of two checks, if they
+were allowed to drift. Both now call one function; `'account'` is always reachable (it names no
+organization), and everything else is a membership or a connected identity, matching what `resolveHomeRoute`
+already treats as reachable for `/`'s own resolution.
+
+**Not touched: `NotFound` is unchanged for an address a person actually navigates to or types.** The WEB-32
+branch's job stays exactly what it was — refuse an unreachable `ShellRoute`, without saying whether the
+organization exists — for every route reached by ordinary navigation. Only `returnToShell`'s own delivery
+gets the new fallback; `pages/Connect.tsx`/`pages/JoinLink.tsx`/`pages/Invitation.tsx` remain untouched, since
+none of their own `onRedeemed` callbacks ever pass `returnToShell` a destination naming a `ShellRoute` (they
+hand it none at all, letting it fall through to the ordinary home resolution the WEB-34 rework already
+covers).

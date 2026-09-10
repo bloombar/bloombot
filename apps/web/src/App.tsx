@@ -33,7 +33,12 @@
  *    the one place AUTH-4 is actually enforced.
  *  - a `ShellRoute` (`routing/route.ts`) naming an organization or the
  *    account screen — the signed-in shell (`pages/Shell.tsx`), once this
- *    account's own accessibility to it is checked (below).
+ *    account's own accessibility to it is checked (below). WEB-44: a
+ *    `ShellRoute` carried on a sign-in redemption (`returnToShell`, below)
+ *    is checked before it is ever rendered, not after — an unreachable
+ *    destination there resolves to the account's own default organization
+ *    instead, since the reason is a stale delivery, not a person's own
+ *    typed address.
  *  - `route.kind === 'home'` — resolved, once the session is known, to the
  *    account's own canonical landing address and replaced (WEB-34) rather
  *    than rendered directly.
@@ -78,6 +83,7 @@ import {
   isShellRoute,
   parseRoute,
   type Route,
+  type ShellRoute,
 } from './routing/route.js'
 import { useRoute } from './routing/useRoute.js'
 
@@ -136,6 +142,30 @@ type SessionState =
  * cannot name `''`, so this slice's own judgement call (recorded in
  * `docs/DECISIONS.md`) is to fall back one step further for that one case.
  */
+// WEB-44 — the one reachability rule both call sites below need: whether a
+// signed-in account has *any* relationship (a membership or a connected
+// identity) to the organization a `ShellRoute` names, `'account'` always
+// included since it names no organization to check. Shared rather than
+// duplicated so the sign-in destination check (`App`'s own pending-sign-in
+// effect, below) and the WEB-32 no-leak check (`isShellRoute` branch,
+// below) agree on exactly the same definition of "cannot reach" — the
+// no-leak guarantee this app makes for `NotFound` is only as good as the
+// two checks staying identical.
+function isReachableShellRoute(
+  route: ShellRoute,
+  account: AccountSummary
+): boolean {
+  if (route.kind === 'account') return true
+  return (
+    account.memberships.some(
+      (membership) => membership.organizationId === route.organizationId
+    ) ||
+    account.connectedOrganizations.some(
+      (connection) => connection.organizationId === route.organizationId
+    )
+  )
+}
+
 function resolveHomeRoute(
   account: AccountSummary,
   joinedCourse: { organizationId: string; courseId: string } | undefined,
@@ -199,23 +229,26 @@ export function App() {
     | undefined
   >(undefined)
 
-  // Returns the underlying promise (WEB-25's own need, below) — every
-  // existing caller (`onSignedIn` handed straight to a child as a prop,
-  // `useEffect`'s own call just below) already ignored the return value of
-  // the plain `fetchMe().then(...)` this wraps, so exposing it here changes
-  // nothing about how those callers behave; it only lets a *new* caller
-  // sequence work after this has actually settled, rather than merely
-  // fired.
-  const refreshSession = useCallback(() => {
+  // Returns the *resolved* `SessionState` (WEB-25's own need for sequencing,
+  // and WEB-44's own need below), not merely the underlying promise —
+  // `onSignedIn` handed straight to a child as a prop, and `useEffect`'s own
+  // call just below, both still ignore whatever this resolves to, so
+  // widening what settles here changes nothing about how those callers
+  // behave. What it *does* let a new caller do is act on the session this
+  // exact call produced, rather than on `session` state, which may already
+  // hold a different answer (a stale one, or another account's, still
+  // sitting in this component from before the call was ever made) that has
+  // nothing to do with the fetch this call started.
+  const refreshSession = useCallback((): Promise<SessionState> => {
     return fetchMe().then(
-      (response) => {
-        setSession(
-          response.account
-            ? { kind: 'signed-in', account: response.account }
-            : { kind: 'signed-out' }
-        )
+      (response): SessionState => {
+        const next: SessionState = response.account
+          ? { kind: 'signed-in', account: response.account }
+          : { kind: 'signed-out' }
+        setSession(next)
+        return next
       },
-      (caught: unknown) => {
+      (caught: unknown): SessionState => {
         // A missing rejection handler here (finding 3 of the WEB-1..6
         // rework) meant an unreachable apps/api left `session` at `loading`
         // forever, with no message and no way to retry, and an unhandled
@@ -223,8 +256,12 @@ export function App() {
         // rejects with an `ApiError` (never a bare `TypeError`), so this
         // narrows on it the same way every other screen does rather than
         // re-throwing.
-        if (caught instanceof ApiError) setSession({ kind: 'unreachable' })
-        else throw caught
+        if (caught instanceof ApiError) {
+          const next: SessionState = { kind: 'unreachable' }
+          setSession(next)
+          return next
+        }
+        throw caught
       }
     )
   }, [])
@@ -269,17 +306,59 @@ export function App() {
   // unchanged) — `parseRoute` is what turns it into a `Route` this app's own
   // router can navigate to, rather than a second, parallel `window.history`
   // call living here.
+  //
+  // WEB-44: a same-origin destination is *awaited*, not navigated to first
+  // and corrected after — `refreshSession()`'s own resolved value (never
+  // the ambient `session` this closure could otherwise read, which may
+  // already hold a different account's session, or a stale one, sitting in
+  // this component from before this redemption ever started) is what
+  // decides where this lands. Two things went wrong before this shape, both
+  // found in review against an earlier version of this fix, reproduced with
+  // probe tests rather than reasoned about:
+  //
+  //  1. Navigating immediately and validating in a *separate* effect gated
+  //     on `session.kind === 'signed-in'` fired on whatever session was
+  //     already loaded — including one for a different account, live in
+  //     this same tab, whose memberships have nothing to do with the
+  //     destination a just-redeemed token for a *different* account
+  //     carried. That reintroduced this slice's own bug: a legitimate
+  //     destination for account B, redeemed while account A's session was
+  //     still the one in state, briefly rendered `NotFound` before B's own
+  //     session ever arrived to correct it.
+  //  2. That same effect only ever fired for `session.kind === 'signed-in'`
+  //     — so a `refreshSession()` that resolved `unreachable` or
+  //     `signed-out` (an API restart, a dropped cookie) left the address at
+  //     `/sign-in/:token` forever, `RedeemLink` still rendering "Signing you
+  //     in…" over a token already spent by the redemption that got here,
+  //     with no error and no retry.
+  //
+  // Awaiting `refreshSession()` here and branching on exactly what it
+  // resolved to fixes both: every outcome navigates away from `'sign-in'`
+  // (never signed-in: straight to the destination itself, which is exactly
+  // what the ordinary render logic below already knows how to answer —
+  // `unreachable`'s retry screen, or `SignIn` reoffered with that same
+  // destination for `signed-out`, both regardless of route); and only a
+  // `signed-in` outcome is ever checked against `isReachableShellRoute`,
+  // using the account *this* resolution produced.
   const returnToShell = useCallback(
     (destination?: string) => {
       if (destination && isSameOriginPath(destination)) {
-        navigate(parseRoute(destination), { replace: true })
-        refreshSession()
+        const parsedDestination = parseRoute(destination)
+        refreshSession().then((next) => {
+          const target =
+            next.kind === 'signed-in' &&
+            isShellRoute(parsedDestination) &&
+            !isReachableShellRoute(parsedDestination, next.account)
+              ? resolveHomeRoute(next.account, joinedCourse, justInstalled)
+              : parsedDestination
+          navigate(target, { replace: true })
+        })
         return
       }
       navigate({ kind: 'home' }, { replace: true })
       refreshSession()
     },
-    [navigate, refreshSession]
+    [navigate, refreshSession, joinedCourse, justInstalled]
   )
 
   // Before every session-dependent branch below, deliberately: these two are
@@ -456,17 +535,13 @@ export function App() {
       // relationship to at all (neither a membership nor a connected
       // identity) is exactly the "anything else... names something this
       // account cannot see" case the brief calls out: a not-found screen,
-      // never a leak of whether the organization even exists.
-      // `'account'` names no organization to check.
-      if (
-        route.kind !== 'account' &&
-        !session.account.memberships.some(
-          (membership) => membership.organizationId === route.organizationId
-        ) &&
-        !session.account.connectedOrganizations.some(
-          (connection) => connection.organizationId === route.organizationId
-        )
-      ) {
+      // never a leak of whether the organization even exists. This is for
+      // an address the person actually navigated to or typed — WEB-44's
+      // own pending-sign-in effect (above) is what keeps a stale sign-in
+      // destination from ever reaching this branch unresolved, so this
+      // check's only job stays "was this address reachable", the same
+      // `isReachableShellRoute` that effect already used.
+      if (!isReachableShellRoute(route, session.account)) {
         return (
           <NotFound
             onHome={() => navigate({ kind: 'home' }, { replace: true })}

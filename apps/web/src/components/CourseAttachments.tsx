@@ -47,6 +47,27 @@
  * (`detachingIds`) until the row actually disappears from the next poll,
  * with the same "still queued" hint if that takes too long — a course must
  * never look like a detach silently did nothing.
+ *
+ * **FILE-10: bytes are read lazily, at Attach time, never at drop time.**
+ * The queue (above) holds `File` references, not their bytes — reading
+ * every dropped file up front would remove the failure class this fixes
+ * below, but the course budget is 100 MB, so a full queue would hold
+ * ~133 MB of base64 sitting in tab memory the whole time it waits to be
+ * attached. A crashed tab is worse than a clear, per-file error, so the
+ * read stays lazy; do not "fix" this by pre-reading without weighing that
+ * tradeoff again.
+ *
+ * That laziness has a cost: `File` references go stale. The queue exists
+ * so an instructor can drop files in more than one pass, so minutes (or a
+ * save, a rename, an edit) can separate a drop from the Attach click that
+ * finally reads it — the browser's own `FileReader` reports that as a
+ * `NotFoundError`, not a bug in this app. `handleUpload` below treats a
+ * failed read as an expected, per-file outcome: it never re-throws (a
+ * production report was a `DOMException` escaping an async click handler
+ * as an unhandled rejection, silent in the UI), and continuing past one
+ * bad file — rather than stopping the batch — is a deliberate choice
+ * (`handleUpload`'s own comment) so one regenerated file never blocks
+ * everything queued after it.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -66,7 +87,7 @@ import {
   SuccessIcon,
 } from '../icons.js'
 import { Button } from './Button.js'
-import { ErrorMessage } from './ErrorMessage.js'
+import { describeApiError, ErrorMessage } from './ErrorMessage.js'
 import { describeSize, FileDropZone } from './FileDropZone.js'
 
 export interface CourseAttachmentsProps {
@@ -169,6 +190,53 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () =>
       reject(reader.error ?? new Error('could not read the selected file'))
     reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * FILE-10: one queued file's own reason for failing, whether the failure
+ * came from `fileToBase64` (a stale `File` reference — the reported bug)
+ * or from `attachCourseFile` itself (a server refusal). One sentence, so
+ * it reads well as a single bullet in `describeApiError`'s own `details`
+ * list (below) next to every other failed file in the same batch.
+ */
+function describeFileFailureReason(caught: unknown): string {
+  if (caught instanceof ApiError) return describeApiError(caught).headline
+  // Not an `ApiError` — in practice, `fileToBase64`'s own rejection: most
+  // often a `DOMException` (`NotFoundError`) because the browser's
+  // snapshot of the file no longer matches what is on disk, but this reads
+  // the same for any other read failure too, since none of them are this
+  // instructor's to diagnose — only to act on.
+  return 'This file changed or moved on disk since it was added to the queue — remove it and add it again.'
+}
+
+/**
+ * FILE-10: one or more queued files failed in the same upload — some, or
+ * all, of a batch. `ErrorMessage`/`describeApiError` (`ErrorMessage.tsx`)
+ * already knows how to render a headline plus a per-item `details` list;
+ * this builds a client-only `ApiError` in exactly that shape (the same
+ * "synthesize an `ApiError` for a failure `apps/api` never sent" precedent
+ * `client.ts`'s own `network_error` and `JoinLinks.tsx`'s own
+ * `clipboard_unavailable` already use) rather than bypassing it with
+ * bespoke markup. `describeApiError`'s own `client_attachment_failures`
+ * case (`ErrorMessage.tsx`) turns this back into words.
+ */
+function buildAttachmentFailuresError(
+  failures: { file: File; error: unknown }[],
+  successCount: number,
+  totalCount: number
+): ApiError {
+  const failedCount = failures.length
+  const headline =
+    `Attached ${successCount} of ${totalCount} file${totalCount === 1 ? '' : 's'}.` +
+    ` ${failedCount} failed:`
+  return new ApiError(0, {
+    error: 'client_attachment_failures',
+    conflict: { message: headline },
+    issues: failures.map(({ file, error: caught }) => ({
+      path: [file.name],
+      message: describeFileFailureReason(caught),
+    })),
   })
 }
 
@@ -295,15 +363,24 @@ export function CourseAttachments({
   // FILE-7: appends rather than replaces, deduplicated by name+size — an
   // instructor picking readings in two passes is the normal case, and
   // choosing the same file twice by mistake should not queue it twice.
+  //
+  // FILE-10: a name+size match *replaces* the queued entry rather than
+  // being skipped. Skipping kept whichever `File` reference was already
+  // queued — the older one, on a re-drop — which is exactly backwards: an
+  // edited file re-dropped with its old size unchanged is the case most
+  // likely to have gone stale, so the old reference is the one most likely
+  // to fail to read at Attach time. Replacing means re-adding a file always
+  // ends up uploading that file's current bytes.
   const chooseFiles = (files: File[]): void => {
     setUploadError(undefined)
     setQueuedFiles((current) => {
       const next = [...current]
       for (const file of files) {
-        const alreadyQueued = next.some(
+        const staleIndex = next.findIndex(
           (queued) => queued.name === file.name && queued.size === file.size
         )
-        if (!alreadyQueued) next.push(file)
+        if (staleIndex === -1) next.push(file)
+        else next[staleIndex] = file
       }
       return next
     })
@@ -343,40 +420,66 @@ export function CourseAttachments({
     }
 
     setUploading(true)
+    const totalCount = queuedFiles.length
+    // FILE-10 — one bad file must not silently strand the rest: this loop
+    // never stops on a failure (a read failure or a server refusal alike)
+    // and never re-throws — the reported bug was exactly a non-`ApiError`
+    // rejection (`fileToBase64`'s own `DOMException`) escaping this
+    // `catch`'s old `else throw caught` and out of an async click handler
+    // as an unhandled rejection, silent in the UI. Continuing, rather than
+    // stopping where today's behaviour used to, is the deliberate choice:
+    // one regenerated file should not block a batch of twenty behind it,
+    // and every failure — not just the first — reaches the instructor in
+    // one summary once the batch finishes.
+    const failures: { file: File; error: unknown }[] = []
+    let successCount = 0
     try {
       // FILE-7 — one `attachCourseFile` at a time, never in parallel: each
       // carries up to 100 MB of base64, and a handful of those in flight at
       // once would be a real memory and bandwidth spike for no benefit an
-      // instructor would notice. A failure stops the loop where it is —
-      // the files already sent stay sent (removed from the queue as each
-      // one succeeds), and the ones after the failure are left queued so
-      // the instructor can retry without re-choosing them.
+      // instructor would notice.
       let index = 0
       for (const file of queuedFiles) {
         index += 1
-        setUploadProgress({ current: index, total: queuedFiles.length })
-        const contentBase64 = await fileToBase64(file)
-        await attachCourseFile(organizationId, courseId, {
-          filename: file.name,
-          // A file this browser could not classify (an empty `File.type`,
-          // some OS/extension combinations) still has to satisfy
-          // `courseAttachments.attach`'s own `contentType: z.string().min(1)`
-          // — the provider gets to decide whether it can use it, not this
-          // form.
-          contentType: file.type || 'application/octet-stream',
-          contentBase64,
-        })
-        setQueuedFiles((current) => current.filter((f) => f !== file))
+        setUploadProgress({ current: index, total: totalCount })
+        try {
+          const contentBase64 = await fileToBase64(file)
+          await attachCourseFile(organizationId, courseId, {
+            filename: file.name,
+            // A file this browser could not classify (an empty `File.type`,
+            // some OS/extension combinations) still has to satisfy
+            // `courseAttachments.attach`'s own `contentType: z.string().min(1)`
+            // — the provider gets to decide whether it can use it, not this
+            // form.
+            contentType: file.type || 'application/octet-stream',
+            contentBase64,
+          })
+          setQueuedFiles((current) => current.filter((f) => f !== file))
+          successCount += 1
+        } catch (caught) {
+          // Left queued deliberately — a failed read or a failed upload
+          // are both worth retrying without re-choosing the file: a read
+          // failure once the instructor has removed and re-added it (a
+          // fresh `File` reference), a server failure as-is.
+          failures.push({ file, error: caught })
+        }
       }
-    } catch (caught) {
-      if (caught instanceof ApiError) setUploadError(caught)
-      else throw caught
+      if (failures.length === 1 && failures[0]!.error instanceof ApiError) {
+        // Exactly one failure, and it is a server refusal: renders exactly
+        // as it always has (`ErrorMessage` on that one `ApiError`), so this
+        // does not regress the existing single-file-failure behaviour.
+        setUploadError(failures[0]!.error)
+      } else if (failures.length > 0) {
+        setUploadError(
+          buildAttachmentFailuresError(failures, successCount, totalCount)
+        )
+      }
     } finally {
       setUploadProgress(undefined)
       setUploading(false)
-      // Whatever got through before a failure (or all of it, on success)
-      // is already uploaded — refresh so the list reflects it immediately
-      // rather than waiting for the next poll.
+      // Whatever got through — all of it on success, some of it if part of
+      // the batch failed — is already uploaded, so refresh here rather
+      // than waiting for the next poll.
       await refresh()
     }
   }

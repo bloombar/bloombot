@@ -3301,7 +3301,7 @@
     since it takes one project at a time; one project's failed fetch renders
     that failure without blanking the others, and a project with no courses
     shows…"
-  section: §35 Course Portability
+  section: §34 Web Control Panel
   family: WEB
   phase: 19
   status: Backlog

@@ -34,7 +34,7 @@
  * row.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   archiveProject,
@@ -172,7 +172,10 @@ export function Projects({
   // `pages/Shell.tsx#discordFetchId` uses for its own Discord fetch — kept
   // per project id here rather than a single ref, since a project's own
   // fetch can be reissued on its own (after that project's course changes,
-  // below) independently of every other project's.
+  // below) independently of every other project's — review finding: this
+  // guard is exercised by `tests/projects.test.tsx`'s own "two fetches for
+  // the same project" case, which fails if the id comparison below is
+  // removed.
   const [courseStates, setCourseStates] = useState<
     Record<string, CourseFetchState>
   >({})
@@ -181,10 +184,16 @@ export function Projects({
     (project: Project) => {
       const id = (courseFetchIds.current[project.id] ?? 0) + 1
       courseFetchIds.current[project.id] = id
-      setCourseStates((previous) => ({
-        ...previous,
-        [project.id]: { status: 'loading' },
-      }))
+      setCourseStates((previous) => {
+        // Only start as `'loading'` (hiding whatever this project's own
+        // row already shows) when there is nothing to show yet — a
+        // refetch after a course action (`onChanged`, below) or a project
+        // mutation keeps rendering the previous list/error until the new
+        // one resolves, the same way `Courses.tsx#refresh` already never
+        // blanks its own list except on its very first fetch.
+        if (previous[project.id] !== undefined) return previous
+        return { ...previous, [project.id]: { status: 'loading' } }
+      })
       listCourses(organizationId, project.id).then(
         (result) => {
           if (courseFetchIds.current[project.id] !== id) return
@@ -207,18 +216,75 @@ export function Projects({
     [organizationId]
   )
 
+  // Review finding: this used to key off `projects` itself, so *any*
+  // project-level mutation — rename, archive, create, duplicate, even
+  // ticking "Show archived" — produced a new array reference and reset
+  // every listed project's own `courseStates` to `'loading'`, discarding
+  // correct lists and re-announcing N `role="status"` regions for a
+  // mutation that touched at most one project's own row. `projectIds` is a
+  // primitive derived from the *set* of ids alone, compared by value
+  // (`Object.is` on a string) rather than by the array's own identity, so a
+  // rename (same ids) leaves it unchanged and the effect below does not
+  // refire at all.
+  const projectIds = useMemo(
+    () => (projects ?? []).map((project) => project.id).join(','),
+    [projects]
+  )
+
   // Fires once the projects themselves have loaded (mount, an
-  // includeArchived toggle, or any other `refresh()`) and issues every
-  // listed project's own `courses.list` in parallel — N requests for N
-  // projects, there being no batched "every project's courses" action to
-  // issue instead (see this file's own module comment). `fetchCourses`'s
-  // own per-project fetch id means a `refresh()` mid-flight simply
-  // supersedes whichever of these requests have not yet resolved, the same
-  // way `Courses.tsx#refresh` already supersedes its own.
+  // includeArchived toggle, or any other `refresh()` that actually changes
+  // *which* projects are listed) and issues every newly-listed project's
+  // own `courses.list` in parallel — N requests for N projects, there
+  // being no batched "every project's courses" action to issue instead
+  // (see this file's own module comment). Only a project this effect has
+  // not already fetched (`courseFetchIds.current[project.id] ===
+  // undefined`) is fetched here — a project already fetched keeps its own
+  // state exactly as `fetchCourses`/`onChanged` below left it, rather than
+  // being refetched merely because some *other* project's id joined or
+  // left the list. A project that leaves the list (archived out of view,
+  // deleted) has its own `courseStates`/`courseFetchIds` entry pruned
+  // below too, rather than growing forever.
   useEffect(() => {
     if (projects === undefined) return
-    for (const project of projects) fetchCourses(project)
-  }, [projects, fetchCourses])
+    const currentIds = new Set(projects.map((project) => project.id))
+    for (const project of projects) {
+      if (courseFetchIds.current[project.id] === undefined) {
+        fetchCourses(project)
+      }
+    }
+    for (const id of Object.keys(courseFetchIds.current)) {
+      if (!currentIds.has(id)) delete courseFetchIds.current[id]
+    }
+    setCourseStates((previous) => {
+      let changed = false
+      const next: Record<string, CourseFetchState> = {}
+      for (const [id, state] of Object.entries(previous)) {
+        if (currentIds.has(id)) {
+          next[id] = state
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : previous
+    })
+    // `projectIds` (not `projects`) is the trigger — see its own comment
+    // above; `projects` itself is still read fresh from the closure, which
+    // is fine here since nothing below reads any field but each project's
+    // own stable `id`.
+  }, [projectIds, fetchCourses])
+
+  // Review finding: `courseStates`/`courseFetchIds` are keyed by project
+  // id alone, with nothing scoping either to *this* organization — a
+  // caller that changed `organizationId` on an already-mounted `Projects`
+  // (rather than remounting it, which is how `pages/Shell.tsx` actually
+  // does it today, via its own `key={activeOrganizationId}`) would
+  // otherwise keep growing both maps for every organization and project
+  // visited in one session. Cheap to close either way: a fresh
+  // organization starts with neither map holding anything.
+  useEffect(() => {
+    setCourseStates({})
+    courseFetchIds.current = {}
+  }, [organizationId])
 
   // WEB-27: "New project" opens a modal asking for the name rather than the
   // old always-present inline input — `.trim()` (finding 7 of the WEB-7
@@ -516,6 +582,13 @@ export function Projects({
                       // requirement `Courses.tsx#refresh` already meets
                       // for its own single project.
                       onChanged={() => fetchCourses(project)}
+                      // WEB-42 review finding — this project's own name,
+                      // threaded into the row's Chat/kebab labels
+                      // (`CourseRows`' own doc comment on why): unlike
+                      // `Courses.tsx`, this screen lists more than one
+                      // project's courses side by side, and nothing else
+                      // makes a title unique across them.
+                      projectName={project.name}
                     />
                   )}
                 </div>

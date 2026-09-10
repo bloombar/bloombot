@@ -2578,6 +2578,17 @@ that Discord would treat as one role. A pair already stored that way keeps worki
 edited, the same grandfathering SRV-10's own check applies, and the refusal names the other course
 and the role, so an instructor knows which two things collide.
 
+#### WEB-42 The projects page shows each project's courses
+
+The organization's main page (`/o/:organizationId/projects`) lists each project's own courses beneath
+it, indented to show the hierarchy through real nested markup, not padding alone. Each course row offers
+the same controls it has on the project's own page (`/o/:organizationId/projects/:projectId`): the title
+opens the course editor, **Chat** opens a chat session for it, and its kebab offers **Export** and
+**Disable**/Enable — the one row implementation shared between both pages, not a second one grown here.
+`courses.list` is fetched per project, in parallel, since it takes one project at a time; one project's
+failed fetch renders that failure without blanking the others, and a project with no courses shows the
+same empty state its own page already uses.
+
 ### 35. Course Portability
 
 #### PORT-1 A course exports to a single portable file
@@ -2673,14 +2684,3 @@ dropped onto it or the zone can be clicked to choose one. The modal names the pr
 into and says that imported courses arrive disabled before the import runs, not after. On success it
 shows the PORT-7 report — the title the course was given, and anything the file could not carry — and
 the course appears in that project's list. A refused file leaves the modal open with the reason.
-
-#### WEB-42 The projects page shows each project's courses
-
-The organization's main page (`/o/:organizationId/projects`) lists each project's own courses beneath
-it, indented to show the hierarchy through real nested markup, not padding alone. Each course row offers
-the same controls it has on the project's own page (`/o/:organizationId/projects/:projectId`): the title
-opens the course editor, **Chat** opens a chat session for it, and its kebab offers **Export** and
-**Disable**/Enable — the one row implementation shared between both pages, not a second one grown here.
-`courses.list` is fetched per project, in parallel, since it takes one project at a time; one project's
-failed fetch renders that failure without blanking the others, and a project with no courses shows the
-same empty state its own page already uses.

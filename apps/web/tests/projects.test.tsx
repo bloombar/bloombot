@@ -687,6 +687,126 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
         'Data Structures'
       )
     ).toBeInTheDocument()
+    // Review finding: the negative half — each course under its *own*
+    // project's item, and not the other's — the same assertion the first
+    // test in this block already carries.
+    expect(
+      within(screen.getByTestId('project-project-1')).queryByText(
+        'Data Structures'
+      )
+    ).not.toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-2')).queryByText('Web Design')
+    ).not.toBeInTheDocument()
+  })
+
+  // Review finding: none of the tests above ever put two `listCourses`
+  // calls for the *same* project in flight at once — the "slower project
+  // resolves first" case above interleaves two *different* projects,
+  // which the `Record`-keyed `courseStates` already isolates with no id
+  // guard needed at all. This is the case `courseFetchIds` actually
+  // exists for: two refreshes of *one* project's own courses (here, two
+  // quick Disables on the same row — each one's own `onChanged` starts a
+  // fresh `courses.list` for `project-1` before the previous one has
+  // resolved), with the *first* one resolving *last*. Fails with the id
+  // comparison in `fetchCourses` removed: the stale first response would
+  // land after the second, showing the version of the course this test
+  // never asked to see.
+  it('two in-flight fetches for the same project — the one started first but resolving last must not overwrite the later one', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    disableCourse.mockResolvedValue({ disabled: true })
+    let resolveFirstRefresh: (value: CourseSummary[]) => void = () => {}
+    let resolveSecondRefresh: (value: CourseSummary[]) => void = () => {}
+    listCourses
+      .mockResolvedValueOnce([COURSE_ONE])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstRefresh = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecondRefresh = resolve
+          })
+      )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    // First Disable: `disableCourse` resolves, `onChanged` starts the
+    // second `listCourses` call above (held pending) — the row itself is
+    // no longer busy once that call has merely *started*, so it can be
+    // clicked again immediately, before that call resolves.
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Actions for "Web Design" in "Fall 2026"',
+      })
+    )
+    fireEvent.click(
+      within(
+        screen.getByRole('group', {
+          name: 'Actions for "Web Design" in "Fall 2026"',
+        })
+      ).getByRole('button', { name: 'Disable' })
+    )
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Disable',
+      })
+    )
+    await waitFor(() => expect(disableCourse).toHaveBeenCalledTimes(1))
+    // The confirm dialog makes the rest of the page inert while it is open
+    // (`Modal.tsx`'s own `showModal()`) — waited out before the next click,
+    // or the row's own kebab is briefly unreachable to an accessibility
+    // query even though `confirm()` has already resolved.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+
+    // Second Disable, same row, same project — the third `listCourses`
+    // call above (also held pending).
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Actions for "Web Design" in "Fall 2026"',
+      })
+    )
+    fireEvent.click(
+      within(
+        screen.getByRole('group', {
+          name: 'Actions for "Web Design" in "Fall 2026"',
+        })
+      ).getByRole('button', { name: 'Disable' })
+    )
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Disable',
+      })
+    )
+    await waitFor(() => expect(disableCourse).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(listCourses).toHaveBeenCalledTimes(3))
+
+    // The *second* refresh (started later) resolves first, with the
+    // course renamed so its own text proves which response actually won.
+    resolveSecondRefresh([{ ...COURSE_ONE, title: 'Web Design (current)' }])
+    expect(await screen.findByText('Web Design (current)')).toBeInTheDocument()
+
+    // The *first* refresh (started earlier) resolves last, and must be
+    // ignored — without the id guard, this would overwrite the screen with
+    // the stale title a moment after the assertion above passed.
+    resolveFirstRefresh([{ ...COURSE_ONE, title: 'Web Design (stale)' }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Web Design (current)')).toBeInTheDocument()
+    expect(screen.queryByText('Web Design (stale)')).not.toBeInTheDocument()
   })
 
   it('a project with no courses renders the empty state Courses.tsx already uses', async () => {
@@ -757,6 +877,80 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     )
   })
 
+  // WEB-42 review finding: nothing makes a course title unique *across*
+  // projects — PROJ-3's collision rule scopes category/role names, not
+  // titles, and duplicating a project (`Projects.tsx#handleDuplicate`)
+  // copies every title unchanged into a second project. Two courses named
+  // alike from two different projects, both listed on this one page, must
+  // still each resolve to exactly one row — a bare `getByRole('button',
+  // { name: 'Chat about "Intro to CS"' })` would otherwise be a
+  // strict-mode violation (more than one match), which is itself the
+  // failure this test pins.
+  it('two projects sharing a course title still resolve to one row each, by project name', async () => {
+    const sharedTitleOne: CourseSummary = {
+      ...COURSE_ONE,
+      title: 'Intro to CS',
+    }
+    const sharedTitleTwo: CourseSummary = {
+      ...COURSE_TWO,
+      title: 'Intro to CS',
+    }
+    listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
+    listCourses.mockImplementation(
+      (_organizationId: string, projectId: string) =>
+        Promise.resolve(
+          projectId === 'project-1' ? [sharedTitleOne] : [sharedTitleTwo]
+        )
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    // Both projects list a course titled "Intro to CS" — `findAllByText`
+    // waits for both to resolve without assuming which settles first.
+    await waitFor(async () =>
+      expect(await screen.findAllByText('Intro to CS')).toHaveLength(2)
+    )
+
+    // Without the project name threaded in, each of the four queries below
+    // would match two elements — one per project — and `getByRole` throws
+    // on more than one match.
+    const projectOneChat = screen.getByRole('button', {
+      name: 'Chat about "Intro to CS" in "Fall 2026"',
+    })
+    const projectTwoChat = screen.getByRole('button', {
+      name: 'Chat about "Intro to CS" in "Spring 2027"',
+    })
+    expect(
+      within(screen.getByTestId('project-project-1')).getByRole('button', {
+        name: 'Actions for "Intro to CS" in "Fall 2026"',
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('project-project-2')).getByRole('button', {
+        name: 'Actions for "Intro to CS" in "Spring 2027"',
+      })
+    ).toBeInTheDocument()
+
+    // Each Chat button hands up its own course id, not the other
+    // project's course sharing the same title.
+    expect(
+      within(screen.getByTestId('project-project-1')).getByTestId(
+        'course-course-1'
+      )
+    ).toContainElement(projectOneChat)
+    expect(
+      within(screen.getByTestId('project-project-2')).getByTestId(
+        'course-course-2'
+      )
+    ).toContainElement(projectTwoChat)
+  })
+
   it('a course title opens the course editor for the right project', async () => {
     listProjects.mockResolvedValue([PROJECT, PROJECT_TWO])
     listCourses.mockImplementation(
@@ -796,7 +990,9 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     await screen.findByText('Web Design')
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Chat about "Web Design"' })
+      screen.getByRole('button', {
+        name: 'Chat about "Web Design" in "Fall 2026"',
+      })
     )
 
     expect(onOpenChat).toHaveBeenCalledWith('course-1')
@@ -823,9 +1019,13 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     listCourses.mockClear()
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Actions for "Web Design"' })
+      screen.getByRole('button', {
+        name: 'Actions for "Web Design" in "Fall 2026"',
+      })
     )
-    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    const menu = screen.getByRole('group', {
+      name: 'Actions for "Web Design" in "Fall 2026"',
+    })
     fireEvent.click(within(menu).getByRole('button', { name: 'Disable' }))
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Disable' }))
@@ -865,7 +1065,9 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
     await screen.findByText('Web Design')
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Actions for "Web Design"' })
+      screen.getByRole('button', {
+        name: 'Actions for "Web Design" in "Fall 2026"',
+      })
     )
     fireEvent.click(screen.getByRole('button', { name: 'Export' }))
 

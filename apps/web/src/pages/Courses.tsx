@@ -59,6 +59,13 @@ export function Courses({
   const refreshId = useRef(0)
   const refresh = useCallback(() => {
     const id = ++refreshId.current
+    // A previous `refresh()` (this screen's own fetch, not `CourseRows`'
+    // own row-action errors) may have failed and left `error` set — review
+    // finding: without this, a transient failure here outlived every
+    // subsequent successful refresh for the life of the screen, since
+    // nothing else ever cleared it once the toggle/export handlers (and
+    // their own `setError(undefined)`) moved into `CourseRows`.
+    setError(undefined)
     listCourses(organizationId, project.id).then(
       (result) => {
         if (id !== refreshId.current) return

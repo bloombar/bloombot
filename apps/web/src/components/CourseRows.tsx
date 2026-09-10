@@ -45,6 +45,22 @@ export interface CourseRowsProps {
   onOpenChat: (courseId: string) => void
   /** Called once a course's enabled state actually changed (never on Export, which changes nothing) — the caller's own cue to refetch, at whatever scope makes sense for it. */
   onChanged: () => void
+  /**
+   * WEB-42 review finding: `pages/Courses.tsx` never passes this — one
+   * project's own courses are already unambiguous among themselves on
+   * that screen (its own heading already names the one project every row
+   * belongs to). `pages/Projects.tsx` lists more than one project's
+   * courses on the same page, and nothing makes a course title unique
+   * *across* projects (PROJ-3's collision rule scopes category/role
+   * names, not titles) — two duplicated projects (`Projects.tsx
+   * #handleDuplicate`) copy every title unchanged, so without this two
+   * rows can read "Chat about "Intro to CS"" and "Actions for "Intro to
+   * CS"" with nothing to tell a screen reader, or a `getByRole` query,
+   * which project's course either one names. Threaded straight into both
+   * labels below when given; omitted (not even a trailing "in undefined")
+   * when not.
+   */
+  projectName?: string
 }
 
 export function CourseRows({
@@ -53,6 +69,7 @@ export function CourseRows({
   onOpenCourse,
   onOpenChat,
   onChanged,
+  projectName,
 }: CourseRowsProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [busyCourseId, setBusyCourseId] = useState<string | undefined>(
@@ -181,13 +198,21 @@ export function CourseRows({
                 <Button
                   variant="secondary"
                   icon={<ChatIcon aria-hidden="true" className="size-4" />}
-                  aria-label={`Chat about "${course.title}"`}
+                  aria-label={
+                    projectName
+                      ? `Chat about "${course.title}" in "${projectName}"`
+                      : `Chat about "${course.title}"`
+                  }
                   onClick={() => onOpenChat(course.id)}
                 >
                   Chat
                 </Button>
                 <KebabMenu
-                  label={`Actions for "${course.title}"`}
+                  label={
+                    projectName
+                      ? `Actions for "${course.title}" in "${projectName}"`
+                      : `Actions for "${course.title}"`
+                  }
                   items={items}
                   disabled={busy}
                 />

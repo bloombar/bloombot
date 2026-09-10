@@ -169,6 +169,13 @@ export interface CourseEditorProps {
   navigate: (route: Route, options?: { replace?: boolean }) => void
   onSaved: (course: Course) => void
   onCancel: () => void
+  /**
+   * WEB-43 — test-only override of `DEFAULT_SAVED_CLEAR_AFTER_MS`, the same
+   * device `components/CourseAttachments.tsx`'s own `stillQueuedHintAfterMs`
+   * uses: a test driving the "Saved" confirmation off the clock would
+   * otherwise have to wait out the real default for no reason.
+   */
+  savedClearAfterMs?: number
 }
 
 /** WEB-35 — a label for each of `routing/route.ts#COURSE_EDITOR_TABS`'s own ids — the tab bar's own concern, not the routing module's, so it stays here rather than growing that array into something UI-shaped. */
@@ -219,6 +226,13 @@ interface EditableCategory {
   name: string
   channels: EditableChannel[]
 }
+
+// WEB-43 — how long the "Saved" confirmation beside `Save course` stays up
+// once a save lands, before it clears on its own; it also clears
+// immediately if the form is edited again first (`isDirty`'s own effect,
+// below) — a fixed default long enough to be seen, short enough that it is
+// gone well before anyone could mistake it for the form's current state.
+const DEFAULT_SAVED_CLEAR_AFTER_MS = 3_000
 
 function newKey(): string {
   return crypto.randomUUID()
@@ -348,6 +362,7 @@ export function CourseEditor({
   navigate,
   onSaved,
   onCancel,
+  savedClearAfterMs = DEFAULT_SAVED_CLEAR_AFTER_MS,
 }: CourseEditorProps) {
   // WEB-35 — local UI state, not part of `form`/`baseline`: which tab is
   // rendered is not part of the record being edited. Seeded from the `tab`
@@ -472,6 +487,51 @@ export function CourseEditor({
   // True only for the one case that needs saying out loud: the prompt's
   // "Save changes" wrote the instructions and then the form was refused.
   const [halfSaved, setHalfSaved] = useState(false)
+  // WEB-43: true for the stretch after a successful `handleSave` during
+  // which the `Saved` confirmation shows beside the button — set only on
+  // that success path (never on a refusal or a half-saved outcome, below),
+  // and cleared either by `savedTimeoutRef`'s own timer or immediately by
+  // the `isDirty` effect further down, whichever comes first.
+  const [justSaved, setJustSaved] = useState(false)
+  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
+  // Cleared on the way out so a save that outlives this component (an
+  // unmount mid-request) never fires `setJustSaved` on a component that no
+  // longer exists.
+  useEffect(() => {
+    return () => {
+      if (savedTimeoutRef.current !== undefined)
+        clearTimeout(savedTimeoutRef.current)
+    }
+  }, [])
+  /**
+   * Shows `Saved` beside the button, then clears it after `savedClearAfterMs`
+   * — restarting the timer rather than stacking a second one, in the
+   * (test-only, `savedClearAfterMs={0}`) case where a save could land twice
+   * before the first timer fires.
+   */
+  const showSavedConfirmation = useCallback(() => {
+    setJustSaved(true)
+    if (savedTimeoutRef.current !== undefined)
+      clearTimeout(savedTimeoutRef.current)
+    savedTimeoutRef.current = setTimeout(() => {
+      setJustSaved(false)
+      savedTimeoutRef.current = undefined
+    }, savedClearAfterMs)
+  }, [savedClearAfterMs])
+  // WEB-43: a `Saved` sitting beside a form the person has since edited is
+  // a lie — cleared the moment `isDirty` goes true again, not only once the
+  // timer above happens to fire, so an edit made a second into the window
+  // still removes it immediately.
+  useEffect(() => {
+    if (!isDirty) return
+    setJustSaved(false)
+    if (savedTimeoutRef.current !== undefined) {
+      clearTimeout(savedTimeoutRef.current)
+      savedTimeoutRef.current = undefined
+    }
+  }, [isDirty])
   // TEN-9 — every binding this organization has ever held (active or
   // removed, `discordServers.list`'s own shape), fetched once per
   // organization. Only the active ones (`activeBindings`, below) decide
@@ -693,6 +753,11 @@ export function CourseEditor({
       // agrees with the server again, the same reason `setForm` above is
       // set from `saved` rather than left as whatever was typed.
       setBaseline(savedForm)
+      // WEB-43: shown only here, on the one path where the form itself
+      // actually saved — never from the catch below, and never for
+      // `saveDirtyWork`'s half-saved outcome, which sets `halfSaved`
+      // instead of reaching this line at all.
+      showSavedConfirmation()
       onSaved(saved)
       return true
     } catch (caught) {
@@ -1756,15 +1821,40 @@ export function CourseEditor({
 
       {/* WEB-15/WEB-35: the one primary action this form offers, always
           visible regardless of which tab is showing — an edit made on one
-          tab is never stranded when someone is looking at another. */}
-      <div>
+          tab is never stranded when someone is looking at another.
+          WEB-43: disabled whenever there is nothing to save (`!isDirty`), on
+          top of the two in-flight guards that already covered a save
+          underway (`saving`) and the tab prompt's own "Save changes"
+          (`switchSaving`) — the label itself no longer doubles as the
+          progress indicator (below), so it reads `Save course` in every
+          state, including this one. A row, not a lone button, now that the
+          progress/confirmation message sits beside it rather than inside
+          it; `flex-wrap` keeps the pair readable rather than clipped on a
+          narrow viewport, where the message drops to its own line under the
+          button instead of overflowing. */}
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="primary"
           onClick={() => void handleSave()}
-          disabled={saving || switchSaving}
+          disabled={saving || switchSaving || !isDirty}
         >
-          {saving || switchSaving ? 'Saving…' : 'Save course'}
+          Save course
         </Button>
+        {/* WEB-43: `saving`/`switchSaving` both count as "a save is
+            happening" — a tab-switch save is a save, and must not look like
+            nothing is going on next to a button that has gone quiet.
+            `justSaved` only ever reads true once neither is, so the two
+            messages never show at once. */}
+        {(saving || switchSaving) && (
+          <p role="status" className="text-sm text-neutral-600">
+            Saving…
+          </p>
+        )}
+        {!saving && !switchSaving && justSaved && (
+          <p role="status" className="text-sm text-neutral-600">
+            Saved
+          </p>
+        )}
       </div>
     </section>
   )

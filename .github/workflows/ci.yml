@@ -30,6 +30,16 @@ on:
           commit this run is based on. Set it to an earlier commit to roll back.
         required: false
         type: string
+      migrate_pm2_names:
+        description: >-
+          OPS-16 — run the OPS-15 pm2 rename migration as part of this
+          deploy, instead of an operator running scripts/migrate-pm2-names.sh
+          by hand. Only meaningful on a `workflow_dispatch` run: a `push`
+          event has no inputs at all, so an ordinary deploy can never set
+          this by accident.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -210,6 +220,13 @@ jobs:
           # indistinguishable here — both arrive as "" — and those two cases
           # need opposite behaviour from deploy.sh's own PM2_APP default.
           DEPLOY_SKIP_PYTHON_BOT: ${{ vars.DEPLOY_SKIP_PYTHON_BOT }}
+          # OPS-16 — a `workflow_dispatch` input, not a repository variable:
+          # this is a per-run choice ("migrate this one deploy"), never a
+          # standing default the way DEPLOY_SKIP_PYTHON_BOT above is. A
+          # `push` event has no `inputs` at all, so this is always empty on
+          # an ordinary merge to master — a migration can only ever be a
+          # deliberate, manually dispatched run.
+          MIGRATE_PM2_NAMES_INPUT: ${{ inputs.migrate_pm2_names }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
@@ -238,6 +255,12 @@ jobs:
             # An explicitly empty PM2_APP — deploy.sh reads that as "this
             # droplet has no legacy Python bot" and leaves it alone.
             remote="PM2_APP= $remote"
+          fi
+          if [ "$MIGRATE_PM2_NAMES_INPUT" = "true" ]; then
+            # OPS-16 — deploy.sh reads any non-empty MIGRATE_PM2_NAMES as
+            # "run the OPS-15 pm2 rename migration as part of this deploy";
+            # see that script's own header for exactly what that does.
+            remote="MIGRATE_PM2_NAMES=1 $remote"
           fi
 
           port_args=()

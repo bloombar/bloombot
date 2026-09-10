@@ -2828,6 +2828,21 @@
   phase: 15
   status: Done
   review: false
+- id: OPS-16
+  title: A pm2 rename migrates itself, from CI, with no hands on the droplet
+  full: "Renaming a supervised process (OPS-15) is a deliberate, one-time
+    migration, but it does not require an operator to run anything by hand on
+    the droplet: dispatching the deploy workflow with a migration flag set
+    updates the checkout, builds it, and only then — never before — deletes the
+    old-named processes and starts their replacements, in the one run. A build
+    failure leaves the old-named processes untouched. The rename does not roll
+    back with the code: a deploy that migrates and then fails its health check
+    restores the previous commit, but the renamed pm2 processes stay renamed."
+  section: §27 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
 - id: ENRL-7
   title: Anyone a course is taught through is enrolled by asking it
   full: CORE-2 routes a message to a course when its author holds either of that

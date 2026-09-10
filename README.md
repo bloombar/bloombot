@@ -279,19 +279,26 @@ environment variable, see [docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md) — a
 Platform is not (yet) a fit for this platform's single-SQLite-file architecture.
 
 **A droplet already running this platform under the old, bare names needs a one-time
-migration, run in this exact order — checkout, then migration, then deploy:**
+migration.** OPS-16 — dispatch the deploy workflow with `migrate_pm2_names` set (Actions →
+CI → Run workflow); it updates the checkout, builds, then migrates the pm2 names itself, all
+in one run, with no shell access to the droplet needed. See
+[docs/DEPLOY_DROPLET.md](docs/DEPLOY_DROPLET.md)'s own migration note for what that run does
+and why the rename does not roll back even if the deploy itself later does.
+
+Without a dispatchable CI (or to do it by hand), run it in this exact order — checkout, then
+migration, then deploy:
 
 1. Update the droplet's checkout to the commit that renamed the processes (this one) **by
    hand** — `git fetch` plus a `git reset --hard` to that commit — rather than by triggering
    an ordinary deploy. `scripts/deploy.sh`'s own half-migrated guard refuses, before it ever
-   touches the checkout, while pm2 still knows any of the old names, so a deploy cannot do
-   this step for you yet.
+   touches the checkout, while pm2 still knows any of the old names, unless that deploy sets
+   `MIGRATE_PM2_NAMES` (see the automated path above).
 2. Run `scripts/migrate-pm2-names.sh` by hand, once (see that script's own header for exactly
-   what it does and why a deploy cannot safely do it unattended). It refuses outright, and
-   deletes nothing, if the checkout is still on the commit *before* the rename — running it
-   first, against the *old* `ecosystem.config.cjs`, would delete every old process and then
-   start none of the new ones, since `--only bloombot-api` (etc.) matches nothing in a file
-   that has never heard of that name.
+   what it does and why an *ordinary* deploy cannot safely do it unattended). It refuses
+   outright, and deletes nothing, if the checkout is still on the commit *before* the rename —
+   running it first, against the *old* `ecosystem.config.cjs`, would delete every old process
+   and then start none of the new ones, since `--only bloombot-api` (etc.) matches nothing in
+   a file that has never heard of that name.
 3. Only then let (or trigger) the next ordinary deploy — the guard is silent once no old name
    is left, and reloads every process under its new name normally.
 

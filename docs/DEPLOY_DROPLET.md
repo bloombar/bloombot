@@ -206,7 +206,7 @@ what breaks when it is wrong or missing:
 | `OPENAI_API_KEY` | **yes** | the model provider credential | every model call fails; `apps/api`'s own web chat degrades to an apology (WEB-10) rather than refusing to start, but `apps/bot` refuses to start without it |
 | `DISCORD_CLIENT_SECRET` | **yes** | the install flow's OAuth2 client secret | the install flow (and, once landed, the account-connect flow — see §4.1) fails |
 | `OPS_ALERT_WEBHOOK_URL` | strongly recommended (OPS-12) | a Discord or Slack incoming-webhook URL `scripts/ops-monitor.mjs` posts to on a health transition | unset means a transition is still written to `logs/pm2-ops-monitor-out.log`/`logs/pm2-ops-monitor-error.log` (pm2's own redirect for that process, `ecosystem.config.cjs`) but nobody is paged — see `docs/CUTOVER.md`'s own §5 |
-| `OPS_ALERT_POLL_INTERVAL_MS` | no (`30000` default) | how often `ops-monitor` polls | lower is faster to notice, and more requests against every process's own `/health` |
+| `OPS_ALERT_POLL_INTERVAL_MS` | no (`30000` default) | how often `bloombot-ops-monitor` polls | lower is faster to notice, and more requests against every process's own `/health` |
 | `MAIL_FILE` | **must stay unset in production** | development-only sign-in-link file | refused outright when `NODE_ENV=production`, whether set or not — see the callout at the top of this document |
 
 `PUBLIC_APP_URL` (and the Discord/Google origins registered against it in §4) must match the
@@ -816,20 +816,21 @@ Python deployment, which a brand-new, platform-only droplet has no use for):
 
 ```bash
 node packages/db/dist/run-migrate.js --i-know   # once, before anything starts (OPS-8)
-pm2 start ecosystem.config.cjs --only api
-pm2 start ecosystem.config.cjs --only bot
-pm2 start ecosystem.config.cjs --only worker
-pm2 start ecosystem.config.cjs --only mcp
-pm2 start ecosystem.config.cjs --only ops-monitor
+pm2 start ecosystem.config.cjs --only bloombot-api
+pm2 start ecosystem.config.cjs --only bloombot-bot
+pm2 start ecosystem.config.cjs --only bloombot-worker
+pm2 start ecosystem.config.cjs --only bloombot-mcp
+pm2 start ecosystem.config.cjs --only bloombot-ops-monitor
 pm2 save
 pm2 startup   # prints a command to enable autostart on reboot — copy and run it
 ```
 
-**If AUTH-5 (this document's own lead callout) has not landed yet, `api` will crash-loop here**
-— `pm2 status` shows it restarting continuously, and `https://<your domain>/health` returns
-nginx's own `502 Bad Gateway`, not a response from `apps/api`. `bot`/`worker`/`mcp`/`ops-monitor`
-come up normally regardless; only the panel, the web chat surface, and anything routed through
-`apps/api` are unreachable until AUTH-5 lands and `api` is reloaded.
+**If AUTH-5 (this document's own lead callout) has not landed yet, `bloombot-api` will
+crash-loop here** — `pm2 status` shows it restarting continuously, and
+`https://<your domain>/health` returns nginx's own `502 Bad Gateway`, not a response from
+`apps/api`. `bloombot-bot`/`bloombot-worker`/`bloombot-mcp`/`bloombot-ops-monitor` come up
+normally regardless; only the panel, the web chat surface, and anything routed through
+`apps/api` are unreachable until AUTH-5 lands and `bloombot-api` is reloaded.
 
 If this droplet is **replacing an existing Python deployment**, do not start the platform's
 processes this way — follow [docs/CUTOVER.md](CUTOVER.md) instead, which rehearses the import
@@ -845,6 +846,17 @@ TypeScript workspace, applies the platform migration exactly once (OPS-8), reloa
 process individually, and rolls all of them back together if any fails its health check —
 read that script's own header comment for the full sequence, and `docs/DECISIONS.md`'s D-40
 for why it is built the way it is.
+
+### Migrating a droplet still on the old, bare pm2 names (OPS-16)
+
+A droplet still running under the pre-OPS-15 names (`api`, `bot`, `worker`, `mcp`,
+`ops-monitor`) does not need shell access to migrate. Dispatch `.github/workflows/ci.yml`'s
+`deploy` job from Actions → CI → Run workflow with `migrate_pm2_names` checked; it updates the
+checkout, builds, then deletes the old names and starts the `bloombot-` prefixed ones in that
+same run — see `scripts/deploy.sh`'s own `MIGRATE_PM2_NAMES` for exactly what it does and the
+order it does it in. **The rename does not roll back.** If that same run's health check then
+fails and it rolls the checkout back, the pm2 names stay renamed — a rollback undoes code, not
+a name migration.
 
 ### What this deployment actually uses
 
@@ -896,7 +908,7 @@ Editing `.env` is not enough on its own. pm2 keeps the environment a process was
 with, so a process already running carries the old value until it is explicitly told otherwise:
 
 ```bash
-pm2 restart api bot worker mcp --update-env
+pm2 restart bloombot-api bloombot-bot bloombot-worker bloombot-mcp --update-env
 ```
 
 Without `--update-env` the edit appears to have been applied — the file on disk is right, the
@@ -949,7 +961,7 @@ row pointing at them, is only half a recovery.
 # same file open through peewee, and restoring over it while that process
 # still holds a handle is exactly what the WAL warning above this section
 # exists to prevent — omitting it here would be the same mistake.
-pm2 stop bloombot api bot worker mcp ops-monitor
+pm2 stop bloombot bloombot-api bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor
 rm -f data/data.db-wal data/data.db-shm   # stale WAL/shared-memory sidecars from the old file —
                                            # leaving them would let SQLite try to replay them
                                            # against the restored file's own, unrelated history
@@ -960,7 +972,7 @@ node packages/db/dist/run-migrate.js --i-know   # the restored file may predate 
 # cut-over droplet that process no longer exists, and pm2 simply reports it
 # as not found — harmless. On a droplet still mid-migration it must come
 # back, which is why it is here rather than in a comment somebody has to act on.
-pm2 start bloombot api bot worker mcp ops-monitor
+pm2 start bloombot bloombot-api bloombot-bot bloombot-worker bloombot-mcp bloombot-ops-monitor
 ```
 
 ### 8.2 Log rotation
@@ -986,10 +998,10 @@ Run this after §6 (or after any `scripts/deploy.sh` run) — the automated heal
 and reachable*; this proves the product actually works end to end.
 
 **If AUTH-5 has not landed** (this document's own lead callout), steps 1, 2 and 5 below will not
-work — `api` itself is not running, so step 5's `curl` returns nginx's own `502 Bad Gateway`, not
-`{"ready":true,"database":true}`, and steps 1–2 have no panel to reach at all. That is expected,
-not a regression to chase; steps 3 and 4 (Discord, the worker) do not depend on `api` and are a
-real test of the cutover regardless.
+work — `bloombot-api` itself is not running, so step 5's `curl` returns nginx's own
+`502 Bad Gateway`, not `{"ready":true,"database":true}`, and steps 1–2 have no panel to reach at
+all. That is expected, not a regression to chase; steps 3 and 4 (Discord, the worker) do not
+depend on `bloombot-api` and are a real test of the cutover regardless.
 
 1. **Sign in.** Google (§4.3), if configured — email sign-in has no working path until AUTH-5
    lands (state this plainly if it is what you are testing; do not treat a failure here as a
@@ -1002,5 +1014,5 @@ real test of the cutover regardless.
    has no public nginx route, §5.4) reports `queueDepth` dropping back to what it was before.
 5. **Health, from outside nginx's own proxy:** `curl -s https://<your domain>/health` should
    read `{"ready":true,"database":true}`.
-6. **Alerting is armed** (OPS-12) — confirm `ops-monitor` is in pm2's process list and
+6. **Alerting is armed** (OPS-12) — confirm `bloombot-ops-monitor` is in pm2's process list and
    `OPS_ALERT_WEBHOOK_URL` is set; see `docs/CUTOVER.md`'s own §5 for what "notified" means.

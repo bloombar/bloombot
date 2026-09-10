@@ -124,6 +124,9 @@ test('a project and course defined entirely in the panel route and answer a matc
   await page.getByRole('tab', { name: 'AI' }).click()
   await page.getByLabel('Instructions').fill(courseInstructions)
   await page.getByRole('button', { name: 'Save instructions' }).click()
+  // WEB-20: the History section is collapsed by default — open it before
+  // looking for "Current".
+  await page.getByRole('button', { name: /Show history/ }).click()
   await expect(page.getByText('Current')).toBeVisible()
 
   // 4. This is where the browser's own part ends. Everything from here

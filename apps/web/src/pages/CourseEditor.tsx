@@ -147,7 +147,7 @@ import { RosterImport } from '../components/RosterImport.js'
 import { ScaffoldButton } from '../components/ScaffoldButton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
-import { AddIcon, RemoveFromListIcon, WarningIcon } from '../icons.js'
+import { AddIcon, DeleteIcon, WarningIcon } from '../icons.js'
 
 export interface CourseEditorProps {
   organizationId: string
@@ -1199,22 +1199,30 @@ export function CourseEditor({
               }
               className={textInputClasses}
             />
+            {/* WEB-20 — icon-only delete, matching CourseAttachments' own
+                treatment of a detach button: the `aria-label` still names
+                the category, so the accessible name is unchanged even
+                though the visible "Remove category" text is gone. The
+                confirmation inside `removeCategory` is untouched. */}
             <Button
               variant="ghost"
               aria-label={`Remove category ${category.name || ''}`.trim()}
-              icon={
-                <RemoveFromListIcon aria-hidden="true" className="size-4" />
-              }
+              icon={<DeleteIcon aria-hidden="true" className="size-4" />}
               onClick={() => void removeCategory(category.key, category.name)}
-            >
-              Remove category
-            </Button>
+            />
           </div>
           {category.channels.map((channel) => (
             <div
               key={channel.key}
               className="flex flex-wrap items-center gap-2 pl-4"
             >
+              {/* WEB-20 — `min-w-0` lets this input shrink below its
+                  content width so `flex-1` can actually divide the row
+                  with the checkbox and delete button instead of the
+                  `w-full` in `textInputClasses` claiming the whole row
+                  and pushing them onto a line of their own. `flex-wrap`
+                  stays on the row above so a narrow viewport still wraps
+                  rather than overflowing horizontally. */}
               <input
                 aria-label="Channel name"
                 value={channel.name}
@@ -1223,7 +1231,7 @@ export function CourseEditor({
                     name: event.target.value,
                   })
                 }
-                className={textInputClasses}
+                className={`${textInputClasses} min-w-0 flex-1`}
               />
               <label className="flex items-center gap-2 text-sm text-neutral-700">
                 <input
@@ -1242,15 +1250,11 @@ export function CourseEditor({
               <Button
                 variant="ghost"
                 aria-label={`Remove channel ${channel.name || ''}`.trim()}
-                icon={
-                  <RemoveFromListIcon aria-hidden="true" className="size-4" />
-                }
+                icon={<DeleteIcon aria-hidden="true" className="size-4" />}
                 onClick={() =>
                   void removeChannel(category.key, channel.key, channel.name)
                 }
-              >
-                Remove channel
-              </Button>
+              />
             </div>
           ))}
           <Button

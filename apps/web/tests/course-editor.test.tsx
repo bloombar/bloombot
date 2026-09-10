@@ -1635,6 +1635,61 @@ describe('CourseEditor remove-category / remove-channel confirmation (WEB-15)', 
     expect(screen.getByLabelText('Category name')).toBeInTheDocument()
     expect(screen.getByLabelText('Channel name')).toHaveValue('general')
   })
+
+  // WEB-20: the remove controls are icon-only now — findable by their
+  // accessible name (unchanged, above), but with no visible "Remove
+  // category"/"Remove channel" text sitting next to the icon.
+  it('the category and channel remove controls are icon-only — no visible label text', async () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+
+    const removeCategoryButton = screen.getByRole('button', {
+      name: /Remove category/,
+    })
+    const removeChannelButton = screen.getByRole('button', {
+      name: /Remove channel/,
+    })
+    expect(removeCategoryButton).toHaveTextContent('')
+    expect(removeChannelButton).toHaveTextContent('')
+  })
+
+  // WEB-20: the channel-name input, the "Admins only" checkbox and the
+  // delete control all sit in one row container — a structural check
+  // (shared parent), not a Tailwind class-string assertion.
+  it('the channel row keeps its name input, "Admins only" checkbox and remove control together', async () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+
+    const channelNameInput = screen.getByLabelText('Channel name')
+    const adminsOnlyCheckbox = screen.getByLabelText('Admins only')
+    const removeChannelButton = screen.getByRole('button', {
+      name: /Remove channel/,
+    })
+
+    const row = channelNameInput.parentElement
+    expect(row).toContainElement(adminsOnlyCheckbox)
+    expect(row).toContainElement(removeChannelButton)
+  })
 })
 
 /**

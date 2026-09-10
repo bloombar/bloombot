@@ -54,7 +54,7 @@
  * memoized closure actually needs here.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -121,6 +121,12 @@ export function CourseInstructions({
   const [restoreError, setRestoreError] = useState<ApiError | undefined>(
     undefined
   )
+  // WEB-20 — the revision history is collapsed by default; this is the
+  // only new state the toggle needs. `historyRegionId` links the toggle
+  // button to the region it shows/hides (`aria-controls`), the same
+  // `useId()` shape `KebabMenu.tsx` already uses for a per-instance id.
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const historyRegionId = useId()
   const { confirm } = useModal()
 
   // Rework finding: whether the textarea currently holds an edit `refresh`
@@ -323,56 +329,86 @@ export function CourseInstructions({
       </div>
 
       <div className="flex flex-col gap-2">
-        <h3 className="text-section-title font-semibold text-neutral-900">
-          History
-        </h3>
-        {revisions === undefined && !loadError && (
-          <p role="status" className="text-sm text-neutral-500">
-            Loading…
-          </p>
-        )}
-        {revisions && revisions.length === 0 && (
-          <p className="text-sm text-neutral-500">No instructions saved yet.</p>
-        )}
-        {revisions && revisions.length > 0 && (
-          <ul className="flex flex-col gap-2">
-            {revisions.map((revision, index) => (
-              <li
-                key={revision.id}
-                className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm text-neutral-600">
-                    Saved by {revision.savedByAccountId} on{' '}
-                    {new Date(revision.createdAt).toLocaleString()}
-                  </p>
-                  {index === 0 ? (
-                    <span className="text-sm font-medium text-neutral-500">
-                      Current
-                    </span>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      icon={
-                        <RestoreIcon aria-hidden="true" className="size-4" />
-                      }
-                      onClick={() => void handleRestore(revision)}
-                      disabled={restoringId !== undefined}
-                    >
-                      {restoringId === revision.id
-                        ? 'Restoring…'
-                        : 'Restore this revision'}
-                    </Button>
-                  )}
-                </div>
-                <p className="whitespace-pre-wrap text-sm text-neutral-800">
-                  {revision.instructions}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-        {restoreError && <ErrorMessage error={restoreError} />}
+        {/* WEB-20 — collapsed by default; a real `<button>` (not a
+            `<div onClick>`, WEB-17) with `aria-expanded` and
+            `aria-controls` naming the region below, the same pattern
+            `KebabMenu.tsx` uses for its own trigger. The label says how
+            many revisions there are whenever that count is already known
+            (`revisions` is fetched on mount regardless of whether this
+            section is expanded — that fetch stays as it is; see this
+            file's module comment on scope), so the maintainer knows what
+            they are about to open without opening it. */}
+        <div>
+          <Button
+            variant="ghost"
+            aria-expanded={historyExpanded}
+            aria-controls={historyRegionId}
+            onClick={() => setHistoryExpanded((current) => !current)}
+          >
+            {historyExpanded ? 'Hide' : 'Show'} history
+            {revisions !== undefined &&
+              ` (${revisions.length} revision${revisions.length === 1 ? '' : 's'})`}
+          </Button>
+        </div>
+        <div id={historyRegionId} hidden={!historyExpanded}>
+          <div className="flex flex-col gap-2">
+            <h3 className="text-section-title font-semibold text-neutral-900">
+              History
+            </h3>
+            {revisions === undefined && !loadError && (
+              <p role="status" className="text-sm text-neutral-500">
+                Loading…
+              </p>
+            )}
+            {revisions && revisions.length === 0 && (
+              <p className="text-sm text-neutral-500">
+                No instructions saved yet.
+              </p>
+            )}
+            {revisions && revisions.length > 0 && (
+              <ul className="flex flex-col gap-2">
+                {revisions.map((revision, index) => (
+                  <li
+                    key={revision.id}
+                    className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm text-neutral-600">
+                        Saved by {revision.savedByAccountId} on{' '}
+                        {new Date(revision.createdAt).toLocaleString()}
+                      </p>
+                      {index === 0 ? (
+                        <span className="text-sm font-medium text-neutral-500">
+                          Current
+                        </span>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          icon={
+                            <RestoreIcon
+                              aria-hidden="true"
+                              className="size-4"
+                            />
+                          }
+                          onClick={() => void handleRestore(revision)}
+                          disabled={restoringId !== undefined}
+                        >
+                          {restoringId === revision.id
+                            ? 'Restoring…'
+                            : 'Restore this revision'}
+                        </Button>
+                      )}
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm text-neutral-800">
+                      {revision.instructions}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {restoreError && <ErrorMessage error={restoreError} />}
+          </div>
+        </div>
       </div>
     </div>
   )

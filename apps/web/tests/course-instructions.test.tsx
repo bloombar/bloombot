@@ -52,6 +52,13 @@ function revision(
   }
 }
 
+// WEB-20 — the History section is now collapsed by default, so any test
+// that reaches into it (the revision list, "Current", a restore control)
+// has to open it first, the same way an actual instructor would.
+function expandHistory() {
+  fireEvent.click(screen.getByRole('button', { name: /Show history/ }))
+}
+
 afterEach(() => {
   vi.resetAllMocks()
 })
@@ -68,6 +75,7 @@ describe('CourseInstructions (WEB-19)', () => {
       />
     )
 
+    expandHistory()
     expect(
       await screen.findByText('No instructions saved yet.')
     ).toBeInTheDocument()
@@ -115,6 +123,7 @@ describe('CourseInstructions (WEB-19)', () => {
     // The course has no saved instructions yet — resolving with an empty
     // list is exactly the "brand-new course" case the failing e2e hit.
     resolveList([])
+    expandHistory()
     await screen.findByText('No instructions saved yet.')
 
     // The typed text survives, and Save is not left disabled by a baseline
@@ -150,6 +159,7 @@ describe('CourseInstructions (WEB-19)', () => {
     )
 
     expect(await screen.findByDisplayValue('Be terse.')).toBeInTheDocument()
+    expandHistory()
     // FILE-4: the earlier revision's own text is still visible in the
     // history, not only the current one.
     expect(screen.getByText('Be helpful.')).toBeInTheDocument()
@@ -180,6 +190,7 @@ describe('CourseInstructions (WEB-19)', () => {
         onDirtyChange={vi.fn()}
       />
     )
+    expandHistory()
     await screen.findByText('No instructions saved yet.')
 
     fireEvent.change(screen.getByLabelText('Instructions'), {
@@ -364,6 +375,7 @@ describe('CourseInstructions (WEB-19)', () => {
       />
     )
     await screen.findByDisplayValue('Be terse.')
+    expandHistory()
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Restore this revision' })
@@ -406,6 +418,7 @@ describe('CourseInstructions (WEB-19)', () => {
       />
     )
     await screen.findByDisplayValue('Be terse.')
+    expandHistory()
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Restore this revision' })
@@ -444,5 +457,114 @@ describe('CourseInstructions (WEB-19)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Not found, or you do not have access to it.'
     )
+  })
+})
+
+// WEB-20: the History section is collapsed by default, behind a real
+// `<button>` toggle rather than always-rendered content.
+describe('CourseInstructions history toggle (WEB-20)', () => {
+  it('is collapsed on first render, and its toggle reports that in aria-expanded', async () => {
+    listCourseInstructionRevisions.mockResolvedValue([
+      revision({ instructions: 'Be helpful.' }),
+    ])
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Be helpful.')
+
+    const toggle = screen.getByRole('button', { name: /Show history/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // The revision text is in the document (JSDOM keeps `hidden` markup
+    // around) but not exposed by role — a screen reader has nothing to
+    // announce here until the section is opened.
+    expect(
+      screen.queryByRole('button', { name: 'Restore this revision' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('reveals the revisions on activation, flips aria-expanded, and hides them again on a second activation', async () => {
+    listCourseInstructionRevisions.mockResolvedValue([
+      revision({ id: 'rev-2', instructions: 'Be terse.' }),
+      revision({ id: 'rev-1', instructions: 'Be helpful.' }),
+    ])
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Be terse.')
+
+    const toggle = screen.getByRole('button', { name: /Show history/ })
+    fireEvent.click(toggle)
+    expect(
+      screen.getByRole('button', { name: /Hide history/ })
+    ).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      screen.getByRole('button', { name: 'Restore this revision' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Hide history/ }))
+    expect(
+      screen.getByRole('button', { name: /Show history/ })
+    ).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      screen.queryByRole('button', { name: 'Restore this revision' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('names how many revisions there are once they are known', async () => {
+    listCourseInstructionRevisions.mockResolvedValue([
+      revision({ id: 'rev-2', instructions: 'Be terse.' }),
+      revision({ id: 'rev-1', instructions: 'Be helpful.' }),
+    ])
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('button', {
+        name: /Show history \(2 revisions\)/,
+      })
+    ).toBeInTheDocument()
+  })
+
+  // WEB-17: a real `<button>`, focusable by `Tab` — `fireEvent.click` here
+  // stands in for `Enter`/`Space`, the same real-keyboard-activation shape
+  // `kebab-menu.test.tsx`'s own comment explains for that component's
+  // trigger: both produce the same `click` event a native button fires.
+  it('the toggle is a real, focusable button — operable by keyboard, not only by mouse', async () => {
+    listCourseInstructionRevisions.mockResolvedValue([
+      revision({ instructions: 'Be helpful.' }),
+    ])
+
+    renderWithModal(
+      <CourseInstructions
+        organizationId="org-1"
+        courseId="course-1"
+        onDirtyChange={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Be helpful.')
+
+    const toggle = screen.getByRole('button', { name: /Show history/ })
+    toggle.focus()
+    expect(toggle).toHaveFocus()
+    fireEvent.click(toggle)
+    expect(
+      screen.getByRole('button', { name: /Hide history/ })
+    ).toHaveAttribute('aria-expanded', 'true')
   })
 })

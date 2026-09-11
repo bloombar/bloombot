@@ -3,9 +3,9 @@
 How the platform is put together, and why. The requirements this satisfies are `PLAT-1`, `PLAT-2` and
 `PLAT-5` in [SPEC.md](SPEC.md) §12; the judgment calls behind it are in [DECISIONS.md](DECISIONS.md).
 
-This describes the JavaScript platform being built on `feat/PLAT-1-multi-surface-platform`. The Python bot
-in the repository root is the system currently serving students; it is untouched by this work and is
-promoted out of the way only when an operator decides to cut over.
+This describes the JavaScript platform, which is merged to `master` and deploys to the droplet. The Python
+bot in the repository root is the system it replaces; the two can still run side by side on one database
+(D-9), and [CUTOVER.md](CUTOVER.md) is the procedure for retiring the Python one on a given server.
 
 ## One repository, many packages
 
@@ -19,8 +19,9 @@ e2e/        Playwright specs and the fake upstreams they run against
 scripts/    repository tooling (the project board sync, deploy)
 ```
 
-`packages/` and `scripts/` exist today; `apps/` arrives with the Discord bot and `e2e/` with the first
-change that spans front- and back-end. The table below marks what is built.
+All four directories exist. The table below is the dependency graph as it actually stands; it is checked
+by the lint rules and tests described under *Boundaries are enforced*, so a row that drifts fails the build
+rather than merely misleading a reader.
 
 A package is a unit of **dependency and testing**, not a unit of release. These are workspace packages, not
 independently published ones: they share a lockfile, version together, and `@bloombot/*` resolves to local
@@ -30,14 +31,24 @@ source rather than to a registry. The discipline here is architectural, not a di
 
 | package                  | owns                                                          | may depend on           |
 | ------------------------ | ------------------------------------------------------------- | ----------------------- |
-| `packages/schemas`       | zod contracts, including the legacy `bot_config.yml` schema    | **zod, and nothing else** |
-| `packages/config`        | the environment parsed once against a schema; admin allowlist  | zod                     |
-| `packages/logger`        | structured JSONL logging                                       | —                       |
+| `packages/schemas`       | zod contracts, including the legacy `bot_config.yml` schema     | **nothing — zod only**  |
+| `packages/config`        | the environment parsed once against a schema; admin allowlist   | —                       |
+| `packages/logger`        | structured JSONL logging                                        | config                  |
 | `packages/db`            | schema, migrations, and the organization-scoped repositories    | config, logger          |
-| `packages/core`          | the answering pipeline and message routing                      | db                      |
-| `packages/openai`        | the model adapter — the only package that knows the vendor      | core, config, logger    |
-| `packages/legacy-import` | the one-shot importer from the Python system's database         | db, schemas             |
-| `apps/bot` _(in flight)_ | the Discord gateway process                                     | core, db, the surface   |
+| `packages/jobs`          | the background job contract the worker and its enqueuers share  | db, logger              |
+| `packages/core`          | the answering pipeline and message routing                      | db, jobs, logger        |
+| `packages/actions`       | every write the platform can perform, behind one dispatch path  | db, schemas             |
+| `packages/auth`          | sessions, sign-in tokens, and the mail port                     | config, db              |
+| `packages/openai`        | the model adapter — the only package that knows the vendor      | config, core, logger    |
+| `packages/mail`          | the SMTP adapter behind `auth`'s `EmailSender` port (AUTH-5)    | auth, logger            |
+| `packages/discord`       | the surface logic behind a reply port — no `discord.js`          | core, db, jobs, logger  |
+| `packages/discord-rest`  | the Discord REST client the API and worker share                | config                  |
+| `packages/legacy-import` | the one-shot importer from the Python system's database         | config, db, logger, schemas |
+| `apps/api`               | the Express API, and the only process that sends mail           | actions, auth, core, db, discord-rest, jobs, mail, openai |
+| `apps/bot`               | the Discord gateway process (PLAT-3 — the only one)             | core, db, discord, jobs, openai |
+| `apps/worker`            | the background job runner                                       | db, discord-rest, jobs, openai |
+| `apps/mcp`               | the MCP server an assistant connects to (MCP-1..8)              | actions, auth, core, db, jobs, openai |
+| `apps/web`               | the static control panel                                        | **schemas only**        |
 
 Dependencies point one way and the graph is acyclic. Nothing in `packages/` imports from `apps/`.
 
@@ -104,8 +115,10 @@ their own, so imported data obeys the same scoping and collision rules as data c
 
 ## Processes
 
-Four processes are planned, each single-instance (`PLAT-4`): the Express API, the Discord bot, the
-background worker, and the static web build served by nginx. Only the bot exists so far.
+Four Node processes run, each single-instance (`PLAT-4`): the Express API, the Discord bot, the background
+worker and the MCP server, with the static web build served by nginx beside them. `ecosystem.config.cjs`
+names them `bloombot-api`, `bloombot-bot`, `bloombot-worker` and `bloombot-mcp`, alongside
+`bloombot-ops-monitor` (OPS-12) and `bloombot`, the Python bot the platform replaces.
 
 `apps/bot` holds the **only** gateway connection (`PLAT-3`); the API and worker reach Discord over REST with
 the same token, so there is no inter-process coordination to get wrong. Two gateway connections on one token

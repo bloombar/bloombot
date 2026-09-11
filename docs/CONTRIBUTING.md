@@ -33,8 +33,9 @@ descriptive slug when no requirement id applies.
 **Do not commit code to the default branch.** The exceptions are documentation (Markdown, anything under
 `docs/`), `env.example`, and tooling under `scripts/`, which may go straight to the default branch.
 
-During the platform build, `feat/PLAT-1-multi-surface-platform` is a long-lived integration branch. Phase and
-slice branches target it; it is promoted to `master` at phase boundaries.
+`feat/PLAT-1-multi-surface-platform` was the long-lived integration branch for the platform build. That build
+has merged; `master` is the default branch and slice branches target it directly. A merge to `master` deploys
+to the droplet (`.github/workflows/ci.yml`), so a PR is a release, not just a review.
 
 **Check for stale branches and open PRs before starting anything** — an open PR touching your files means
 coordinate, not proceed. The `.claude/skills/stale-check/` skill has the commands.
@@ -44,10 +45,10 @@ coordinate, not proceed. The `.claude/skills/stale-check/` skill has the command
 Every PR body includes `Closes #N`, where `N` is the board issue's number — one line per requirement the PR
 satisfies — so the change and the requirement stay linked in the history.
 
-> **`Closes #N` does not move the card during the platform build.** GitHub's closing keywords fire only for a
-> pull request merged into the **default branch**, and slice branches target `feat/PLAT-1-multi-surface-platform`
-> instead. Left to itself the board would show every card in Backlog while the work happened and long after it
-> shipped. Move the card explicitly at each transition:
+> **Move the card explicitly anyway (BOARD-4).** GitHub's closing keywords fire only for a pull request merged
+> into the **default branch**. A slice branched off `master` and merged back does fire them — but `Closes #N`
+> only ever reaches the `Done` end of the board, never `In progress` or `In review`, and any slice targeting a
+> branch other than `master` fires nothing at all. Move the card at each transition:
 >
 > ```bash
 > npm run board:status -- "In progress" TEN-1 TEN-2   # when the slice starts
@@ -64,8 +65,12 @@ wrong number closes somebody else's requirement.
 Run the checks before opening one:
 
 ```bash
-npm run lint && npm run format:check && npm run typecheck && npm test
+npm run lint && npm run format:check && npm run typecheck && npm test && npm run e2e
 ```
+
+**`npm test` does not run the Playwright suite.** `npm run e2e` is a separate command — its own `pree2e`
+builds first, and it takes a few minutes. Skipping it is how a change to a shared screen ships green here
+and fails in CI.
 
 `npm run board:derive` must leave `scripts/board/manifest.yaml` unchanged — CI fails on a stale manifest.
 
@@ -107,7 +112,8 @@ this is the general list.
 | Variable | Read by | Default if unset |
 | --- | --- | --- |
 | `VITE_GOOGLE_CLIENT_ID` | `pages/SignIn.tsx` — the Google sign-in button. Omitted or wrong and the button silently does nothing (`docs/DEPLOY_DROPLET.md` §4.3 has the full reasoning). | none — Google sign-in is reported as "not configured" |
-| `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin `robots.txt`/`sitemap.xml` and the prerendered `/privacy`/`/terms` pages' `<link rel="canonical">` are written against. **Not** read by `pages/Mcp.tsx` (WEB-47) for the **connector** URL — it carries no information about whether the MCP server is actually exposed at that origin, and today's reference nginx config does not proxy `/mcp` at all (`docs/DEPLOY_DROPLET.md` §5.4). **Is** read for the **icon** URL, preferred over `window.location.origin` — the icon is fetched by the MCP client's own servers (e.g. ChatGPT's), not the reader's browser, so a `window.location.origin` that only the reader's own browser could resolve (a bare droplet IP, an internal hostname, `vite preview`'s local origin) is the wrong default there; falls back to `window.location.origin` only when this is unset. | `https://bloombot.wonkledge.com` |
+| `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin `robots.txt`/`sitemap.xml` and the prerendered `/privacy`/`/terms` pages' `<link rel="canonical">` are written against. **Not** read by `pages/Mcp.tsx` (WEB-47) for the **connector** URL — it carries no information about whether the MCP server is actually exposed at that origin, and a deployment only reaches the MCP server if it has actually installed the reference config for it
+(`deploy/nginx/mcp.conf`, `docs/DEPLOY_DROPLET.md` §5.4). **Is** read for the **icon** URL, preferred over `window.location.origin` — the icon is fetched by the MCP client's own servers (e.g. ChatGPT's), not the reader's browser, so a `window.location.origin` that only the reader's own browser could resolve (a bare droplet IP, an internal hostname, `vite preview`'s local origin) is the wrong default there; falls back to `window.location.origin` only when this is unset. | `https://bloombot.wonkledge.com` |
 | `VITE_MCP_PUBLIC_URL` | `pages/Mcp.tsx` (WEB-47) — the MCP connector URL the tab renders, read as-is (trailing slash stripped). **Must equal `${PUBLIC_MCP_URL}/mcp`** (root `.env`'s `PUBLIC_MCP_URL`, `packages/config/src/env.ts` — MCP-7's own OAuth issuer/resource identifier is `new URL('/mcp', PUBLIC_MCP_URL)`, `apps/mcp/src/index.ts`): the two variables are read by two different processes at two different times (this one at `apps/web`'s build, that one at `apps/mcp`'s startup) with nothing that checks they agree, so a mismatch here is silent until a real client's connection fails against a resource identifier this value does not match. There is no derived fallback — set this only once a deployment has actually exposed the MCP server publicly (an nginx `location /mcp` block, or otherwise) and knows what `PUBLIC_MCP_URL` was set to. **Belongs in the repository-root `.env`, alongside `PUBLIC_MCP_URL`** (`deploy/nginx/README.md`) — that is what `vite.config.ts`'s root-env fallback reads (WEB-47 defect); an `apps/web/.env`/`.env.production` entry for the same key, if one exists, still overrides it. | none — the tab reports the connector as not configured rather than guessing |
 | `VITE_OPERATOR_NAME` | `content/document.ts`'s `OPERATOR` — the legal entity the privacy policy and terms name throughout. | `Bloombot` |
 | `VITE_OPERATOR_CONTACT_EMAIL` | `content/document.ts`'s `OPERATOR` — where a privacy or legal request should be sent. | `privacy@wonkledge.com` |

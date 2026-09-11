@@ -1,15 +1,15 @@
 # Deploying to DigitalOcean App Platform — an honest assessment, not a walkthrough
 
-> ## Read this first: there is no production email transport yet, on any host
+> ## Read this first: mail is configuration, not a missing part
 >
-> Before reading any further about App Platform specifically: `apps/api` refuses to start at
-> all in `NODE_ENV=production` today, on a droplet or here, because no real `EmailSender` has
-> been built yet (`packages/auth/src/email.ts`'s own module comment: "this package ships the
-> interface and a recording fake for tests, never a real mail transport"). This is tracked as
-> **AUTH-5** and is not specific to App Platform — [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md)'s
-> own lead callout has the full detail. It is repeated here, first, because someone deciding
-> between the two documents should not have to reach §4 of this one to learn it changes nothing
-> about which platform to pick.
+> An earlier revision of this document led with a warning that no real mail transport existed
+> on any host. It does now — `@bloombot/mail` (**AUTH-5**, D-47) sends over SMTP — so this is a
+> variable to set rather than code to write. What has not changed is the consequence of leaving
+> it unset: `apps/api/src/logging-email-sender.ts#buildEmailSender` refuses to start `apps/api`
+> at all in `NODE_ENV=production` without `MAIL_SMTP_HOST` and `MAIL_FROM`, and it runs in
+> `main()` before the server listens — so the whole process fails to come up, not just email
+> sign-in. That is identical on either host and changes nothing about which one to pick;
+> [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md)'s own lead callout has the detail.
 
 **This document is not a "how to deploy" in the same shape as
 [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md).** It is written the way the rest of this repository
@@ -156,9 +156,9 @@ without this work having happened first.
 ## 4. Everything else — env vars and third-party setup
 
 Identical to [docs/DEPLOY_DROPLET.md](DEPLOY_DROPLET.md)'s own §3.1 (every variable, what it is
-for, what breaks) and §4 (Discord, OpenAI, Google Cloud, and the same missing-email-transport
-gap that document's own callout describes — App Platform does not change that fact, and the
-same warning applies here without qualification). App Platform's own **App-Level Environment
+for, what breaks) and §4 (Discord, OpenAI, Google Cloud, and the same SMTP settings `apps/api`
+refuses to start in production without — App Platform does not change that, and the same
+requirement applies here without qualification). App Platform's own **App-Level Environment
 Variables** (or a component's own, if the combined-component shape in §2 is used) replace
 `.env` — mark every credential-shaped one **encrypted**, App Platform's own equivalent of this
 repository's own QA-6 "a credential is never committed" discipline. `PUBLIC_APP_URL` is the

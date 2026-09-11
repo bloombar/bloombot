@@ -619,7 +619,11 @@ describe('Shell (WEB-3, WEB-4)', () => {
       ).toBeInTheDocument()
     })
 
-    it('switching to the connected-only organization offers only Chat, and Chat is what actually renders', async () => {
+    // WEB-47 rename — Chat is no longer the only tab this account keeps
+    // here: MCP is offered too (the same audience, `Shell.tsx`'s own
+    // module comment on why). The absences below are what this test
+    // actually proves; only the title used to overclaim.
+    it('switching to the connected-only organization drops Discord/Projects/Transcripts, and Chat is what actually renders', async () => {
       renderShell({
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),

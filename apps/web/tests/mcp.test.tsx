@@ -58,22 +58,74 @@ describe('Mcp (WEB-47)', () => {
     ).toBeInTheDocument()
   })
 
-  // Fails without the change: before this component read a configured
-  // value at all, there was nothing for this test to distinguish — a
-  // literal string would still pass with the deployment's own URL edited
-  // out entirely.
-  it('the connector URL comes from configuration, not a literal', () => {
-    const { rerender } = render(
-      <Mcp connectorUrl="https://first.example.edu/mcp" />
-    )
-    expect(screen.getByTestId('mcp-connector-url')).toHaveTextContent(
-      'https://first.example.edu/mcp'
-    )
+  // Review finding: re-rendering with two different `connectorUrl` *props*
+  // proves only that this component renders its prop — true of any
+  // component, and it exercised nothing `<Mcp />` (no prop, `Shell.tsx`'s
+  // own render, `Shell.tsx:845`) actually takes in production. `Mcp`
+  // reads `import.meta.env['VITE_MCP_PUBLIC_URL']` only when `connectorUrl`
+  // is omitted entirely (the `'in' in props` check) — `vi.stubEnv` is what
+  // exercises that path for real, the same way `sign-in.test.tsx` already
+  // does for `VITE_GOOGLE_CLIENT_ID`. Renaming the env key, or reading a
+  // different one, fails every case below without failing the tests above.
+  describe('the default connector URL, read from VITE_MCP_PUBLIC_URL (no prop)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
 
-    rerender(<Mcp connectorUrl="https://second.example.edu/mcp" />)
-    expect(screen.getByTestId('mcp-connector-url')).toHaveTextContent(
-      'https://second.example.edu/mcp'
-    )
+    it('renders the exact value of VITE_MCP_PUBLIC_URL when set', () => {
+      vi.stubEnv('VITE_MCP_PUBLIC_URL', 'https://mcp.example.edu/mcp')
+      render(<Mcp />)
+      expect(screen.getByTestId('mcp-connector-url')).toHaveTextContent(
+        'https://mcp.example.edu/mcp'
+      )
+    })
+
+    // Pins the exact key name: a rename (or reading some other variable
+    // instead) leaves this env stubbed under the wrong key, and this test
+    // catches that by asserting "not configured" — the correct answer for
+    // an environment that never actually set the real key.
+    it('ignores a similarly-named variable that is not VITE_MCP_PUBLIC_URL', () => {
+      vi.stubEnv('VITE_MCP_URL', 'https://wrong-key.example.edu/mcp')
+      render(<Mcp />)
+      expect(
+        screen.getByText(
+          'The MCP connector is not configured for this deployment.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByTestId('mcp-connector-url')).not.toBeInTheDocument()
+    })
+
+    // Review finding: an earlier version of this component fell back to
+    // `${VITE_PUBLIC_APP_URL}/mcp` when `VITE_MCP_PUBLIC_URL` was unset —
+    // that origin is documented for `robots.txt`/canonical links, proves
+    // nothing about whether MCP is actually exposed there, and today's own
+    // reference nginx config does not proxy `/mcp` at all
+    // (`docs/DEPLOY_DROPLET.md` §5.4). Guessing it returned `index.html`
+    // with HTTP 200 instead of a refusal — worse than no URL. Fails
+    // against that fallback (it would render the derived URL here instead
+    // of "not configured").
+    it('never falls back to VITE_PUBLIC_APP_URL, even when that is set and VITE_MCP_PUBLIC_URL is not', () => {
+      vi.stubEnv('VITE_PUBLIC_APP_URL', 'https://panel.example.edu')
+      render(<Mcp />)
+      expect(
+        screen.getByText(
+          'The MCP connector is not configured for this deployment.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.queryByTestId('mcp-connector-url')).not.toBeInTheDocument()
+    })
+
+    // `toHaveTextContent` alone is a substring match — the unstripped value
+    // itself contains the stripped one as a prefix, so it would pass either
+    // way. Reading `.textContent` directly and asserting exact equality is
+    // what actually tells the two apart.
+    it('strips a trailing slash from a configured value', () => {
+      vi.stubEnv('VITE_MCP_PUBLIC_URL', 'https://mcp.example.edu/mcp/')
+      render(<Mcp />)
+      expect(screen.getByTestId('mcp-connector-url').textContent).toBe(
+        'https://mcp.example.edu/mcp'
+      )
+    })
   })
 
   it('renders "not configured" rather than a guessed URL when none is given', () => {

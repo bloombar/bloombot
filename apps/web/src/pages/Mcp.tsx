@@ -24,19 +24,22 @@
  * exists, the same way `pages/SignIn.tsx` renders "not configured" rather
  * than guessing at a Google client id it was not given.
  *
- * **The connector URL, never a literal domain.** `apps/mcp/src/server.ts`
- * mounts its tool endpoint at `/mcp`, on `CONFIG.MCP_PORT`, bound to
- * `127.0.0.1` only — reaching it from outside this box is something a
- * deployment decides for itself, by adding an nginx `location /mcp`
- * proxied to that port at the *same* origin the panel itself is served
- * from (`docs/DEPLOY_DROPLET.md` §5.4's own suggested shape). `apps/web`
- * already has a build-time equivalent of that origin, `VITE_PUBLIC_APP_URL`
- * (documented in `docs/CONTRIBUTING.md`, read the same way
- * `prerender-plugin.ts` already reads it) — `defaultConnectorUrl`, below,
- * derives from that plus the literal `/mcp` apps/mcp itself answers on,
- * rather than guessing this project's own domain. `VITE_MCP_PUBLIC_URL`
- * overrides it outright, for a deployment that exposes the MCP server
- * somewhere else entirely (a distinct subdomain, a different path).
+ * **The connector URL, only when a deployment actually says so.**
+ * `apps/mcp/src/server.ts` mounts its tool endpoint at `/mcp`, on
+ * `CONFIG.MCP_PORT`, bound to `127.0.0.1` only — reaching it from outside
+ * this box is something a deployment decides for itself, by adding an
+ * nginx `location /mcp` block (`docs/DEPLOY_DROPLET.md` §5.4). Today's own
+ * reference nginx config has none — `/mcp` is not proxied at all, so
+ * guessing `${VITE_PUBLIC_APP_URL}/mcp` (an earlier version of this file's
+ * own choice, review finding) would fall through to the SPA's `location /`
+ * fallback and return `index.html` with **HTTP 200**: a client expecting
+ * JSON-RPC gets HTML instead, silently, which is a worse failure than no
+ * URL at all — `VITE_PUBLIC_APP_URL` is documented for `robots.txt`/
+ * `sitemap.xml`/canonical links and carries no information about whether
+ * MCP is exposed. `defaultConnectorUrl`, below, reads only
+ * `VITE_MCP_PUBLIC_URL` — set by a deployment that has actually added that
+ * nginx block (or exposes MCP some other way) — and renders "not
+ * configured" for every other build, rather than a URL nobody proxied.
  */
 
 import { useState } from 'react'
@@ -57,19 +60,20 @@ export interface McpProps {
 }
 
 /**
- * `VITE_MCP_PUBLIC_URL` if a deployment has set one explicitly, otherwise
- * `VITE_PUBLIC_APP_URL` (this deployment's own public origin, already
- * documented for `apps/web`) with the literal `/mcp` path
- * `apps/mcp/src/server.ts` mounts appended — `undefined` when neither is
- * set, which is what an unconfigured build actually is: there is nothing
- * true to print, so this module's own caller renders "not configured"
- * rather than a guessed string.
+ * `VITE_MCP_PUBLIC_URL` alone — `undefined` when it is not set, which is
+ * what an unconfigured build actually is: nothing else this app knows
+ * (`VITE_PUBLIC_APP_URL` included, this file's own module comment on why)
+ * proves the MCP server is reachable at all, so there is nothing true to
+ * print, and this module's own caller renders "not configured" rather
+ * than a guessed string. A trailing slash is stripped the same way
+ * `packages/config`'s own `stripTrailingSlashes` normalises
+ * `PUBLIC_APP_URL` — a deployment that sets this with one gets a URL that
+ * still reads and copies as this connector's own address, not one with a
+ * dangling `/`.
  */
 function defaultConnectorUrl(): string | undefined {
-  const explicit = import.meta.env['VITE_MCP_PUBLIC_URL']
-  if (explicit) return explicit
-  const publicAppUrl = import.meta.env['VITE_PUBLIC_APP_URL']
-  return publicAppUrl ? `${publicAppUrl.replace(/\/+$/, '')}/mcp` : undefined
+  const configured = import.meta.env['VITE_MCP_PUBLIC_URL']
+  return configured ? configured.replace(/\/+$/, '') : undefined
 }
 
 export function Mcp(props: McpProps) {

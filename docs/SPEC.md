@@ -2777,11 +2777,12 @@ is exactly who most needs an out-of-browser way to reach their course's assistan
 at its own address, the same discipline every other tab in this panel already holds itself to
 (WEB-32/WEB-34): linkable, bookmarkable, and selected from the address on load.
 
-The connector URL is never a literal domain — it is derived from this deployment's own
-configuration (its public origin, plus the path the MCP server answers on), so a fork or a second
-deployment shows its own URL rather than this project's. A plain sentence states what connecting
-grants, without overstating it: the MCP client acts as the connected account, and reaches only the
-courses that account can already reach.
+The connector URL is never a literal domain, and never guessed from another setting that does not
+actually prove the MCP server is exposed — it renders only once a deployment's own configuration
+names it explicitly, so a fork or a second deployment shows its own URL rather than this project's,
+or says plainly that none is configured. A plain sentence states what connecting grants, without
+overstating it: the MCP client acts as the connected account, and reaches only the courses that
+account can already reach.
 
 ### 35. Course Portability
 

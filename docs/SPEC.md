@@ -2767,6 +2767,28 @@ means to routing and collision checking); the form marks both optional the same 
 marks `Max requests per day` optional, and an instructor clearing either field saves successfully,
 storing `null` rather than an empty string.
 
+#### WEB-47 An MCP tab tells a person how to reach their courses from ChatGPT or Claude
+
+Beside Chat, a tab named MCP explains, in plain language, what connecting an AI chat app (ChatGPT,
+Claude, or another connector-capable client) grants: the client acts as the connected account, asks
+a course's assistant the same questions a student could ask on the web or in Discord, and reaches
+only the courses that account could already reach — connecting itself grants nothing new. It then
+gives the connector URL, a copy control, and one setup step per client — since MCP-7, that step ends
+at the client's own sign-in and consent screen, with no token to copy or paste. The same accounts who
+can reach Chat can reach this tab — a membership, or a person connected to the organization with no
+membership at all (LINK-10) — since a connected-only person is exactly who most needs an
+out-of-browser way to reach their course's assistant. It is reachable at its own address, the same
+discipline every other tab in this panel already holds itself to (WEB-32/WEB-34): linkable,
+bookmarkable, and selected from the address on load.
+
+The connector URL is never a literal domain, and never guessed from another setting that does not
+actually prove the MCP server is exposed — it renders only once a deployment's own configuration
+names it explicitly (matching the server's own `PUBLIC_MCP_URL`, MCP-7), so a fork or a second
+deployment shows its own URL rather than this project's, or says plainly that none is configured.
+The tab also links to the session-token flow MCP-7 kept alongside OAuth (`pages/Connect.tsx`), as a
+clearly-labelled fallback for a client that cannot open a sign-in redirect — that flow was already
+real and working, but reachable only by typing its address; this tab is what makes it findable.
+
 ### 35. Course Portability
 
 #### PORT-1 A course exports to a single portable file

@@ -89,6 +89,8 @@ const ROUTES: Route[] = [
   { kind: 'team', organizationId: 'org-1' },
   { kind: 'usage', organizationId: 'org-1' },
   { kind: 'jobs', organizationId: 'org-1' },
+  // WEB-47 — the MCP tab's own landing address.
+  { kind: 'mcp', organizationId: 'org-1' },
 ]
 
 describe('routing/route.ts (WEB-32, WEB-34)', () => {
@@ -110,6 +112,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/projects/proj-1/courses/new',
     '/o/org-1/chat',
     '/o/org-1/chat/course-1',
+    '/o/org-1/mcp',
     '/account',
     '/platform-admin',
     '/platform-admin/organizations',

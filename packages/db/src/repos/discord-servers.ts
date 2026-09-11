@@ -291,6 +291,26 @@ export function getActiveDiscordServerBinding(
     .get()
 }
 
+/**
+ * Every *active* binding across every organization — SURF-9's own
+ * `apps/bot#onReady` catch-up scan reads this on `Events.ClientReady`, once,
+ * to find every server the bot is bound to and needs to scan, rather than
+ * asking one organization at a time (nothing on `Events.ClientReady` names
+ * an organization to start from). The same "org-agnostic by necessity"
+ * class `resolveDiscordServerBinding` above already is, for the same
+ * reason: nothing has resolved an organization yet at this point in a
+ * catch-up run.
+ */
+export function listActiveDiscordServerBindings(
+  db: Database
+): DiscordServerBinding[] {
+  return db
+    .select()
+    .from(discordServerBindings)
+    .where(isNull(discordServerBindings.removedAt))
+    .all()
+}
+
 /** Every binding — active or removed — an organization has ever held. */
 export function listDiscordServerBindingsForOrganization(
   organizationId: string,

@@ -4017,3 +4017,21 @@
   phase: 27
   status: Done
   review: false
+- id: SURF-9
+  title: A message missed while the bot was disconnected is answered late, or
+    apologised for
+  full: "The gateway delivers a message once, to a session that is connected at
+    that moment. A message sent while the bot process is not connected — a
+    deploy restart, a crash, a network drop — is never delivered at all, and
+    Discord does not replay it when the process comes back. Nothing in the
+    platform records that it happened: there is no log line, no transcript row,
+    and no reply. The student sees the bot ignore them, and the only evidence
+    the message existed is in Discord itself. Two such losses have been
+    confirmed in production, both during class hours, both inside a
+    seventeen-second restart window, and both took a cross-reference of two
+    separate log files to identify. SURF-6's guarantee that…"
+  section: §32 Discord Surface
+  family: SURF
+  phase: 28
+  status: Backlog
+  review: false

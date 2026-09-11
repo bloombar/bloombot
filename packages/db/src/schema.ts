@@ -1820,3 +1820,59 @@ export const mcpOauthAccessTokens = sqliteTable('mcp_oauth_access_tokens', {
   revokedAt: integer('revoked_at'),
   createdAt: integer('created_at').notNull(),
 })
+
+// SURF-9 — the durable record of which Discord messages a catch-up scan has
+// already handled (answered, apologised to, or otherwise dispositioned),
+// keyed on Discord's own message snowflake as the primary key: the same
+// "let the database refuse a duplicate rather than trust an application
+// check" discipline `discordServerBindings` already holds itself to for
+// TEN-3, applied here so a message can never be recorded, and therefore
+// answered, twice. `apps/bot`'s own `catch-up.ts` reads this table's ids on
+// every fresh gateway session (`Events.ShardReady`/`Events.ClientReady`,
+// SURF-9 rework round 2's own MF-A) to decide, per candidate message,
+// `answer` / `apologise` / `skip` (`packages/discord/src/catch-up.ts`'s own
+// pure decision function) — this table only ever remembers *that* a message
+// was handled, never *how*, since the live path (`handle-mention.ts`) and
+// the catch-up path both write the same row the same way.
+export const discordHandledMessages = sqliteTable(
+  'discord_handled_messages',
+  {
+    // The Discord message snowflake. Text, not integer, for the same
+    // precision reason `discordServerBindings.serverId` is text — a
+    // snowflake exceeds `Number.MAX_SAFE_INTEGER`.
+    messageId: text('message_id').primaryKey(),
+    serverId: text('server_id').notNull(),
+    channelId: text('channel_id').notNull(),
+    handledAt: integer('handled_at').notNull(),
+  },
+  (table) => [
+    // What `repos/discord-handled-messages.ts#pruneHandledMessagesOlderThan`
+    // sweeps on: a catch-up scan bounded by `DISCORD_CATCHUP_LOOKBACK_MS`
+    // never needs a row older than that window, so pruning by `handledAt`
+    // keeps this table from growing without bound across a long-running
+    // process.
+    index('discord_handled_messages_handled_at_idx').on(table.handledAt),
+  ]
+)
+
+// SURF-9 rework round 2, MF-B — a single durable row recording the last
+// moment `apps/bot` is *known* to have been connected to the Discord
+// gateway, independent of message traffic entirely: `discordHandledMessages`
+// above cannot serve as the catch-up scan's own window floor, because
+// pruning it (deliberately, to bound its own growth) deletes the very row
+// the floor read on any server quieter than the configured lookback — the
+// table empties, catch-up's own cold-start guard treats that identically to
+// "never connected," and the feature goes permanently silent after the
+// first restart on a quiet server. This table is never pruned and never
+// keyed on a message at all: `apps/bot`'s own `connected-marker.ts` upserts
+// its one row periodically while connected, and once more on a clean
+// shutdown, so it always names approximately the true last-connected moment
+// regardless of how much (or how little) traffic the server saw.
+export const discordGatewayStatus = sqliteTable('discord_gateway_status', {
+  // Always the literal string `'singleton'` — there is exactly one row,
+  // enforced by this being the primary key rather than by application
+  // discipline (the same "let the database refuse it" approach
+  // `discordServerBindings` already takes for TEN-3).
+  id: text('id').primaryKey(),
+  lastKnownConnectedAt: integer('last_known_connected_at').notNull(),
+})

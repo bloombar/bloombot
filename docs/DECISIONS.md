@@ -11494,3 +11494,165 @@ the UI") — both real, deliberately deferred rather than solved here. No cap or
 `mcp_oauth_clients` itself (`/register` is unauthenticated, rate-limited only by the SDK's own
 default) — left alone by the security review as acceptable for now, but worth adding if it is ever
 cheap to.
+
+## D-105 — `apps/bot`/`packages/discord`: SURF-9 — catch-up's scan window, the ready event it runs on, and two judgment calls the rework brief left open
+
+**Background.** The first SURF-9 slice landed a catch-up scan that answered or apologised for messages missed
+while `apps/bot` was disconnected, wired to `Events.ClientReady`. Two independent reviews (a high-effort code
+review and a fresh-context spec review) agreed on six must-fixes, all in the discord.js wiring
+(`apps/bot/src/catch-up.ts` and its own wiring in `index.ts`) — the pure decision function
+(`packages/discord/src/catch-up.ts#decideCatchUp`), the schema, the migration and the repo all came back
+clean from both reviews. This entry records the reasoning behind the six fixes and the two judgment calls
+the rework brief asked to have documented rather than re-litigated in code comments alone.
+
+**MF1 — fetch the newest page, filter locally.** `channel.messages.fetch({ after: <cutoff>, limit: 100 })`
+returns the 100 messages *immediately after* the cutoff — the *oldest* 100 within the lookback, not the
+*newest*. In any channel busier than 100 messages per lookback window, the message this scan exists to
+recover is never in that page, while up to 100 day-old messages land in the apology band instead. Fixed by
+dropping `after` entirely: `fetch({ limit: 100 })` with no `before`/`after` returns the newest 100 messages,
+and the scan's own window floor (below) is applied by filtering the fetched page locally rather than asking
+Discord's own cursor for it.
+
+**MF2 — floor the window at the last known handled moment, not the full lookback.** `discord_handled_messages`
+is empty on the first boot after this table's own migration. Scanning the full `DISCORD_CATCHUP_LOOKBACK_MS`
+on that first boot apologises for a day of messages the bot most likely already answered, live, before the
+table existed — "I wasn't running when you sent this" posted directly beneath the answer it already gave.
+Fixed: `discord-handled-messages.ts#maxHandledAt` is the most recent `handledAt` this table has ever recorded;
+the scan's own window floor is `Math.max(maxHandledAt, now - lookbackMs)`, so the lookback stays a hard
+*ceiling* (the window can never be wider than it configures) while the floor tightens to the actual outage
+once there is a real baseline to tighten it from. An empty table (`maxHandledAt` returns `undefined`) means no
+known baseline at all — this run skips the scan entirely rather than guessing one. The very next successful
+live answer (or catch-up answer) plants that baseline, so this is a one-time gap on first boot after the
+migration, not a standing one.
+
+**MF3 — re-check `isMessageHandled` immediately before dispatch, not only the snapshot.** `runCatchUp` takes
+one snapshot of `discord_handled_messages`'s own ids before it ever fetches a channel, but the live path keeps
+serving messages the entire time the scan runs afterward. A student who notices the outage and re-sends their
+question is answered live before the scan's own loop reaches their earlier message; dispatching from the
+snapshot alone answers it a second time — a second model call, a second allowance decrement, two replies where
+one already existed. Fixed: `isMessageHandled` (already in the repo, for a different reason) is called again,
+immediately before dispatching each decision — the snapshot is still what `decideCatchUp` itself reasons about
+(so the pure decision function stays free of a live database read mid-computation), but the one commitment
+point that actually sends anything checks fresh.
+
+**MF4 — an apology only where routing agrees an answer could have happened live.** `apologise` used to reply
+unconditionally, without consulting routing at all. A message in `#announcements` that no course routes to
+gets silence live (`unrouted`, SURF-6); a disabled course's own category resolves the same way (`routeMessage`
+itself filters a disabled course out before either signal runs — `routing.ts`'s own doc comment — so
+`unmatched` already covers both "matches nothing" and "matches only a disabled course"); an ambiguous match
+between two courses is logged and never replied to, live, either. An apology after a restart broke that
+silence for exactly the cases SURF-6/SURF-8 deliberately keep quiet. Fixed by
+`handle-mention.ts#wouldRouteToAnEnabledCourse` — the same binding-lookup-then-`routeMessage` steps
+`handleMention` itself runs before it ever resolves a person, exposed as its own function rather than
+duplicated in `apps/bot`, so the one place that owns routing stays the one place that answers "would this have
+routed" too. `runCatchUp`'s own `apologise` branch checks it before sending anything; `answer` does not need
+the same guard, since it calls the real `handleMention`, which already reaches `unrouted`/`course-disabled` on
+its own and stays silent for them exactly as live.
+
+**MF5 — `runCatchUp` had zero test coverage**, which is exactly why the other five findings all landed there
+undetected. `apps/bot/tests/catch-up.test.ts` now exercises it directly against a real throwaway database and
+plain discord.js fakes (`tests/helpers/fake-discord.ts`) — one test per finding above, plus the cheap-fixes
+below and a throwing-channel case. `onMessageCreate` (the live path's own recording) moved out of `index.ts`
+into `message-handler.ts` — `index.ts`'s own top level calls `main()` unconditionally on import (true before
+this rework, too), which a unit test must never trigger; extracting it is what makes it importable at all.
+
+**MF6 — run on every fresh gateway session, not once per process.** `Events.ClientReady` fires exactly once
+per process (discord.js's own semantics) — wiring a scan to it means a shard that drops and later
+re-identifies (its own RESUME failed, most often because this process was down long enough for Discord to
+expire the session) gets no catch-up at all, even though a failed resume is exactly the "was this process not
+listening" case SURF-9 exists for. Fixed: `wireCatchUp` (`apps/bot/src/catch-up.ts`) listens on
+`Events.ShardReady` instead — it fires once per shard, every time, including the very first connection (so
+ordinary startup is still covered, not only a later re-identify) — and deliberately *not* on
+`Events.ShardResume`: a resumed session is one Discord itself replays the events missed during the gap for
+(`shardResume`'s own `replayedEvents` count), so nothing was actually missed there for a scan to find.
+`client.isReady()`'s own type guard is what lets `wireCatchUp` narrow to `Client<true>` from an event whose own
+callback carries no ready client, only a shard id.
+
+**Cheap-fixes, both already in files this rework owns.** Recording a handled id exists only to dedup against a
+catch-up scan; with `DISCORD_CATCHUP_LOOKBACK_MS <= 0` (catch-up disabled), there is no scan left to dedup
+against, so the live path (`message-handler.ts#onMessageCreate`) now skips recording entirely in that case,
+and `runCatchUp` itself still prunes once on every ready event even while disabled, so a table populated before
+catch-up was turned off still drains rather than sitting there forever. Separately, the summary log line's own
+`answered` count used to increment for every dispatched `answer` decision regardless of what `handleMention`
+actually did with it — a scan whose dispatches all came back `unrouted` logged `answered: 10`, which is
+exactly the number an operator greps this log line for after an incident. Fixed: `unrouted`/`course-disabled`
+— the two silent outcomes, nothing sent to the channel at all — count toward `skipped` instead.
+
+**Two judgment calls, recorded rather than left implicit in a code comment only:**
+
+1. **A caught-up answer is billed against `today()`, not the day the message was actually sent.** `runCatchUp`
+   calls `handleMention` with `day: today()` — the same call the live path makes, unchanged by this rework.
+   A message from yesterday, answered by a catch-up scan that runs after midnight, spends *today's* daily
+   allowance, not yesterday's already-reset one. This is defensible (the model call, the cost, and the
+   allowance slot are all genuinely consumed *today*, whatever day the question was originally asked) but was
+   undocumented before this entry — a future slice changing how `day` is threaded through `answerQuestion`
+   should know this is deliberate, not an oversight this rework left behind.
+2. **The `MAX(handled_at)` floor (MF2, above) is a *known-good* baseline, not a guarantee nothing before it was
+   missed.** A message that arrived, was never a mention, and so was never recorded, sits before
+   `maxHandledAt` exactly the same as a message this process genuinely never saw — the floor cannot
+   distinguish "nothing to answer here" from "this table simply has no opinion about that moment." This is
+   fine for what SURF-9 promises (a message that *addressed the bot* and was missed), since only a mention
+   ever gets recorded at all (`isHandledOutcome`'s own three-exception rule), and a non-mention was never a
+   candidate this scan needed to recover in the first place.
+
+**Addendum, round 2 — MF-A/MF-B/MF-C/MF-D.** Two further reviews found the round-1 fix still did not run on
+the restart SURF-9 exists for, and the window it computed could both go permanently silent and contend with
+the live path for the same message. All four fixes below live in `apps/bot`'s own wiring; the pure decision
+function, schema conventions, migration and repo from round 1 were untouched.
+
+*MF-A — the ready-event gate itself was the bug.* Round 1 wired `Events.ShardReady`, gated on
+`client.isReady()`. discord.js emits `ShardReady` from its own `AllReady` handling *before*
+`checkShardsReady()`/`triggerClientReady()` ever runs — the only place `ws.status` becomes `Status.Ready`,
+which is what `isReady()` actually checks — so on a cold process start (the deploy restart this requirement
+exists for) the guard was still `false` the instant `ShardReady` fired, and the scan silently never ran. It
+only ever ran on a *later* re-identify, once `isReady()` had caught up from the original connection. Fixed by
+reading `client.user` directly (populated before either ready event fires) instead of gating on `isReady()`
+at all, and wiring `Events.ClientReady` alongside `Events.ShardReady` — one shared in-flight boolean across
+both listeners is what stops the pair from ever starting two overlapping scans for the same session, since
+both routinely fire for the very same cold start, moments apart.
+
+*MF-B — the floor was stored in a table that prunes itself empty.* `discord_handled_messages`'s own
+`handled_at` is swept below the lookback ceiling on every run (deliberately, to bound the table's growth) —
+which is precisely the row `maxHandledAt` read as the window's own floor. On any server quieter than the
+configured lookback, the very first scan after a restart prunes the only row that named a floor, the *next*
+restart's cold-start guard finds nothing, and catch-up goes permanently silent from then on. `handled_at` was
+also the wrong clock even before the prune emptied it: it is stamped when handling *finishes*, not when the
+message arrived, so a slow model call floors out a message sent well before it. **Choice: a new, single-row,
+never-pruned table** (`discord_gateway_status`, `packages/db/src/repos/discord-gateway-status.ts`) that names
+only "the last moment this process is known to have been connected" — entirely independent of message
+traffic. `apps/bot/src/connected-marker.ts` keeps it current three ways: immediately on every genuine connect
+transition, a periodic heartbeat (`CONNECTED_MARKER_HEARTBEAT_MS`, 60s — generous on purpose; the marker only
+has to be within this margin of the truth) while connected, and once more on a clean shutdown. The heartbeat
+is what bounds an *ungraceful* crash's own gap — `SIGKILL`, a power loss, nothing runs the clean-shutdown
+write — to one interval, rather than leaving the marker stuck at whenever this process happened to start.
+
+*MF-C — the window had no upper bound.* A message created after the session opened is a candidate the live
+path (`Events.MessageCreate`, already wired before any scan can run) will handle on its own; without a
+ceiling, the scan's own newest-100 fetch could see the very same message seconds later, race the live path's
+own post-answer recording, and answer it twice — the exact class of bug MF3 (round 1) already closed for a
+message answered *during* the scan, reopened here for a message that arrived *after* the scan started but
+before the live path's own handling finished. Fixed by capturing `sessionStart` once, at the top of
+`runCatchUp`, and excluding every candidate with `createdAt >= sessionStart` before it is ever built — not a
+`decideCatchUp` concern (that function's own `now` is still what ages a candidate that already cleared this
+gate), purely an application-level "this was never this scan's message to begin with" filter.
+
+*MF-D — a REST fetch carries no member payload.* `message.member` is `null` for any author outside the
+gateway's own cache (routine above 50 members), and `buildInboundMention` used to read role names off it
+directly — an empty list, for a role-routed course, that decides `unrouted`, which still counts as "handled"
+(`isHandledOutcome`), burying the message permanently on the very first scan that ever saw it. Fixed by
+resolving the real `GuildMember` explicitly (`guild.members.fetch`, which discord.js caches) before building
+the mention, and — the part that matters as much as the fetch itself — skipping *without recording* when
+that resolution fails outright, so a later scan can still retry rather than compounding a transient failure
+into a permanent loss. `buildInboundMention` grew a third, optional parameter for this (an explicit member
+override), defaulting to `message.member` so the live path's own two-argument call is unaffected.
+
+**The one gap both reviews named and accepted, not fixed:** a crash between sending the apology
+(`reply.reply(catchUpApologyText())`) and recording it (`discordHandledMessages.recordHandledMessage`) leaves
+the message unrecorded, so the *next* restart's scan sees it as still unhandled and apologises again — and
+again, on every restart, until the message ages out of the window entirely. This is the same "recorded after
+the work, not before" trade-off `discord-handled-messages.ts`'s own module comment already accepts for the
+`answer` path (a crash there risks a duplicate model call and a duplicate reply, strictly worse than a
+duplicate apology), extended here rather than special-cased: a second identical one-line apology, bounded by
+how quickly a restart loop is noticed and fixed, is judged cheaper than the added complexity of a
+write-then-send ordering (which would then risk recording an apology that failed to send at all — the
+opposite failure).

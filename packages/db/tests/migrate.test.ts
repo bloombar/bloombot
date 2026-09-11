@@ -72,6 +72,8 @@ describe('runMigrations', () => {
       'course_self_enrolment_intents',
       'course_web_sources',
       'courses',
+      'discord_gateway_status',
+      'discord_handled_messages',
       'discord_install_states',
       'discord_server_bindings',
       'enrolments',

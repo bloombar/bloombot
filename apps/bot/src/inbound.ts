@@ -4,6 +4,19 @@
  * to route by, BOT-1's own scope) — into `@bloombot/discord`'s
  * `InboundMention` DTO. The only place in this file that reaches into a
  * discord.js `Message`.
+ *
+ * SURF-9 rework round 2, MF-D — `buildInboundMention`'s third parameter lets
+ * a caller supply the author's `GuildMember` explicitly, overriding
+ * `message.member`. The live gateway event (`Events.MessageCreate`) always
+ * carries a real member, so `message-handler.ts`'s own call never passes a
+ * third argument and this defaults to exactly what it read before. A
+ * REST-fetched message (`apps/bot/src/catch-up.ts`'s own scan) carries no
+ * `member` payload at all — `message.member` is `null` for any author
+ * outside the gateway's own member cache, which is routine above 50
+ * members — and reading `authorRoleNames: []` off that silently breaks a
+ * role-routed course: `catch-up.ts` resolves the real member itself
+ * (`guild.members.fetch`, cached) and passes it here rather than trusting
+ * `message.member`.
  */
 
 import type { Message } from 'discord.js'
@@ -32,7 +45,8 @@ function resolveCategoryName(channel: GuildMessage['channel']): string | null {
 
 export function buildInboundMention(
   message: GuildMessage,
-  botId: string
+  botId: string,
+  member: GuildMessage['member'] = message.member
 ): InboundMention {
   return {
     guildId: message.guild.id,
@@ -41,8 +55,8 @@ export function buildInboundMention(
     authorId: message.author.id,
     // A server nickname when the author has one, their bare username
     // otherwise — the same "readable name" BOT-6 rewrites a mention to.
-    authorDisplayName: message.member?.displayName ?? message.author.username,
-    authorRoleNames: message.member?.roles.cache.map((role) => role.name) ?? [],
+    authorDisplayName: member?.displayName ?? message.author.username,
+    authorRoleNames: member?.roles.cache.map((role) => role.name) ?? [],
     text: message.content,
     botId,
     authorIsBot: message.author.bot,

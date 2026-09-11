@@ -2057,6 +2057,38 @@ that answers every unrouted mention in a busy server is noise. A disabled course
 has been deliberately turned off, and announcing itself in the channel it was turned off in is the
 opposite of what disabling it asked for.
 
+#### SURF-9 A message missed while the bot was disconnected is answered late, or apologised for
+
+The gateway delivers a message once, to a session that is connected at that moment. A message sent while
+the bot process is not connected — a deploy restart, a crash, a network drop — is never delivered at all,
+and Discord does not replay it when the process comes back. Nothing in the platform records that it
+happened: there is no log line, no transcript row, and no reply. The student sees the bot ignore them, and
+the only evidence the message existed is in Discord itself. Two such losses have been confirmed in
+production, both during class hours, both inside a seventeen-second restart window, and both took a
+cross-reference of two separate log files to identify. SURF-6's guarantee that every outcome reaches the
+student or the log does not hold across a restart, because the outcome never becomes an outcome.
+
+On establishing a fresh gateway session, the bot looks for messages it should have handled while it was
+away and handles them. It considers only servers with an active binding, only channels it can currently
+read, and only messages that address it — the same test SURF-2 applies live, mention or reply. A message
+it has already handled is never handled twice, which the platform knows because it records the id of every
+Discord message it has handled, whatever the outcome was.
+
+How late an answer is still worth sending is configuration, not a constant: a message caught up seconds
+after a deploy restart should simply be answered, and one from hours ago should not suddenly receive an
+answer to a question its author has long since resolved, resent, or forgotten. A missed message younger
+than the configured age is answered exactly as it would have been live — same routing, same enrolment
+gates, same allowance, same refusals. An older one, within the bounded window the catch-up scans at all,
+gets a short apology in its own channel instead: the bot was not running when it was asked, no answer is
+coming, and asking again will work. No model call is made and no allowance is spent on an apology.
+
+The catch-up is bounded work with a bounded blast radius. It scans one page of recent messages per eligible
+channel and no further back than its own window, so a bot returning from a long outage does not spend
+minutes replaying a backlog or wake a quiet server with a burst of apologies. A failure to scan one channel
+— a permission removed, a rate limit, a channel deleted — is logged and skipped, never fatal: catching up
+is a courtesy the process performs after it is already running, and it must not be able to stop the bot
+from serving the messages arriving now.
+
 ### 33. HTTP API
 
 #### API-1 Routes carry, they do not decide

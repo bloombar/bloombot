@@ -23,6 +23,7 @@ import {
 
 import {
   handleMention,
+  wouldRouteToAnEnabledCourse,
   type HandleMentionDependencies,
 } from '../src/handle-mention.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
@@ -1658,5 +1659,68 @@ describe('handleMention — TEN-9: routing never crosses a Discord server bounda
     // says explicitly what it always implicitly meant.
     const course = courses.getCourse(organizationId, courseId, testDb.db)
     expect(course?.discordServerId).toBe(guildId)
+  })
+})
+
+// SURF-9 rework, MF4 — `wouldRouteToAnEnabledCourse` is what the catch-up
+// path's own apology gates on: an apology only makes sense where an answer
+// could actually have happened live.
+describe('wouldRouteToAnEnabledCourse (SURF-9 rework, MF4)', () => {
+  it('is true for a message that routes to exactly one enabled course', () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+    })
+
+    expect(
+      wouldRouteToAnEnabledCourse(
+        inboundMention({ guildId, categoryName: 'Week 1' }),
+        testDb.db
+      )
+    ).toBe(true)
+  })
+
+  it('is false for a message matching no course — the same case the live path answers with silence, not an apology', () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+    })
+
+    expect(
+      wouldRouteToAnEnabledCourse(
+        inboundMention({ guildId, categoryName: 'Not A Real Category' }),
+        testDb.db
+      )
+    ).toBe(false)
+  })
+
+  // `routeMessage` itself filters a disabled course out before either
+  // signal runs (`routing.ts`'s own doc comment), so a disabled course's
+  // category reaches this the same as `unmatched` — no separate branch
+  // needed, but exercised explicitly since MF4 names it by name.
+  it('is false when the only matching course is disabled', () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+      enabled: false,
+    })
+
+    expect(
+      wouldRouteToAnEnabledCourse(
+        inboundMention({ guildId, categoryName: 'Week 1' }),
+        testDb.db
+      )
+    ).toBe(false)
+  })
+
+  it('is false for an unbound Discord server', () => {
+    testDb = createTestDatabase()
+
+    expect(
+      wouldRouteToAnEnabledCourse(
+        inboundMention({ guildId: randomUUID(), categoryName: 'Week 1' }),
+        testDb.db
+      )
+    ).toBe(false)
   })
 })

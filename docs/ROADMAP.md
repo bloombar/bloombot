@@ -358,3 +358,13 @@ adding them does not also hand a student every administrative tool that gate exi
 them, and that gate itself needed no change.
 
 **In scope:** MCP-8
+
+## Phase 28 — A message the bot never received
+
+A message sent while the bot process is not connected to the gateway is never delivered, never logged and
+never answered: Discord does not replay it, and the platform has no record that it existed. Two were lost
+in production during class hours, inside restart windows of seventeen seconds each. This phase makes the
+bot look for what it missed when it reconnects, answer what is still worth answering, and apologise for
+what is not.
+
+**In scope:** SURF-9

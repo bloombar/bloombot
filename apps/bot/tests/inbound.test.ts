@@ -104,6 +104,22 @@ function fakeMessage(options: {
   } as unknown as Parameters<typeof buildInboundMention>[0]
 }
 
+/** A fake `GuildMember` — the same shape `fakeMessage`'s own inline `member` already takes, factored out so the MF-D tests below can build one independent of a message. */
+function fakeGuildMember(options: {
+  displayName?: string
+  roleNames?: string[]
+}) {
+  return {
+    displayName: options.displayName ?? 'Explicit Member',
+    roles: {
+      cache: {
+        map: (fn: (role: { name: string }) => string) =>
+          (options.roleNames ?? []).map((name) => fn({ name })),
+      },
+    },
+  } as unknown as Parameters<typeof buildInboundMention>[2]
+}
+
 describe('buildInboundMention', () => {
   it('reads the category through a non-thread channel one level up, as before', () => {
     const message = fakeMessage({
@@ -204,5 +220,48 @@ describe('buildInboundMention', () => {
     expect(result.authorRoleNames).toEqual(['admins-wd', 'students-wd'])
     expect(result.botId).toBe(BOT_ID)
     expect(result.authorIsBot).toBe(true)
+  })
+
+  // SURF-9 rework round 2, MF-D — a REST-fetched message carries no
+  // `message.member` at all; `catch-up.ts` resolves the real member itself
+  // and passes it as the third argument, which must win over whatever
+  // `message.member` says (here, nothing).
+  describe('the explicit member override (MF-D)', () => {
+    it('reads the display name and role names from the explicit member when message.member is null', () => {
+      const message = fakeMessage({ memberDisplayName: null })
+      const member = fakeGuildMember({
+        displayName: 'Resolved Member',
+        roleNames: ['admins-wd', 'students-wd'],
+      })
+
+      const result = buildInboundMention(message, BOT_ID, member)
+
+      expect(result.authorDisplayName).toBe('Resolved Member')
+      expect(result.authorRoleNames).toEqual(['admins-wd', 'students-wd'])
+    })
+
+    it('still falls back to the username when neither message.member nor an explicit member is available', () => {
+      const message = fakeMessage({
+        memberDisplayName: null,
+        authorUsername: 'bare.username',
+      })
+
+      const result = buildInboundMention(message, BOT_ID, null)
+
+      expect(result.authorDisplayName).toBe('bare.username')
+      expect(result.authorRoleNames).toEqual([])
+    })
+
+    it("defaults to message.member when no third argument is passed at all — the live path's own call is unaffected", () => {
+      const message = fakeMessage({
+        memberDisplayName: 'Live Gateway Member',
+        roleNames: ['students-wd'],
+      })
+
+      const result = buildInboundMention(message, BOT_ID)
+
+      expect(result.authorDisplayName).toBe('Live Gateway Member')
+      expect(result.authorRoleNames).toEqual(['students-wd'])
+    })
   })
 })

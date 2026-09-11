@@ -120,7 +120,9 @@ pip install --user pipenv
 # nginx, and certbot for TLS
 sudo apt-get install -y nginx certbot python3-certbot-nginx
 
-# sqlite3 CLI, for the backup step in §8
+# sqlite3 CLI, for the manual backup in §8.1 (optional — scripts/deploy.sh's
+# own pre-migration backup, OPS-19, uses the better-sqlite3 Node driver
+# `npm ci` already installs, not this CLI, so a deploy no longer needs it)
 sudo apt-get install -y sqlite3
 ```
 

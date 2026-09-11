@@ -2945,6 +2945,24 @@
   phase: 15
   status: Done
   review: false
+- id: OPS-19
+  title: The pre-migration backup reaches SQLite without a system binary the
+    droplet may not have
+  full: "OPS-18's backup shelled out to the sqlite3 CLI, and the production
+    droplet does not have it — installing one needs a sudo the deploy user does
+    not have, so every deploy that reaches a migration failed the same way,
+    blocking anything already merged behind it. scripts/deploy.sh reaches the
+    same SQLite online backup API through better-sqlite3 instead — the driver
+    packages/db already depends on, and npm ci already installs into the
+    checkout being deployed — so nothing new has to be installed on the droplet
+    at all. Every guarantee OPS-18 established still holds: a failed backup
+    aborts before the migration and before any process is reloaded, a first-ever
+    deploy with no database yet still skips…"
+  section: §27 Production Hardening & Cutover
+  family: OPS
+  phase: 15
+  status: Backlog
+  review: false
 - id: ENRL-7
   title: Anyone a course is taught through is enrolled by asking it
   full: CORE-2 routes a message to a course when its author holds either of that

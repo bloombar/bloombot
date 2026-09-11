@@ -3964,3 +3964,21 @@
   phase: 26
   status: Done
   review: false
+- id: MCP-8
+  title: A linked account can ask a course's assistant, under the same admission
+    rules as any other surface
+  full: An MCP client can list, across every organization the account can reach,
+    only the courses the account is currently admitted to chat in — the same
+    predicate that decides admission for the web and Discord surfaces, called
+    directly rather than reimplemented — and ask one of them a question, getting
+    the same answer, through the same metered, attributed pipeline. A course id
+    the caller supplies is resolved against that same predicate before anything
+    is answered; when none is given and more than one course is admitted, or the
+    id given is not one the account may ask in, the tool refuses and names the
+    admitted courses instead of guessing, by project and course, never by
+    organization. Every answer…
+  section: §25 MCP Server & Agent Access
+  family: MCP
+  phase: 27
+  status: Backlog
+  review: false

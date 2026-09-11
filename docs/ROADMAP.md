@@ -344,3 +344,15 @@ bot that is down, a mention that did not register, or a message that routed some
 phase gives that one outcome a reply.
 
 **In scope:** SURF-8
+
+## Phase 27 — Asking a course's assistant from an MCP client
+
+Phase 13's own tool surface is entirely instructor-side course administration; nothing on it lets
+the person the whole platform answers questions for — a student, reachable only through a
+connected identity and an enrolment, never a membership — actually ask one. This phase adds the two
+tools that let a linked MCP client do that, under the identical admission rules ENRL-15/16 already
+gave the web and Discord surfaces, and resolves `call-tool.ts`'s own blanket membership gate down to
+a per-tool declaration so adding them does not also hand a student every administrative tool that
+gate exists to keep from them.
+
+**In scope:** MCP-8

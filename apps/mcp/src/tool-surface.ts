@@ -110,7 +110,7 @@
  */
 
 import type { ActionRegistry, AnyAction } from '@bloombot/actions'
-import { z } from 'zod'
+import { z, type ZodRawShape } from 'zod'
 
 /** One entry in the explicit allowlist above. */
 export interface ToolSurfaceEntry {
@@ -308,6 +308,83 @@ function withOrganizationId(schema: object): object {
  * starts listening) rather than a silently dropped or silently
  * under-described tool discovered later, mid-session.
  */
+/**
+ * MCP-8: the two chat tools, declared explicitly here (MCP-2's own "chosen,
+ * not derived") alongside `MCP_TOOL_SURFACE` — but deliberately a second,
+ * separate array rather than two more entries in it. `chat-tools.ts`'s own
+ * module comment has the full reasoning; the short version: every entry in
+ * `MCP_TOOL_SURFACE` dispatches one `organizationId`-scoped action through
+ * `call-tool.ts#callTool` (`@bloombot/actions#dispatch`'s own
+ * single-organization contract), and its own membership check
+ * (`memberships.getMembership`) is correct for that catalog precisely
+ * because every one of those tools *is* organization-scoped course
+ * administration. Neither tool below is: `chat.listCourses` is explicitly
+ * cross-organization (MCP-7's own account-wide link is the point of it),
+ * and `chat.ask` takes no `organizationId` at all — the organization a
+ * `courseId` belongs to is resolved from the course itself, not named by
+ * the caller (`chat-tools.ts#resolveAdmittedCourse`), so a refused or
+ * hallucinated id never leaks which organization it would have belonged to.
+ * `server.ts#registerChatTools` registers these directly, the same way
+ * `registerPersonLinkTool` (LINK-8) already registers a tool whose own
+ * shape does not fit `call-tool.ts#callTool`'s dispatch pipeline either —
+ * both bypass `call-tool.ts`'s membership gate entirely, never weaken it,
+ * because neither is authorized by membership in the first place:
+ * `chat-tools.ts`'s own functions authorize through
+ * `enrolments.resolveChatAdmission`/`listChatAdmittedCourses` alone, called
+ * fresh, per course, at call time — the one rule this whole slice exists to
+ * hold to (a student with an enrolment and no membership must be able to
+ * use these two tools, and must still be refused every tool on
+ * `MCP_TOOL_SURFACE` above, which this separation gives for free: nothing
+ * about adding these two tools touches `call-tool.ts` or its own membership
+ * check at all).
+ *
+ * Tool descriptions are the model's only instructions (MCP clients cache
+ * tool lists, so nothing here can rely on a prior turn to explain a call):
+ * `chat.ask`'s own description spells out that `courseId` is optional, that
+ * ids come from `chat.listCourses`, and that this tool itself names the
+ * admitted courses when it cannot tell which one is meant, so a model
+ * reads all of that from the one place it can — not from this file's own
+ * comments, which it never sees.
+ */
+export interface ChatToolSurfaceEntry {
+  name: string
+  description: string
+  /** A real zod object shape (not JSON Schema) — handed straight to `McpServer#registerTool` (`server.ts`), which takes a `ZodRawShape` directly rather than `MCP_TOOL_SURFACE`'s own JSON-Schema-via-`z.toJSONSchema` detour (that detour exists only so `McpToolDefinition` stays testable with no `@modelcontextprotocol/sdk` import at all — this file's own module comment on `McpToolDefinition.inputSchema` — which these two tools do not need since `server.ts` builds and registers them directly). */
+  inputSchema: ZodRawShape
+}
+
+export const MCP_CHAT_TOOL_SURFACE: readonly ChatToolSurfaceEntry[] = [
+  {
+    name: 'chat.listCourses',
+    description:
+      'Every course this account may currently ask a question in, across every organization it can reach — the organization, the project and the course for each. Call this first when you do not already have a courseId, or when chat.ask says it cannot tell which course is meant.',
+    inputSchema: {},
+  },
+  {
+    name: 'chat.ask',
+    description:
+      "Ask a course's assistant a question and get an answer, the same one a student would see on the web or in Discord. " +
+      'courseId is optional — omit it when the person you are helping has exactly one course available (chat.listCourses lists them); ' +
+      'if there is more than one, or the id you supply is not one this account may ask in, this tool refuses and lists the ' +
+      'admitted courses (by project and course name) instead of guessing — call chat.listCourses or re-ask with one of those ids. ' +
+      'The reply always names which course it came from.',
+    inputSchema: {
+      courseId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'The course to ask, from chat.listCourses. Omit when there is exactly one course available.'
+        ),
+      text: z
+        .string()
+        .min(1)
+        .max(4000)
+        .describe("The question to ask the course's assistant."),
+    },
+  },
+]
+
 export function buildToolDefinitions(
   registry: ActionRegistry,
   surface: readonly ToolSurfaceEntry[] = MCP_TOOL_SURFACE

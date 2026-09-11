@@ -147,6 +147,31 @@ describe('Courses (WEB-8)', () => {
     expect(
       screen.queryByText(/does not route on a role/)
     ).not.toBeInTheDocument()
+    // Singular — only one role is actually present. `(?!s)` rules out
+    // matching the "roles" substring inside a plural reading.
+    expect(screen.getByText(/routes on role(?!s)/)).toBeInTheDocument()
+  })
+
+  // The control on the case above: a course naming *both* roles reads
+  // "routes on roles" (plural), not the singular wording a course naming
+  // only one gets. Fails without the fix: this line read "routes on role
+  // X / Y" even with both present — WEB-46 only changed the three
+  // checkbox descriptions, never this one.
+  it('a course naming both roles reads "routes on roles" (plural), not "routes on role"', async () => {
+    listCourses.mockResolvedValue([COURSE])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+    expect(screen.getByText(/routes on roles/)).toBeInTheDocument()
   })
 
   // WEB-45: the list/collection shape — a row-shaped skeleton, gone once

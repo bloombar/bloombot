@@ -153,12 +153,18 @@ describe('routeMessage (CORE-2)', () => {
   })
 
   // PROJ-7: a course may name no role at all — the platform then does not
-  // attempt role-based identification for it. These three cases are exactly
-  // where a mistake is dangerous (this slice's own brief): `roleNames.has(null)`
-  // happening to be falsy is not a substitute for checking explicitly, since a
-  // course whose role is `''` rather than `null` would otherwise match every
-  // author, and two role-less courses would otherwise force every message
-  // without a category into `ambiguous`.
+  // attempt role-based identification for it. `Set<string>.has(null)` is
+  // `false` at runtime regardless of the explicit `!== null` guard in
+  // `routing.ts` — so this test (and "does not make an otherwise-unambiguous
+  // message ambiguous", below) do not fail if that guard is removed; only
+  // `tsc` objects to the resulting type error (`roleNames.has(null)` against
+  // a `Set<string>`). What they still pin down: a role-less course is inert
+  // for an author holding no role, and does not create a spurious ambiguity,
+  // regardless of *how* that is implemented. The one case with genuine
+  // runtime teeth is the next test, which rules out coalescing an absent
+  // role to `''` (`course.adminsRole ?? ''`) rather than checking it for
+  // `null` explicitly — that variant really would treat a role named `''`
+  // as a match.
   it('a role-less course is never a role match, even for an author holding no role at all', () => {
     const roleless: RoutableCourse = {
       id: 'course-roleless',
@@ -213,10 +219,12 @@ describe('routeMessage (CORE-2)', () => {
       studentsRole: null,
       enabled: true,
     }
-    // Fails without the fix: two role-less courses, compared the naive way
-    // (`roleNames.has(course.adminsRole)` with no `!== null` guard), would
-    // both "match" whichever author holds no relevant role, reporting an
-    // ambiguity nobody named a colliding role for.
+    // Same caveat as the first test above: this does not fail if the
+    // `!== null` guard is removed (`Set<string>.has(null)` is already
+    // `false` at runtime), only if `null` were ever coalesced to `''`
+    // first. Pinned here anyway, alongside `webDesign`, so a later reader
+    // has a worked example of "role-less does not manufacture an
+    // ambiguity" next to "a real role match still wins."
     const result = routeMessage([rolelessOne, rolelessTwo, webDesign], {
       categoryName: null,
       channelName: null,

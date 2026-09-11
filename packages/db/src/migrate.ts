@@ -45,6 +45,25 @@ export function runMigrations(db: Database): void {
   db.$client.pragma('foreign_keys = OFF')
   try {
     migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
+    // Disabling `foreign_keys` for the whole batch (above) is exactly what
+    // SQLite's own "make other kinds of table schema changes" recipe
+    // prescribes for a table rebuild — and exactly what it also prescribes
+    // running immediately afterward, still on this connection: with
+    // enforcement off, a migration that inserts or backfills a row with a
+    // dangling foreign key (a bad `course_id` on `course_categories`, say)
+    // would otherwise commit silently, where before this file ever
+    // disabled anything that same mistake failed loudly at the offending
+    // statement. `PRAGMA foreign_key_check` returns one row per violation
+    // it finds anywhere in the database, checked against every table, not
+    // only the one this batch touched — so this also catches a violation
+    // some *earlier* migration already left behind, not only a fresh one.
+    // `[]` means clean.
+    const violations = db.$client.pragma('foreign_key_check') as unknown[]
+    if (violations.length > 0) {
+      throw new Error(
+        `runMigrations: foreign_key_check found ${violations.length} violation(s) after applying migrations — ${JSON.stringify(violations)}`
+      )
+    }
   } finally {
     db.$client.pragma('foreign_keys = ON')
   }

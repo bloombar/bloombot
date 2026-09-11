@@ -177,13 +177,20 @@ export function CourseRows({
                 <p className="text-xs text-neutral-500">
                   {/* PROJ-7: a role that is absent must not render as an
                       empty `<code>` tag — this reads sensibly whether
-                      neither, one, or both roles are set. */}
+                      neither, one, or both roles are set. "role"/"roles"
+                      is singular unless both are actually present — WEB-46
+                      only changed the three checkbox descriptions, not
+                      this line's own wording. */}
                   {course.adminsRole === null &&
                   course.studentsRole === null ? (
                     'does not route on a role'
                   ) : (
                     <>
-                      routes on role{' '}
+                      routes on{' '}
+                      {course.adminsRole !== null &&
+                      course.studentsRole !== null
+                        ? 'roles'
+                        : 'role'}{' '}
                       {course.adminsRole !== null && (
                         <code className="rounded bg-neutral-100 px-1">
                           {course.adminsRole}

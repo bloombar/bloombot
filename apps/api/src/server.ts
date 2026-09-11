@@ -53,6 +53,7 @@ import { buildChatRouter } from './routes/chat.js'
 import { buildDiscordServersRouter } from './routes/discord-servers.js'
 import { buildJoinLinksRouter } from './routes/join-links.js'
 import { buildMembershipInvitationsRouter } from './routes/membership-invitations.js'
+import { buildMcpOauthConsentRouter } from './routes/mcp-oauth-consent.js'
 import {
   buildPersonLinkRouter,
   type PendingDiscordConnect,
@@ -207,6 +208,17 @@ export function buildApp(deps: ServerDependencies): Express {
   app.use(
     '/organizations/:organizationId/transcript-exports',
     buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
+  )
+  // MCP-7 — a plain HTML `<form>` POST, not a JSON body: this needs
+  // `express.urlencoded`, which nothing else this app mounts does.
+  app.use('/oauth/mcp', express.urlencoded({ extended: false }))
+  app.use(
+    '/oauth/mcp',
+    buildMcpOauthConsentRouter({
+      db: deps.db,
+      publicAppUrl: deps.publicAppUrl,
+      emailSender: deps.emailSender,
+    })
   )
   app.use(
     '/organizations/:organizationId/person-link',

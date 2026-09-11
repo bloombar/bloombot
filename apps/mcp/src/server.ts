@@ -1,13 +1,15 @@
 /**
- * apps/mcp's own transport adapter — the one file in this app allowed to
- * import `@modelcontextprotocol/sdk`, the same "vendor SDK confined to its
- * own adapter" discipline `apps/bot`'s own module comment holds discord.js
- * to (`packages/discord/tests/no-vendor-sdk.test.ts` enforces that one
- * mechanically across a package boundary; this is a single app with no such
- * boundary to enforce it, so the discipline is held by keeping every SDK
- * import in this one file instead). `tool-surface.ts` and `call-tool.ts` —
- * the tool definitions and the dispatch logic — import nothing from the SDK
- * and are testable with no transport standing up at all.
+ * apps/mcp's own transport adapter — one of two files in this app allowed to
+ * import `@modelcontextprotocol/sdk` (`oauth-provider.ts` is the other, for
+ * MCP-7's own auth subsystem; that file's own module comment), the same
+ * "vendor SDK confined to its own adapter" discipline `apps/bot`'s own
+ * module comment holds discord.js to (`packages/discord/tests/no-vendor-sdk.test.ts`
+ * enforces that one mechanically across a package boundary; this is a
+ * single app with no such boundary to enforce it, so the discipline is held
+ * by keeping every SDK import in these two files instead). `tool-surface.ts`
+ * and `call-tool.ts` — the tool definitions and the dispatch logic — import
+ * nothing from the SDK and are testable with no transport standing up at
+ * all.
  *
  * Builds an Express app: `/health` and `/mcp`, an MCP Streamable HTTP
  * endpoint run in *stateful* mode — one `McpServer`/`StreamableHTTPServerTransport`
@@ -25,15 +27,37 @@
  * drives this with `supertest` and no port bound just to run a suite.
  *
  * Authentication happens on every single HTTP request to `/mcp`, not only
- * the one that creates a session (`authenticateBearerToken`, MCP-3) — a
- * request with no valid bearer token never reaches a tool, the same "no
- * session, no dispatch" refusal `apps/api`'s own `routes/actions.ts` gives
- * an anonymous caller, and a session whose token has since expired or been
- * revoked stops working on its very next request rather than staying live
- * until the client disconnects. A session, once created, is also pinned to
- * the account that created it — a bearer token authenticating a *different*
+ * the one that creates a session (MCP-3) — a request with no valid bearer
+ * token never reaches a tool, the same "no session, no dispatch" refusal
+ * `apps/api`'s own `routes/actions.ts` gives an anonymous caller, and a
+ * session whose token has since expired, been revoked, or been rotated away
+ * stops working on its very next request rather than staying live until
+ * the client disconnects. A session, once created, is also pinned to the
+ * account that created it — a bearer token authenticating a *different*
  * account presented against an existing `Mcp-Session-Id` is refused, not
  * silently allowed to reuse another account's already-registered tools.
+ *
+ * **MCP-7 — two bearer shapes, one pinning rule.** `resolveCallerAccountId`
+ * (below) tries an OAuth access token first (`oauth-provider.ts#verifyAccessToken`,
+ * the primary path a real ChatGPT/Claude connector uses after
+ * `mcpAuthRouter`'s own `/authorize`/`/token` complete) and falls back to
+ * MCP-3's original bearer session token (`authenticateBearerToken`) when
+ * that fails — a deliberate decision to keep both rather than migrate
+ * MCP-3 to OAuth-only (`docs/DECISIONS.md`'s MCP-7 entry has the full
+ * reasoning): `bloombot_connectAssistant` and this app's own existing test
+ * suite depend on a session token working exactly as it does today, and
+ * retiring it is a separate decision with its own blast radius this slice
+ * does not take. The two are never confused for one another — an OAuth
+ * token is a hash lookup against `mcp_oauth_access_tokens`, a session
+ * token against `sessions`, and neither table's hash space overlaps the
+ * other's (both are 256-bit CSPRNG secrets, `@bloombot/auth`'s own
+ * `secrets.ts`) — so a token minted by one path can never be accepted by
+ * the other's own check. `mcpAuthRouter` itself (`buildApp`, below) is
+ * mounted at this app's own root, publishing `/authorize`, `/token`,
+ * `/register`, `/revoke` and both metadata documents alongside `/mcp` and
+ * `/health` — the SDK's own required mounting point
+ * (`server/auth/router.js`'s own doc comment: "This router MUST be
+ * installed at the application root").
  *
  * A session's own lifecycle (this file's own rework, after a live-listener
  * repro reproduced unbounded growth: ~170 KB retained per abandoned
@@ -65,6 +89,11 @@ import { organizations, type Database } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
 
+import {
+  createOAuthMetadata,
+  mcpAuthRouter,
+} from '@modelcontextprotocol/sdk/server/auth/router.js'
+import type { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js'
@@ -93,6 +122,31 @@ export interface ServerDependencies {
   logger: Logger
   /** Built once, before this process starts listening (`index.ts`) — `call-tool.ts`'s own `CallToolContext.toolDefinitions` doc comment on why this is precomputed rather than rebuilt per call or per session. */
   toolDefinitions: readonly McpToolDefinition[]
+  /**
+   * MCP-7 — `oauth-provider.ts#buildOauthProvider`'s own return value.
+   * `mcpAuthRouter` (`buildApp`, below) dispatches every `/authorize`,
+   * `/token`, `/register` and `/revoke` request to it, and
+   * `resolveCallerAccountId` (below) calls its `verifyAccessToken` directly
+   * as the first of the two bearer shapes a `/mcp` request may now carry
+   * (this file's own module comment).
+   */
+  oauthProvider: OAuthServerProvider
+  /**
+   * The OAuth issuer identifier `mcpAuthRouter`'s own metadata documents
+   * publish — `CONFIG.PUBLIC_MCP_URL`, or a loopback fallback, in
+   * production (`index.ts`); an `http://127.0.0.1:0`-shaped URL a test
+   * builds against its own ephemeral port. Must be HTTPS unless the
+   * hostname is `localhost`/`127.0.0.1` — the SDK's own `checkIssuerUrl`
+   * (`router.js`) enforces this, not this file.
+   */
+  issuerUrl: URL
+  /**
+   * MCP-7's own RFC 8707 resource identifier — this server's own `/mcp`
+   * endpoint, published in the protected-resource metadata document and
+   * checked (loosely: only when both sides actually name one) in
+   * `oauth-provider.ts#verifyAccessToken`. Defaults to `${issuerUrl}/mcp`.
+   */
+  resourceServerUrl?: URL
   /**
    * How long an `elicitation/create` request waits for a human before
    * giving up. Defaults to `DEFAULT_ELICITATION_TIMEOUT_MS` (30s);
@@ -580,6 +634,49 @@ export function buildApp(
   app.disable('x-powered-by')
   app.use(express.json())
 
+  const resourceServerUrl =
+    deps.resourceServerUrl ?? new URL('/mcp', deps.issuerUrl)
+
+  // MCP-7 security review — the SDK's own `createOAuthMetadata` hard-codes
+  // `token_endpoint_auth_methods_supported: ['client_secret_post', 'none']`
+  // and `revocation_endpoint_auth_methods_supported: ['client_secret_post']`,
+  // with no option on `mcpAuthRouter` to override either — but this
+  // deployment supports only `none` (`schema.ts#mcpOauthClients`'s own
+  // module comment: no client secret is ever issued). A strict client that
+  // trusts the metadata literally may pick `client_secret_post` and fail to
+  // authenticate, or read the (accurate, per-client) `client_secret_expires_at:
+  // undefined` as "unsupported" and skip `/revoke` entirely. Mounted
+  // *before* `mcpAuthRouter` below, at the exact metadata path, so this
+  // corrected document answers first — Express never reaches the SDK's own
+  // (still-mounted, for every other path) metadata route for this one.
+  app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+    const metadata = createOAuthMetadata({
+      provider: deps.oauthProvider,
+      issuerUrl: deps.issuerUrl,
+    })
+    res.status(200).json({
+      ...metadata,
+      token_endpoint_auth_methods_supported: ['none'],
+      revocation_endpoint_auth_methods_supported: ['none'],
+    })
+  })
+
+  // MCP-7 — mounted at this app's own root, the SDK's own required
+  // position (`server/auth/router.js`'s own doc comment). Publishes
+  // `/authorize`, `/token`, `/register`, `/revoke`,
+  // `/.well-known/oauth-authorization-server` (superseded by the corrected
+  // route above, for every request that actually reaches it) and
+  // `/.well-known/oauth-protected-resource` — every one of them derived
+  // from `deps.issuerUrl`/`resourceServerUrl`, never a hard-coded domain
+  // (this file's own module comment).
+  app.use(
+    mcpAuthRouter({
+      provider: deps.oauthProvider,
+      issuerUrl: deps.issuerUrl,
+      resourceServerUrl,
+    })
+  )
+
   app.get('/health', (_req, res) => {
     const status = checkHealth(deps.db, sessions.size, isShuttingDown())
     res.status(status.ready ? 200 : 503).json(status)
@@ -653,6 +750,34 @@ function evictOldestSessionForAccount(
   return oldestId
 }
 
+/**
+ * MCP-7's own two-shape bearer check: an OAuth access token
+ * (`deps.oauthProvider.verifyAccessToken`) first — the primary path a real
+ * connector uses once `mcpAuthRouter`'s own `/authorize`/`/token` complete
+ * — falling back to MCP-3's original session bearer token
+ * (`authenticateBearerToken`) when the OAuth verification fails. Never
+ * both: a token that verifies as an OAuth access token is never re-checked
+ * against `sessions` (this file's own module comment on why the two hash
+ * spaces cannot collide regardless), and a token that fails *both* is
+ * refused exactly the way an invalid session token always has been —
+ * `undefined`, indistinguishable from "wrong" vs. "expired" vs. "revoked",
+ * AUTH-3's own guarantee, unchanged by which of the two checks actually
+ * ran.
+ */
+async function resolveCallerAccountId(
+  token: string,
+  deps: ServerDependencies
+): Promise<string | undefined> {
+  try {
+    const authInfo = await deps.oauthProvider.verifyAccessToken(token)
+    const accountId = authInfo.extra?.['accountId']
+    if (typeof accountId === 'string') return accountId
+  } catch {
+    // Not a valid OAuth access token — fall through to the legacy path.
+  }
+  return authenticateBearerToken(token, deps.db)
+}
+
 async function handleMcpRequest(
   req: Request,
   res: Response,
@@ -664,10 +789,10 @@ async function handleMcpRequest(
   // own `routes/actions.ts` gives an anonymous caller. Checked on every
   // request, not only the one that creates an MCP session (this file's own
   // module comment on why).
-  const accountId = authenticateBearerToken(
-    parseBearerToken(req.headers.authorization),
-    deps.db
-  )
+  const bearerToken = parseBearerToken(req.headers.authorization)
+  const accountId = bearerToken
+    ? await resolveCallerAccountId(bearerToken, deps)
+    : undefined
   if (!accountId) {
     jsonRpcError(res, 401, 'not_signed_in')
     return

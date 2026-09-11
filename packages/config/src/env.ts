@@ -86,6 +86,27 @@ export const envSchema = z.object({
   // `API_PORT` already gives `apps/api`.
   MCP_PORT: port(3003),
 
+  // MCP-7 — the externally-reachable origin (and, if the MCP server sits
+  // behind a path prefix rather than its own subdomain, the full base URL)
+  // a real ChatGPT/Claude connector discovers this server at: the OAuth
+  // issuer and resource-server identifiers `oauth-provider.ts` publishes in
+  // both metadata documents, and every absolute URL those documents build
+  // (`/authorize`, `/token`, `/register`, `/revoke`), are derived from this,
+  // never hard-coded. Optional, unlike `PUBLIC_APP_URL`: this is a *new*
+  // deployment concern MCP-7 introduces (today `docs/DEPLOY_DROPLET.md`
+  // deliberately leaves `MCP_PORT` unproxied — "decide deliberately whether
+  // an outside MCP client ever needs to reach it"), so requiring it would
+  // break every existing `.env` the moment this shipped; `apps/mcp/src/index.ts`
+  // falls back to `http://127.0.0.1:${MCP_PORT}` — a real, working answer for
+  // local development, where no client outside this machine will ever
+  // discover the server anyway — when it is unset. A real deployment that
+  // wants MCP-7 reachable from outside must set this once nginx (or
+  // whatever terminates TLS in front of it) actually proxies `MCP_PORT`
+  // publicly; `docs/DEPLOY_DROPLET.md` is the maintainer's own document
+  // (this slice does not edit it) and needs that nginx block and this
+  // variable added together when that is decided.
+  PUBLIC_MCP_URL: z.url().transform(stripTrailingSlashes).optional(),
+
   // Comma-separated platform administrator emails (AUTH-4). May be empty.
   // Read through `isAdminEmail`, never from here — see the note in admin.ts.
   ADMIN_EMAILS: z.string().default(''),

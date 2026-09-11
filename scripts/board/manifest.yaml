@@ -3641,6 +3641,23 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-47
+  title: An MCP tab tells a person how to reach their courses from ChatGPT or Claude
+  full: "Beside Chat, a tab named MCP shows the setup steps for connecting an MCP
+    client (ChatGPT, Claude) to this deployment's own assistants: the connector
+    URL, one step per client, and a copy control for the URL. The same accounts
+    who can reach Chat can reach this tab — a membership, or a person connected
+    to the organization with no membership at all (LINK-10) — since a
+    connected-only person is exactly who most needs an out-of-browser way to
+    reach their course's assistant. It is reachable at its own address, the same
+    discipline every other tab in this panel already holds itself to
+    (WEB-32/WEB-34): linkable, bookmarkable, and selected from the address on
+    load. The connector URL is never a literal…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
   full: "A per-student channel is named after the local part of the student's

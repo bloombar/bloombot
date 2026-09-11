@@ -1112,6 +1112,46 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
   })
 
+  // --- WEB-47: the MCP tab, beside Chat for every account, member or not --
+  describe('the MCP tab (WEB-47)', () => {
+    it('renders for a member', () => {
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+      openDrawer()
+      fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+      expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
+    })
+
+    // LINK-10 — the same audience Chat already reaches: a connected-only
+    // account, switched to the organization it holds no membership in,
+    // still sees and can open this tab.
+    it('renders for a connected non-member', () => {
+      renderShell({
+        account: CONNECTED_NON_MEMBER_ACCOUNT,
+        onSignedOut: vi.fn(),
+      })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
+        target: { value: 'institution-org' },
+      })
+      openDrawer()
+      expect(screen.getByRole('button', { name: 'MCP' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+      expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
+    })
+
+    // WEB-32/WEB-34 — reachable and selected from the address, both
+    // directions, the same discipline every other tab already holds
+    // itself to (`tests/routing.test.ts` proves the parser/builder side;
+    // this proves `tabForRoute` picks it out here).
+    it('is selected from the address', () => {
+      renderShell({
+        account: MULTI_MEMBERSHIP_ACCOUNT,
+        route: { kind: 'mcp', organizationId: 'org-1' },
+        onSignedOut: vi.fn(),
+      })
+      expect(screen.getByRole('heading', { name: 'MCP' })).toBeInTheDocument()
+    })
+  })
+
   // --- WEB-29/WEB-30: the drawer's own divider, sign-out, the header's
   // organization name, and the profile control reaching account settings ---
   describe('the navigation drawer and account settings (WEB-29, WEB-30)', () => {

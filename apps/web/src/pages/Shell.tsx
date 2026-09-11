@@ -102,6 +102,15 @@
  * to any member, not only an owner — `isOwner` is not threaded through
  * here, unlike Usage/Team, because `jobs.list` itself carries no owner-only
  * restriction (that action's own descriptor).
+ *
+ * WEB-47: an eighth tab, MCP (`pages/Mcp.tsx`) — how to reach a course's
+ * assistants from ChatGPT or Claude, rather than only this browser. It sits
+ * in the "everyday" group beside Chat, not the organization-member one,
+ * and for the same reason Chat itself is offered to a connected-but-not-a-
+ * member account (LINK-10, above): `effectiveTab`'s own comment below
+ * carries `'mcp'` through the identical exception it already carries
+ * `'account'` through, so this tab is never withheld from exactly the
+ * reader who most needs it.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -139,6 +148,7 @@ import {
 import { Account } from './Account.js'
 import { Chat } from './Chat.js'
 import { Jobs } from './Jobs.js'
+import { Mcp } from './Mcp.js'
 import { NotFound } from './NotFound.js'
 import { ProjectsPanel } from './ProjectsPanel.js'
 import { Transcripts } from './Transcripts.js'
@@ -317,8 +327,15 @@ function ShellInner({
   // where the server would refuse every one of them. `'account'` is the one
   // exception (WEB-30, this file's own module comment): it is not
   // organization-scoped at all, so a non-member reaching it is never a leak
-  // the way any of the other tabs would be.
-  const effectiveTab = isMember || activeTab === 'account' ? activeTab : 'chat'
+  // the way any of the other tabs would be. WEB-47 — `'mcp'` is a second
+  // exception, for the same reason Chat itself is reachable here: it
+  // renders the same instructions for every reader (this file's own
+  // module comment on that tab's audience), so a connected-but-not-a-member
+  // account reaching it is not a leak either.
+  const effectiveTab =
+    isMember || activeTab === 'account' || activeTab === 'mcp'
+      ? activeTab
+      : 'chat'
 
   // WEB-32/WEB-34 — and once that substitution has happened, correct the
   // *address* to match the screen (review finding). Rendering Chat under a
@@ -532,6 +549,15 @@ function ShellInner({
     onClick: () => navigateToTab('chat'),
     active: effectiveTab === 'chat',
   }
+  // WEB-47 — beside Chat, the same audience: `effectiveTab`'s own comment
+  // above has why a connected-but-not-a-member account can reach this tab
+  // too, not only a member.
+  const mcpNavItem = {
+    key: 'mcp',
+    label: 'MCP',
+    onClick: () => navigateToTab('mcp'),
+    active: effectiveTab === 'mcp',
+  }
   const everydayGroup = {
     key: 'everyday',
     items: isMember
@@ -543,6 +569,7 @@ function ShellInner({
             active: effectiveTab === 'projects',
           },
           chatNavItem,
+          mcpNavItem,
           {
             key: 'transcripts',
             label: 'Transcripts',
@@ -550,7 +577,7 @@ function ShellInner({
             active: effectiveTab === 'transcripts',
           },
         ]
-      : [chatNavItem],
+      : [chatNavItem, mcpNavItem],
   }
   // WEB-29: the organization group — Discord, Team, Usage, Jobs — offered
   // only to a member, and divided from the everyday group above by a
@@ -809,6 +836,13 @@ function ShellInner({
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
         />
+      ) : effectiveTab === 'mcp' ? (
+        // WEB-47 — no `key={activeOrganizationId}`, unlike every tab
+        // above: `pages/Mcp.tsx` fetches nothing of this organization's own
+        // (the connector URL and instructions it renders do not vary by
+        // organization or course), so there is nothing an organization
+        // switch would need to reset.
+        <Mcp />
       ) : effectiveTab === 'account' ? (
         // WEB-30 — not organization-scoped (this file's own module comment
         // on why `effectiveTab` permits it for a non-member too), so unlike

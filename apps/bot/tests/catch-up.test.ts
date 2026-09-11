@@ -13,6 +13,7 @@ import { createAdmissionGate } from '@bloombot/jobs'
 import { Events } from 'discord.js'
 
 import { runCatchUp, wireCatchUp } from '../src/catch-up.js'
+import { createInFlightMessageIds } from '../src/in-flight-messages.js'
 import {
   fakeChannel,
   fakeGuild,
@@ -54,6 +55,7 @@ function baseDeps(
     admission: createAdmissionGate({ limit: 5, waitMs: 1000 }),
     pricing: PRICING,
     connectUrl: 'https://app.bloombot.test',
+    inFlight: createInFlightMessageIds(),
   }
 }
 
@@ -296,6 +298,60 @@ describe('runCatchUp (SURF-9)', () => {
     expect(raceMessage.reply).not.toHaveBeenCalled()
   })
 
+  // SURF-9 follow-up — the gateway-hydration window: discord.js queues a
+  // non-whitelisted dispatch while `status !== Status.Ready` and drains it
+  // only *after* `triggerClientReady()`, which is after `sessionStart` is
+  // captured here. A message from that window has `createdTimestamp <
+  // sessionStart` (passes MF-C's own upper bound) but its live handling
+  // only *starts* after this scan already began — after the `handledIds`
+  // snapshot below, and (until it finishes) before
+  // `discord_handled_messages` has a row either. `deps.inFlight` is the
+  // only thing that can catch it; an otherwise identical message in
+  // neither the set nor the table still dispatches normally.
+  it('does not dispatch a message whose live handling has begun but not yet recorded (gateway-hydration window)', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+    })
+    const now = Date.now()
+    seedConnectedMarker(testDb, now - 200_000)
+
+    const inFlightMessage = fakeMessage({
+      guildId,
+      categoryName: 'Week 1',
+      content: '<@bot-1> in-flight question',
+      createdTimestamp: now - 1_000,
+    })
+    const freeMessage = fakeMessage({
+      guildId,
+      categoryName: 'Week 1',
+      content: '<@bot-1> free question',
+      createdTimestamp: now - 1_000,
+    })
+    const channel = fakeChannel({
+      id: 'chan-1',
+      messages: [inFlightMessage, freeMessage],
+    })
+    const guild = fakeGuild({ id: guildId, channels: [channel] })
+    const client = fakeReadyClient({ botId: 'bot-1', guilds: [guild] })
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+    const inFlight = createInFlightMessageIds()
+    // Claimed by the live path (`message-handler.ts`) — no
+    // `discord_handled_messages` row yet, so neither existing guard sees it.
+    inFlight.add(inFlightMessage.id)
+
+    await runCatchUp(client, {
+      ...baseDeps(testDb, model, logger),
+      bounds: { answerMaxAgeMs: 600_000, lookbackMs: 86_400_000 },
+      inFlight,
+    })
+
+    expect(inFlightMessage.reply).not.toHaveBeenCalled()
+    expect(freeMessage.reply).toHaveBeenCalledTimes(1)
+    expect(model.calls).toHaveLength(1)
+  })
+
   // MF4 — an apology only where an answer could actually have happened
   // live: a message matching no course gets silence live (`unrouted`), so it
   // must get silence here too, not an apology beneath nothing.
@@ -533,6 +589,7 @@ describe('wireCatchUp (SURF-9 rework round 2, MF-A)', () => {
       pricing: PRICING,
       connectUrl: 'https://app.bloombot.test',
       bounds: { answerMaxAgeMs: 600_000, lookbackMs: 86_400_000 },
+      inFlight: createInFlightMessageIds(),
     })
 
     expect(on).toHaveBeenCalledWith(Events.ShardReady, expect.any(Function))
@@ -587,6 +644,7 @@ describe('wireCatchUp (SURF-9 rework round 2, MF-A)', () => {
       pricing: PRICING,
       connectUrl: 'https://app.bloombot.test',
       bounds: { answerMaxAgeMs: 600_000, lookbackMs: 86_400_000 },
+      inFlight: createInFlightMessageIds(),
     })
 
     shardReadyHandler?.(0)
@@ -617,6 +675,7 @@ describe('wireCatchUp (SURF-9 rework round 2, MF-A)', () => {
       pricing: PRICING,
       connectUrl: 'https://app.bloombot.test',
       bounds: { answerMaxAgeMs: 600_000, lookbackMs: 86_400_000 },
+      inFlight: createInFlightMessageIds(),
     })
 
     expect(() => shardReadyHandler?.(0)).not.toThrow()
@@ -678,6 +737,7 @@ describe('wireCatchUp (SURF-9 rework round 2, MF-A)', () => {
       pricing: PRICING,
       connectUrl: 'https://app.bloombot.test',
       bounds: { answerMaxAgeMs: 600_000, lookbackMs: 86_400_000 },
+      inFlight: createInFlightMessageIds(),
     })
 
     shardReadyHandler?.(0)

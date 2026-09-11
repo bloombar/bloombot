@@ -106,6 +106,19 @@ describe('Mcp (WEB-47)', () => {
   // the env key, or reading a different one, fails every case below
   // without failing the tests above.
   describe('the default connector URL, read from VITE_MCP_PUBLIC_URL (no prop)', () => {
+    // Every case below asserts what `Mcp` renders for a *given* value of
+    // `VITE_MCP_PUBLIC_URL`, including the two that assert "not configured"
+    // for a deployment that never set it. `import.meta.env` carries whatever
+    // vite loaded from the developer's own `.env`, so on a machine where that
+    // file sets `VITE_MCP_PUBLIC_URL` — a machine running the real
+    // deployment, which is precisely the common case — those two cases read
+    // the real URL and fail, while CI (no `.env`) passes. Clearing the key
+    // first makes "unset" an actual fact of the test rather than an accident
+    // of the machine; each case that wants a value still stubs its own.
+    beforeEach(() => {
+      vi.stubEnv('VITE_MCP_PUBLIC_URL', '')
+    })
+
     afterEach(() => {
       vi.unstubAllEnvs()
     })

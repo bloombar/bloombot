@@ -174,7 +174,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       {
         courseId: course.id,
         personId: person.id,
-        roleNames: [course.studentsRole],
+        roleNames: [course.studentsRole as string], // PROJ-7: seeded non-null above.
       },
       testDb.db
     )
@@ -224,7 +224,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       {
         courseId: course.id,
         personId: person.id,
-        roleNames: [course.adminsRole],
+        roleNames: [course.adminsRole as string], // PROJ-7: seeded non-null above.
       },
       testDb.db
     )
@@ -271,7 +271,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       {
         courseId: course.id,
         personId: person.id,
-        roleNames: [course.adminsRole],
+        roleNames: [course.adminsRole as string], // PROJ-7: seeded non-null above.
       },
       testDb.db
     )
@@ -283,7 +283,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       {
         courseId: course.id,
         personId: person.id,
-        roleNames: [course.adminsRole],
+        roleNames: [course.adminsRole as string], // PROJ-7: seeded non-null above.
       },
       testDb.db
     )
@@ -884,7 +884,7 @@ describe('enrolments repo (ENRL-1..6)', () => {
       {
         courseId: course.id,
         personId: ended.id,
-        roleNames: [course.studentsRole],
+        roleNames: [course.studentsRole as string], // PROJ-7: seeded non-null above.
       },
       testDb.db
     )

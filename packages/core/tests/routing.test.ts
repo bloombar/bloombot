@@ -151,4 +151,101 @@ describe('routeMessage (CORE-2)', () => {
     })
     expect(result).toEqual({ kind: 'matched', course: webDesign })
   })
+
+  // PROJ-7: a course may name no role at all — the platform then does not
+  // attempt role-based identification for it. `Set<string>.has(null)` is
+  // `false` at runtime regardless of the explicit `!== null` guard in
+  // `routing.ts` — so this test (and "does not make an otherwise-unambiguous
+  // message ambiguous", below) do not fail if that guard is removed; only
+  // `tsc` objects to the resulting type error (`roleNames.has(null)` against
+  // a `Set<string>`). What they still pin down: a role-less course is inert
+  // for an author holding no role, and does not create a spurious ambiguity,
+  // regardless of *how* that is implemented. The one case with genuine
+  // runtime teeth is the next test, which rules out coalescing an absent
+  // role to `''` (`course.adminsRole ?? ''`) rather than checking it for
+  // `null` explicitly — that variant really would treat a role named `''`
+  // as a match.
+  it('a role-less course is never a role match, even for an author holding no role at all', () => {
+    const roleless: RoutableCourse = {
+      id: 'course-roleless',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([roleless], {
+      categoryName: null,
+      channelName: null,
+      roleNames: [],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  // The exact danger this slice's own brief names: a role-less course must
+  // not match every author. A course whose absent role were ever coalesced
+  // to `''` (`course.adminsRole ?? ''`) rather than checked explicitly for
+  // `null` would wrongly match an author who — however unlikely — holds a
+  // Discord role literally named the empty string, since `roleNames` would
+  // then contain `''` too. This fails against that implementation and
+  // passes against the real one, which never produces `''` at all.
+  it('a role-less course does not match an author holding a role literally named the empty string', () => {
+    const roleless: RoutableCourse = {
+      id: 'course-roleless',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([roleless], {
+      categoryName: null,
+      channelName: null,
+      roleNames: [''],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  it('a role-less course does not make an otherwise-unambiguous message ambiguous', () => {
+    const rolelessOne: RoutableCourse = {
+      id: 'course-roleless-one',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const rolelessTwo: RoutableCourse = {
+      id: 'course-roleless-two',
+      categoryNames: ['Yet Another'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    // Same caveat as the first test above: this does not fail if the
+    // `!== null` guard is removed (`Set<string>.has(null)` is already
+    // `false` at runtime), only if `null` were ever coalesced to `''`
+    // first. Pinned here anyway, alongside `webDesign`, so a later reader
+    // has a worked example of "role-less does not manufacture an
+    // ambiguity" next to "a real role match still wins."
+    const result = routeMessage([rolelessOne, rolelessTwo, webDesign], {
+      categoryName: null,
+      channelName: null,
+      roleNames: ['admins-wd'],
+    })
+    expect(result).toEqual({ kind: 'matched', course: webDesign })
+  })
+
+  it('a course with only one role set still matches on that one', () => {
+    const adminsOnly: RoutableCourse = {
+      id: 'course-admins-only',
+      categoryNames: ['Something Else'],
+      adminsRole: 'admins-only-course',
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([adminsOnly], {
+      categoryName: null,
+      channelName: null,
+      roleNames: ['admins-only-course'],
+    })
+    expect(result).toEqual({ kind: 'matched', course: adminsOnly })
+  })
 })

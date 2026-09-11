@@ -240,8 +240,10 @@ export interface CourseSummary {
   projectId: string
   title: string
   enabled: boolean
-  adminsRole: string
-  studentsRole: string
+  // PROJ-7 — `null` means this course names no role at all: the platform
+  // does not attempt role-based identification for it.
+  adminsRole: string | null
+  studentsRole: string | null
   promptId: string | null
   instructions: string | null
   model: string | null

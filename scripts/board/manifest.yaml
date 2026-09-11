@@ -3658,6 +3658,23 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-47
+  title: An MCP tab tells a person how to reach their courses from ChatGPT or Claude
+  full: "Beside Chat, a tab named MCP explains, in plain language, what connecting
+    an AI chat app (ChatGPT, Claude, or another connector-capable client)
+    grants: the client acts as the connected account, asks a course's assistant
+    the same questions a student could ask on the web or in Discord, and reaches
+    only the courses that account could already reach — connecting itself grants
+    nothing new. It then gives the connector URL, a copy control, and one setup
+    step per client — since MCP-7, that step ends at the client's own sign-in
+    and consent screen, with no token to copy or paste. The same accounts who
+    can reach Chat can reach this tab — a membership, or a person connected to
+    the organization with no…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
   full: "A per-student channel is named after the local part of the student's

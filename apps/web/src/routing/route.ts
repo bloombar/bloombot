@@ -99,6 +99,11 @@ export type OrganizationRoute =
   | { kind: 'team'; organizationId: string }
   | { kind: 'usage'; organizationId: string }
   | { kind: 'jobs'; organizationId: string }
+  // WEB-47 — the MCP setup/instructions tab, the same audience as Chat
+  // (`pages/Shell.tsx`'s own module comment on LINK-10); no id of its own
+  // beyond the organization, since the connector URL and instructions it
+  // renders (`pages/Mcp.tsx`) do not vary by course.
+  | { kind: 'mcp'; organizationId: string }
 
 /** WEB-34 — `/account` is deliberately not organization-scoped (the brief's own words); `pages/Shell.tsx` is the one place this and every `OrganizationRoute` below are ever rendered. */
 export type AccountRoute = { kind: 'account' }
@@ -335,6 +340,10 @@ export function parseRoute(pathname: string): Route {
     if (rest.length === 1 && rest[0] === 'jobs') {
       return { kind: 'jobs', organizationId }
     }
+    // WEB-47 — the MCP tab's own landing address.
+    if (rest.length === 1 && rest[0] === 'mcp') {
+      return { kind: 'mcp', organizationId }
+    }
   }
 
   return { kind: 'not-found' }
@@ -416,6 +425,8 @@ export function buildPath(route: Route): string {
       return `/o/${route.organizationId}/usage`
     case 'jobs':
       return `/o/${route.organizationId}/jobs`
+    case 'mcp':
+      return `/o/${route.organizationId}/mcp`
     // Never actually navigated to on purpose (this file's own module
     // comment) — a path that itself parses back to `'not-found'`, which is
     // all the round-trip property above needs from it.
@@ -437,6 +448,7 @@ export function isShellRoute(route: Route): route is ShellRoute {
     case 'team':
     case 'usage':
     case 'jobs':
+    case 'mcp':
     case 'account':
       return true
     default:
@@ -504,6 +516,7 @@ export type Tab =
   | 'usage'
   | 'team'
   | 'jobs'
+  | 'mcp'
   | 'account'
 
 export function tabForRoute(route: ShellRoute): Tab {

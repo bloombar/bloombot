@@ -102,7 +102,12 @@ function seedRosterAdmittedCourse(
   return { courseTitle, discordPersonId: discordPerson.id }
 }
 
-test('a student connected into an institution the account does not administer reaches the switcher, sees only Chat there, and gets an answer (LINK-10)', async ({
+// WEB-47 rename — the drawer no longer withholds every tab but Chat: MCP
+// is offered there too (`Shell.tsx`'s own module comment on why the two
+// share an audience). The assertions below (`.not.toBeVisible()` for
+// Discord/Projects/Transcripts) are what this spec actually proves; only
+// the title used to overclaim "only Chat."
+test('a student connected into an institution the account does not administer reaches the switcher, sees no organization-member tabs there, and gets an answer (LINK-10)', async ({
   page,
 }) => {
   const suffix = randomUUID().slice(0, 8)

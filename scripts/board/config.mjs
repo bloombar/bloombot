@@ -22,7 +22,7 @@ export const REPO = 'bloombar/bloombot'
 // sync.mjs creates its milestone.
 export const PHASES = [
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-  22, 23, 24, 25, 26, 27,
+  22, 23, 24, 25, 26, 27, 28,
 ]
 export const MILESTONE_TITLE = {
   0: 'Phase 0 — Shipped baseline',
@@ -54,6 +54,7 @@ export const MILESTONE_TITLE = {
   25: 'Phase 25 — A course decides who it enrols and who it answers',
   26: 'Phase 26 — A course that answers nothing says so',
   27: "Phase 27 — Asking a course's assistant from an MCP client",
+  28: 'Phase 28 — A message the bot never received',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

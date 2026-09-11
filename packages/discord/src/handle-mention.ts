@@ -326,6 +326,43 @@ function loadRoutableCourses(
 }
 
 /**
+ * SURF-9 rework, MF4 — would this message actually reach an enabled course
+ * able to answer it, live? The catch-up path's own apology (`apps/bot`'s
+ * `catch-up.ts`) only makes sense where an answer could actually have
+ * happened — an @-mention in a channel no course routes to gets silence
+ * live (`unmatched`, SURF-6), and so does one whose only matching course is
+ * disabled (`routeMessage` itself filters a disabled course out before
+ * either signal runs, `routing.ts`'s own doc comment, so `unmatched` already
+ * covers both) or ambiguous between two courses (also logged, never
+ * replied to, live). This reuses exactly the two steps `handleMention`
+ * itself runs before it ever resolves a person — SURF-3's binding lookup
+ * and CORE-2's routing — and nothing after: the apology never actually
+ * answers, so nothing past "does this route to exactly one enabled course"
+ * is needed, and duplicating that much here (rather than exporting
+ * `loadRoutableCourses` itself) keeps this file's own routing steps as the
+ * one place that logic lives.
+ */
+export function wouldRouteToAnEnabledCourse(
+  input: InboundMention,
+  db: Database
+): boolean {
+  const binding = discordServers.resolveDiscordServerBinding(input.guildId, db)
+  if (!binding) return false
+
+  const { routable } = loadRoutableCourses(
+    binding.organizationId,
+    input.guildId,
+    db
+  )
+  const routing = routeMessage(routable, {
+    categoryName: input.categoryName,
+    channelName: input.channelName,
+    roleNames: input.authorRoleNames,
+  })
+  return routing.kind === 'matched'
+}
+
+/**
  * Handle one incoming message. In order:
  *
  * 1. SURF-2 — ignore the bot's own messages, another bot's messages, and

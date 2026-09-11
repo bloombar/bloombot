@@ -34,26 +34,22 @@ import {
 import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import {
   closeDatabase,
+  discordGatewayStatus,
   openDatabase,
   runMigrations,
-  type Database,
 } from '@bloombot/db'
-import {
-  createCountingModelClient,
-  type ModelClient,
-  type PricingTable,
-} from '@bloombot/core'
-import { handleMention } from '@bloombot/discord'
-import { createAdmissionGate, type AdmissionGate } from '@bloombot/jobs'
-import { createLogger, type Logger } from '@bloombot/logger'
+import { createCountingModelClient } from '@bloombot/core'
+import { createAdmissionGate } from '@bloombot/jobs'
+import { createLogger } from '@bloombot/logger'
 import { createOpenAiModelClient } from '@bloombot/openai'
 
+import { wireCatchUp } from './catch-up.js'
+import { startConnectedMarkerHeartbeat } from './connected-marker.js'
 import { wireGatewayHealth } from './gateway-health.js'
 import { startHealthServer } from './health.js'
-import { buildInboundMention } from './inbound.js'
-import { buildReplyPort, SUPPRESS_ALL_MENTIONS } from './reply-port.js'
+import { onMessageCreate } from './message-handler.js'
+import { SUPPRESS_ALL_MENTIONS } from './reply-port.js'
 import { createShutdown, InFlightTracker } from './shutdown.js'
-import { today } from './today.js'
 
 const PROCESS_NAME = 'bot'
 
@@ -71,48 +67,6 @@ function requireEnv(name: string): string {
     throw new Error(`apps/bot: ${name} must be set (see env.example)`)
   }
   return value
-}
-
-interface MessageHandlerDeps {
-  botId: string
-  botDisplayName: string
-  db: Database
-  model: ModelClient
-  logger: Logger
-  /** JOB-4's bound on concurrent model calls — built once in `main()`, from `CONFIG`, and shared across every message this process handles. */
-  admission: AdmissionGate
-  /** COST-1/COST-6's per-model rates — built once in `main()`, from `CONFIG.MODEL_PRICING_JSON`, and shared across every message this process handles. */
-  pricing: PricingTable
-  /** LINK-2's own address — built once in `main()`, from `CONFIG.PUBLIC_APP_URL`, and shared across every message this process handles. */
-  connectUrl: string
-}
-
-/** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
-async function onMessageCreate(
-  message: Message,
-  deps: MessageHandlerDeps
-): Promise<void> {
-  // BOT-1's own scope is a server channel — a DM has no category or roles
-  // to route by, and `message.inGuild()` is what narrows discord.js's own
-  // types (`message.channel`, `message.guild`) to their guild-only shape.
-  if (!message.inGuild()) return
-
-  const input = buildInboundMention(message, deps.botId)
-  const reply = buildReplyPort(message)
-
-  const result = await handleMention(input, {
-    db: deps.db,
-    model: deps.model,
-    logger: deps.logger,
-    reply,
-    day: today(),
-    botDisplayName: deps.botDisplayName,
-    admission: deps.admission,
-    pricing: deps.pricing,
-    connectUrl: deps.connectUrl,
-  })
-
-  deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
 }
 
 async function main(): Promise<void> {
@@ -138,6 +92,13 @@ async function main(): Promise<void> {
   // connect link this builds can never double a slash the way it could
   // before that normalisation moved into the schema itself.
   const connectUrl = CONFIG.PUBLIC_APP_URL
+  // SURF-9 — the same "read CONFIG once in main(), thread it through"
+  // discipline every other configured value above already follows:
+  // `@bloombot/discord`'s own `decideCatchUp` never reads `CONFIG` either.
+  const catchUpBounds = {
+    answerMaxAgeMs: CONFIG.DISCORD_CATCHUP_ANSWER_MAX_AGE_MS,
+    lookbackMs: CONFIG.DISCORD_CATCHUP_LOOKBACK_MS,
+  }
   const botToken = requireEnv('BOT_TOKEN')
   const openaiApiKey = requireEnv('OPENAI_API_KEY')
 
@@ -199,15 +160,43 @@ async function main(): Promise<void> {
     () => gatewayConnected,
     getModelStats
   )
+  // SURF-9 rework round 2, MF-B — the durable "last known connected" marker
+  // catch-up's own scan floors its window on (`connected-marker.ts`'s own
+  // module comment). Bumped immediately on every genuine connect (here,
+  // rather than waiting for the heartbeat's own next tick), kept current by
+  // the heartbeat below while connected, and written once more on a clean
+  // shutdown, further down.
   wireGatewayHealth(client, (connected) => {
     gatewayConnected = connected
+    if (connected) {
+      discordGatewayStatus.recordLastKnownConnected(Date.now(), db)
+    }
   })
+  const connectedMarkerHeartbeat = startConnectedMarkerHeartbeat(
+    db,
+    () => gatewayConnected
+  )
 
   client.once(Events.ClientReady, (readyClient) => {
     logger.info(
       { botId: readyClient.user.id, botTag: readyClient.user.tag },
       'apps/bot: connected to the Discord gateway'
     )
+  })
+
+  // SURF-9 — a fresh gateway session is exactly the moment a message sent
+  // while this process was disconnected can finally be found and acted on
+  // (`docs/SPEC.md` §32's own incident). `wireCatchUp` (`catch-up.ts`) is
+  // what decides *which* event actually means that (SURF-9 rework, MF6) —
+  // not this file's own concern beyond passing it what it needs.
+  wireCatchUp(client, {
+    db,
+    model,
+    logger,
+    admission,
+    pricing,
+    connectUrl,
+    bounds: catchUpBounds,
   })
 
   client.on(Events.Error, (error) => {
@@ -233,6 +222,7 @@ async function main(): Promise<void> {
           admission,
           pricing,
           connectUrl,
+          catchUpEnabled: catchUpBounds.lookbackMs > 0,
         }).catch((error: unknown) => {
           logger.error(
             { err: error },
@@ -261,6 +251,15 @@ async function main(): Promise<void> {
     inFlight,
   })
   const onSignal = (signal: string) => {
+    // SURF-9 rework round 2, MF-B — the marker's own clean-shutdown update:
+    // if the gateway was actually connected right up to this signal, this
+    // is the exact moment catch-up's own window floor should treat as "last
+    // known connected" for the *next* restart. Recorded, and the heartbeat
+    // stopped, before `shutdown()` below flips `gatewayConnected` false.
+    if (gatewayConnected) {
+      discordGatewayStatus.recordLastKnownConnected(Date.now(), db)
+    }
+    connectedMarkerHeartbeat.stop()
     void shutdown(signal).then(() => process.exit(0))
   }
   process.once('SIGINT', () => onSignal('SIGINT'))

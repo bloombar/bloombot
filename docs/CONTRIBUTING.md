@@ -95,8 +95,9 @@ gives the SPEC and the code traceability in both directions.
 `apps/web` is a static Vite build with no server of its own (`vite.config.ts`'s own module
 comment), so a handful of settings are baked in at `npm run build --workspace apps/web` time
 through `import.meta.env`, from `apps/web/.env`/`apps/web/.env.production` first, falling back
-to the same `VITE_`-prefixed key in the **repository-root** `.env`/`.env.production` if
-`apps/web`'s own files do not set it (`vite.config.ts`'s own module comment and
+to the same `VITE_`-prefixed key in the **repository-root** `.env`/`.env.production`/
+`.env.local`/`.env.production.local` if `apps/web`'s own files do not set it (`vite.config.ts`'s
+own module comment and
 `load-root-env.ts` — WEB-47 defect: the root `.env` is where every other deployment setting
 lives, and a `VITE_` variable set only there was previously invisible to the build). This is
 read-only at build time: changing either file needs a rebuild of `apps/web` (a redeploy), not a

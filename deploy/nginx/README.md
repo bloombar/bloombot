@@ -52,8 +52,10 @@ server advertises another, and the connector fails with nothing explaining why.
 `VITE_MCP_PUBLIC_URL` is read at `apps/web`'s **build** time, not at process
 start — changing it needs a rebuild of `apps/web` (redeploy), not merely a
 process restart (`apps/web/vite.config.ts`'s own module comment, WEB-47
-defect). An `apps/web/.env`/`.env.production` entry for the same key, if one
-exists, still wins over the root `.env`'s value.
+defect). The same fallback also reads `.env.local`/`.env.production.local`
+at the repository root, not only `.env`/`.env.production` (`load-root-env.ts`'s
+own module comment). An `apps/web/.env`/`.env.production` entry for the same
+key, if one exists, still wins over the root `.env`'s value.
 
 ## Verifying it worked
 

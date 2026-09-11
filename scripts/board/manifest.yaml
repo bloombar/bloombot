@@ -2926,7 +2926,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: Done
   review: false
 - id: ENRL-7
   title: Anyone a course is taught through is enrolled by asking it

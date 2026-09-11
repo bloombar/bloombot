@@ -3673,7 +3673,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
@@ -3997,5 +3997,5 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 27
-  status: Backlog
+  status: Done
   review: false

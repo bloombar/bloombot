@@ -878,7 +878,7 @@ newest 5 are kept and older ones are pruned automatically. A fresh droplet with 
 skips the step and says so in the deploy log, rather than failing over nothing to back up.
 
 **This does not restore anything by itself** — restoring is a deliberate, by-hand act, on purpose
-(see D-101). The deploy log names the exact restore command for that run's own backup; §8.1 below
+(see D-102). The deploy log names the exact restore command for that run's own backup; §8.1 below
 has the full procedure (stopping every process first, clearing stale WAL/shared-memory sidecars,
 restoring, then re-running the migration in case the restored file predates a later one).
 

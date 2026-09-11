@@ -2767,6 +2767,22 @@ means to routing and collision checking); the form marks both optional the same 
 marks `Max requests per day` optional, and an instructor clearing either field saves successfully,
 storing `null` rather than an empty string.
 
+#### WEB-47 An MCP tab tells a person how to reach their courses from ChatGPT or Claude
+
+Beside Chat, a tab named MCP shows the setup steps for connecting an MCP client (ChatGPT, Claude)
+to this deployment's own assistants: the connector URL, one step per client, and a copy control for
+the URL. The same accounts who can reach Chat can reach this tab — a membership, or a person
+connected to the organization with no membership at all (LINK-10) — since a connected-only person
+is exactly who most needs an out-of-browser way to reach their course's assistant. It is reachable
+at its own address, the same discipline every other tab in this panel already holds itself to
+(WEB-32/WEB-34): linkable, bookmarkable, and selected from the address on load.
+
+The connector URL is never a literal domain — it is derived from this deployment's own
+configuration (its public origin, plus the path the MCP server answers on), so a fork or a second
+deployment shows its own URL rather than this project's. A plain sentence states what connecting
+grants, without overstating it: the MCP client acts as the connected account, and reaches only the
+courses that account can already reach.
+
 ### 35. Course Portability
 
 #### PORT-1 A course exports to a single portable file

@@ -28,10 +28,20 @@ beforeEach(() => {
   Object.assign(navigator, {
     clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
   })
+  // Rework finding (must-fix 3): `defaultIconUrl` now reads
+  // `VITE_PUBLIC_APP_URL` too, the same `import.meta.env` carrying whatever
+  // vite loaded from the developer's own `.env` that `d47f17d` already
+  // fixed for `VITE_MCP_PUBLIC_URL` below — on a machine configured for the
+  // real deployment this would otherwise make the icon-URL assertions read
+  // a live origin and fail, while CI (no `.env`) passes. Cleared here, for
+  // every test in this file, not only the connector-URL describe block
+  // below; each case that wants a value still stubs its own.
+  vi.stubEnv('VITE_PUBLIC_APP_URL', '')
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('Mcp (WEB-47)', () => {
@@ -78,14 +88,15 @@ describe('Mcp (WEB-47)', () => {
     ).toBeInTheDocument()
   })
 
-  // The icon URL must be `${window.location.origin}/icon-512.png`, derived
-  // at render time from the browser's own origin — not a hardcoded
-  // deployment address and not read from any env var. jsdom's default test
-  // origin is `http://localhost:3000`, so a hardcoded
+  // The icon URL falls back to `${window.location.origin}/icon-512.png`
+  // when `VITE_PUBLIC_APP_URL` is unset — this file's own `beforeEach`
+  // clears that key, so this exercises the fallback specifically, not
+  // whichever value a developer's own `.env` happens to set. jsdom's
+  // default test origin is `http://localhost:3000`, so a hardcoded
   // `https://bloombot.wonkledge.com/icon-512.png` (or any other fixed
   // string) would fail this assertion; only a genuine `window.location
   // .origin` read produces it.
-  it("renders the icon URL, derived from this app's own origin", () => {
+  it("renders the icon URL, derived from this app's own origin when VITE_PUBLIC_APP_URL is unset", () => {
     render(
       <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
     )
@@ -93,6 +104,53 @@ describe('Mcp (WEB-47)', () => {
     expect(screen.getByTestId('mcp-icon-url')).toHaveTextContent(
       `${window.location.origin}/icon-512.png`
     )
+  })
+
+  // Rework finding, must-fix 3: `defaultIconUrl` used to read only
+  // `window.location.origin`, an address the *reader's* browser resolves
+  // but ChatGPT's own servers — the actual fetcher of this URL — cannot,
+  // on a bare droplet IP, an internal hostname, or `vite preview`'s local
+  // origin. `VITE_PUBLIC_APP_URL` is this deployment's declared public
+  // origin (`prerender-plugin.ts` already reads it for the same reason)
+  // and must be preferred when set.
+  describe('the default icon URL, preferring VITE_PUBLIC_APP_URL', () => {
+    it('prefers VITE_PUBLIC_APP_URL over window.location.origin when set', () => {
+      vi.stubEnv('VITE_PUBLIC_APP_URL', 'https://panel.example.edu')
+      render(
+        <Mcp {...mcpProps({ connectorUrl: 'https://mcp.example.edu/mcp' })} />
+      )
+      expect(screen.getByTestId('mcp-icon-url').textContent).toBe(
+        'https://panel.example.edu/icon-512.png'
+      )
+    })
+
+    // The unset case — this file's own `beforeEach` already clears
+    // `VITE_PUBLIC_APP_URL`, so this is a second, explicit assertion of the
+    // same fact the test above's "when VITE_PUBLIC_APP_URL is unset" case
+    // relies on implicitly.
+    it('falls back to window.location.origin when VITE_PUBLIC_APP_URL is unset', () => {
+      render(
+        <Mcp {...mcpProps({ connectorUrl: 'https://mcp.example.edu/mcp' })} />
+      )
+      expect(screen.getByTestId('mcp-icon-url').textContent).toBe(
+        `${window.location.origin}/icon-512.png`
+      )
+    })
+
+    // `toHaveTextContent` is a substring match — the unstripped value
+    // contains the stripped one as a prefix, so exact-equality on
+    // `.textContent` is what actually proves the slash was stripped,
+    // the same distinction `defaultConnectorUrl`'s own trailing-slash test
+    // (below) already relies on.
+    it('strips a trailing slash from VITE_PUBLIC_APP_URL', () => {
+      vi.stubEnv('VITE_PUBLIC_APP_URL', 'https://panel.example.edu/')
+      render(
+        <Mcp {...mcpProps({ connectorUrl: 'https://mcp.example.edu/mcp' })} />
+      )
+      expect(screen.getByTestId('mcp-icon-url').textContent).toBe(
+        'https://panel.example.edu/icon-512.png'
+      )
+    })
   })
 
   // The connector URL and the icon URL are two independently copyable
@@ -295,6 +353,102 @@ describe('Mcp (WEB-47)', () => {
     expect(screen.getByTestId('mcp-connector-url')).toHaveTextContent(
       'https://panel.example.edu/mcp'
     )
+  })
+
+  // Rework finding, must-fix 1: a failed *icon* copy used to render its
+  // error beside the *connector* URL, since both controls shared one
+  // `copyError` rendered only in the connector row — pointing the reader
+  // at the wrong value with no feedback at all on the button they actually
+  // clicked. This fails against that shared-state version: the alert would
+  // not appear in the icon row's own `queryAllByRole('alert')` result, or
+  // would appear twice (once per row) if both rendered it.
+  it('an icon-copy failure renders its error beside the icon URL, not the connector URL', async () => {
+    Object.assign(navigator, { clipboard: undefined })
+
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy icon URL' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'Could not copy the link — copy it from the text above by hand.'
+    )
+    // Both `<code>`s sit earlier in the same document than the alert
+    // either way (the icon row is nested inside the connector section), so
+    // document order alone cannot tell "beside the icon" from "beside the
+    // connector" — what distinguishes them is which element the alert
+    // renders immediately *next to*. The icon URL's own `<dd>` must be
+    // followed directly by the alert; the connector row's own wrapping
+    // `<div>` must not be (the old, shared-state version rendered it
+    // there for every failure, including one on the icon field).
+    const iconRow = screen.getByTestId('mcp-icon-url').closest('dd')
+    expect(iconRow?.nextElementSibling).toBe(alert)
+    const connectorRow = screen.getByTestId('mcp-connector-url').closest('div')
+    expect(connectorRow?.nextElementSibling).not.toBe(alert)
+    expect(connectorRow?.nextElementSibling).not.toHaveAttribute(
+      'role',
+      'alert'
+    )
+    // Exactly one alert on screen — the connector row must not also render
+    // a (stale, shared) copy of the same error.
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  // Rework finding, must-fix 2: the `catch` used to set `copyError` without
+  // ever clearing `copiedField`, so once a field's copy had succeeded once,
+  // a *later failure on that same field* — a `navigator.clipboard` that
+  // stops working mid-session, e.g. focus leaving the window and a browser
+  // throwing `NotAllowedError` — left the button still reading "Copied!"
+  // while a failure alert sat right beside it. Copying the icon URL
+  // successfully, then failing on a second click of the *same* button, is
+  // what this fails against: `copiedField` stays `'icon'` forever once set,
+  // so `'Icon URL copied'` remains the accessible name even though the
+  // click that just ran failed.
+  it('a failed copy does not leave a stale "Copied!" for the field that failed', async () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    // Succeed once, on the icon URL.
+    fireEvent.click(screen.getByRole('button', { name: 'Copy icon URL' }))
+    await screen.findByRole('button', { name: 'Icon URL copied' })
+
+    // Then fail on that same field.
+    Object.assign(navigator, { clipboard: undefined })
+    fireEvent.click(screen.getByRole('button', { name: 'Icon URL copied' }))
+    await screen.findByRole('alert')
+
+    // The button must not go on claiming success for the copy that just
+    // failed.
+    expect(
+      screen.queryByRole('button', { name: 'Icon URL copied' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Copy icon URL' })
+    ).toBeInTheDocument()
+  })
+
+  // The complementary case: a failure on one field must not erase a
+  // genuine, still-current success already showing on the *other* field.
+  it('a failure on one field leaves the other field\'s "Copied!" alone', async () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    // Succeed once, on the connector URL.
+    fireEvent.click(screen.getByRole('button', { name: 'Copy connector URL' }))
+    await screen.findByRole('button', { name: 'Connector URL copied' })
+
+    // Then fail on the icon URL.
+    Object.assign(navigator, { clipboard: undefined })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy icon URL' }))
+    await screen.findByRole('alert')
+
+    expect(
+      screen.getByRole('button', { name: 'Connector URL copied' })
+    ).toBeInTheDocument()
   })
 
   // The coordinator's own addition: MCP-7 kept `pages/Connect.tsx`'s own

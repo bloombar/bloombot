@@ -308,13 +308,13 @@ prune_old_backups() {
   return 0
 }
 
-# OPS-18 — takes a SQLite-consistent backup of the platform database
+# OPS-18/OPS-19 — takes a SQLite-consistent backup of the platform database
 # immediately before the migration below runs, and returns non-zero (never
 # exits directly — the caller decides what a backup failure means, the same
 # shape every other checked forward-path step in this file already uses) if
 # it could not.
 #
-# `sqlite3 "$db" ".backup '$dest'"` rather than `cp`: WAL mode
+# `better-sqlite3`'s `Database#backup()` rather than `cp`: WAL mode
 # (`packages/db/src/client.ts`'s own pragmas) means the file can have a
 # `-wal` beside it with committed data that has not been checkpointed into
 # the main file yet, and up to four processes (API, bot, worker, MCP server)
@@ -322,19 +322,24 @@ prune_old_backups() {
 # miss the WAL entirely, producing a "backup" that looks fine and restores
 # wrong. SQLite's own online backup API is safe against exactly that
 # (docs/DEPLOY_DROPLET.md's own §8.1 already documents this for the manual,
-# scheduled backup; this is the same tool, run automatically, right before
-# the one operation on this file with no way back). `sqlite3` not being on
-# PATH is refused outright rather than silently falling back to `cp` — a
-# backup that is unsafe under concurrent writers is worse than an operator
-# knowing there is no backup at all.
+# scheduled backup; this is the same underlying mechanism, run automatically,
+# right before the one operation on this file with no way back). OPS-18 used
+# the `sqlite3` CLI to reach it; OPS-19 reaches the same API through
+# `better-sqlite3` instead — `packages/db`'s own driver, already installed by
+# `npm ci` (see D-104) — because the droplet has no `sqlite3` on PATH and
+# installing one needs a `sudo` the deploy user does not have. Unresolvable
+# is refused outright rather than silently falling back to `cp`, the same
+# discipline the removed "`sqlite3` not on PATH" check had — a backup that is
+# unsafe under concurrent writers is worse than an operator knowing there is
+# no backup at all.
 #
 # Unconditional rather than gated on "does this deploy actually have a
 # pending migration": this script does not know that ahead of time (it
 # hands `--i-know` to `run-migrate.js` and lets that script decide what, if
 # anything, is pending) — see this file's own header for why applying it is
 # never gated the way a dependency install is. Backing up on every deploy
-# that already has a database is the safe default; the cost is one
-# `.backup` invocation and a bounded amount of disk (`prune_old_backups`).
+# that already has a database is the safe default; the cost is one backup
+# call and a bounded amount of disk (`prune_old_backups`).
 #
 # Skips cleanly, rather than failing, when there is genuinely no database
 # yet — a first-ever deploy on a fresh droplet has nothing to back up. But
@@ -363,12 +368,26 @@ database, before deploying a migration." >&2
     return 0
   fi
 
-  if ! command -v sqlite3 >/dev/null 2>&1; then
-    echo "ERROR: sqlite3 is not on PATH. Refusing to back up $db_path with
-anything less safe than SQLite's own .backup — a plain file copy of a live
-database with a -wal file beside it is not consistent under the four
-processes that hold it open at deploy time. Install sqlite3 on this droplet
-before deploying a migration." >&2
+  # OPS-19 — resolved the same way a script living at `$APP_DIR` would
+  # resolve it: `node`'s own module lookup walks up from the current working
+  # directory, and this whole script `cd`s to `$APP_DIR` before anything
+  # else runs (this file's own header). By the time this function is ever
+  # called, `npm ci` (or an earlier deploy's own install, when node
+  # dependencies did not change this run) has already populated
+  # `$APP_DIR/node_modules` — see this function's own call site, further
+  # down, for why that ordering holds on every path that reaches it. Checked
+  # before touching the database at all, and loudly, rather than letting a
+  # bare `require` failure half-way through the actual backup look like a
+  # corrupt database.
+  if ! node -e 'require.resolve("better-sqlite3")' 2>/dev/null; then
+    echo "ERROR: better-sqlite3 could not be resolved from $APP_DIR. Refusing
+to back up $db_path with anything less safe than SQLite's own online backup
+API — a plain file copy of a live database with a -wal file beside it is not
+consistent under the four processes that hold it open at deploy time.
+better-sqlite3 is packages/db's own driver and should already be in
+$APP_DIR/node_modules after npm ci; if it is not, this checkout's
+dependencies did not install correctly — fix that before deploying a
+migration." >&2
     return 1
   fi
 
@@ -388,9 +407,78 @@ before deploying a migration." >&2
   dest="$backup_dir/backup_$(date -u +%Y%m%dT%H%M%SZ)_${TARGET_SHA:0:8}.db"
 
   log "backing up $db_path to $dest before the migration"
-  if ! sqlite3 "$db_path" ".backup '$dest'"; then
-    # `.backup` failing partway (disk-full, most likely) can leave both the
-    # partial destination file and its own rollback-journal sidecar behind;
+  # OPS-19 — `Database#backup()` is SQLite's own online backup API (the same
+  # one the `sqlite3` CLI's `.backup` dot-command called), reached here
+  # through the Node driver instead. It returns a Promise, and is awaited
+  # here rather than fired-and-forgotten: an unawaited rejection would let
+  # this `node -e` process exit 0 while the backup itself failed, which is
+  # exactly the "reports success on a failed backup" outcome this function
+  # exists to prevent. Any failure — from `backup()` itself, or from the
+  # verification below — is reported on stderr and turned into a non-zero
+  # exit, which the `if !` below treats identically to the old CLI failing.
+  #
+  # The source is opened read-only: this process only ever reads the live
+  # database, never writes it, and a read-only handle cannot itself
+  # contribute to the concurrent-writer hazard this function exists to
+  # avoid.
+  #
+  # The produced file is verified before this function calls it done — not
+  # merely that it exists, which a truncated or partial write could also
+  # produce: `pragma integrity_check` must report exactly "ok", and the
+  # backup must contain at least one table, catching a `.backup` that
+  # completed without error against a source that was not what this
+  # function thought it was.
+  if ! node -e '
+    const Database = require("better-sqlite3")
+    const [dbPath, dest] = process.argv.slice(1)
+    const db = new Database(dbPath, { readonly: true })
+    db.backup(dest)
+      .then(() => {
+        db.close()
+        // The backup copies the source header verbatim, so a source in WAL
+        // mode (every one this platform ever writes — see the comment
+        // above this function) produces a destination that also declares
+        // WAL mode. Left alone, merely opening that file later — this
+        // verification, or an operator running the restore command logged
+        // below — creates a "-wal"/"-shm" sidecar next to it, which a
+        // single-file backup meant to stand on its own should not need.
+        // Switching to DELETE mode here checkpoints and drops WAL for good,
+        // once, right after the copy — not readonly, since changing the
+        // journal mode is itself a write.
+        const check = new Database(dest, { fileMustExist: true })
+        check.pragma("journal_mode = DELETE")
+        const integrity = check.pragma("integrity_check")
+        const ok =
+          Array.isArray(integrity) &&
+          integrity.length === 1 &&
+          integrity[0].integrity_check === "ok"
+        const tableCount = check
+          .prepare("select count(*) as n from sqlite_master where type = ?")
+          .get("table").n
+        check.close()
+        if (!ok || tableCount === 0) {
+          process.stderr.write(
+            "backup produced but failed verification (integrity_check: " +
+              JSON.stringify(integrity) +
+              ", tables: " +
+              tableCount +
+              ")\n"
+          )
+          process.exitCode = 1
+        }
+      })
+      .catch((err) => {
+        try {
+          db.close()
+        } catch {
+          // already closed, or never opened — nothing further to clean up
+        }
+        process.stderr.write(String((err && err.message) || err) + "\n")
+        process.exitCode = 1
+      })
+  ' "$db_path" "$dest"; then
+    # A failed `.backup` (disk-full, most likely) can leave both the partial
+    # destination file and its own rollback-journal sidecar behind;
     # `prune_old_backups` only globs `backup_*.db`, so an uncleaned sidecar
     # accumulates one per failure, forever.
     rm -f "$dest" "$dest-journal"
@@ -399,9 +487,14 @@ before deploying a migration." >&2
   fi
 
   size="$(du -h "$dest" 2>/dev/null | cut -f1)"
+  # OPS-19 — the logged restore command is now Node, not the `sqlite3` CLI's
+  # `.restore` dot-command: the droplet does not have the CLI (this
+  # function's own comment above explains why), so a command an operator can
+  # actually run there has to use the same driver this function does. Run
+  # from $APP_DIR, so `require('better-sqlite3')` resolves the same way.
   log "backup complete: $dest (${size:-unknown size}). Restore with (stop
 every supervised process first — docs/DEPLOY_DROPLET.md's own §8.1 has the
-full procedure): sqlite3 \"$db_path\" \".restore '$dest'\""
+full procedure): node -e \"new (require('better-sqlite3'))('$dest', { readonly: true }).backup('$db_path').then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1) })\""
 
   prune_old_backups "$backup_dir"
 }

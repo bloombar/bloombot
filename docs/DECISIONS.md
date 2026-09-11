@@ -11275,6 +11275,61 @@ whose size has nothing to do with the risk this slice exists to cover (a migrati
 
 ---
 
+## D-104 — `scripts/deploy.sh`: OPS-19 — the pre-migration backup reaches SQLite through `better-sqlite3`, not the `sqlite3` CLI
+
+**Problem.** OPS-18's pre-migration backup (D-102) shelled out to the `sqlite3` CLI. The production
+droplet does not have it installed, and installing one needs a `sudo` password the deploy user does
+not have — every deploy that reached the migration step failed with `backup_database` correctly
+refusing to migrate an unbacked-up database, blocking MCP-7 and MCP-8 (already merged) from reaching
+production at all, with the maintainer unreachable to run the install by hand.
+
+**Choice: `better-sqlite3`'s `Database#backup()` instead of the CLI.** It is `packages/db`'s own
+driver, so it is already installed in `$APP_DIR/node_modules` by the `npm ci` this same deploy just
+ran — nothing new has to reach the droplet. It calls the identical SQLite online backup API the
+CLI's `.backup` dot-command does, so the concurrent-writer safety D-102 chose it for is unchanged:
+WAL mode (`packages/db/src/client.ts`'s own pragmas) still means a plain `cp` is unsafe, and this is
+still not one.
+
+**Choice: unresolvable fails loudly, never falls back to `cp`.** The same discipline the removed
+"`sqlite3` not on PATH" check had (D-102) — a backup that is unsafe under concurrent writers is
+worse than an operator being told plainly there is no backup at all. Checked with a cheap
+`require.resolve` before touching the database, so a missing dependency is reported as exactly
+that, not misread as a corrupt database partway through the real backup.
+
+**Choice: `backup()` is awaited, not fired-and-forgotten.** It returns a Promise; the one outcome
+this whole change must never introduce is a rejected backup reporting success because nothing
+waited for it. The Promise's resolution — success or rejection — is what decides this Node
+subprocess's own exit code, which `backup_database`'s existing `if !` already treated the CLI's
+exit code the same way.
+
+**Choice: the produced file is verified, not merely assumed present.** `pragma integrity_check`
+must report exactly `ok`, and the backup must contain at least one table — catching a `.backup`
+that completed without error against a source that was not what this function thought it was.
+OPS-18's own reviewer noted its test suite never proved a backup was a genuine, restorable copy
+(its fake `sqlite3` stub just `cp`'d a fixture file); this slice's own tests seed a real SQLite
+database and read a row back out of the produced backup, closing that gap along the way.
+
+**Choice: the destination is switched out of WAL mode once, right after the copy.** The backup API
+copies the source header verbatim, so a source in WAL mode (every one this platform ever writes)
+produces a destination that also declares WAL mode — left alone, merely opening that file later
+(this function's own verification, or an operator's restore) creates a `-wal`/`-shm` sidecar next
+to it. A single-file backup meant to stand on its own should not need one; `pragma journal_mode =
+DELETE` checkpoints and drops it for good.
+
+**Choice: the logged restore command is Node, not the `sqlite3` CLI's `.restore`.** The same reason
+the CLI cannot back up here, it cannot restore here either — the command an operator can actually
+run on this droplet has to use the same driver this function does.
+
+**Not covered.** `docs/DEPLOY_DROPLET.md`'s own §8.1 (the manual, scheduled backup of the whole
+`data/` directory, distinct from this per-deploy step) still recommends the `sqlite3` CLI for an
+operator running commands by hand — that document is the maintainer's own, and an operator's shell
+still has whatever they installed on their own machine or a future droplet, which is a different
+question from whether `deploy.sh` itself can depend on it. The one line in that document that
+named `sqlite3` as a droplet-wide prerequisite specifically *for the automated deploy step* is
+corrected alongside this slice; the CLI itself is not removed as a manual convenience.
+
+---
+
 ## D-103 — `apps/mcp`, `apps/api`, `packages/auth`, `packages/db`: MCP-7 — this server is its own OAuth 2.1 authorization server, not a bespoke pairing flow, and not a proxy to an upstream IdP
 
 **Problem.** MCP-7's first brief specified a bespoke flow: an unauthenticated MCP session calls a

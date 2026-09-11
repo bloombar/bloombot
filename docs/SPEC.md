@@ -1693,6 +1693,22 @@ the backup itself cannot be taken. A first-ever deploy with no database yet skip
 rather than failing over nothing to back up. Restoring from a backup stays a deliberate,
 by-hand act; this only ensures a good one exists.
 
+#### OPS-19 The pre-migration backup reaches SQLite without a system binary the droplet may not have
+
+OPS-18's backup shelled out to the `sqlite3` CLI, and the production droplet does not have it —
+installing one needs a `sudo` the deploy user does not have, so every deploy that reaches a
+migration failed the same way, blocking anything already merged behind it. `scripts/deploy.sh`
+reaches the same SQLite online backup API through `better-sqlite3` instead — the driver
+`packages/db` already depends on, and `npm ci` already installs into the checkout being deployed
+— so nothing new has to be installed on the droplet at all. Every guarantee OPS-18 established
+still holds: a failed backup aborts before the migration and before any process is reloaded, a
+first-ever deploy with no database yet still skips cleanly, and a configured-but-missing
+`DATABASE_PATH` still aborts rather than being read as a fresh droplet. `Database#backup()`
+returns a Promise, and it is awaited rather than fired-and-forgotten — the one outcome this
+change must never introduce is a rejected backup reporting success — and the produced file is
+verified (`pragma integrity_check`, plus a sanity check that it actually contains a table) before
+this counts as a good backup at all.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

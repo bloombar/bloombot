@@ -121,9 +121,7 @@ describe('Courses (WEB-8)', () => {
     )
 
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
-    expect(
-      screen.getByText(/does not route on a role/)
-    ).toBeInTheDocument()
+    expect(screen.getByText(/does not route on a role/)).toBeInTheDocument()
     expect(screen.queryByText('admins-wd-fa26')).not.toBeInTheDocument()
     expect(screen.queryByText('students-wd-fa26')).not.toBeInTheDocument()
   })
@@ -146,7 +144,9 @@ describe('Courses (WEB-8)', () => {
 
     expect(await screen.findByText('Web Design')).toBeInTheDocument()
     expect(screen.getByText('admins-wd-fa26')).toBeInTheDocument()
-    expect(screen.queryByText(/does not route on a role/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/does not route on a role/)
+    ).not.toBeInTheDocument()
   })
 
   // WEB-45: the list/collection shape — a row-shaped skeleton, gone once

@@ -337,10 +337,15 @@ describe('courses.import', () => {
   it('a course with no roles round-trips through export and import', async () => {
     testDb = createTestDatabase()
     const source = seedOrganizationWithProject(testDb.db, 'Fall 2026')
-    const course = seedFullCourse(source.organizationId, source.projectId, testDb.db, {
-      adminsRole: null,
-      studentsRole: null,
-    })
+    const course = seedFullCourse(
+      source.organizationId,
+      source.projectId,
+      testDb.db,
+      {
+        adminsRole: null,
+        studentsRole: null,
+      }
+    )
     const text = await exportText(source.organizationId, course.id, testDb.db)
     expect(parseYaml(text)).toMatchObject({
       course: { adminsRole: null, studentsRole: null },

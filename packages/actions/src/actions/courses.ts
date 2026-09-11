@@ -219,7 +219,10 @@ export const saveCourseAction: Action<
       // comment), and a create with the key omitted gets `null`, the same
       // "nothing yet to preserve" default every other optional field here
       // gets.
-      adminsRole: keepOrClear(input.adminsRole, entity.existingCourse?.adminsRole),
+      adminsRole: keepOrClear(
+        input.adminsRole,
+        entity.existingCourse?.adminsRole
+      ),
       studentsRole: keepOrClear(
         input.studentsRole,
         entity.existingCourse?.studentsRole

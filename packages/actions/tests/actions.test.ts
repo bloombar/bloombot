@@ -79,7 +79,8 @@ function courseSaveInput(
     // PROJ-7: `'adminsRole' in overrides`, not `??` — a test that overrides
     // with an explicit `null` (naming no role) must keep that `null`, not
     // have it silently replaced by the default the way `??` would.
-    adminsRole: 'adminsRole' in overrides ? overrides.adminsRole : 'admins-wd-fa26',
+    adminsRole:
+      'adminsRole' in overrides ? overrides.adminsRole : 'admins-wd-fa26',
     studentsRole:
       'studentsRole' in overrides ? overrides.studentsRole : 'students-wd-fa26',
     categories: overrides.categories ?? [
@@ -452,17 +453,26 @@ describe('courses.save', () => {
       { organizationId, db: testDb.db }
     )
 
-    const input = courseSaveInput(projectId, { id: created.id })
-    // Sent through `dispatch`'s own `rawInput: unknown` so the two role
-    // keys can be genuinely omitted, past `courseSaveInput`'s own always-
-    // present defaults (`courseSaveInput`'s own module comment on why the
-    // helper cannot omit them the ordinary way).
-    const { adminsRole: _admins, studentsRole: _students, ...withoutRoles } =
-      input
-    const updated = await dispatch(saveCourseAction, withoutRoles, {
-      organizationId,
-      db: testDb.db,
-    })
+    // Built by hand, not `courseSaveInput` (whose own module comment
+    // explains why it always sends both role keys) — this is the one
+    // caller in this file that genuinely needs to omit them, past
+    // `dispatch`'s own `rawInput: unknown`.
+    const updated = await dispatch(
+      saveCourseAction,
+      {
+        id: created.id,
+        projectId,
+        title: 'Web Design',
+        enabled: true,
+        categories: [
+          {
+            name: 'Web Design - GLOBAL',
+            channels: [{ name: 'chat', adminsOnly: false }],
+          },
+        ],
+      },
+      { organizationId, db: testDb.db }
+    )
 
     expect(updated.adminsRole).toBeNull()
     expect(updated.studentsRole).toBeNull()

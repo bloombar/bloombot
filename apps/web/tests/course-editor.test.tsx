@@ -200,7 +200,9 @@ describe('CourseEditor (WEB-8)', () => {
     ).toBeInTheDocument()
 
     expect(
-      screen.queryByText(/Students can only ask this course while it is enabled/)
+      screen.queryByText(
+        /Students can only ask this course while it is enabled/
+      )
     ).not.toBeInTheDocument()
     expect(
       screen.queryByText(/immediately if they already have a connected account/)

@@ -732,7 +732,8 @@ export function CourseEditor({
         // present-but-empty very differently, so this form never lets
         // "" reach either). Normalised the same way `model`, just below,
         // already normalises a blank string to `null`.
-        adminsRole: form.adminsRole.trim() === '' ? null : form.adminsRole.trim(),
+        adminsRole:
+          form.adminsRole.trim() === '' ? null : form.adminsRole.trim(),
         studentsRole:
           form.studentsRole.trim() === '' ? null : form.studentsRole.trim(),
         // Every optional field below is sent explicitly — `null` when the
@@ -1218,8 +1219,8 @@ export function CourseEditor({
       </label>
       <p className="text-sm text-neutral-600">
         {/* WEB-46: maintainer-reported copy correction. */}
-        Students in this course will not be able to chat with the bot unless
-        it is enabled here.
+        Students in this course will not be able to chat with the bot unless it
+        is enabled here.
       </p>
     </div>
   )

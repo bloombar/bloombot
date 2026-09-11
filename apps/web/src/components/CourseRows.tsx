@@ -178,7 +178,8 @@ export function CourseRows({
                   {/* PROJ-7: a role that is absent must not render as an
                       empty `<code>` tag — this reads sensibly whether
                       neither, one, or both roles are set. */}
-                  {course.adminsRole === null && course.studentsRole === null ? (
+                  {course.adminsRole === null &&
+                  course.studentsRole === null ? (
                     'does not route on a role'
                   ) : (
                     <>

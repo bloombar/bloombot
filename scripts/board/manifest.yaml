@@ -2391,7 +2391,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: Backlog
+  status: Done
   review: false
 - id: ENRL-16
   title: The web surface admits whoever Discord would admit, for a caller a
@@ -2409,7 +2409,7 @@
   section: §19 Enrolment & Course Access
   family: ENRL
   phase: 12
-  status: Backlog
+  status: Done
   review: false
 - id: LINK-1
   title: An unrecognized person is invited to connect, not answered
@@ -3622,7 +3622,7 @@
   section: §34 Web Control Panel
   family: WEB
   phase: 22
-  status: Backlog
+  status: Done
   review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
@@ -3911,7 +3911,7 @@
   section: §16 Projects
   family: PROJ
   phase: 25
-  status: Backlog
+  status: Done
   review: false
 - id: SURF-8
   title: A course that answers nothing says so, rather than saying nothing

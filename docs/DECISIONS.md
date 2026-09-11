@@ -11657,6 +11657,33 @@ how quickly a restart loop is noticed and fixed, is judged cheaper than the adde
 write-then-send ordering (which would then risk recording an apology that failed to send at all — the
 opposite failure).
 
+**Addendum — SURF-9 follow-ups: the gateway-hydration double-answer, and deleting the orphaned `maxHandledAt`.**
+Two gaps this entry left open were closed in a later slice:
+
+1. **A message can still be answered twice, in the gateway-hydration window.** discord.js queues every
+   non-whitelisted gateway dispatch while `client.ws.status !== Status.Ready`, and only drains that queue
+   (via `setImmediate`) *after* `triggerClientReady()` runs — which is *after* `sessionStart` is captured in
+   the `ShardReady` handler (`catch-up.ts`). A mention posted in the roughly one-second hydration window
+   after a restart therefore has `createdTimestamp < sessionStart` (passing MF-C's own upper bound) while its
+   live handling only *starts* running once the scan has already begun. Both existing guards miss it: the
+   pre-scan `handledIds` snapshot predates it, and the pre-dispatch `isMessageHandled` re-check (MF3) is
+   still `false`, because `discord_handled_messages` is written only *after* `handleMention` resolves — the
+   same "recorded after the work, not before" trade-off this entry's own module comment already accepts.
+   **Fixed with a third guard: an in-process `Set<string>` of message ids the live path has *begun*
+   handling** (`apps/bot/src/in-flight-messages.ts`), threaded into both `MessageHandlerDeps` and
+   `CatchUpDependencies` rather than reached by import, so a test can supply its own. The live path
+   (`message-handler.ts#onMessageCreate`) adds a message's id to it *before* calling `handleMention`, and
+   removes it in a `finally` only *after* `recordHandledMessage` has written — there is never an instant
+   where an in-flight message is in neither the set nor the table. Catch-up's own pre-dispatch check now
+   consults both. **Deliberately in-process and non-durable**: a restart empties the set completely, and that
+   is the point — it only ever needs to survive the few milliseconds between the live path claiming a message
+   and finishing its own durable write, a window a restart cannot straddle (the process that started the
+   claim no longer exists to finish it after one). `discord_handled_messages` remains the one durable,
+   cross-restart record; this set was never meant to be a second one.
+2. **The orphaned `maxHandledAt` (MF2, above) was deleted.** Round 2's MF-B replaced it with
+   `discord_gateway_status` as the scan's own window floor (above), leaving `maxHandledAt` referenced only by
+   its own unit test and the tenant-scoping allowlist — removed along with both.
+
 ## D-106 — `apps/web`: WEB-47 defect — the control-panel build reads `VITE_*` from the repository-root `.env`, with `apps/web`'s own files kept as an override
 
 **Background.** An operator set `VITE_MCP_PUBLIC_URL` (and `PUBLIC_MCP_URL`) in the droplet's

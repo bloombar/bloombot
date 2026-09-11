@@ -100,40 +100,4 @@ describe('discord-handled-messages repo (SURF-9)', () => {
       new Set(['new'])
     )
   })
-
-  // SURF-9 rework, MF2 — `runCatchUp`'s own scan-window floor.
-  describe('maxHandledAt', () => {
-    it('is undefined for an empty table', () => {
-      testDb = createTestDatabase()
-      expect(discordHandledMessages.maxHandledAt(testDb.db)).toBeUndefined()
-    })
-
-    it('is the most recent handledAt across every row, not the most recently inserted', () => {
-      testDb = createTestDatabase()
-      const now = Date.now()
-
-      // Inserted out of chronological order on purpose — this must read the
-      // maximum value, not merely the last row written.
-      discordHandledMessages.recordHandledMessage(
-        {
-          messageId: 'newest',
-          serverId: 'server-1',
-          channelId: 'chan-1',
-          handledAt: now,
-        },
-        testDb.db
-      )
-      discordHandledMessages.recordHandledMessage(
-        {
-          messageId: 'oldest',
-          serverId: 'server-1',
-          channelId: 'chan-1',
-          handledAt: now - 100,
-        },
-        testDb.db
-      )
-
-      expect(discordHandledMessages.maxHandledAt(testDb.db)).toBe(now)
-    })
-  })
 })

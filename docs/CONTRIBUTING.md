@@ -94,16 +94,20 @@ gives the SPEC and the code traceability in both directions.
 
 `apps/web` is a static Vite build with no server of its own (`vite.config.ts`'s own module
 comment), so a handful of settings are baked in at `npm run build --workspace apps/web` time
-through `import.meta.env`, from `apps/web/.env`/`apps/web/.env.production` — not from the
-repository root's `.env` (`packages/config`'s schema, which is `apps/api`'s own, has no reach into
-this build at all). `docs/DEPLOY_DROPLET.md` §4.3 has the production deployment sequence for
-these; this is the general list.
+through `import.meta.env`, from `apps/web/.env`/`apps/web/.env.production` first, falling back
+to the same `VITE_`-prefixed key in the **repository-root** `.env`/`.env.production` if
+`apps/web`'s own files do not set it (`vite.config.ts`'s own module comment and
+`load-root-env.ts` — WEB-47 defect: the root `.env` is where every other deployment setting
+lives, and a `VITE_` variable set only there was previously invisible to the build). This is
+read-only at build time: changing either file needs a rebuild of `apps/web` (a redeploy), not a
+process restart. `docs/DEPLOY_DROPLET.md` §4.3 has the production deployment sequence for these;
+this is the general list.
 
 | Variable | Read by | Default if unset |
 | --- | --- | --- |
 | `VITE_GOOGLE_CLIENT_ID` | `pages/SignIn.tsx` — the Google sign-in button. Omitted or wrong and the button silently does nothing (`docs/DEPLOY_DROPLET.md` §4.3 has the full reasoning). | none — Google sign-in is reported as "not configured" |
 | `VITE_PUBLIC_APP_URL` | `prerender-plugin.ts` — the origin `robots.txt`/`sitemap.xml` and the prerendered `/privacy`/`/terms` pages' `<link rel="canonical">` are written against. **Not** read by `pages/Mcp.tsx` (WEB-47) — it carries no information about whether the MCP server is actually exposed at that origin, and today's reference nginx config does not proxy `/mcp` at all (`docs/DEPLOY_DROPLET.md` §5.4). | `https://bloombot.wonkledge.com` |
-| `VITE_MCP_PUBLIC_URL` | `pages/Mcp.tsx` (WEB-47) — the MCP connector URL the tab renders, read as-is (trailing slash stripped). **Must equal `${PUBLIC_MCP_URL}/mcp`** (root `.env`'s `PUBLIC_MCP_URL`, `packages/config/src/env.ts` — MCP-7's own OAuth issuer/resource identifier is `new URL('/mcp', PUBLIC_MCP_URL)`, `apps/mcp/src/index.ts`): the two variables are read by two different processes at two different times (this one at `apps/web`'s build, that one at `apps/mcp`'s startup) with nothing that checks they agree, so a mismatch here is silent until a real client's connection fails against a resource identifier this value does not match. There is no derived fallback — set this only once a deployment has actually exposed the MCP server publicly (an nginx `location /mcp` block, or otherwise) and knows what `PUBLIC_MCP_URL` was set to. | none — the tab reports the connector as not configured rather than guessing |
+| `VITE_MCP_PUBLIC_URL` | `pages/Mcp.tsx` (WEB-47) — the MCP connector URL the tab renders, read as-is (trailing slash stripped). **Must equal `${PUBLIC_MCP_URL}/mcp`** (root `.env`'s `PUBLIC_MCP_URL`, `packages/config/src/env.ts` — MCP-7's own OAuth issuer/resource identifier is `new URL('/mcp', PUBLIC_MCP_URL)`, `apps/mcp/src/index.ts`): the two variables are read by two different processes at two different times (this one at `apps/web`'s build, that one at `apps/mcp`'s startup) with nothing that checks they agree, so a mismatch here is silent until a real client's connection fails against a resource identifier this value does not match. There is no derived fallback — set this only once a deployment has actually exposed the MCP server publicly (an nginx `location /mcp` block, or otherwise) and knows what `PUBLIC_MCP_URL` was set to. **Belongs in the repository-root `.env`, alongside `PUBLIC_MCP_URL`** (`deploy/nginx/README.md`) — that is what `vite.config.ts`'s root-env fallback reads (WEB-47 defect); an `apps/web/.env`/`.env.production` entry for the same key, if one exists, still overrides it. | none — the tab reports the connector as not configured rather than guessing |
 | `VITE_OPERATOR_NAME` | `content/document.ts`'s `OPERATOR` — the legal entity the privacy policy and terms name throughout. | `Bloombot` |
 | `VITE_OPERATOR_CONTACT_EMAIL` | `content/document.ts`'s `OPERATOR` — where a privacy or legal request should be sent. | `privacy@wonkledge.com` |
 | `VITE_OPERATOR_JURISDICTION` | `content/document.ts`'s `OPERATOR` — whose law governs the terms. | `New York, United States` |

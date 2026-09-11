@@ -19,13 +19,48 @@
  * build`, never `vite dev`/`vite preview` — see its own module comment
  * (`prerender-plugin.ts`) for why the public pages are prerendered at build
  * time rather than served by a runtime SSR process.
+ *
+ * WEB-47 defect: `VITE_*` also has to be readable from the **repository
+ * root** `.env`, not only `apps/web`'s own. Vite's `envDir` defaults to the
+ * project root it is invoked from — `apps/web` here — so a plain `vite
+ * build` only ever loads `apps/web/.env`/`.env.production`, never the root
+ * `.env` every other deployment setting lives in. That silently swallowed
+ * an operator's `VITE_MCP_PUBLIC_URL`: they set it in the root `.env`
+ * alongside `PUBLIC_MCP_URL` (the natural place, and the only place
+ * `deploy/nginx/README.md` told them to), and the built bundle never saw
+ * it — `pages/Mcp.tsx` correctly reported "not configured" about a build
+ * that, from its own point of view, really was unconfigured.
+ *
+ * The fix calls `loadEnv` **twice** — once the way Vite already does
+ * (`apps/web` itself), once against the repository root — and injects into
+ * `process.env`, before Vite resolves its own env, only the root keys that
+ * are missing from both the local result and `process.env` already
+ * (`load-root-env.ts`'s own comment has the full precedence reasoning).
+ * That ordering is what keeps `apps/web`'s own files winning: Vite's
+ * `loadEnv` itself prioritises `process.env` over file values, so an
+ * `apps/web/.env.production` entry (the existing `VITE_GOOGLE_CLIENT_ID`
+ * arrangement, `docs/DEPLOY_DROPLET.md` §4.3) must keep overriding the same
+ * key set at the root, exactly as it does today — only a key `apps/web`
+ * never set at all should ever fall back to the root's value.
+ *
+ * Both directories are resolved from `import.meta.url`, not `process.cwd()`
+ * — `scripts/deploy.sh` runs this build from the repository root,
+ * `npm run build --workspace apps/web`/`npm run dev` run it from `apps/web`
+ * itself, and a cwd-relative path would silently resolve to a different
+ * directory depending on which one invoked it.
  */
+
+import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import { prerenderPlugin } from './prerender-plugin.js'
+import { resolveRootEnvFallback } from './load-root-env.js'
+
+const WEB_DIR = fileURLToPath(new URL('.', import.meta.url))
+const ROOT_DIR = fileURLToPath(new URL('../..', import.meta.url))
 
 const apiPort = process.env['API_PORT'] ?? '3000'
 const apiOrigin = `http://127.0.0.1:${apiPort}`
@@ -72,11 +107,24 @@ const proxy = {
   '/oauth': apiOrigin,
 }
 
-export default defineConfig({
-  // WEB-11: Tailwind is the one styling system — `@tailwindcss/vite` builds
-  // `src/style.css`'s `@import "tailwindcss"` directly, no separate
-  // `postcss.config` or `tailwind.config` file to keep in sync with it.
-  plugins: [react(), tailwindcss(), prerenderPlugin()],
-  server: { proxy },
-  preview: { proxy },
+export default defineConfig(({ mode }) => {
+  // WEB-47 defect — see the module comment above for the full reasoning.
+  // Injected before `defineConfig`'s own env resolution runs, so Vite's
+  // subsequent internal `loadEnv(mode, WEB_DIR, ...)` sees these as
+  // `process.env` entries and treats them exactly as it would a value set
+  // on the command line.
+  const rootFallback = resolveRootEnvFallback(mode, WEB_DIR, ROOT_DIR)
+  for (const [key, value] of Object.entries(rootFallback)) {
+    process.env[key] = value
+  }
+
+  return {
+    // WEB-11: Tailwind is the one styling system — `@tailwindcss/vite`
+    // builds `src/style.css`'s `@import "tailwindcss"` directly, no
+    // separate `postcss.config` or `tailwind.config` file to keep in sync
+    // with it.
+    plugins: [react(), tailwindcss(), prerenderPlugin()],
+    server: { proxy },
+    preview: { proxy },
+  }
 })

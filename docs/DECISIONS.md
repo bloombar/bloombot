@@ -11656,3 +11656,39 @@ duplicate apology), extended here rather than special-cased: a second identical 
 how quickly a restart loop is noticed and fixed, is judged cheaper than the added complexity of a
 write-then-send ordering (which would then risk recording an apology that failed to send at all — the
 opposite failure).
+
+## D-106 — `apps/web`: WEB-47 defect — the control-panel build reads `VITE_*` from the repository-root `.env`, with `apps/web`'s own files kept as an override
+
+**Background.** An operator set `VITE_MCP_PUBLIC_URL` (and `PUBLIC_MCP_URL`) in the droplet's
+repository-root `.env` — the file every other deployment setting lives in, and the only file
+`deploy/nginx/README.md` told them to use — and the deployed panel still rendered "The MCP
+connector is not configured for this deployment." `pages/Mcp.tsx` was not lying: Vite's `envDir`
+defaults to the project root it is invoked from (`apps/web`), so a plain `vite build` only ever
+loaded `apps/web/.env`/`.env.production`, and the root `.env` was invisible to the build.
+`VITE_GOOGLE_CLIENT_ID` only ever escaped this because `docs/DEPLOY_DROPLET.md` separately tells
+the operator to write it into `apps/web/.env.production` — a second, undocumented-elsewhere file
+that happened to work for one variable and silently failed for another.
+
+**Choice: the repository-root `.env` is the single source of truth for deployment configuration,
+including browser-build (`VITE_*`) variables — `apps/web/.env`/`.env.production` are retained as
+an *override*, not removed.** `vite.config.ts` now calls `loadEnv` twice (`load-root-env.ts`'s own
+`resolveRootEnvFallback`) — once the way Vite already did, against `apps/web` itself, and once
+against the repository root — and injects into `process.env`, before Vite resolves its own env,
+only the root keys missing from both the local result and `process.env` already. That ordering is
+deliberate: a key `apps/web/.env.production` already sets (the live `VITE_GOOGLE_CLIENT_ID`
+arrangement) must keep winning over the same key set at the root, so nothing about that existing
+arrangement changes — the root `.env` fills in what `apps/web`'s own files leave unset, rather than
+replacing them. The alternative — deleting `apps/web/.env*` entirely and requiring everything in
+the root file — was rejected: it would have forced an unrelated migration of the working
+`VITE_GOOGLE_CLIENT_ID` setup in the same change that was fixing an unrelated variable, for no
+benefit the override behaviour does not already give an operator who wants a build-specific value.
+
+Tested as a pure helper (`apps/web/tests/load-root-env.test.ts`) against temporary directories
+under `tmp/`, not against the developer's own `.env` files — the same rule PR #409 established for
+`apps/web/tests/mcp.test.tsx` ("the MCP tests must not read the developer's own .env") applies
+here too, and turned out to apply one layer deeper than expected: Vite's own `loadEnv` always
+overlays the *real* `process.env` on top of whatever directory it is pointed at, and Vitest's own
+config resolution (itself Vite-based, rooted at the repository root) had already loaded the
+developer's real root `.env` into `process.env` before the test ever ran. The test's `beforeEach`
+clears the one key it exercises from the real `process.env` and restores it in `afterEach`, making
+"unset" a fact of the test rather than an accident of the machine that runs it.

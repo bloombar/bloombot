@@ -34,8 +34,9 @@ sudo cp /etc/nginx/sites-enabled/bloombot.bak /etc/nginx/sites-enabled/bloombot
 sudo systemctl reload nginx
 ```
 
-Then set these in the droplet's `.env` and redeploy so the processes pick them
-up (both must agree — see below):
+Then set these in the droplet's **repository-root** `.env` — the same file
+every other deployment setting lives in, not `apps/web/.env*` — and redeploy so
+the processes pick them up (both must agree — see below):
 
 ```
 PUBLIC_MCP_URL=https://<host>
@@ -48,6 +49,11 @@ connector URL the panel's MCP tab shows a person to paste, which is the
 **resource identifier** — `new URL('/mcp', issuerUrl)`. They are two variables
 describing one deployment, so a mismatch shows one URL in the panel while the
 server advertises another, and the connector fails with nothing explaining why.
+`VITE_MCP_PUBLIC_URL` is read at `apps/web`'s **build** time, not at process
+start — changing it needs a rebuild of `apps/web` (redeploy), not merely a
+process restart (`apps/web/vite.config.ts`'s own module comment, WEB-47
+defect). An `apps/web/.env`/`.env.production` entry for the same key, if one
+exists, still wins over the root `.env`'s value.
 
 ## Verifying it worked
 

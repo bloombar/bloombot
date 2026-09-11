@@ -31,13 +31,27 @@
  * (ENRL-7: "anyone a course is taught through is enrolled by asking it" —
  * `routing.ts#routeMessage` already answers an admins-role holder's message
  * the same as a students-role holder's, so this file's own admission has to
- * match, or the web surface, which authorizes on this table rather than a
- * membership, refuses the very person Discord just answered). ENRL-5's "a
- * Discord role confers none of [staff authority]" is untouched by this —
- * that requirement is about `memberships` and who may administer a course,
- * a different table and a different question than "who may ask it," which
- * is all `enrolments` ever records — against whatever role names its caller
- * already resolved; this file makes no Discord call of its own.
+ * match). ENRL-5's "a Discord role confers none of [staff authority]" is
+ * untouched by this — that requirement is about `memberships` and who may
+ * administer a course, a different table and a different question than "who
+ * may ask it," which is all `enrolments` ever records — against whatever
+ * role names its caller already resolved; this file makes no Discord call
+ * of its own.
+ *
+ * ENRL-15/16 add `resolveChatAdmission`/`listChatAdmittedCourses`, below —
+ * the one place `apps/api/src/routes/chat.ts` decides who may chat, so its
+ * list (`GET /courses`) and its per-course reads and writes cannot
+ * disagree. This is the one place in this file that *does* read
+ * `memberships` (an organization's own `owner` — ENRL-15's own "owner" —
+ * is exactly the role every other owner-gated action in this codebase
+ * already checks: `repos/memberships.ts`, `actions/transcripts.ts`,
+ * `actions/cost-ledger.ts`) and reads a course's `selfEnrolFromDiscord`/
+ * `answerUnenrolled` settings the same way `@bloombot/discord`'s own
+ * `handle-mention.ts` does (ENRL-13/ENRL-14) — mirrored, not reimplemented,
+ * so the two surfaces cannot silently drift apart. See `docs/DECISIONS.md`
+ * for the fuller reasoning, including why a web message under
+ * `selfEnrolFromDiscord` still enrols the caller despite the column's own
+ * name.
  */
 
 import BetterSqlite3 from 'better-sqlite3'
@@ -45,6 +59,7 @@ import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import * as courses from './courses.js'
+import * as memberships from './memberships.js'
 import { getPerson } from './people.js'
 import { enrolments, people, type EnrolmentSource } from '../schema.js'
 
@@ -767,4 +782,173 @@ export function enrolViaSelfEnrolment(
     false,
     db
   )
+}
+
+/**
+ * ENRL-15/16: why `apps/api/src/routes/chat.ts` may treat a caller as
+ * admitted to chat in a course, for `resolveChatAdmission`/
+ * `listChatAdmittedCourses` below to report. `docs/DECISIONS.md` D-101
+ * has the history of how this predicate arrived at this shape.
+ *
+ * An *ended* enrolment (ENRL-6) refuses unconditionally, ahead of every
+ * other admission path — including the organization's own `owner`, who
+ * can always reinstate the enrolment (ENRL-9) if they meant to keep it —
+ * because ending one is an instructor's own deliberate act and nothing
+ * else should be able to silently undo it. Ahead of *that*: an active
+ * enrolment, which is what "not ended" ordinarily means.
+ *
+ * Past the ended check, `owner` admits to any course in the organization
+ * unconditionally, regardless of its own settings — the one membership
+ * role every other organization-wide authority in this codebase already
+ * treats as full authority (`repos/memberships.ts#grantMembershipRole`'s
+ * own caller check, `actions/transcripts.ts`, `actions/cost-ledger.ts`).
+ * Any other membership (`memberships.getMembership`, the same lookup
+ * `routes/actions.ts` uses to resolve a caller's own organization) unlocks
+ * a course's own `selfEnrolFromDiscord`/`answerUnenrolled` settings
+ * (ENRL-13/ENRL-14) — `selfEnrolFromDiscord` checked first, since a course
+ * carrying both actually enrols, not merely answers, the identical way
+ * `@bloombot/discord`'s own ENRL-13-before-ENRL-14 ordering does. A
+ * connected person holding no membership at all gets neither setting
+ * consulted, on any path — membership is this predicate's web-side
+ * analogue of Discord's own routing precondition (CORE-2): proof that this
+ * caller already has a real, disclosed relationship to the organization's
+ * own courses, the way reaching the right Discord channel proves a
+ * message actually routed there.
+ */
+export type ChatAdmission =
+  | { kind: 'enrolled'; enrolment: Enrolment }
+  | { kind: 'owner' }
+  | { kind: 'self-enrol' }
+  | { kind: 'answers-unenrolled' }
+  | { kind: 'refused' }
+
+/**
+ * The pure decision behind `resolveChatAdmission`/`listChatAdmittedCourses`
+ * — no database access of its own, so both callers below can share it
+ * without either re-deriving it or querying twice for the same course.
+ * Order matters — see this file's own module comment on `ChatAdmission`
+ * for what each branch means and why it sits where it does.
+ */
+function admissionForCourse(
+  course: Pick<courses.Course, 'selfEnrolFromDiscord' | 'answerUnenrolled'>,
+  activeEnrolment: Enrolment | undefined,
+  hasEndedEnrolment: boolean,
+  isOwner: boolean,
+  hasMembership: boolean
+): ChatAdmission {
+  if (activeEnrolment) return { kind: 'enrolled', enrolment: activeEnrolment }
+  if (hasEndedEnrolment) return { kind: 'refused' }
+  if (isOwner) return { kind: 'owner' }
+  if (hasMembership) {
+    if (course.selfEnrolFromDiscord) return { kind: 'self-enrol' }
+    if (course.answerUnenrolled) return { kind: 'answers-unenrolled' }
+  }
+  return { kind: 'refused' }
+}
+
+/**
+ * ENRL-15/16: whether `personId`/`accountId` may chat in `courseId` — the
+ * one predicate `routes/chat.ts` calls from both its per-course read and
+ * write handlers, so neither can authorize a course the other refuses.
+ * `personId` is who an enrolment settles onto; `accountId` is whose
+ * *membership* this predicate reads — two different callers' own
+ * identities (`routes/chat.ts`'s own module comment on why a web person
+ * and a web account are not the same question), both already resolved by
+ * the time this is called.
+ *
+ * `{ kind: 'refused' }` for a disabled course, or one that does not exist
+ * in this organization — TEN-5's "a foreign or absent id refuses the same
+ * way," the same as every other lookup in this file.
+ */
+export function resolveChatAdmission(
+  organizationId: string,
+  courseId: string,
+  input: { personId: string; accountId: string },
+  db: Database
+): ChatAdmission {
+  const course = courses.getCourse(organizationId, courseId, db)
+  if (!course || !course.enabled) return { kind: 'refused' }
+
+  const activeEnrolment = getActiveEnrolment(
+    organizationId,
+    courseId,
+    input.personId,
+    db
+  )
+  const endedEnrolment = hasEndedEnrolment(
+    organizationId,
+    courseId,
+    input.personId,
+    db
+  )
+  const membership = memberships.getMembership(
+    organizationId,
+    input.accountId,
+    db
+  )
+  return admissionForCourse(
+    course,
+    activeEnrolment,
+    endedEnrolment,
+    membership?.role === 'owner',
+    membership !== undefined
+  )
+}
+
+/**
+ * ENRL-15/16: every course in `organizationId` that `personId`/`accountId`
+ * may currently chat in — widening `listCoursesForPerson`'s old "active
+ * enrolments, and no others" (this file's own module comment predates
+ * this function) to the same admission `resolveChatAdmission` grants a
+ * per-course read or write, so a course this lists is never one the same
+ * caller's own message would then refuse. Disabled courses are excluded
+ * before `admissionForCourse` ever runs, the same "excluded from the list,
+ * not merely from routing" cheap-fix `listCoursesForPerson` above already
+ * applies.
+ *
+ * The organization's own membership is read once, not once per course
+ * (`resolveChatAdmission` re-reads it, which this function does not call,
+ * precisely to avoid that): an organization of a hundred courses does not
+ * need a hundred identical membership lookups to answer "is this caller a
+ * member, and is it the owner."
+ */
+export function listChatAdmittedCourses(
+  organizationId: string,
+  input: { personId: string; accountId: string },
+  db: Database
+): courses.Course[] {
+  const membership = memberships.getMembership(
+    organizationId,
+    input.accountId,
+    db
+  )
+  const isOwner = membership?.role === 'owner'
+  const hasMembership = membership !== undefined
+  const enabledCourses = courses
+    .listCourses(organizationId, db)
+    .filter((course) => course.enabled)
+
+  return enabledCourses.filter((course) => {
+    const activeEnrolment = getActiveEnrolment(
+      organizationId,
+      course.id,
+      input.personId,
+      db
+    )
+    const endedEnrolment = hasEndedEnrolment(
+      organizationId,
+      course.id,
+      input.personId,
+      db
+    )
+    return (
+      admissionForCourse(
+        course,
+        activeEnrolment,
+        endedEnrolment,
+        isOwner,
+        hasMembership
+      ).kind !== 'refused'
+    )
+  })
 }

@@ -46,7 +46,20 @@ function hashSecret(secret: string): string {
   return createHash('sha256').update(secret).digest('hex')
 }
 
-/** One enabled course in `issuer`'s own organization, and a live join link for it. */
+/**
+ * One enabled course in `issuer`'s own organization, and a live join link
+ * for it.
+ *
+ * Left at `createCourse`'s own real defaults — `routes/chat.ts`'s own
+ * predicate reads `answerUnenrolled` only for a caller who holds a
+ * membership in this organization (`enrolments.ts`'s own module comment
+ * on `ChatAdmission` has why); a join-link redeemer never gains one
+ * (redeeming writes an enrolment, `enrolViaJoinLink`, never a
+ * `memberships` row), so this file's own ENRL-8 scenarios need no pinned
+ * setting: a removed redeemer's own enrolment ending refuses them on this
+ * course the same way it would refuse anyone with no relationship to it
+ * at all.
+ */
 function seedJoinLink(
   db: Database,
   issuer: SignedInCaller,

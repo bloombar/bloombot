@@ -123,8 +123,9 @@ export function Chat({
   // one this account's enrolment has since ended). Read by `loadMessages`
   // below as well as by the render, so an address like that never issues a
   // single request against the id it names — the server would refuse them
-  // anyway (`apps/api`'s own `routes/chat.ts` authorizes on an active
-  // enrolment), but there is nothing to ask for and nothing to show.
+  // anyway (`apps/api`'s own `routes/chat.ts` authorizes through
+  // `resolveChatAdmission`, ENRL-15/16), but there is nothing to ask for
+  // and nothing to show.
   const routedCourseIsUnknown =
     courseId !== undefined &&
     courses !== undefined &&
@@ -381,13 +382,16 @@ export function Chat({
 
   // WEB-32/WEB-34 — an address may name any course id at all, and until
   // this check nothing compared it against the list this account can
-  // actually chat in: a link naming a course they are not enrolled in
-  // rendered a *different* course's title (or an empty `<select>`) while
-  // every message went out against the id in the address. Deliberately the
-  // same treatment `pages/ProjectsPanel.tsx` already gives an unknown
-  // `projectId` — the server refuses the reads regardless
-  // (`apps/api`'s own `routes/chat.ts` authorizes on an active enrolment),
-  // so this is about telling the reader plainly rather than about access.
+  // actually chat in: a link naming a course they may not chat in rendered
+  // a *different* course's title (or an empty `<select>`) while every
+  // message went out against the id in the address. Deliberately the same
+  // treatment `pages/ProjectsPanel.tsx` already gives an unknown
+  // `projectId` — the server refuses the reads regardless (`apps/api`'s own
+  // `routes/chat.ts` authorizes through `resolveChatAdmission`, ENRL-15/16
+  // — wider than a plain active enrolment by both the organization's own
+  // owner and, for any other membership, a course's own settings, but this
+  // list already reflects exactly what it admits), so this is about
+  // telling the reader plainly rather than about access.
   if (routedCourseIsUnknown) {
     return <NotFound onHome={onClearCourse} />
   }

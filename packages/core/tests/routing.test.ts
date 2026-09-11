@@ -175,6 +175,29 @@ describe('routeMessage (CORE-2)', () => {
     expect(result).toEqual({ kind: 'unmatched' })
   })
 
+  // The exact danger this slice's own brief names: a role-less course must
+  // not match every author. A course whose absent role were ever coalesced
+  // to `''` (`course.adminsRole ?? ''`) rather than checked explicitly for
+  // `null` would wrongly match an author who — however unlikely — holds a
+  // Discord role literally named the empty string, since `roleNames` would
+  // then contain `''` too. This fails against that implementation and
+  // passes against the real one, which never produces `''` at all.
+  it('a role-less course does not match an author holding a role literally named the empty string', () => {
+    const roleless: RoutableCourse = {
+      id: 'course-roleless',
+      categoryNames: ['Something Else'],
+      adminsRole: null,
+      studentsRole: null,
+      enabled: true,
+    }
+    const result = routeMessage([roleless], {
+      categoryName: null,
+      channelName: null,
+      roleNames: [''],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
   it('a role-less course does not make an otherwise-unambiguous message ambiguous', () => {
     const rolelessOne: RoutableCourse = {
       id: 'course-roleless-one',

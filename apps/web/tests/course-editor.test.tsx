@@ -171,6 +171,74 @@ describe('CourseEditor (WEB-8)', () => {
     expect(screen.queryByLabelText('Prompt id')).not.toBeInTheDocument()
   })
 
+  // WEB-46: three maintainer-reported copy corrections — the old strings
+  // must be gone, not merely coexisting alongside the new ones.
+  it('WEB-46: renders the corrected Enabled, self-enrol and answer-unenrolled descriptions, not the old ones', () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByText(
+        'Students in this course will not be able to chat with the bot unless it is enabled here.'
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Students who message the bot will be added to the course roster.'
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Respond to messages from unenrolled students.')
+    ).toBeInTheDocument()
+
+    expect(
+      screen.queryByText(/Students can only ask this course while it is enabled/)
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/immediately if they already have a connected account/)
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        /only a student this course has enrolled gets an answer/
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  // WEB-46: Title now leads the new-course form, above the fields that
+  // decide routing — this asserts DOM order, not visual position, since
+  // Tailwind classes say nothing about where a screen reader or a Tab
+  // press actually goes next.
+  it('WEB-46: Title precedes the Admins role and Students role fields in DOM order', () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+
+    const titlePosition = screen
+      .getByLabelText('Title')
+      .compareDocumentPosition(screen.getByLabelText('Admins role'))
+    const studentsRolePosition = screen
+      .getByLabelText('Title')
+      .compareDocumentPosition(screen.getByLabelText('Students role'))
+    // `DOCUMENT_POSITION_FOLLOWING` (4): the argument node follows Title.
+    expect(titlePosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(studentsRolePosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('editing an existing course prefills the form from courses.get', async () => {
     getCourse.mockResolvedValue(COURSE)
 
@@ -244,6 +312,44 @@ describe('CourseEditor (WEB-8)', () => {
         channels: [{ name: 'announcements', adminsOnly: false }],
       },
     ])
+  })
+
+  // PROJ-7: the panel's own half of "an empty string normalises to null" —
+  // an instructor blanking both role fields must save successfully, and
+  // the request must carry `null` for each, never `''`.
+  it('PROJ-7: saves successfully with both role fields blank, sending null rather than an empty string', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+
+    // WEB-35: Admins role/Students role are on the Discord tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.change(screen.getByLabelText('Admins role'), {
+      target: { value: '' },
+    })
+    fireEvent.change(screen.getByLabelText('Students role'), {
+      target: { value: '' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+    const [, input] = saveCourse.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ]
+    expect(input).toHaveProperty('adminsRole', null)
+    expect(input).toHaveProperty('studentsRole', null)
   })
 
   it("a save refused for a PROJ-3 collision renders the conflict's own message, naming the other course and project (WEB-9)", async () => {

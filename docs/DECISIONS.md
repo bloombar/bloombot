@@ -11673,13 +11673,26 @@ Two gaps this entry left open were closed in a later slice:
    handling** (`apps/bot/src/in-flight-messages.ts`), threaded into both `MessageHandlerDeps` and
    `CatchUpDependencies` rather than reached by import, so a test can supply its own. The live path
    (`message-handler.ts#onMessageCreate`) adds a message's id to it *before* calling `handleMention`, and
-   removes it in a `finally` only *after* `recordHandledMessage` has written — there is never an instant
-   where an in-flight message is in neither the set nor the table. Catch-up's own pre-dispatch check now
-   consults both. **Deliberately in-process and non-durable**: a restart empties the set completely, and that
+   removes it in a `finally` only *after* `recordHandledMessage` has written — so a concurrently running scan
+   never sees a message unclaimed *while it is being handled*. Catch-up's own pre-dispatch check now
+   consults both. The `finally` releases the claim unconditionally, so on a `handleMention` throw, on an
+   outcome `isHandledOutcome` does not record, and whenever catch-up is disabled, the id ends up in neither
+   the set nor the table — deliberately, since that is exactly what makes a later scan re-handle a message
+   whose answer died mid-flight rather than bury it. "Absent from the set" therefore does not imply
+   "present in the table", and no future guard should be built on it. **Deliberately in-process and non-durable**: a restart empties the set completely, and that
    is the point — it only ever needs to survive the few milliseconds between the live path claiming a message
    and finishing its own durable write, a window a restart cannot straddle (the process that started the
    claim no longer exists to finish it after one). `discord_handled_messages` remains the one durable,
    cross-restart record; this set was never meant to be a second one.
+   **The symmetric inversion is left open, knowingly.** Catch-up does not claim the ids *it* dispatches, and
+   the live path consults neither the set nor `discord_handled_messages`, so in principle a scan that reached
+   its pre-dispatch check *before* a queued `MESSAGE_CREATE` drained would answer a message the live path then
+   answers again. It is unreachable as this process is built: with a single shard, `Events.ShardReady` and
+   `triggerClientReady()` fire in the same tick, the queued dispatches drain on a `setImmediate` immediately
+   after, and the scan's own first suspension is a REST `channel.messages.fetch` — so the live claim always
+   lands first. **Sharding `apps/bot` would make it reachable**, because `ShardReady` then fires seconds
+   before the client is ready and the scan starts against an undrained queue. Whoever adds a second shard must
+   close this: have catch-up claim into the same set before dispatching, and have the live path consult it.
 2. **The orphaned `maxHandledAt` (MF2, above) was deleted.** Round 2's MF-B replaced it with
    `discord_gateway_status` as the scan's own window floor (above), leaving `maxHandledAt` referenced only by
    its own unit test and the tenant-scoping allowlist — removed along with both.

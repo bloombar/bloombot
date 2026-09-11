@@ -53,8 +53,18 @@ export async function onMessageCreate(
   // gateway-hydration window `in-flight-messages.ts`'s own module comment
   // describes) sees it as already spoken for, not merely absent from
   // `discord_handled_messages` yet. Removed in `finally`, below, only after
-  // the durable record has actually been written — never a moment where the
-  // id is in neither the set nor the table.
+  // the durable record has actually been written, so a scan running
+  // concurrently never sees this message unclaimed *while it is being
+  // handled*.
+  //
+  // The `finally` releases the claim unconditionally, including when
+  // `handleMention` throws, when the outcome is not one `isHandledOutcome`
+  // records, and whenever catch-up is disabled — in each of those the id
+  // ends up in neither the set nor the table, deliberately: that is what
+  // makes a later scan re-handle a message whose answer died mid-flight
+  // rather than bury it (`docs/SPEC.md` §32's own incident). Do not read
+  // this as "absent from the set implies present in the table" and build a
+  // guard on it; the retry depends on that implication being false.
   deps.inFlight.add(message.id)
   try {
     const input = buildInboundMention(message, deps.botId)

@@ -216,29 +216,62 @@ install_deps() {
 BACKUP_RETENTION=5
 
 # OPS-18 — resolves the platform's own SQLite file the same way its four
-# Node processes do: `DATABASE_PATH` from `.env`, defaulting to
-# `./data/data.db` (`packages/config/src/env.ts`'s own zod default),
-# resolved against `$APP_DIR` — `ecosystem.config.cjs`'s own comment on why
-# pm2's `cwd` (== `$APP_DIR` here, since this script `cd`s there before
-# anything else) is what every relative path in `.env` resolves against.
-# Deliberately not hard-coded to `data/data.db`: a droplet that has moved
-# the database (docs/DEPLOY_DROPLET.md's own "own boot disk over a term"
-# note) must be backed up at the path it actually uses, not the default.
-# Parsed with a plain bash `read` loop rather than `sed`/`grep`/`cut` — one
-# fewer external command this step depends on being on PATH, on top of the
-# `sqlite3` check below that already refuses to guess.
+# Node processes do: a real `DATABASE_PATH` environment variable wins,
+# otherwise `.env` supplies it, otherwise `./data/data.db`
+# (`packages/config/src/env.ts`'s own zod default) — resolved against
+# `$APP_DIR`, `ecosystem.config.cjs`'s own comment on why pm2's `cwd` (==
+# `$APP_DIR` here, since this script `cd`s there before anything else) is
+# what every relative path in `.env` resolves against. Deliberately not
+# hard-coded to `data/data.db`: a droplet that has moved the database
+# (docs/DEPLOY_DROPLET.md's own "own boot disk over a term" note) must be
+# backed up at the path it actually uses, not the default.
+#
+# Parsed by asking Node's own `process.loadEnvFile` — the same call
+# `packages/config/src/dotenv.ts`'s `loadDotEnv` makes — rather than
+# reimplementing `.env` parsing in bash. Rework finding: a hand-rolled
+# `KEY=VALUE` `read` loop does not agree with the platform's own loader on
+# a quoted value, an `export ` prefix, a trailing `\r` (CRLF), trailing
+# blank lines, or a final line with no newline — every one of those is a
+# shape a real `.env` file uses, `loadDotEnv` accepts all of them, and a
+# parser that silently disagrees does not fail loudly: it resolves to the
+# wrong path, finds nothing there, and (see `backup_database` below) used
+# to read as "no database yet" — skipping the backup and migrating anyway.
+# Node is already a required command on this script's own PATH (the
+# preflight `for cmd in git node npm pm2` check above), so this adds no new
+# dependency.
+#
+# Prints two tab-separated fields: whether `DATABASE_PATH` was actually
+# configured (`explicit` or `default`) and the resolved, absolute path. The
+# first field is what lets `backup_database` tell "nothing to back up yet"
+# apart from "cannot find the database this deploy was told to use" — only
+# the former is safe to skip.
 resolve_database_path() {
-  local db_rel="./data/data.db" key value
-  if [ -f "$APP_DIR/.env" ]; then
-    while IFS='=' read -r key value; do
-      if [ "$key" = "DATABASE_PATH" ]; then
-        db_rel="$value"
-      fi
-    done <"$APP_DIR/.env"
-  fi
-  case "$db_rel" in
-    /*) printf '%s' "$db_rel" ;;
-    *) printf '%s' "$APP_DIR/$db_rel" ;;
+  local out prefix rel
+  out="$(node -e '
+    const fs = require("fs")
+    const envPath = process.argv[1]
+    let explicit = false
+    if (process.env.DATABASE_PATH) {
+      explicit = true
+    } else if (fs.existsSync(envPath)) {
+      try {
+        process.loadEnvFile(envPath)
+      } catch {
+        // A malformed .env is not this function'"'"'s problem to diagnose —
+        // leaving explicit false here falls through to the same default an
+        // .env with no DATABASE_PATH line at all would, and the caller
+        // decides what a missing file at that path means.
+      }
+      if (process.env.DATABASE_PATH) explicit = true
+    }
+    const rel = explicit ? process.env.DATABASE_PATH : "./data/data.db"
+    process.stdout.write((explicit ? "explicit" : "default") + "\t" + rel)
+  ' "$APP_DIR/.env")"
+  prefix="${out%%$'\t'*}"
+  rel="${out#*$'\t'}"
+  case "$rel" in
+    /*) printf '%s\t%s' "$prefix" "$rel" ;;
+    *) printf '%s\t%s' "$prefix" "$APP_DIR/$rel" ;;
   esac
 }
 
@@ -249,6 +282,12 @@ resolve_database_path() {
 # component — see `backup_database`'s own naming below), so a plain
 # lexical sort is enough to find the oldest without touching mtimes, which
 # a `cp`/rsync of this directory could otherwise disturb.
+#
+# Always returns success: a backup that was actually taken correctly must
+# not be reported as failed — and roll the whole deploy back — merely
+# because an old one refused to delete (a read-only remount, an
+# immutable-flagged file). A prune failure is logged and left for an
+# operator, not escalated into a migration that never runs.
 prune_old_backups() {
   local dir="$1"
   local -a backups=()
@@ -263,9 +302,10 @@ prune_old_backups() {
     local i
     for ((i = 0; i < count - BACKUP_RETENTION; i++)); do
       log "pruning old backup ${backups[$i]} (keeping the newest $BACKUP_RETENTION)"
-      rm -f "${backups[$i]}"
+      rm -f "${backups[$i]}" || log "WARNING: could not prune old backup ${backups[$i]} — left in place"
     done
   fi
+  return 0
 }
 
 # OPS-18 — takes a SQLite-consistent backup of the platform database
@@ -296,13 +336,29 @@ prune_old_backups() {
 # that already has a database is the safe default; the cost is one
 # `.backup` invocation and a bounded amount of disk (`prune_old_backups`).
 #
-# Skips cleanly, rather than failing, when there is no database yet — a
-# first-ever deploy on a fresh droplet has nothing to back up.
+# Skips cleanly, rather than failing, when there is genuinely no database
+# yet — a first-ever deploy on a fresh droplet has nothing to back up. But
+# "genuinely" matters: skipping is only correct when `DATABASE_PATH` was
+# never configured at all, so the path checked is this function's own
+# built-in default. A `DATABASE_PATH` that *was* configured (`.env` or a
+# real environment variable) and does not resolve to an existing file is a
+# misconfiguration or a wrong path, not a fresh droplet — treated as a
+# backup failure so the migration never runs against a database this
+# deploy cannot actually find.
 backup_database() {
-  local db_path backup_dir dest size
-  db_path="$(resolve_database_path)"
+  local resolved explicit db_path backup_dir dest size
+  resolved="$(resolve_database_path)"
+  explicit="${resolved%%$'\t'*}"
+  db_path="${resolved#*$'\t'}"
 
   if [ ! -f "$db_path" ]; then
+    if [ "$explicit" = "explicit" ]; then
+      echo "ERROR: DATABASE_PATH is configured, and resolves to $db_path, but
+that file does not exist. Refusing to treat a configured-but-missing
+database as \"nothing to back up yet\" — fix DATABASE_PATH, or create the
+database, before deploying a migration." >&2
+      return 1
+    fi
     log "no database at $db_path yet; skipping the pre-migration backup (first deploy)"
     return 0
   fi
@@ -318,6 +374,14 @@ before deploying a migration." >&2
 
   backup_dir="$(dirname "$db_path")/backups"
   mkdir -p "$backup_dir"
+  # OPS-18 — `.gitignore`'s own `data/backups/` line only covers the
+  # default location; a `DATABASE_PATH` that has moved the database moves
+  # this directory with it, and a static `.gitignore` test cannot see that
+  # at review time. Checked here, at the moment the directory is actually
+  # used, rather than assumed.
+  if ! git check-ignore -q "$backup_dir" 2>/dev/null; then
+    log "WARNING: $backup_dir is not covered by .gitignore. If this deploy's own DATABASE_PATH has moved the database outside the default location, add an explicit ignore rule for it before anything here is ever \`git add\`ed."
+  fi
   # Timestamp first, so the newest backup always sorts last — the ordering
   # `prune_old_backups` above relies on — and the target commit second, for
   # an operator scanning the directory for which run a given file belongs to.
@@ -325,7 +389,11 @@ before deploying a migration." >&2
 
   log "backing up $db_path to $dest before the migration"
   if ! sqlite3 "$db_path" ".backup '$dest'"; then
-    rm -f "$dest"
+    # `.backup` failing partway (disk-full, most likely) can leave both the
+    # partial destination file and its own rollback-journal sidecar behind;
+    # `prune_old_backups` only globs `backup_*.db`, so an uncleaned sidecar
+    # accumulates one per failure, forever.
+    rm -f "$dest" "$dest-journal"
     echo "ERROR: backing up $db_path to $dest failed." >&2
     return 1
   fi
@@ -333,7 +401,7 @@ before deploying a migration." >&2
   size="$(du -h "$dest" 2>/dev/null | cut -f1)"
   log "backup complete: $dest (${size:-unknown size}). Restore with (stop
 every supervised process first — docs/DEPLOY_DROPLET.md's own §8.1 has the
-full procedure): sqlite3 $db_path \".restore '$dest'\""
+full procedure): sqlite3 \"$db_path\" \".restore '$dest'\""
 
   prune_old_backups "$backup_dir"
 }

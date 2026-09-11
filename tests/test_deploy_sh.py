@@ -851,11 +851,17 @@ def test_migrate_pm2_names_is_a_noop_on_an_already_migrated_droplet(world):
 
 def test_ops18_backup_runs_before_the_migration(world):
     """The whole point of the slice, pinned on the actual order the two log
-    lines appear in, not merely that both appear somewhere."""
+    lines appear in, not merely that both appear somewhere.
+
+    Rework finding — this used to match "backing up", which is the
+    *caller's own* log line, emitted before `backup_database` is even
+    entered — true on every path, including a no-op mutation of the
+    function's own body. "backup complete:" is only printed after
+    `sqlite3 .backup` has actually succeeded, so it pins the real work."""
     result = world.run(world.code_only)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    backup_at = result.stdout.find("backing up")
+    backup_at = result.stdout.find("backup complete:")
     migrate_at = result.stdout.find("applying the platform database migration")
     assert backup_at != -1, result.stdout
     assert migrate_at != -1, result.stdout
@@ -865,6 +871,15 @@ def test_ops18_backup_runs_before_the_migration(world):
     )
     sqlite_calls = world.calls("sqlite3")
     assert any(".backup" in call for call in sqlite_calls), sqlite_calls
+
+    # Query it: the produced file must be a genuine copy of the database,
+    # not merely a file that exists at the expected name.
+    backups_dir = world.app / "data" / "backups"
+    backups = sorted(backups_dir.glob("backup_*.db"))
+    assert len(backups) == 1, backups
+    assert backups[0].read_text(encoding="utf-8") == (
+        world.app / "data" / "data.db"
+    ).read_text(encoding="utf-8")
 
 
 def test_ops18_a_failing_backup_aborts_before_the_migration_and_before_anything_is_reloaded(
@@ -901,6 +916,74 @@ def test_ops18_a_first_deploy_with_no_database_yet_skips_the_backup(world):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "skipping the pre-migration backup" in result.stdout
     assert world.calls("sqlite3") == []
+
+
+# Rework finding — `resolve_database_path` used to parse `.env` with a
+# hand-rolled `KEY=VALUE` bash `read` loop, which disagrees with
+# `process.loadEnvFile` (what `packages/config/src/dotenv.ts`'s own
+# `loadDotEnv` actually calls) on every shape below. A quoted value in
+# particular — the form a great many hand-written `.env` files use —
+# resolved to the literal string `"./data/other.db"`, including the quote
+# characters, which then failed the "does this file exist" check and read
+# as a first-ever deploy with nothing to back up: the backup was silently
+# skipped and the live database was migrated anyway. Each case seeds the
+# database at a NON-default path, named only through the `.env` shape under
+# test, so a parser that resolves the wrong path also fails to find the
+# file at all — the same failure mode the real bug had.
+OPS18_ENV_SHAPES = [
+    ("a quoted value", 'DATABASE_PATH="./data/other.db"\n'),
+    ("an export-prefixed value", "export DATABASE_PATH=./data/other.db\n"),
+    ("a value with trailing whitespace", "DATABASE_PATH=./data/other.db   \n"),
+    ("a CRLF line ending", "DATABASE_PATH=./data/other.db\r\n"),
+    ("a final line with no trailing newline", "DATABASE_PATH=./data/other.db"),
+]
+
+
+@pytest.mark.parametrize(
+    "env_line", [line for _, line in OPS18_ENV_SHAPES],
+    ids=[name for name, _ in OPS18_ENV_SHAPES],
+)
+def test_ops18_resolves_database_path_from_env_shapes(world, env_line):
+    """`DATABASE_PATH` must resolve the same way for every shape a real
+    `.env` file uses, not only the plain `KEY=VALUE` line `world`'s own
+    fixture happens to write."""
+    (world.app / ".env").write_text(env_line, encoding="utf-8")
+    other_db = world.app / "data" / "other.db"
+    other_db.write_text("other database contents\n", encoding="utf-8")
+
+    result = world.run(world.code_only)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "skipping the pre-migration backup" not in result.stdout, (
+        env_line,
+        result.stdout,
+    )
+    backups_dir = world.app / "data" / "backups"
+    backups = sorted(backups_dir.glob("backup_*.db"))
+    assert len(backups) == 1, (env_line, backups)
+    # The backup must be a copy of the DATABASE_PATH-configured file, not
+    # the default `data/data.db` the fixture also happens to have.
+    assert backups[0].read_text(encoding="utf-8") == other_db.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_ops18_a_configured_database_path_that_does_not_exist_aborts(world):
+    """The second half of the fix: a configured `DATABASE_PATH` that does
+    not resolve to an existing file is a misconfiguration, not a fresh
+    droplet — it must abort before the migration, not be read as "nothing
+    to back up yet"."""
+    (world.app / ".env").write_text(
+        "DATABASE_PATH=./data/does-not-exist.db\n", encoding="utf-8"
+    )
+
+    result = world.run(world.code_only)
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "DATABASE_PATH is configured" in output
+    assert "skipping the pre-migration backup" not in output
+    assert "applying the platform database migration" not in output
 
 
 def test_ops18_sqlite3_absent_fails_loudly_rather_than_falling_back_to_a_copy(

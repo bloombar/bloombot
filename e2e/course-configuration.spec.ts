@@ -483,3 +483,51 @@ test("a channel row's name input, checkbox and remove button stay on one line, a
   })
   expect(narrowOverflows).toBe(false)
 })
+
+// PROJ-7: a course may name no Discord role at all — routing on the
+// category alone (or on a join link, or self-enrolment, neither exercised
+// here) is a real, supported shape, not merely a database state nothing in
+// the panel can produce.
+test('a course with both role fields left blank saves successfully, and its own row reads that it does not route on a role (PROJ-7)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `proj7-${suffix}@example.edu`
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await navigateTo(page, 'Projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog
+    .getByLabel('Project name')
+    .fill(`Fall 2026 — ${suffix}`)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page
+    .getByRole('button', { name: `Fall 2026 — ${suffix}`, exact: true })
+    .click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
+  // Admins role/Students role left blank on purpose — this is the case
+  // under test.
+  await page.getByRole('button', { name: 'Add category' }).click()
+  await page.getByLabel('Category name').fill(`Web Design - GLOBAL - ${suffix}`)
+  await page.getByRole('button', { name: 'Save course' }).click()
+
+  // The save succeeded once the settings tabs appear, the same signal the
+  // QA-8 test above uses.
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
+
+  // Back on the project's own course list, the row's metadata line says
+  // this course does not route on a role, not an empty pair of `<code>`
+  // tags (`components/CourseRows.tsx`'s own fix).
+  await navigateTo(page, 'Projects')
+  await page
+    .getByRole('button', { name: `Fall 2026 — ${suffix}`, exact: true })
+    .click()
+  await expect(
+    page.getByText('does not route on a role', { exact: false })
+  ).toBeVisible()
+})

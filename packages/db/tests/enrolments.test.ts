@@ -302,7 +302,13 @@ describe('enrolments repo (ENRL-1..6)', () => {
   it('there is no repo function that enrols with a caller-chosen source', () => {
     // Structural: `enrolments.ts` exports exactly four admission functions
     // (ENRL-13 added the fourth), each with a fixed source, and no generic
-    // `enrol(..., { source })`.
+    // `enrol(..., { source })`. ENRL-15/16 added two more exports —
+    // `resolveChatAdmission`/`listChatAdmittedCourses` — neither of which
+    // enrols anybody at all (both are pure reads; `routes/chat.ts`'s own
+    // `POST` handler is what decides whether to call `enrolViaSelfEnrolment`
+    // off the back of one), so they are listed here too rather than this
+    // test narrowing to a subset that would stop noticing a *real* new
+    // enrolling function landing beside them unchecked.
     expect(Object.keys(enrolments).sort()).toEqual(
       [
         'enrolViaDiscordRole',
@@ -317,6 +323,8 @@ describe('enrolments repo (ENRL-1..6)', () => {
         'listCoursesForPerson',
         'listPeopleForCourse',
         'listEnrolmentsForCourse',
+        'resolveChatAdmission',
+        'listChatAdmittedCourses',
       ].sort()
     )
   })
@@ -1022,5 +1030,428 @@ describe('enrolments repo (ENRL-1..6)', () => {
     expect(
       enrolments.getActiveEnrolment(orgA, courseA.id, person.id, testDb.db)
     ).toBeDefined()
+  })
+})
+
+// ENRL-15/16 — the predicate `apps/api/src/routes/chat.ts` shares between
+// its list and its per-course read/write, tested at the repo layer against
+// every admission path it decides between (`enrolments.ts`'s own module
+// comment on `ChatAdmission` has the full reasoning; `docs/DECISIONS.md`
+// D-101 has how this shape was arrived at). Every course below is left at
+// `courses.createCourse`'s own real defaults (`answerUnenrolled: true`
+// among them) unless a test says otherwise.
+describe('enrolments repo — resolveChatAdmission/listChatAdmittedCourses (ENRL-15/16)', () => {
+  it("admits this organization's owner to a course they were never enrolled in, on real default settings (ENRL-15)", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: owner.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'owner' })
+    expect(
+      enrolments
+        .listChatAdmittedCourses(
+          organizationId,
+          { personId: person.id, accountId: owner.id },
+          testDb.db
+        )
+        .map((c) => c.id)
+    ).toEqual([course.id])
+  })
+
+  // The reported bug, finally fixed by a rule that does not leak: an
+  // instructor who is a member of the organization — not its owner, and
+  // holding no enrolment of their own — is admitted to a course left at
+  // `createCourse`'s own real default (`answerUnenrolled: true`), the
+  // same way `@bloombot/discord`'s `handle-mention.ts` would answer them.
+  it('admits a plain member (not the owner, no enrolment) to a default-settings course', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    expect(course.answerUnenrolled).toBe(true)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'answers-unenrolled' })
+    expect(
+      enrolments
+        .listChatAdmittedCourses(
+          organizationId,
+          { personId: person.id, accountId: instructor.id },
+          testDb.db
+        )
+        .map((c) => c.id)
+    ).toEqual([course.id])
+  })
+
+  it('refuses a plain member on a course carrying neither setting', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb, {
+      answerUnenrolled: false,
+    })
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+    expect(
+      enrolments.listChatAdmittedCourses(
+        organizationId,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual([])
+  })
+
+  // Both settings on, no enrolment — pins the precedence order
+  // `admissionForCourse` (`repos/enrolments.ts`) holds itself to:
+  // `selfEnrolFromDiscord` checked ahead of `answerUnenrolled`, so a
+  // course carrying both reports `'self-enrol'`, not `'answers-unenrolled'`
+  // — a plain kind check that a reviewer noted swapping the two lines in
+  // `admissionForCourse` would not otherwise catch (both are true, so
+  // either order "passes" a test that only checks *something* other than
+  // `'refused'` came back).
+  it('reports selfEnrolFromDiscord ahead of answerUnenrolled when a course carries both, pinning the precedence order', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb, {
+      answerUnenrolled: true,
+      selfEnrolFromDiscord: true,
+    })
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'self-enrol' })
+  })
+
+  // Must-fix 1, at the repo layer, re-aimed at the caller it actually
+  // targets: a *connected person who holds no membership at all* — the
+  // account exists (created in its own, unrelated organization, the same
+  // shape `routes/person-link.ts#/discord/begin` produces for a genuine
+  // stranger who merely names an organization id) — must not be admitted
+  // by a course's own settings, even on a course left at `createCourse`'s
+  // own real default. This is the caller the leak was actually about; a
+  // plain member (tested above) is deliberately not this caller.
+  it('refuses a connected person with no membership at all, even on a course whose answerUnenrolled default is true (must-fix 1, no-leak)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    expect(course.answerUnenrolled).toBe(true)
+    const strangerOrganizationId = randomUUID()
+    organizations.createOrganization(
+      strangerOrganizationId,
+      { name: "The stranger's own organization", isPersonal: false },
+      testDb.db
+    )
+    const stranger = accounts.createAccount(
+      strangerOrganizationId,
+      { email: 'stranger@example.edu', displayName: 'Stranger', role: 'owner' },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: stranger.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+    expect(
+      enrolments.listChatAdmittedCourses(
+        organizationId,
+        { personId: person.id, accountId: stranger.id },
+        testDb.db
+      )
+    ).toEqual([])
+  })
+
+  // Must-fix 2, at the repo layer: an ended enrolment refuses
+  // unconditionally, even for a plain member on a course carrying both
+  // settings on — the identical priority `@bloombot/discord`'s own
+  // `handle-mention.ts` gives its `enrolmentEnded` gate ahead of
+  // ENRL-13/14. A member's own membership must not readmit them through
+  // the course's settings once an instructor has ended their enrolment.
+  it('refuses an ended enrolment unconditionally, even for a member on a course carrying both settings on (ENRL-6/ENRL-9, must-fix 2)', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb, {
+      answerUnenrolled: true,
+      selfEnrolFromDiscord: true,
+    })
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+    expect(
+      enrolments.listChatAdmittedCourses(
+        organizationId,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual([])
+  })
+
+  // The order this pins: a review round found `admissionForCourse`
+  // checking `isOwner` ahead of `hasEndedEnrolment`, which let the
+  // organization's own owner keep chatting in a course after an
+  // instructor ended their enrolment there — the one mutation (of eight
+  // planted) that survived the rest of this file's own suite. ENRL-6 is
+  // an instructor's deliberate act; an owner who disagrees can reinstate
+  // it (ENRL-9), not have it silently overridden by holding the
+  // organization's own top role.
+  it("refuses the organization's own owner when their enrolment has been ended, even though owner otherwise admits unconditionally", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+    enrolments.endEnrolment(organizationId, enrolment.id, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: owner.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+    expect(
+      enrolments.listChatAdmittedCourses(
+        organizationId,
+        { personId: person.id, accountId: owner.id },
+        testDb.db
+      )
+    ).toEqual([])
+  })
+
+  it('refuses a disabled course regardless of settings or membership', () => {
+    testDb = createTestDatabase()
+    // Pinned off, so this course's own admission is only ever the disabled
+    // check itself — not entangled with the membership-based settings rule
+    // this file's own other tests exercise.
+    const { organizationId, course } = seedOrganizationWithCourse(testDb, {
+      answerUnenrolled: false,
+    })
+    const disabled = seedOrganizationWithCourse(testDb, {
+      answerUnenrolled: true,
+      enabled: false,
+      adminsRole: 'admins-disabled',
+      studentsRole: 'students-disabled',
+    })
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+    expect(
+      enrolments.resolveChatAdmission(
+        disabled.organizationId,
+        disabled.course.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+  })
+
+  // "Also fix" from a review round: the only disabled-course test above
+  // seeds it in a *second* organization and calls `resolveChatAdmission`
+  // alone — that cannot catch `listChatAdmittedCourses` disagreeing with
+  // it, since a disabled course in a different organization was never a
+  // candidate for this organization's own list in the first place. A
+  // disabled course in the *same* organization, with the caller enrolled
+  // in it, is the shape that would actually expose the list and the
+  // per-course read disagreeing.
+  it("excludes a disabled course from the list even when the caller holds an active enrolment in it, in the caller's own organization", () => {
+    testDb = createTestDatabase()
+    // Pinned off — this test is about the disabled-course exclusion, not
+    // about the membership-based settings rule this file's own other tests
+    // exercise; left at the real default, the enabled course below would
+    // also admit this member on its own settings, muddying what this test
+    // is checking.
+    const { organizationId, course: enabledCourse } =
+      seedOrganizationWithCourse(testDb, {
+        adminsRole: 'admins-enabled',
+        studentsRole: 'students-enabled',
+        answerUnenrolled: false,
+      })
+    const project = projects.getProject(
+      organizationId,
+      enabledCourse.projectId,
+      testDb.db
+    )
+    if (!project) throw new Error('setup failed: no project')
+    const disabledResult = courses.createCourse(
+      organizationId,
+      {
+        projectId: project.id,
+        title: 'Retired Course',
+        enabled: false,
+        adminsRole: 'admins-disabled-same-org',
+        studentsRole: 'students-disabled-same-org',
+        categories: [],
+      },
+      testDb.db
+    )
+    if (!disabledResult.ok) throw new Error('setup failed: unexpected conflict')
+    const disabledCourse = disabledResult.course
+
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'instructor',
+      },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: disabledCourse.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    expect(
+      enrolments
+        .listChatAdmittedCourses(
+          organizationId,
+          { personId: person.id, accountId: instructor.id },
+          testDb.db
+        )
+        .map((c) => c.id)
+    ).toEqual([])
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        disabledCourse.id,
+        { personId: person.id, accountId: instructor.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'refused' })
+  })
+
+  it('reports an active enrolment ahead of ownership', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const person = people.createPerson(organizationId, {}, testDb.db)
+    const enrolment = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('setup failed: no enrolment')
+
+    expect(
+      enrolments.resolveChatAdmission(
+        organizationId,
+        course.id,
+        { personId: person.id, accountId: owner.id },
+        testDb.db
+      )
+    ).toEqual({ kind: 'enrolled', enrolment })
   })
 })

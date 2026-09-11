@@ -15,11 +15,23 @@
  * explicit step that simulates a connect flow having already run, through
  * the real `people.connectIdentity` (LINK-3's own merged path) — never a
  * raw `connectedAt` write.
+ *
+ * `seedEnrolledCourse` takes no flag overrides — every course it creates
+ * keeps `courses.createCourse`'s own real defaults (`answerUnenrolled:
+ * true` among them), so a course's real defaults are exactly what every
+ * "connected, no membership, refused" scenario below is tested against
+ * (`routes/chat.ts`'s own predicate reads `selfEnrolFromDiscord`/
+ * `answerUnenrolled` only for a caller who also holds a membership —
+ * `enrolments.ts`'s own module comment on `ChatAdmission` has why). The
+ * two tests specifically about ENRL-2's own enrolment scoping, unrelated
+ * to membership, pin `answerUnenrolled: false` on their own second course
+ * explicitly, with a comment saying why — everywhere else stays at the
+ * real default.
  */
 
 import { randomUUID } from 'node:crypto'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 
 import type { ModelAnswer, ModelClient, ModelRequest } from '@bloombot/core'
@@ -35,7 +47,11 @@ import {
 
 import { buildTestApp, TEST_PUBLIC_APP_URL } from '../helpers/build-test-app.js'
 import { FakeModelClient } from '../helpers/fake-model-client.js'
-import { seedSignedInCaller, type SignedInCaller } from '../helpers/seed.js'
+import {
+  seedSecondCallerInOrganization,
+  seedSignedInCaller,
+  type SignedInCaller,
+} from '../helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -56,7 +72,14 @@ afterEach(() => {
 function seedEnrolledCourse(
   db: Database,
   caller: SignedInCaller,
-  options: { enrol?: boolean } = {}
+  options: {
+    enrol?: boolean
+    // Overrides `createCourse`'s own real defaults — only the tests
+    // specifically about ENRL-2's own enrolment scoping, or about one of
+    // ENRL-16's own two settings, use these, with a comment saying why.
+    answerUnenrolled?: boolean
+    selfEnrolFromDiscord?: boolean
+  } = {}
 ): { courseId: string; discordPersonId: string } {
   // A fresh project name per call — this app's own PROJ-1 constraint is
   // unique per organization, and this helper is called more than once for
@@ -81,6 +104,12 @@ function seedEnrolledCourse(
       studentsRole: `Students-${unique}`,
       promptId: 'prompt-1',
       categories: [],
+      ...(options.answerUnenrolled !== undefined
+        ? { answerUnenrolled: options.answerUnenrolled }
+        : {}),
+      ...(options.selfEnrolFromDiscord !== undefined
+        ? { selfEnrolFromDiscord: options.selfEnrolFromDiscord }
+        : {}),
     },
     db
   )
@@ -122,6 +151,22 @@ function connectCallerTo(
     db
   )
   if (!connected) throw new Error('test setup: connectIdentity refused')
+}
+
+/**
+ * ENRL-15 — a caller connected to a brand-new person with no enrolment
+ * anywhere: the shape every scenario below that is *not* about ENRL-2's
+ * own enrolled-person path needs (`connectCallerTo` above always connects
+ * onto a caller-supplied `personId`; this is the "there is nothing else
+ * to name" case).
+ */
+function connectCallerToFreshPerson(
+  db: Database,
+  caller: SignedInCaller
+): string {
+  const person = people.createPerson(caller.organizationId, {}, db)
+  connectCallerTo(db, caller, person.id)
+  return person.id
 }
 
 describe('routes/chat.ts (WEB-10)', () => {
@@ -182,11 +227,23 @@ describe('routes/chat.ts (WEB-10)', () => {
 
   it('lists only the courses this connected person is actively enrolled in — a second course this same person is not enrolled in never appears', async () => {
     testDb = createTestDatabase()
-    const caller = seedSignedInCaller(testDb.db)
+    // ENRL-15 gives this organization's own `owner` blanket admission to
+    // every one of its courses, and ENRL-16 now admits any *member* through
+    // a course's own settings (this file's own module comment) — a plain
+    // `instructor` membership here, with the second course's own
+    // `answerUnenrolled` pinned off below, so this stays a test of ENRL-2's
+    // own enrolment scoping specifically.
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
     const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
     connectCallerTo(testDb.db, caller, discordPersonId)
-    // A second course the same discord-surface person is *not* enrolled in.
-    seedEnrolledCourse(testDb.db, caller, { enrol: false })
+    // A second course the same discord-surface person is *not* enrolled
+    // in — `answerUnenrolled: false` so this caller's own `instructor`
+    // membership does not also admit them to it through ENRL-16's new
+    // rule, which would defeat what this test is about.
+    seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+      answerUnenrolled: false,
+    })
 
     const app = await buildTestApp(testDb.db)
     const response = await request(app)
@@ -280,12 +337,18 @@ describe('routes/chat.ts (WEB-10)', () => {
 
   it('asking a course this connected person is not enrolled in is refused as not found (ENRL-2)', async () => {
     testDb = createTestDatabase()
-    const caller = seedSignedInCaller(testDb.db)
+    // Not this organization's `owner`, and `answerUnenrolled` pinned off —
+    // see the identical note on the list test above; either ENRL-15's
+    // owner rule or ENRL-16's new membership rule would otherwise admit
+    // this caller regardless of enrolment, defeating what this test is
+    // about.
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
     const { courseId, discordPersonId } = seedEnrolledCourse(
       testDb.db,
       caller,
       {
         enrol: false,
+        answerUnenrolled: false,
       }
     )
     connectCallerTo(testDb.db, caller, discordPersonId)
@@ -702,5 +765,621 @@ describe('routes/chat.ts (WEB-10)', () => {
     const body = response.body as { result: { kind: string; text: string } }
     expect(body.result.kind).toBe('failed-with-apology')
     expect(body.result.text).toMatch(/sorry/i)
+  })
+
+  // ENRL-15 — the first reported problem: the account that creates a
+  // course, its own organization's `owner` (`seedSignedInCaller`'s own
+  // default role), held no enrolment in it and so could not chat in it at
+  // all. `seedEnrolledCourse` defaults to `enrol: true`, so this
+  // deliberately opts out to prove the *owner* path admits on its own.
+  it("ENRL-15: this organization's owner sees, reads and posts in a course they created but never enrolled in", async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+    })
+    connectCallerToFreshPerson(testDb.db, caller)
+    const model = new FakeModelClient('Welcome, owner.')
+
+    const app = await buildTestApp(testDb.db, { model })
+
+    const list = await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+    expect(list.status).toBe(200)
+    expect(
+      (list.body as { courses: { id: string }[] }).courses.map((c) => c.id)
+    ).toEqual([courseId])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(read.status).toBe(200)
+
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(post.status).toBe(200)
+    expect((post.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+    expect(model.calls).toHaveLength(1)
+  })
+
+  // ENRL-16, the reported bug finally closed as a side effect: an
+  // instructor is a member of the organization the course they created
+  // belongs to, so a course left at `createCourse`'s own real default
+  // (`answerUnenrolled: true`) admits them even though they hold no
+  // enrolment and are not the organization's `owner`.
+  it('ENRL-16: a plain member (not the owner, no enrolment) sees, reads and posts in a default-settings course', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+    })
+    connectCallerToFreshPerson(testDb.db, caller)
+    const model = new FakeModelClient('Sure, ask away.')
+
+    const app = await buildTestApp(testDb.db, { model })
+
+    const list = await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+    expect(
+      (list.body as { courses: { id: string }[] }).courses.map((c) => c.id)
+    ).toEqual([courseId])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(read.status).toBe(200)
+
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(post.status).toBe(200)
+    expect((post.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+  })
+
+  // The same member, refused on a course carrying neither setting —
+  // membership alone is not ambient admission; it only ever unlocks a
+  // course's own settings (this file's own module comment).
+  it('ENRL-16: the same plain member is refused on a course carrying neither setting', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+      answerUnenrolled: false,
+    })
+    connectCallerToFreshPerson(testDb.db, caller)
+
+    const app = await buildTestApp(testDb.db)
+
+    const list = await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+    expect((list.body as { courses: unknown[] }).courses).toEqual([])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(read.status).toBe(404)
+
+    const write = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(write.status).toBe(404)
+  })
+
+  // Must-fix 1 from a review round, re-aimed at the caller it actually
+  // targets: a signed-in *stranger to this organization* — their own
+  // account belongs to a different organization entirely, and the only
+  // thing they have done here is complete an ordinary connect flow
+  // (`routes/person-link.ts`'s own `/discord/begin` requires nothing more
+  // than a session and an organization id that exists — no membership, no
+  // enrolment; this is that same shape, reproduced directly against
+  // `people.connectIdentity` rather than the real OAuth round trip). Must
+  // not be admitted, even on a course left at `createCourse`'s own real
+  // default — the no-leak regression test that matters most.
+  it('a signed-in stranger with a connected person, but no membership and no enrolment, cannot list, read or post in a default-settings course (must-fix 1, no-leak)', async () => {
+    testDb = createTestDatabase()
+    const owner = seedSignedInCaller(testDb.db)
+    const { courseId } = seedEnrolledCourse(testDb.db, owner, {
+      enrol: false,
+    })
+    // A stranger to `owner`'s own organization — their own account was
+    // created elsewhere (a personal organization of their own, with no
+    // membership at all in `owner`'s), and the only thing they have done
+    // in `owner`'s organization is connect a person there.
+    const stranger = seedSignedInCaller(testDb.db, {
+      organizationName: "The stranger's own personal organization",
+    })
+    const strangerPerson = people.createPerson(
+      owner.organizationId,
+      {},
+      testDb.db
+    )
+    const connected = people.connectIdentity(
+      owner.organizationId,
+      strangerPerson.id,
+      { surface: 'web', externalId: stranger.accountId },
+      testDb.db
+    )
+    if (!connected) throw new Error('test setup: connectIdentity refused')
+
+    const app = await buildTestApp(testDb.db)
+
+    const list = await request(app)
+      .get(`/organizations/${owner.organizationId}/chat/courses`)
+      .set('Cookie', stranger.cookieHeader)
+    expect(list.status).toBe(200)
+    expect((list.body as { courses: unknown[] }).courses).toEqual([])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', stranger.cookieHeader)
+    expect(read.status).toBe(404)
+
+    const write = await request(app)
+      .post(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', stranger.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(write.status).toBe(404)
+  })
+
+  // Must-fix 2, reproduced then proven fixed: an instructor ending a
+  // student's enrolment must actually stop them, on a course left at
+  // `createCourse`'s own real, default settings — the caller's own
+  // `instructor` membership must not readmit them through the course's
+  // settings once their enrolment has been ended.
+  it('an ended enrolment refuses on every path, on a default-settings course, matching handle-mention.ts (ENRL-6/ENRL-9, must-fix 2)', async () => {
+    testDb = createTestDatabase()
+    // Not this organization's `owner` — ENRL-15's owner rule would
+    // otherwise admit this caller regardless of their own enrolment
+    // ending, defeating what this test is about.
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+
+    const app = await buildTestApp(testDb.db)
+
+    // Baseline: the connected, actively-enrolled caller can ask.
+    const before = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(before.status).toBe(200)
+
+    const enrolment = enrolments.getActiveEnrolment(
+      caller.organizationId,
+      courseId,
+      discordPersonId,
+      testDb.db
+    )
+    if (!enrolment) throw new Error('test setup: no active enrolment')
+    enrolments.endEnrolment(caller.organizationId, enrolment.id, testDb.db)
+
+    const list = await request(app)
+      .get(`/organizations/${caller.organizationId}/chat/courses`)
+      .set('Cookie', caller.cookieHeader)
+    expect((list.body as { courses: unknown[] }).courses).toEqual([])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(read.status).toBe(404)
+
+    const write = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(write.status).toBe(404)
+  })
+
+  // The order this pins, over HTTP: an instructor ends the organization
+  // owner's own enrolment in a course. `admissionForCourse`
+  // (`repos/enrolments.ts`) used to check `isOwner` ahead of
+  // `hasEndedEnrolment`, which kept the course listed and answering for
+  // the owner regardless — the one mutation (of eight planted) that
+  // survived this suite. ENRL-6 is an instructor's deliberate act; an
+  // owner can reinstate it (ENRL-9) if they disagree, not have it
+  // silently overridden by holding the organization's own top role.
+  it("ENRL-6/ENRL-9: an ended enrolment refuses the organization's own owner too, even though owner otherwise admits unconditionally", async () => {
+    testDb = createTestDatabase()
+    const owner = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, owner)
+    connectCallerTo(testDb.db, owner, discordPersonId)
+
+    const app = await buildTestApp(testDb.db)
+
+    const before = await request(app)
+      .get(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+    expect(before.status).toBe(200)
+
+    const enrolment = enrolments.getActiveEnrolment(
+      owner.organizationId,
+      courseId,
+      discordPersonId,
+      testDb.db
+    )
+    if (!enrolment) throw new Error('test setup: no active enrolment')
+    enrolments.endEnrolment(owner.organizationId, enrolment.id, testDb.db)
+
+    const list = await request(app)
+      .get(`/organizations/${owner.organizationId}/chat/courses`)
+      .set('Cookie', owner.cookieHeader)
+    expect((list.body as { courses: unknown[] }).courses).toEqual([])
+
+    const read = await request(app)
+      .get(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+    expect(read.status).toBe(404)
+
+    const write = await request(app)
+      .post(
+        `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', owner.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(write.status).toBe(404)
+  })
+
+  // The identical must-fix 2 shape, on a course carrying
+  // `selfEnrolFromDiscord` — proving the ended-enrolment refusal holds
+  // ahead of ENRL-16's own settings-based admission too, not merely ahead
+  // of `answerUnenrolled`.
+  it('an ended enrolment refuses on every path, on a course carrying selfEnrolFromDiscord', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const project = projects.createProject(
+      caller.organizationId,
+      { name: `Term ${randomUUID()}` },
+      testDb.db
+    )
+    const unique = randomUUID()
+    const created = courses.createCourse(
+      caller.organizationId,
+      {
+        projectId: project.id,
+        title: 'Self-Enrolling Course',
+        enabled: true,
+        adminsRole: `Staff-${unique}`,
+        studentsRole: `Students-${unique}`,
+        categories: [],
+        selfEnrolFromDiscord: true,
+      },
+      testDb.db
+    )
+    if (!created.ok) throw new Error('test setup: course creation refused')
+    const courseId = created.course.id
+    const discordPerson = people.resolvePersonByIdentity(
+      caller.organizationId,
+      { surface: 'discord', externalId: `discord-user-${randomUUID()}` },
+      testDb.db
+    )
+    const enrolment = enrolments.enrolViaRoster(
+      caller.organizationId,
+      { courseId, personId: discordPerson.id },
+      testDb.db
+    )
+    if (!enrolment) throw new Error('test setup: no enrolment')
+    connectCallerTo(testDb.db, caller, discordPerson.id)
+    enrolments.endEnrolment(caller.organizationId, enrolment.id, testDb.db)
+
+    const app = await buildTestApp(testDb.db)
+
+    const read = await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(read.status).toBe(404)
+
+    const write = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(write.status).toBe(404)
+  })
+
+  // ENRL-16's own judgement call, restored and pinned explicitly: a
+  // message under `selfEnrolFromDiscord`, by a member with no prior
+  // enrolment, enrols the caller on this very message — the same
+  // `source: 'self_enrolment'` `@bloombot/discord`'s `handle-mention.ts`
+  // writes for an already-connected person.
+  it('ENRL-16: a POST under selfEnrolFromDiscord by a member creates an enrolment with the same source Discord writes', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+      answerUnenrolled: false,
+      selfEnrolFromDiscord: true,
+    })
+    const personId = connectCallerToFreshPerson(testDb.db, caller)
+    const model = new FakeModelClient('Welcome aboard.')
+
+    const app = await buildTestApp(testDb.db, { model })
+
+    // Reading before ever asking anything does not enrol — a `GET` must
+    // never write.
+    await request(app)
+      .get(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+    expect(
+      enrolments.getActiveEnrolment(
+        caller.organizationId,
+        courseId,
+        personId,
+        testDb.db
+      )
+    ).toBeUndefined()
+
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+    expect(post.status).toBe(200)
+    expect((post.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+
+    const enrolment = enrolments.getActiveEnrolment(
+      caller.organizationId,
+      courseId,
+      personId,
+      testDb.db
+    )
+    expect(enrolment).toBeDefined()
+    expect(enrolment?.source).toBe('self_enrolment')
+  })
+
+  // The bug this file's own module comment describes chat.ts fixing: a
+  // review round caught the first version of this write discarding its
+  // own return value. Reproduced with `vi.spyOn` on the exported repo
+  // function, standing in for the race `routes/chat.ts`'s own comment
+  // describes (`resolveChatAdmission` and this write reading the same row
+  // set microseconds apart) — a real race is not reproducible
+  // deterministically in a single-threaded test, but the *consequence* of
+  // a decline reaching this code path is exactly what this pins.
+  it('ENRL-16: a POST under selfEnrolFromDiscord is refused, not answered, when the enrolment write declines', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+      answerUnenrolled: false,
+      selfEnrolFromDiscord: true,
+    })
+    connectCallerToFreshPerson(testDb.db, caller)
+    const model = new FakeModelClient('unused')
+
+    const spy = vi
+      .spyOn(enrolments, 'enrolViaSelfEnrolment')
+      .mockReturnValue(undefined)
+
+    const app = await buildTestApp(testDb.db, { model })
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+
+    spy.mockRestore()
+
+    expect(post.status).toBe(404)
+    expect((post.body as { error: string }).error).toBe('chat_course_not_found')
+    expect(model.calls).toHaveLength(0)
+  })
+
+  // A thrown error recording the admission (an unexpected database
+  // failure, not the ordinary decline the test above pins) is logged and
+  // does not block the reply — the identical "does not block the reply"
+  // treatment `handle-mention.ts`'s own admission write already gives its
+  // own failure.
+  it('ENRL-16: a POST under selfEnrolFromDiscord still answers when the enrolment write throws, logging rather than 500ing', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db, { role: 'instructor' })
+    const { courseId } = seedEnrolledCourse(testDb.db, caller, {
+      enrol: false,
+      answerUnenrolled: false,
+      selfEnrolFromDiscord: true,
+    })
+    connectCallerToFreshPerson(testDb.db, caller)
+    const model = new FakeModelClient('Welcome aboard.')
+
+    const spy = vi
+      .spyOn(enrolments, 'enrolViaSelfEnrolment')
+      .mockImplementation(() => {
+        throw new Error('simulated database failure')
+      })
+
+    const app = await buildTestApp(testDb.db, { model })
+    const post = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+
+    spy.mockRestore()
+
+    expect(post.status).toBe(200)
+    expect((post.body as { result: { kind: string } }).result.kind).toBe(
+      'answered'
+    )
+  })
+
+  // ENRL-15/16 — the invariant most likely to break: whatever `GET
+  // /courses` lists, the same caller's own per-course read must also
+  // succeed against. One organization, four courses in four different
+  // admission states (enrolled, owner-admitted, member-admitted through
+  // settings, refused), asked by the same non-owner member caller.
+  it('ENRL-15/16: every course the list offers is one whose messages the same caller may read', async () => {
+    testDb = createTestDatabase()
+    const owner = seedSignedInCaller(testDb.db)
+    connectCallerToFreshPerson(testDb.db, owner)
+    const member = seedSecondCallerInOrganization(
+      testDb.db,
+      owner.organizationId
+    )
+    const personId = connectCallerToFreshPerson(testDb.db, member)
+
+    const enrolledCourse = seedEnrolledCourse(testDb.db, owner, {
+      enrol: false,
+      answerUnenrolled: false,
+    })
+    const enrolled = enrolments.enrolViaRoster(
+      owner.organizationId,
+      { courseId: enrolledCourse.courseId, personId },
+      testDb.db
+    )
+    if (!enrolled) throw new Error('test setup: enrolment refused')
+
+    const memberAdmittedCourse = seedEnrolledCourse(testDb.db, owner, {
+      enrol: false,
+    })
+    const refusedCourse = seedEnrolledCourse(testDb.db, owner, {
+      enrol: false,
+      answerUnenrolled: false,
+    })
+
+    const app = await buildTestApp(testDb.db)
+
+    const memberList = await request(app)
+      .get(`/organizations/${member.organizationId}/chat/courses`)
+      .set('Cookie', member.cookieHeader)
+    const memberListedIds = (
+      memberList.body as { courses: { id: string }[] }
+    ).courses
+      .map((c) => c.id)
+      .sort()
+    expect(memberListedIds).toEqual(
+      [enrolledCourse.courseId, memberAdmittedCourse.courseId].sort()
+    )
+    expect(memberListedIds).not.toContain(refusedCourse.courseId)
+
+    for (const courseId of memberListedIds) {
+      const memberRead = await request(app)
+        .get(
+          `/organizations/${member.organizationId}/chat/courses/${courseId}/messages`
+        )
+        .set('Cookie', member.cookieHeader)
+      expect(memberRead.status).toBe(200)
+    }
+
+    const memberRefusedRead = await request(app)
+      .get(
+        `/organizations/${member.organizationId}/chat/courses/${refusedCourse.courseId}/messages`
+      )
+      .set('Cookie', member.cookieHeader)
+    expect(memberRefusedRead.status).toBe(404)
+
+    // The owner's own list: every enabled course in the organization,
+    // including the one they hold no enrolment in and no course-level
+    // membership admission for — and every one of them is also readable.
+    const ownerList = await request(app)
+      .get(`/organizations/${owner.organizationId}/chat/courses`)
+      .set('Cookie', owner.cookieHeader)
+    const ownerListedIds = (
+      ownerList.body as { courses: { id: string }[] }
+    ).courses
+      .map((c) => c.id)
+      .sort()
+    expect(ownerListedIds).toEqual(
+      [
+        enrolledCourse.courseId,
+        memberAdmittedCourse.courseId,
+        refusedCourse.courseId,
+      ].sort()
+    )
+    for (const courseId of ownerListedIds) {
+      const ownerRead = await request(app)
+        .get(
+          `/organizations/${owner.organizationId}/chat/courses/${courseId}/messages`
+        )
+        .set('Cookie', owner.cookieHeader)
+      expect(ownerRead.status).toBe(200)
+    }
+  })
+
+  // An unconnected account is refused as not-connected regardless of what
+  // a course's own settings carry — the same as it always has been (this
+  // file's own earlier "no connected person" tests, above). Not creating a
+  // person as a side effect of this check is `routes/chat.ts`'s own
+  // `resolveIdentity` discipline (its module comment).
+  it('an account with no connected person is refused as not-connected, on a default-settings course, regardless of any relationship it might otherwise have', async () => {
+    testDb = createTestDatabase()
+    const owner = seedSignedInCaller(testDb.db)
+    const { courseId } = seedEnrolledCourse(testDb.db, owner, {
+      enrol: false,
+    })
+    const member = seedSecondCallerInOrganization(
+      testDb.db,
+      owner.organizationId
+    )
+    // Deliberately no `connectCallerToFreshPerson` call here.
+
+    const app = await buildTestApp(testDb.db)
+
+    const list = await request(app)
+      .get(`/organizations/${member.organizationId}/chat/courses`)
+      .set('Cookie', member.cookieHeader)
+    expect(list.status).toBe(404)
+    expect((list.body as { error: string }).error).toBe('chat_not_connected')
+
+    const read = await request(app)
+      .get(
+        `/organizations/${member.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', member.cookieHeader)
+    expect(read.status).toBe(404)
+    expect((read.body as { error: string }).error).toBe('chat_not_connected')
   })
 })

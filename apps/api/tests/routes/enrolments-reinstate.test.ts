@@ -60,6 +60,16 @@ afterEach(() => {
  * miniature rather than imported — each of this app's own route test files
  * builds its own scenario, the same convention `chat.test.ts`'s own module
  * comment already follows).
+ *
+ * Left at `createCourse`'s own real defaults — `routes/chat.ts`'s own
+ * predicate does read `answerUnenrolled`/`selfEnrolFromDiscord` for a
+ * caller who holds a membership (`enrolments.ts`'s own module comment on
+ * `ChatAdmission` has why), which is exactly why this file's own
+ * ENRL-6/ENRL-9 scenarios still need no pinned setting: an *ended*
+ * enrolment refuses unconditionally, ahead of either setting, so the
+ * `student` below (`seedSecondCallerInOrganization`'s own `assistant`
+ * membership) is refused by that check before its membership's own
+ * course-setting admission is ever consulted.
  */
 function seedEnrolledCourse(
   db: Database,

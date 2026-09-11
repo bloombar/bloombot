@@ -11118,3 +11118,111 @@ coarseness from being a silent hole: nothing behind the toggle can now reach an 
 being re-checked. If a future migration needs `foreign_keys` to stay *on* mid-batch for its own correctness —
 unlikely, since a single batch's migrations are not typically depended on to enforce each other's writes —
 this choice would need revisiting.
+## D-101 — `apps/api`/`packages/db`: ENRL-15/16 — a course's owner, an organization's membership, and why neither is the same caller the leak was about
+
+**Problem.** Two reports about the same route, `apps/api/src/routes/chat.ts`, which authorized strictly on
+an active enrolment (`enrolments.getActiveEnrolment`) and nothing else. First: the account that creates a
+course — the organization's own owner — held no enrolment in it and could not chat in its own course,
+told to "ask your instructor" when they are the instructor. Second: a course carrying `selfEnrolFromDiscord`
+or `answerUnenrolled` (ENRL-13/ENRL-14) admits or answers an unenrolled person on Discord
+(`@bloombot/discord`'s `handle-mention.ts`), but the identical person asking the identical course through
+the web was refused, because this route never read either setting.
+
+**Round 1: read both settings for any connected person — leaked.** A first version admitted anyone with a
+connected person in the organization at all. The flaw: Discord only ever reads either setting *after*
+CORE-2's own routing has delivered a message to a specific course — reaching the right category or role,
+inside a specific Discord server. The web route had no equivalent precondition —
+`routes/person-link.ts#/discord/begin` connects a person to any organization a signed-in caller merely
+names, no membership or enrolment required — so reading either setting for "any connected person" let a
+signed-in stranger read every enabled course's title in an organization and chat in each one, on the
+strength of `answerUnenrolled`'s own real-world default (`true`) alone. Measured, not reasoned about, by a
+review round.
+
+**Round 2: remove both settings from the predicate entirely — over-corrected.** The fix for the leak dropped
+`selfEnrolFromDiscord`/`answerUnenrolled` from the predicate altogether, admitting only on an active
+enrolment or the organization's own `owner` role. That closed the leak, but it also refused an organization
+*member* — `instructor`, `assistant`, or `owner` acting as an ordinary member — a course they held no
+enrolment in but whose own settings would admit them, which is exactly what ENRL-16 asks for. A second
+review round caught this: the fix had solved the leak by deleting the feature, not by finding its actual
+boundary.
+
+**Round 3: the boundary is membership, not connectedness.** The caller the leak was actually about
+is a *connected person who holds no membership in the organization at all* — `/discord/begin`'s own "no
+membership or enrolment required" is precisely what makes that caller indistinguishable from a stranger. An
+organization *member* is a different caller: they can already enumerate every course in their own
+organization through the panel's own projects and courses screens (`packages/actions`' `courses.list`,
+gated on nothing more than the membership `routes/actions.ts` already resolves the same way), so offering
+the identical list here discloses nothing a member could not already see. `memberships.getMembership` — the
+same lookup `routes/actions.ts` uses to resolve a caller's own organization — is this predicate's read of
+that boundary, and is the web-side analogue of Discord's own routing precondition: it is what proves a
+caller already has a real, disclosed relationship to the organization's own courses, the way reaching the
+right Discord channel proves a message actually routed there.
+
+`resolveChatAdmission`/`listChatAdmittedCourses` (`packages/db/src/repos/enrolments.ts`) admit on, in
+order: an active enrolment; an *ended* enrolment then refuses unconditionally (ENRL-6/ENRL-9), checked
+explicitly (round 2's removal of the settings made this fall out for free; restoring the settings for
+members means it has to be checked on purpose again); the organization's own `owner` role, unconditionally;
+and only then does a plain membership's own course-setting admission apply — `selfEnrolFromDiscord` checked
+ahead of `answerUnenrolled`, because a course carrying both actually enrols, not merely answers, the
+identical way `@bloombot/discord`'s own ENRL-13-before-ENRL-14 ordering does. A connected person holding no
+membership at all is refused regardless of either setting, on every path — the rule that actually closes the
+leak, independent of which of the two settings a course carries. (Round 3 shipped with `owner` checked
+*ahead of* the ended check — see Round 4, below, for why that was wrong and how it was found.)
+
+**This also closes the ENRL-15 "instructor" gap as a side effect, not by widening the owner rule.** An
+instructor who creates a course is a member of the organization it belongs to (`courses.save`'s own policy
+already requires that), so a course left at `createCourse`'s own default (`answerUnenrolled: true`) now
+admits them through the membership rule — the reported bug, finally fixed, by a rule that does not reopen
+the leak. Widening ENRL-15's own owner rule to any membership would have been the wrong way to get there:
+that rule is unconditional (admits regardless of a course's own settings), and making it unconditional for
+every membership role would have been the identical mistake round 1 made, one level up. The narrower,
+already-modelled distinction stands: `owner` is unconditional; every other membership is conditional on the
+course's own settings, exactly like a connected person who holds it is.
+
+**Restoring the self-enrol write, with the bug fixed.** Round 1 called `enrolViaSelfEnrolment` from the
+`POST` handler and discarded its return value — a review round caught this: `admit`'s own `reviveEnded:
+false` can decline outright (an enrolment an instructor ended stays ended, ENRL-6), and a caller declined
+here was still being answered, the opposite of the parity this requirement exists to create. The restored
+write in round 3 checks the return value: a decline refuses the request the same way any other unenrolled
+caller is refused; a *thrown* error (an unexpected database failure, not the ordinary decline) is logged and
+does not block the reply, the identical "does not block the reply" treatment `handle-mention.ts`'s own
+admission write already gives its own failure. In the ordinary single-request path this decline is
+unreachable — `resolveChatAdmission` already excludes a currently-ended enrolment before the `'self-enrol'`
+kind is ever reported, and `admit`'s own `priorEnded` check reads the identical row set moments later — but
+a concurrent `enrolments.end` between the two is exactly the race this guards against, the same "guarded
+rather than assumed regardless" discipline this repo already holds every other write to.
+`apps/api/tests/routes/chat.test.ts` reproduces the decline path with `vi.spyOn` on the exported repo
+function rather than a genuine race, which is not reproducible deterministically in a single-threaded test —
+the spy stands in for the consequence of a decline reaching this code path, not for the race itself.
+
+**What "a course's owner" means, unchanged from round 1.** `courses.save`'s own policy
+(`packages/actions/src/actions/courses.ts`) admits *any* membership, regardless of role, to create or edit a
+course — write access to a course is an organization-wide fact, not a per-course one, and this codebase does
+not otherwise model a course's own creator at all. `owner` is the one membership role every other
+organization-wide authority in this codebase is already gated on
+(`repos/memberships.ts#grantMembershipRole`'s own caller check, `actions/transcripts.ts`,
+`actions/cost-ledger.ts`), and is why it — alone among membership roles — admits unconditionally rather than
+through a course's own settings.
+
+**Existing tests whose setup had to change again.** Round 2's fixtures pinned `answerUnenrolled: false` on
+every course to keep the leaked predicate's own tests green, which a review round flagged as its own defect
+(no test exercised a course the way the application actually creates one) — round 2 removed those pins.
+Round 3 restores a narrower version of them: only the two tests specifically about ENRL-2's own enrolment
+scoping (a caller with an unrelated second course, or asking an unenrolled one) still pin
+`answerUnenrolled: false` on that *specific* course, since a plain membership now genuinely would admit it
+otherwise and defeat what those two tests are about; every other course in `chat.test.ts`,
+`enrolments-reinstate.test.ts` and `join-links.test.ts` stays at `createCourse`'s own real defaults.
+
+**Round 4: `owner` sat ahead of the ended check, and nothing pinned the order.** Mutation testing against
+round 3's own suite planted eight mutations in `admissionForCourse`; seven were caught, but swapping the
+`isOwner`/`hasEndedEnrolment` checks left the entire suite green. Concretely: an instructor ends the
+organization owner's own enrolment in a course; on Discord, that same human (holding the course's admin
+role) gets the `enrolment-ended` refusal, but on the web the course stayed listed and kept answering,
+spending the organization's allowance regardless. `docs/SPEC.md`'s own ENRL-15 text already stated the
+correct priority — "an enrolment an instructor has ended … stops the person asking … unconditionally … a
+membership does not readmit someone an instructor has explicitly ended" — the code simply did not match its
+own SPEC. Ended now refuses ahead of `owner`: ENRL-6 is an instructor's own deliberate act, and an owner who
+disagrees can reinstate the enrolment (ENRL-9) rather than have a membership role silently override it.
+Pinned at both layers — `packages/db/tests/enrolments.test.ts` and `apps/api/tests/routes/chat.test.ts` each
+gained an owner-plus-ended scenario, so this specific order can never again silently flip without breaking
+the suite.

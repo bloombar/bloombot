@@ -13,9 +13,25 @@
  * relationship to a tenant. The person asking a course a question is not
  * necessarily any such thing; ENRL-1..6 already draws the enrolment
  * relation as a separate concept from a membership on purpose (ENRL-5: "a
- * Discord role confers none of [staff authority]"), and this router
- * authorizes against exactly that — an active enrolment
- * (`enrolments.getActiveEnrolment`) — rather than a membership row.
+ * Discord role confers none of [staff authority]"), and this router used to
+ * authorize against exactly that — an active enrolment
+ * (`enrolments.getActiveEnrolment`) — and nothing else.
+ *
+ * **ENRL-15/16 widened that to `enrolments.resolveChatAdmission`/
+ * `listChatAdmittedCourses`** — both read by every handler below (`GET
+ * /courses`, and the per-course read and write), so the list this account
+ * is offered and what its own messages are actually authorized against
+ * can never drift apart. The organization's own `owner` may chat in any
+ * of its courses; any other membership may chat in a course whose own
+ * `selfEnrolFromDiscord`/`answerUnenrolled` setting (ENRL-13/ENRL-14)
+ * admits it, mirroring what `@bloombot/discord`'s `handle-mention.ts`
+ * would do for the identical Discord message; a connected person holding
+ * no membership at all gets neither setting consulted, on any path. An
+ * *ended* enrolment refuses unconditionally, ahead of every other path,
+ * matching `handle-mention.ts`'s own `enrolmentEnded` priority
+ * (ENRL-6/ENRL-9). `enrolments.ts`'s own module comment on
+ * `ChatAdmission` has the full reasoning; `docs/DECISIONS.md` D-101 has
+ * how this shape was arrived at.
  *
  * **Person resolution — rework, D-37.** This router used to resolve the
  * caller with `people.resolvePersonByIdentity` — create on demand, PPL-3's
@@ -191,7 +207,7 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
     next()
   })
 
-  /** ENRL-1/ENRL-2: the courses this account may ask in this organization — its own active enrolments, and no others. */
+  /** ENRL-1/ENRL-2/ENRL-15/ENRL-16: the courses this account may ask in this organization — its own active enrolments; every course its organization owns, if it is the organization's own owner; and, for any other membership, a course whose own settings admit it — and no others. */
   router.get<{ organizationId: string }>('/courses', (req, res) => {
     const organizationId = req.params.organizationId
     const accountId = requireAccountId(req)
@@ -208,9 +224,9 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
       sendNotConnected(res)
       return
     }
-    const courses = enrolments.listCoursesForPerson(
+    const courses = enrolments.listChatAdmittedCourses(
       organizationId,
-      person.id,
+      { personId: person.id, accountId },
       deps.db
     )
     res.status(200).json({
@@ -221,7 +237,7 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
     })
   })
 
-  /** ENRL-2: this account's own transcript with one course — refused, exactly like any other unauthorized read (TEN-5), when it is not enrolled. */
+  /** ENRL-2/ENRL-15: this account's own transcript with one course — refused, exactly like any other unauthorized read (TEN-5), when `resolveChatAdmission` refuses it. */
   router.get<{ organizationId: string; courseId: string }>(
     '/courses/:courseId/messages',
     (req, res) => {
@@ -240,13 +256,13 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
         sendNotConnected(res)
         return
       }
-      const enrolment = enrolments.getActiveEnrolment(
+      const admission = enrolments.resolveChatAdmission(
         organizationId,
         courseId,
-        person.id,
+        { personId: person.id, accountId },
         deps.db
       )
-      if (!enrolment) {
+      if (admission.kind === 'refused') {
         res.status(404).json({ error: 'chat_course_not_found' })
         return
       }
@@ -258,7 +274,7 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
       // supposed to change anything in the first place"). Read-only —
       // `conversations.findExistingConversation` never inserts — and "no
       // conversation yet" reads as an empty transcript, not a refusal: the
-      // enrolment check above already proved `courseId`/`personId` both
+      // admission check above already proved `courseId`/`personId` both
       // belong to this organization, so `undefined` here can only mean
       // exactly that, never a foreign or absent id (this file's own
       // discipline throughout: guarded rather than assumed regardless).
@@ -291,7 +307,7 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
   // generously than the one it mirrors, not arbitrarily.
   const postMessageInputSchema = z.object({ text: z.string().min(1).max(4000) })
 
-  /** WEB-10: ask a question, through the same `answerQuestion` pipeline the Discord surface calls. */
+  /** WEB-10/ENRL-15: ask a question, through the same `answerQuestion` pipeline the Discord surface calls. */
   router.post<{ organizationId: string; courseId: string }>(
     '/courses/:courseId/messages',
     (req, res, next) => {
@@ -318,15 +334,71 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
         sendNotConnected(res)
         return
       }
-      const enrolment = enrolments.getActiveEnrolment(
+      const admission = enrolments.resolveChatAdmission(
         organizationId,
         courseId,
-        person.id,
+        { personId: person.id, accountId },
         deps.db
       )
-      if (!enrolment) {
+      if (admission.kind === 'refused') {
         res.status(404).json({ error: 'chat_course_not_found' })
         return
+      }
+
+      // ENRL-16 — a message under a course's own `selfEnrolFromDiscord`
+      // enrols the caller on this very message, exactly as
+      // `@bloombot/discord`'s `handle-mention.ts` does for an
+      // already-connected person (a web caller always is one). Unlike that
+      // file's own identical write, this one's *return value* is not
+      // discarded — a rework finding a review round caught: `admit`'s own
+      // `reviveEnded: false` (`repos/enrolments.ts`) can decline outright,
+      // and `resolveChatAdmission` having already excluded a currently-
+      // ended enrolment moments ago does not make a decline here
+      // unreachable, only unlikely — a concurrent `enrolments.end` between
+      // that check and this write is exactly the race this guards against,
+      // the same "guarded rather than assumed regardless" discipline this
+      // repo already holds every other write to. A decline refuses the
+      // request the same way any other unenrolled caller is refused,
+      // rather than answering a question on behalf of someone the write
+      // just declined to admit. A *thrown* error (an unexpected database
+      // failure, not the ordinary decline) is logged and does not block the
+      // reply — the identical "does not block the reply" treatment
+      // `handle-mention.ts`'s own admission write already gives its own
+      // failure, so a caller who really is admitted is not 500'd by a
+      // transient failure recording that fact.
+      if (admission.kind === 'self-enrol') {
+        let selfEnrolment: enrolments.Enrolment | undefined
+        let writeThrew = false
+        try {
+          selfEnrolment = enrolments.enrolViaSelfEnrolment(
+            organizationId,
+            { courseId, personId: person.id },
+            deps.db
+          )
+        } catch (error) {
+          // A *thrown* error — an unexpected database failure, not the
+          // ordinary decline `enrolViaSelfEnrolment` returns rather than
+          // throws — is logged and does not block the reply, the same
+          // "does not block the reply" treatment `handle-mention.ts`'s own
+          // admission write already gives its own failure: a caller who
+          // really is admitted (`resolveChatAdmission` already said so,
+          // moments ago) is not 500'd by a transient failure recording
+          // that fact.
+          writeThrew = true
+          deps.logger.error(
+            { err: error, organizationId, courseId, personId: person.id },
+            'routes/chat.ts: failed to record a self-enrolment admission'
+          )
+        }
+        // Unlike the thrown-and-logged case just above, an ordinary
+        // decline (`enrolViaSelfEnrolment` returning `undefined` without
+        // throwing) does refuse the request — a rework finding a review
+        // round caught: discarding this return value answered a question
+        // on behalf of someone the write just declined to admit.
+        if (!writeThrew && !selfEnrolment) {
+          res.status(404).json({ error: 'chat_course_not_found' })
+          return
+        }
       }
 
       answerQuestion(

@@ -112,6 +112,8 @@
 import type { ActionRegistry, AnyAction } from '@bloombot/actions'
 import { z, type ZodRawShape } from 'zod'
 
+import { ASK_TEXT_MAX_LENGTH } from './chat-tools.js'
+
 /** One entry in the explicit allowlist above. */
 export interface ToolSurfaceEntry {
   /** The dotted action name this tool dispatches — must be registered in `createPlatformRegistry`; `buildToolDefinitions` throws if it is not (a renamed or removed action should fail loudly, not silently drop a tool a reviewer expects to see). */
@@ -379,7 +381,7 @@ export const MCP_CHAT_TOOL_SURFACE: readonly ChatToolSurfaceEntry[] = [
       text: z
         .string()
         .min(1)
-        .max(4000)
+        .max(ASK_TEXT_MAX_LENGTH)
         .describe("The question to ask the course's assistant."),
     },
   },

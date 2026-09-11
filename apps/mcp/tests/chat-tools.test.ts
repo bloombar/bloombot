@@ -225,10 +225,17 @@ describe('chat-tools.ts (MCP-8)', () => {
         throw new Error('expected needs-course-selection')
       }
       expect(result.choices).toHaveLength(2)
-      expect(JSON.stringify(result.choices)).not.toContain('organizationId')
-      expect(JSON.stringify(result.choices)).not.toContain(
-        caller.organizationId
-      )
+      const serializedChoices = JSON.stringify(result.choices)
+      expect(serializedChoices).not.toContain('organizationId')
+      expect(serializedChoices).not.toContain(caller.organizationId)
+      // Not just the id and the field name — the organization *name* too
+      // (this slice's own brief: "never the organization"). Asserting only
+      // the two above would pass even if `CourseChoice` grew an
+      // `organizationName` field, since neither literal appears in that
+      // string.
+      expect(serializedChoices).not.toContain('organizationName')
+      expect(serializedChoices).not.toContain('Test Org')
+      expect(serializedChoices).not.toContain('Second Org')
       expect(model.calls).toHaveLength(0)
     })
 

@@ -27,6 +27,7 @@ import {
 } from './helpers/mcp-http-client.js'
 import {
   connectAccountTo,
+  connectAccountToFreshPerson,
   seedEnrolledCourse,
   seedSignedInAccount,
 } from './helpers/seed.js'
@@ -183,6 +184,16 @@ describe('MCP-8, over the transport — the membership gate distinction', () => 
         answerUnenrolled: false,
       }
     )
+    // Connected — this is genuinely the "membership but no chat admission"
+    // case, not the `unlinked` one: a rework finding caught an earlier
+    // version of this test omitting this call, which meant it was refused
+    // before `resolveChatAdmission` for this course was ever consulted at
+    // all, and would have passed identically with that call deleted.
+    connectAccountToFreshPerson(
+      testDb.db,
+      instructor.organizationId,
+      instructor.accountId
+    )
 
     const app = await buildTestApp({ db: testDb.db })
     const session = await initializeMcpSession(app, instructor.token)
@@ -193,9 +204,9 @@ describe('MCP-8, over the transport — the membership gate distinction', () => 
       method: 'tools/call',
       params: { name: 'chat.ask', arguments: { courseId, text: 'Hi?' } },
     })
-    // Refused as "needs-course-selection" — this account is not connected
-    // to a person at all, so it is refused before admission is even
-    // consulted for this course; either way, not answered.
+    // Refused as "needs-course-selection" — connected, but this course's
+    // own settings admit neither `answerUnenrolled` nor `selfEnrolFromDiscord`
+    // to a member with no enrolment, so `resolveChatAdmission` refuses it.
     expect(toolCallResult(ask).isError).toBe(true)
 
     // The identical account's own administrative access is untouched.
@@ -239,6 +250,60 @@ describe('MCP-8, over the transport — the membership gate distinction', () => 
     expect(toolCallResult(ask).content[0]?.text).toMatch(
       /bloombot_connectAssistant/
     )
+  })
+
+  // `formatAskChatResult` (server.ts) gives a refused courseId and a
+  // nonexistent one the identical *rendered* text — `chat-tools.test.ts`'s
+  // own "indistinguishable" test already proves this at the `AskChatResult`
+  // level; this is the same property one layer further out, at the text a
+  // model actually reads, where a divergence server.ts's own formatting
+  // introduced would otherwise go unnoticed.
+  it('a refused courseId and a nonexistent one render identical text to the MCP client, not just an identical result shape', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db, { role: 'instructor' })
+    const admitted = seedEnrolledCourse(testDb.db, caller.organizationId)
+    connectAccountTo(
+      testDb.db,
+      caller.organizationId,
+      caller.accountId,
+      admitted.discordPersonId
+    )
+    const refused = seedEnrolledCourse(testDb.db, caller.organizationId, {
+      enrol: false,
+      answerUnenrolled: false,
+    })
+
+    const app = await buildTestApp({ db: testDb.db })
+    const session = await initializeMcpSession(app, caller.token)
+
+    const refusedResponse = await sendMcpRequest(app, session, caller.token, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'chat.ask',
+        arguments: { courseId: refused.courseId, text: 'Hi?' },
+      },
+    })
+    const nonexistentResponse = await sendMcpRequest(
+      app,
+      session,
+      caller.token,
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'chat.ask',
+          arguments: { courseId: 'course-does-not-exist', text: 'Hi?' },
+        },
+      }
+    )
+
+    const refusedResult = toolCallResult(refusedResponse)
+    const nonexistentResult = toolCallResult(nonexistentResponse)
+    expect(refusedResult.isError).toBe(true)
+    expect(refusedResult.content).toEqual(nonexistentResult.content)
   })
 
   it('chat.listCourses and chat.ask are on the tools/list output, alongside bloombot_connectAssistant', async () => {

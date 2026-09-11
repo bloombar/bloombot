@@ -170,30 +170,44 @@ function toCourseChoice(
   }
 }
 
-function toAdmittedCourseSummary(
-  resolved: ResolvedAdmission,
-  db: Database
-): AdmittedCourseSummary {
-  const organization = organizations.getOrganizationById(
-    resolved.organizationId,
-    db
-  )
-  return {
-    ...toCourseChoice(resolved, db),
-    organizationId: resolved.organizationId,
-    organizationName: organization?.name ?? '(unknown organization)',
-    projectId: resolved.course.projectId,
-  }
-}
-
 /** `chat.listCourses` — every course this account may currently ask in, across every organization (MCP-7's account-wide link is what makes "across every organization" the point of this tool, not a scoping bug), naming the organization, the project and the course for each, and only what `listChatAdmittedCourses` actually admits (this file's own module comment: never a directory of everything). */
 export function listAskableCourses(
   accountId: string,
   db: Database
 ): AdmittedCourseSummary[] {
-  return listAdmittedCourses(accountId, db).map((resolved) =>
-    toAdmittedCourseSummary(resolved, db)
-  )
+  const resolved = listAdmittedCourses(accountId, db)
+  // One `getOrganizationById`/`getProject` per distinct organization/project,
+  // not per admitted course — a rework finding: an earlier version called
+  // `getOrganizationById` once per course, which for one organization with
+  // several admitted courses repeated the identical lookup once per course
+  // rather than once for the organization.
+  const organizationNames = new Map<string, string>()
+  const projectNames = new Map<string, string>()
+  return resolved.map((entry) => {
+    let organizationName = organizationNames.get(entry.organizationId)
+    if (organizationName === undefined) {
+      organizationName =
+        organizations.getOrganizationById(entry.organizationId, db)?.name ??
+        '(unknown organization)'
+      organizationNames.set(entry.organizationId, organizationName)
+    }
+    const projectKey = `${entry.organizationId}:${entry.course.projectId}`
+    let projectName = projectNames.get(projectKey)
+    if (projectName === undefined) {
+      projectName =
+        projects.getProject(entry.organizationId, entry.course.projectId, db)
+          ?.name ?? '(unknown project)'
+      projectNames.set(projectKey, projectName)
+    }
+    return {
+      courseId: entry.courseId,
+      courseTitle: entry.course.title,
+      projectName,
+      organizationId: entry.organizationId,
+      organizationName,
+      projectId: entry.course.projectId,
+    }
+  })
 }
 
 /** Whether `accountId` has a connected person in *any* organization — both tools refuse the identical way when this is `false` (`askChatQuestion`'s own `unlinked` kind; `server.ts#registerChatTools`' own list handler calls this directly, since `listAskableCourses` alone cannot distinguish "linked, but admitted to nothing" from "never linked at all"). */
@@ -328,8 +342,20 @@ export async function askChatQuestion(
 
   let resolved: ResolvedAdmission | undefined
   let reason: 'no-course-id' | 'not-admitted' | undefined
+  // Computed here, not unconditionally: the "omitted courseId" branch needs
+  // the full list regardless (to tell "exactly one" from "several" apart),
+  // but the "given courseId" branch resolves it directly, at the cost of one
+  // targeted `resolveChatAdmission` per reachable organization
+  // (`resolveAdmittedCourse`, below) rather than every admitted course in
+  // every one of them. Kept around (rather than discarded once `resolved`
+  // is known) so the refusal just below reuses it instead of a second,
+  // identical query — a rework finding: an earlier version called
+  // `listAdmittedCourses` again here even when this branch had just built
+  // it, doubling the cost of the single most common refusal (no id, more
+  // than one course admitted).
+  let admitted: ResolvedAdmission[] | undefined
   if (input.courseId === undefined) {
-    const admitted = listAdmittedCourses(accountId, deps.db)
+    admitted = listAdmittedCourses(accountId, deps.db)
     if (admitted.length === 1) {
       resolved = admitted[0]
     } else {
@@ -341,8 +367,8 @@ export async function askChatQuestion(
   }
 
   if (!resolved) {
-    const choices = listAdmittedCourses(accountId, deps.db).map((r) =>
-      toCourseChoice(r, deps.db)
+    const choices = (admitted ?? listAdmittedCourses(accountId, deps.db)).map(
+      (r) => toCourseChoice(r, deps.db)
     )
     return {
       kind: 'needs-course-selection',

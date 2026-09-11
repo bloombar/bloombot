@@ -666,14 +666,35 @@ function registerChatTools(
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
     async (): Promise<CallToolResult> => {
-      if (!isAccountLinked(accountId, deps.db)) {
+      try {
+        if (!isAccountLinked(accountId, deps.db)) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: NOT_LINKED_TEXT }],
+          }
+        }
+        const courses = listAskableCourses(accountId, deps.db)
+        return { content: [{ type: 'text', text: JSON.stringify(courses) }] }
+      } catch (error) {
+        // A thrown, unrecognised error — a busy SQLite file under this
+        // process's own write contention (`answerQuestion`'s own module
+        // comment on `appendMessage`'s `SQLITE_BUSY` retry — a plain read
+        // can hit the identical contention) — must never reach a client
+        // as-is: the same discipline `registerPersonLinkTool`'s own module
+        // comment holds itself to (D-44's "a raw error handed to an
+        // untrusted client"). Logged so a failed question is not invisible
+        // to this process's own logs, unlike before this fix.
+        deps.logger.error(
+          { err: error, accountId },
+          'apps/mcp: chat.listCourses failed'
+        )
         return {
           isError: true,
-          content: [{ type: 'text', text: NOT_LINKED_TEXT }],
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
         }
       }
-      const courses = listAskableCourses(accountId, deps.db)
-      return { content: [{ type: 'text', text: JSON.stringify(courses) }] }
     }
   )
 
@@ -697,14 +718,38 @@ function registerChatTools(
           ? { courseId: args['courseId'] }
           : {}),
       }
-      const result = await askChatQuestion(accountId, input, {
-        db: deps.db,
-        model: deps.model ?? UNCONFIGURED_MODEL_CLIENT,
-        logger: deps.logger,
-        ...(deps.admission ? { admission: deps.admission } : {}),
-        ...(deps.pricing ? { pricing: deps.pricing } : {}),
-      })
-      return formatAskChatResult(result)
+      try {
+        const result = await askChatQuestion(accountId, input, {
+          db: deps.db,
+          model: deps.model ?? UNCONFIGURED_MODEL_CLIENT,
+          logger: deps.logger,
+          ...(deps.admission ? { admission: deps.admission } : {}),
+          ...(deps.pricing ? { pricing: deps.pricing } : {}),
+        })
+        return formatAskChatResult(result)
+      } catch (error) {
+        // `answerQuestion` is documented to throw for a `courseId`/
+        // `personId`/conversation that does not resolve, or for a write
+        // that genuinely fails after retrying (`packages/core/src/answer.ts`'s
+        // own module comment names its two existing callers' `.catch` for
+        // exactly this) — this tool is the third caller, and needs the
+        // identical treatment `registerPersonLinkTool`'s own module comment
+        // already gives an unrecognised error: logged, and never handed to
+        // the client as-is (a "could not open a conversation for course
+        // <uuid> and person <uuid> in organization <uuid>" message would
+        // otherwise leak this platform's own internal ids to whatever MCP
+        // client is on the other end).
+        deps.logger.error(
+          { err: error, accountId },
+          'apps/mcp: chat.ask failed'
+        )
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
+        }
+      }
     }
   )
 }

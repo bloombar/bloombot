@@ -1,7 +1,8 @@
 /**
  * WEB-47 — the panel's own instructions for reaching a course's assistants
- * from an MCP client (ChatGPT, Claude): the connector URL, how to add it in
- * each client, and a plain sentence on what connecting actually grants.
+ * from an MCP client (ChatGPT, Claude): a layman's explanation of what this
+ * is and why anyone would want it, the connector URL, and how to add it in
+ * each client.
  *
  * **The same audience as Chat, not narrower.** LINK-10 (`pages/Shell.tsx`'s
  * own module comment) already draws the line this tab follows: a
@@ -11,16 +12,17 @@
  * from outside the browser, so it sits beside Chat in `effectiveTab`
  * rather than behind the organization-member group.
  *
- * **No connection state here, deliberately.** MCP-7's own account-linking
- * flow (a session confirmed from the assistant's side —
- * `apps/api/src/routes/person-link.ts`'s `/mcp/preview`/`/mcp/confirm`) is
- * being built concurrently with this slice and has not landed a read this
- * panel could call to say "connected" or "not connected" for the account
- * looking at this screen. Inventing one here would be a second
- * implementation of a flow that slice already owns — this screen renders
- * the setup instructions alone until that read exists, the same way
- * `pages/SignIn.tsx` renders "not configured" rather than guessing at a
- * Google client id it was not given.
+ * **No connection state here, deliberately.** `/mcp/preview`/`/mcp/confirm`
+ * (`apps/api/src/routes/person-link.ts`, LINK-8) already exist and are what
+ * `pages/Connect.tsx`'s own `McpConnectForm` uses to confirm a session from
+ * the assistant's side — but `PersonLinkStatusResponse` (`api/types.ts`)
+ * carries a `discord` field for LINK-7's own durable status read and
+ * nothing equivalent for MCP, and a concurrent slice (MCP-7, unmerged as of
+ * this one) is what would add it. Inventing that read here, ahead of the
+ * slice that actually owns it, would be a second implementation of the
+ * same flow — this screen renders the setup instructions alone until it
+ * exists, the same way `pages/SignIn.tsx` renders "not configured" rather
+ * than guessing at a Google client id it was not given.
  *
  * **The connector URL, never a literal domain.** `apps/mcp/src/server.ts`
  * mounts its tool endpoint at `/mcp`, on `CONFIG.MCP_PORT`, bound to
@@ -98,14 +100,25 @@ export function Mcp(props: McpProps) {
     <div className="flex flex-col gap-6" data-testid="mcp-screen">
       <h1 className="text-page-title font-semibold text-neutral-900">MCP</h1>
 
-      {/* What connecting grants, in plain language, stated once up top —
-          neither overstated (an MCP client is not a separate identity) nor
-          understated (it does act as this account, for whatever it can
-          already reach). */}
+      {/* A layman's explanation first, before any setup detail — a reader
+          who has never heard of MCP still needs to know what this tab is
+          for and why they would want it, in the same register
+          `pages/Connect.tsx`'s own "Connect an assistant" section already
+          uses ("This connects ChatGPT, Claude and other AI assistants, so
+          you can chat with Bloombot from inside those apps."). Renders
+          whether or not `connectorUrl` is configured — this is what the
+          tab is, not instructions for using it. Names "MCP" once, in
+          passing, since that is what the tab itself is called; nothing
+          here leans on the acronym to carry meaning. Never overstates what
+          connecting grants: no new access, and no promise beyond "supports
+          connectors" for a client this deployment has not named. */}
       <p className="text-sm text-neutral-600">
-        Connecting lets ChatGPT or Claude reach your courses' assistants
-        directly from that client. The client acts as your account, and it can
-        reach only the courses you can already reach — nothing more.
+        You can chat with Bloombot from an AI chat app you already use —
+        ChatGPT, Claude, or something else that supports connectors — instead of
+        coming to this site. Ask your course questions there and get the same
+        answers, grounded in the same course materials. Connect once, using the
+        MCP details below, and it reaches only the courses you already have
+        access to — nothing more.
       </p>
 
       {connectorUrl ? (

@@ -12,6 +12,13 @@ logs/*.log
 # never committed, the same reasoning as data/*.db above.
 data/attachments/
 
+# OPS-18 — scripts/deploy.sh's own pre-migration backups of data/data.db.
+# `data/*.db` above only matches files directly under data/, not this
+# subdirectory — without this line a backup of the student database would
+# be one `git add -A` away from a public commit, which is worse than no
+# backup at all.
+data/backups/
+
 # ignore any cloned repos (anchored to the repo root — packages/db/src/repos/
 # is source code, not a clone, and an unanchored pattern here would silently
 # gitignore it)

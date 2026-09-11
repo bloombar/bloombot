@@ -11226,3 +11226,49 @@ disagrees can reinstate the enrolment (ENRL-9) rather than have a membership rol
 Pinned at both layers — `packages/db/tests/enrolments.test.ts` and `apps/api/tests/routes/chat.test.ts` each
 gained an owner-plus-ended scenario, so this specific order can never again silently flip without breaking
 the suite.
+
+## D-102 — `scripts/deploy.sh`: OPS-18 — `.backup`/`VACUUM INTO` rather than `cp`, and restore stays manual
+
+**Problem.** `scripts/deploy.sh` had no backup step of its own before running the platform migration
+(OPS-8). This repository has no down migrations, and a migration in flight at the time this was written
+(`0026_clear_stingray.sql`) drops and recreates `courses`, which fourteen other tables hold foreign keys
+into — a wrong or partway-failed run of it was unrecoverable.
+
+**Choice: SQLite's own online backup (`sqlite3 "$db" ".backup '$dest'"`), never a plain file copy.** WAL
+mode (`packages/db/src/client.ts`'s own pragmas) means a `-wal` file beside the main one can hold committed
+data not yet checkpointed in, and up to four processes (API, bot, worker, MCP server) hold the file open at
+deploy time — a `cp` can copy the main file mid-write, or miss the WAL entirely, and produce a "backup" that
+looks fine and restores wrong. `.backup` (equally, `VACUUM INTO`) is SQLite's own answer to exactly this,
+already documented for the manual, scheduled backup in `docs/DEPLOY_DROPLET.md`'s §8.1 — this reuses the same
+tool rather than inventing a second way to do the same thing.
+
+**Choice: `sqlite3` missing from PATH fails the deploy outright, rather than falling back to `cp`.** A
+backup that is unsafe under concurrent writers is worse than an operator being told plainly there is no
+backup at all — a silent, wrong fallback would look like this slice's own guarantee while not providing it.
+
+**Choice: unconditional on every deploy that already has a database, not gated on "does this migration
+need it".** `scripts/deploy.sh` does not know ahead of time whether the migration it is about to run is a
+no-op — it hands `--i-know` to `packages/db/src/run-migrate.ts` and lets that script decide what, if
+anything, is pending (this file's own header, on why applying the migration itself is never gated the way a
+dependency install is). Backing up on every deploy that has a database yet is the safe default; the cost is
+one `.backup` call and a bounded amount of disk, not a maybe-wrong guess about which deploys are risky.
+
+**Choice: five backups, pruned oldest-first by filename.** `backup_<UTC timestamp>_<short sha>.db`, the
+timestamp first specifically so a lexical sort is also a chronological one — retention does not need to
+touch mtimes, which a later `cp`/rsync of the directory could otherwise disturb. Five is enough to recover
+from a migration noticed wrong a few deploys later without a small droplet's disk filling silently from a
+file this script itself keeps writing.
+
+**Choice: restore stays a deliberate, by-hand act — this slice does not add one.** `scripts/deploy.sh`
+already never attempts to undo a partway-failed migration (this file's own header, and D-40); adding an
+automatic restore here would be a much larger, much riskier change than "make sure a good backup exists",
+and a restore run unattended, against the wrong backup or over a database a process still holds open, is a
+worse failure than the one this slice fixes. The restore command is logged at backup time, and the full
+procedure — stopping every process first, clearing stale WAL/shared-memory sidecars, restoring, and
+re-running the migration in case the restored file predates a later one — is `docs/DEPLOY_DROPLET.md`'s
+existing §8.1, which this slice's own new subsection points to rather than duplicating.
+
+**Not covered.** `data/attachments/` (the course knowledge files FILE-1..5 write, referenced by id from rows
+in the database this backs up) is not backed up by this step — §8.1's own manual, scheduled backup already
+covers it separately, and folding it in here would make an unconditional per-deploy step copy a directory
+whose size has nothing to do with the risk this slice exists to cover (a migration to the *database*).

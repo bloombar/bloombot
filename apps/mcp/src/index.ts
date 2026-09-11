@@ -11,19 +11,39 @@
 import { createServer } from 'node:http'
 
 import { createPlatformRegistry } from '@bloombot/actions'
-import { CONFIG, loadDotEnv } from '@bloombot/config'
+import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
+import type { ModelClient } from '@bloombot/core'
 import {
   closeDatabase,
   openDatabase,
   runMigrations,
   type Database,
 } from '@bloombot/db'
+import { createAdmissionGate } from '@bloombot/jobs'
 import { createLogger, type Logger } from '@bloombot/logger'
+import { createOpenAiModelClient } from '@bloombot/openai'
 
 import { buildOauthProvider } from './oauth-provider.js'
 import { buildApp } from './server.js'
 import { createShutdown } from './shutdown.js'
 import { buildToolDefinitions } from './tool-surface.js'
+
+/**
+ * MCP-8 — `chat.ask` needs a `ModelClient` no matter what, but
+ * `OPENAI_API_KEY` being unset must not stop this whole process from
+ * starting: the identical reasoning `apps/api/src/index.ts`'s own
+ * `createUnconfiguredModelClient` doc comment gives, duplicated here rather
+ * than imported across the app/app boundary this repo does not cross for a
+ * five-line stand-in neither app owns. `answerQuestion`'s own
+ * `failed-with-apology` outcome (`packages/core/src/answer.ts`) is what a
+ * caller of `chat.ask` sees instead of a broken deployment.
+ */
+function createUnconfiguredModelClient(): ModelClient {
+  return {
+    ask: () =>
+      Promise.reject(new Error('apps/mcp: OPENAI_API_KEY is not configured')),
+  }
+}
 
 const PROCESS_NAME = 'mcp'
 
@@ -53,6 +73,16 @@ async function main(): Promise<void> {
   // fallback is a real, working issuer for local development, where no
   // such client exists to discover it anyway.
   const issuerUrl = new URL(CONFIG.PUBLIC_MCP_URL ?? `http://127.0.0.1:${port}`)
+  // MCP-8 — the same three answering seams `apps/api`'s and `apps/bot`'s own
+  // `main()` build for `@bloombot/core#answerQuestion`, read once here
+  // alongside every other `CONFIG` value this process reads at startup
+  // (`ServerDependencies`'s own doc comment on why `chat.ask` needs them).
+  const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
+  const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // Not `requireEnv` — `createUnconfiguredModelClient`'s own doc comment
+  // just above has why a missing key degrades `chat.ask` rather than
+  // stopping this whole process from starting.
+  const openaiApiKey = process.env['OPENAI_API_KEY']
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -86,8 +116,31 @@ async function main(): Promise<void> {
     consentUrl: `${CONFIG.PUBLIC_APP_URL}/oauth/mcp/authorize`,
     resource: new URL('/mcp', issuerUrl).toString(),
   })
+  if (!openaiApiKey) {
+    logger.warn(
+      {},
+      'apps/mcp: OPENAI_API_KEY is not set — chat.ask will apologize to every question until it is configured'
+    )
+  }
+  const model = openaiApiKey
+    ? createOpenAiModelClient({ apiKey: openaiApiKey, logger })
+    : createUnconfiguredModelClient()
+  const admission = createAdmissionGate({
+    limit: admissionLimit,
+    waitMs: admissionWaitMs,
+  })
+  const pricing = getModelPricingTable(CONFIG.MODEL_PRICING_JSON)
   const app = buildApp(
-    { db, logger, toolDefinitions, oauthProvider, issuerUrl },
+    {
+      db,
+      logger,
+      toolDefinitions,
+      oauthProvider,
+      issuerUrl,
+      model,
+      admission,
+      pricing,
+    },
     undefined,
     () => shuttingDown
   )

@@ -1573,6 +1573,20 @@ credential is single-use where the protocol calls for it and hashed at rest. Con
 course access by itself; every course-level decision still runs through the same admission
 predicate every other surface uses.
 
+#### MCP-8 A linked account can ask a course's assistant, under the same admission rules as any other surface
+
+An MCP client can list, across every organization the account can reach, only the courses the
+account is currently admitted to chat in — the same predicate that decides admission for the web
+and Discord surfaces, called directly rather than reimplemented — and ask one of them a question,
+getting the same answer, through the same metered, attributed pipeline. A course id the caller
+supplies is resolved against that same predicate before anything is answered; when none is given
+and more than one course is admitted, or the id given is not one the account may ask in, the tool
+refuses and names the admitted courses instead of guessing, by project and course, never by
+organization. Every answer names the course it came from. An account with no membership at all —
+reachable only through a connected identity and an enrolment — can use these two tools while
+remaining unable to reach anything else on the tool surface, which is administrative and stays
+gated on membership as before.
+
 ### 26. Admin Console, Transcripts & Export
 
 #### ADMIN-1 An instructor can read their course's transcripts

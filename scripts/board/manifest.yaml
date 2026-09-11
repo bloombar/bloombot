@@ -2376,6 +2376,41 @@
   phase: 12
   status: Done
   review: false
+- id: ENRL-15
+  title: A course's owner may chat in it, whether or not they ever enrolled
+  full: "The web chat surface authorizes on an active enrolment and nothing else.
+    That refuses the one person guaranteed to have a real reason to ask a course
+    a question: whoever created it. An organization's owner defines a course,
+    saves it, and then asks it what it will say to a student — and is told they
+    are not enrolled and should ask their instructor, which is nonsensical
+    advice to give the instructor. Courses have no owner of their own; write
+    access to one is a fact about the organization's own membership, not about
+    the course. This closes the gap at the same level: an organization's owner
+    membership — the role every other organization-wide authority in this
+    platform is already gated on — may…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
+- id: ENRL-16
+  title: The web surface admits whoever Discord would admit, for a caller a
+    membership already discloses to
+  full: "A course carrying selfEnrolFromDiscord or answerUnenrolled (ENRL-13,
+    ENRL-14) admits or answers an unenrolled person on Discord — but only after
+    a message has already reached that specific course by routing to it (a
+    category, or a role, inside a specific Discord server). That routing is what
+    actually keeps answerUnenrolled's own default (on, for every existing
+    course) from admitting a stranger to every course an institution owns: a
+    person still has to be in the right channel. The web chat surface has no
+    channel of its own for a message to reach — so it needs a different
+    precondition doing the identical job: proving this caller already has a
+    real, disclosed relationship to the organization's…"
+  section: §19 Enrolment & Course Access
+  family: ENRL
+  phase: 12
+  status: Backlog
+  review: false
 - id: LINK-1
   title: An unrecognized person is invited to connect, not answered
   full: The first message from an identity the platform cannot attribute to a

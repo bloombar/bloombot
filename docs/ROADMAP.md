@@ -138,7 +138,13 @@ Connecting is part of this phase, not a follow-up: LINK-1 declines anybody the p
 cannot attribute to a connected account, so the gate and the way through it have to ship
 together. A build that has the gate and no connect surface answers nobody.
 
-**In scope:** PPL-4/5, WEB-10..17, LINK-1..10, ENRL-1..6, CONV-4
+**In scope:** PPL-4/5, WEB-10..17, LINK-1..10, ENRL-1..6, ENRL-15/16, CONV-4
+
+ENRL-15/16 were found once Phase 25's own two course settings existed to disagree about: this
+router authorized strictly on an active enrolment, so a course's own creator could not chat in it
+and a course that answers or admits an unenrolled Discord message refused the identical web one.
+Claimed here rather than on Phase 25 — the settings are Phase 25's, but the surface disagreeing
+about them is this phase's own router, `routes/chat.ts`.
 
 CONV-4 was found by a reviewer chasing an end-to-end test flake to its cause rather than
 retrying it away: `answerQuestion` catches a failed `appendMessage` and continues, so under the

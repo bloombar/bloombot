@@ -1242,6 +1242,60 @@ nobody and answer everyone, which is today's behaviour and the default every exi
 or admit nobody and answer only those an instructor, a roster or a role already enrolled, which is
 what closes ENRL-6's own gap for a course that wants it closed.
 
+#### ENRL-15 A course's owner may chat in it, whether or not they ever enrolled
+
+The web chat surface authorizes on an active enrolment and nothing else. That refuses the one person
+guaranteed to have a real reason to ask a course a question: whoever created it. An organization's
+owner defines a course, saves it, and then asks it what it will say to a student — and is told they
+are not enrolled and should ask their instructor, which is nonsensical advice to give the instructor.
+
+Courses have no owner of their own; write access to one is a fact about the organization's own
+membership, not about the course. This closes the gap at the same level: an organization's `owner`
+membership — the role every other organization-wide authority in this platform is already gated on —
+may chat in any of that organization's own courses, enrolled or not, regardless of what a course's own
+settings carry. ENRL-16 closes the identical gap for every other membership role, gated on a course's
+own settings rather than granted unconditionally.
+
+An enrolment an instructor has ended (ENRL-6) still stops the person asking on the web, unconditionally
+— the same priority the Discord surface's own `enrolmentEnded` refusal already holds ahead of every
+other admission path, and ahead of ENRL-16's own settings-based admission too: a membership does not
+readmit someone an instructor has explicitly ended.
+
+#### ENRL-16 The web surface admits whoever Discord would admit, for a caller a membership already discloses to
+
+A course carrying `selfEnrolFromDiscord` or `answerUnenrolled` (ENRL-13, ENRL-14) admits or answers an
+unenrolled person on Discord — but only *after* a message has already reached that specific course by
+routing to it (a category, or a role, inside a specific Discord server). That routing is what actually
+keeps `answerUnenrolled`'s own default (on, for every existing course) from admitting a stranger to
+every course an institution owns: a person still has to be in the right channel. The web chat surface
+has no channel of its own for a message to reach — so it needs a different precondition doing the
+identical job: proving this caller already has a real, disclosed relationship to the organization's own
+courses before either setting is read for them at all.
+
+An organization's own membership — `owner`, `instructor` or `assistant` — is that precondition. A
+member can already enumerate every course in their organization through the panel's own projects and
+courses screens; offering the identical course here, on the strength of its own settings, discloses
+nothing a member could not already see. A connected person who holds no membership at all is a
+different caller entirely — connecting requires only a session and an organization id that exists, not
+a membership or an enrolment (LINK-6/7's own "a real identity may be legitimate here before its account
+ever connects") — and is exactly who this requirement must not admit on the strength of a course's own
+settings: doing so once already meant any signed-in account that merely named an organization id could
+read every enabled course's title in it and chat in each one, on the strength of `answerUnenrolled`'s
+own default alone.
+
+A person is offered a course, and its messages are readable and writable, when they hold an active
+enrolment; when they are the organization's own owner (ENRL-15); or when they hold any membership in
+the organization and the course's own `selfEnrolFromDiscord` or `answerUnenrolled` setting would have
+admitted them on Discord. `GET /courses` and the per-course read and write are authorized by the same
+decision, so a course this account is offered is never one its own next message is then refused in. A
+connected person with no membership at all is refused regardless of either setting, on every path — the
+rule that keeps this from becoming an organization-wide directory.
+
+A message under `selfEnrolFromDiscord`, from a member with no active enrolment, enrols the caller on
+that very message — the identical admission an already-connected Discord message produces
+(`enrolViaSelfEnrolment`, the same `source` either surface writes). `answerUnenrolled` only ever
+answers, on either surface; asking under it does not enrol anybody.
+
 ### 20. Background Jobs & Admission
 
 #### JOB-1 Work that outlives a request runs as a job

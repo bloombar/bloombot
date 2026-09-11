@@ -387,6 +387,25 @@ describe('the sign-in round trip for a signed-out visitor', () => {
     expect(getResponse.text).toContain('action="/oauth/mcp/redeem"')
     expect(getResponse.text).toContain('method="POST"')
     expect(getResponse.text).toContain(token)
+    // Security review, fourth round — nothing pinned the framing headers
+    // on this specific response before: reordering this route's own
+    // registration ahead of the router-level `X-Frame-Options`/CSP
+    // middleware (`buildMcpOauthConsentRouter`'s own `router.use` at the
+    // top of that function) ships the interstitial with no framing
+    // protection at all and left the suite green — an `<iframe
+    // src=".../redeem?token=T">` on an attacker page would then auto-submit
+    // the inline script's own POST, carrying `Origin: <app>`, which
+    // `originCheck` admits (this is the round-2 no-navigation shape,
+    // reborn, on a page that was never meant to be framed regardless of
+    // `SameSite`). Not exploitable today — the headers are set, and
+    // `SameSite=Lax` independently blocks the cookie write in a framed,
+    // cross-site POST — but a mutation that silently drops this response's
+    // own framing protection must fail a test, not merely rely on a
+    // different route's assertion to have covered it.
+    expect(getResponse.headers['x-frame-options']).toBe('DENY')
+    expect(getResponse.headers['content-security-policy']).toContain(
+      "frame-ancestors 'none'"
+    )
   })
 
   // Security review, third round — the actual account-takeover this closes:

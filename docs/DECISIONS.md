@@ -11392,6 +11392,37 @@ sufficient alone:
    second login, and the "belongs in the panel eventually" limit two paragraphs up still holds for
    this round trip specifically.
 
+**Security review, third round — the sign-in round trip's own `GET /redeem` was new surface,
+establishing a session with no CSRF or navigation check at all.** The version that shipped in round
+two redeemed the token and set the session cookie directly inside the `GET` handler — the **first
+endpoint in `apps/api` to establish a session from a `GET`** — and `originCheck` deliberately exempts
+`GET` (that middleware's own module comment: "a `GET` is not supposed to change anything in the first
+place"), so nothing gated it. Reproduced live: a link requested for an arbitrary address through the
+panel's own `/auth/request-link`, then a plain cross-site, non-navigating `GET` — the
+`<img src="…/redeem?token=…">` shape, `Sec-Fetch-Dest: image` — silently replaced an already-signed-in
+person's cookie with a session for whichever account the attacker's own link was issued to. An
+instructor's next upload, believing they were still in their own account, would land in the
+attacker's. **Fix: `GET /redeem` no longer touches the database or the cookie jar at all** — it
+renders a plain interstitial containing a `<form method="POST">` (auto-submitted by one inline
+`<script>`, with a manual fallback button, mirroring `pages/RedeemLink.tsx`'s own auto-POST-on-mount)
+naming the *new* `POST /redeem`, which is the one call that actually redeems and sets the cookie —
+and which the globally-mounted `originCheck` already refuses for any cross-site caller, the identical
+protection `/auth/redeem` already has. Two honest caveats the reviewer raised, so this is not
+over-fixed: the *click* variant of this already exists on `master` (a person clicking `/sign-in/<token>`
+still auto-POSTs), and the `<img>` variant depends on a browser permitting a third-party cookie write
+at all (Safari already refuses it) — what this closes is specifically the no-JS, non-navigation shape
+this slice's own new endpoint introduced, which had no protection whatsoever.
+
+**Left alone, on the record.** `POST /oauth/mcp/sign-in` will issue a link for any address to any
+same-origin destination, repointing another address's own outstanding link — the reviewer's own
+finding that the identical primitive already exists on `master` via `POST /auth/request-link`
+(arbitrary email, arbitrary same-origin destination); this slice widens *reach*, not the primitive
+itself, and the consent screen's own disclosure (round two, above) is what stops it becoming an actual
+grant. Tracked separately, not fixed here. `/register`'s own lack of a length cap on `client_name`/
+`redirect_uris` was also left alone — open dynamic client registration is what OAuth 2.1 connectors
+require, and no display spoof was constructible through it once the consent screen renders the real
+redirect host rather than trusting a client-supplied name alone.
+
 **Limits.** `PUBLIC_MCP_URL` is optional and falls back to a loopback issuer for local development
 (`env.ts`'s own doc comment) — a real deployment that wants a ChatGPT/Claude connector to discover
 this server has to set it, *and* have nginx actually proxy both `MCP_PORT` (`apps/mcp`'s own

@@ -127,6 +127,10 @@ const signInInputSchema = z.object({
   request: z.string().min(1),
 })
 
+const redeemInputSchema = z.object({
+  token: z.string().min(1),
+})
+
 /** `/oauth/mcp/authorize?request=<id>` — the one path every sign-in link and every redirect on this surface returns to. */
 function authorizePath(requestId: string): string {
   return `/oauth/mcp/authorize?request=${encodeURIComponent(requestId)}`
@@ -316,14 +320,27 @@ export function buildMcpOauthConsentRouter(
   })
 
   /**
-   * The sign-in round trip's own second half — redeems the token the
-   * emailed link carried (`redeemSignInLink`, the identical function
-   * `routes/auth.ts#/redeem` calls), sets the session cookie directly
-   * (there is no client-side script here to do it, unlike the panel's own
-   * `RedeemLink.tsx`), and redirects the browser to the token's own
-   * `destination` — landing back on `GET /authorize`, now signed in, which
-   * is what actually claims the pending authorization
-   * (`claimPendingAuthorization`, above).
+   * The sign-in round trip's own second half, part one — a plain `GET`
+   * (an emailed link can be nothing else) that establishes nothing by
+   * itself. Security review, second round: the first version of this
+   * route redeemed the token and set the session cookie directly from
+   * this `GET` handler — the **first endpoint in `apps/api` to establish a
+   * session from a `GET`**, and `originCheck` deliberately exempts `GET`
+   * (that middleware's own module comment: "a `GET` is not supposed to
+   * change anything in the first place"), so nothing gated it at all. A
+   * cross-site, no-navigation request — `<img src="…/redeem?token=…">` on
+   * a page an already-signed-in instructor merely visits — silently
+   * replaced their cookie with a session for whichever account the
+   * attacker requested a link for, reproduced live against a real
+   * database: their very next upload lands in the attacker's own
+   * organization, believing it is their own. This `GET` now only ever
+   * *reads* — it renders an interstitial that submits a `POST` to the
+   * handler below, the identical "the panel's own equivalent sits behind
+   * a `POST` and `originCheck`" shape `pages/RedeemLink.tsx` already uses
+   * (that component auto-submits on mount; this page's own inline script
+   * does the same, with a manual fallback for a browser or a security
+   * policy that blocks it) — session establishment is never reachable
+   * from a bare navigation or an embedded resource again.
    */
   router.get('/redeem', (req, res) => {
     const token =
@@ -334,7 +351,41 @@ export function buildMcpOauthConsentRouter(
         .send(htmlPage('Bloombot', '<p>Missing or invalid token.</p>'))
       return
     }
-    const result = redeemSignInLink(token, deps.db)
+    res.status(200).send(
+      htmlPage(
+        'Signing in',
+        `<h1>Signing in…</h1>
+<p>If this does not continue automatically, click below.</p>
+<form method="POST" action="/oauth/mcp/redeem" id="redeem-form">
+  <input type="hidden" name="token" value="${escapeHtml(token)}">
+  <button type="submit">Continue</button>
+</form>
+<script>document.getElementById('redeem-form').submit()</script>`
+      )
+    )
+  })
+
+  /**
+   * The sign-in round trip's own second half, part two — this is the one
+   * call that actually redeems the token (`redeemSignInLink`, the
+   * identical function `routes/auth.ts#/redeem` calls) and sets the
+   * session cookie, and it is a `POST`: the global `originCheck` (mounted
+   * ahead of every route in this app, `server.ts`'s own module comment on
+   * ordering) refuses it outright for a cross-site caller, the same
+   * protection the panel's own `/auth/redeem` already has. Redirects to
+   * the token's own `destination` — landing back on `GET /authorize`, now
+   * signed in, which is what actually claims the pending authorization
+   * (`claimPendingAuthorization`, above).
+   */
+  router.post('/redeem', (req, res) => {
+    const parsed = redeemInputSchema.safeParse(req.body)
+    if (!parsed.success) {
+      res
+        .status(400)
+        .send(htmlPage('Bloombot', '<p>Missing or invalid token.</p>'))
+      return
+    }
+    const result = redeemSignInLink(parsed.data.token, deps.db)
     if (!result) {
       res
         .status(401)

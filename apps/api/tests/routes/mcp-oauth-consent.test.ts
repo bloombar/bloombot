@@ -346,30 +346,101 @@ describe('POST /oauth/mcp/authorize/decide', () => {
 // (`/sign-in`, `/redeem`, `routes/mcp-oauth-consent.ts`'s own module
 // comment on why this lives here rather than in the panel).
 describe('the sign-in round trip for a signed-out visitor', () => {
-  it('emails a link that, once redeemed, signs the browser in and lands back on the same consent screen', async () => {
+  /** Requests a link for `email` carrying `requestId` as its own destination, and returns the token the recording mail port captured. */
+  async function requestLinkAndGetToken(
+    app: Awaited<ReturnType<typeof buildTestApp>>,
+    emailSender: RecordingEmailSender,
+    email: string,
+    requestId: string
+  ): Promise<string> {
+    const signInRequest = await request(app)
+      .post('/oauth/mcp/sign-in')
+      .type('form')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ email, request: requestId })
+    expect(signInRequest.status).toBe(200)
+    expect(signInRequest.text).toMatch(/check your email/i)
+    const emailedLink = emailSender.sent.at(-1)!.body
+    const token = emailedLink.split('token=')[1]?.trim()
+    expect(token).toBeTruthy()
+    return token!
+  }
+
+  it('emails a link whose GET page never sets a cookie — it only renders an interstitial naming a POST', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const app = await buildTestApp(testDb.db, { emailSender })
+    const begun = beginPending(testDb.db)
+    const token = await requestLinkAndGetToken(
+      app,
+      emailSender,
+      'student@example.edu',
+      begun.id
+    )
+
+    const getResponse = await request(app)
+      .get('/oauth/mcp/redeem')
+      .query({ token })
+
+    expect(getResponse.status).toBe(200)
+    expect(getResponse.headers['set-cookie']).toBeUndefined()
+    expect(getResponse.text).toContain('action="/oauth/mcp/redeem"')
+    expect(getResponse.text).toContain('method="POST"')
+    expect(getResponse.text).toContain(token)
+  })
+
+  // Security review, third round — the actual account-takeover this closes:
+  // `GET /oauth/mcp/redeem` used to redeem the token and set the session
+  // cookie directly, from a plain `GET` — the first endpoint in `apps/api`
+  // to establish a session that way, and `originCheck` deliberately exempts
+  // `GET` (that middleware's own module comment). A cross-site request with
+  // no navigation at all — the shape `<img src="…/redeem?token=…">` on a
+  // page an already-signed-in person merely visits produces — must not
+  // establish a session, regardless of `Origin` or `Sec-Fetch-Dest`; this
+  // `GET` no longer touches the database or the cookie jar at all, which is
+  // what this assertion is actually pinning.
+  it('a cross-site, non-document GET does not establish a session', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const app = await buildTestApp(testDb.db, { emailSender })
+    const begun = beginPending(testDb.db)
+    const token = await requestLinkAndGetToken(
+      app,
+      emailSender,
+      'victim@example.edu',
+      begun.id
+    )
+
+    const response = await request(app)
+      .get('/oauth/mcp/redeem')
+      .query({ token })
+      .set('Origin', 'https://evil.example')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .set('Sec-Fetch-Dest', 'image')
+
+    expect(response.status).toBe(200)
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it('POST /redeem sets the session cookie and redirects back to the same consent screen', async () => {
     testDb = createTestDatabase()
     const emailSender = new RecordingEmailSender()
     const app = await buildTestApp(testDb.db, { emailSender })
     const begun = beginPending(testDb.db, {
       clientName: 'Totally Legit Assistant',
     })
-
-    const signInRequest = await request(app)
-      .post('/oauth/mcp/sign-in')
-      .type('form')
-      .set('Origin', TEST_PUBLIC_APP_URL)
-      .send({ email: 'student@example.edu', request: begun.id })
-    expect(signInRequest.status).toBe(200)
-    expect(signInRequest.text).toMatch(/check your email/i)
-    expect(emailSender.sent).toHaveLength(1)
-
-    const emailedLink = emailSender.sent[0]!.body
-    const token = emailedLink.split('token=')[1]?.trim()
-    expect(token).toBeTruthy()
+    const token = await requestLinkAndGetToken(
+      app,
+      emailSender,
+      'student@example.edu',
+      begun.id
+    )
 
     const redeemed = await request(app)
-      .get('/oauth/mcp/redeem')
-      .query({ token })
+      .post('/oauth/mcp/redeem')
+      .type('form')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ token })
     expect(redeemed.status).toBe(302)
     const destination = redeemed.headers['location'] as string
     expect(destination).toBe(`/oauth/mcp/authorize?request=${begun.id}`)
@@ -388,13 +459,29 @@ describe('the sign-in round trip for a signed-out visitor', () => {
     expect(landedOn.text).toContain('Totally Legit Assistant')
   })
 
+  it('POST /redeem refuses a cross-origin caller — the originCheck this GET-only shape used to bypass', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .post('/oauth/mcp/redeem')
+      .type('form')
+      .set('Origin', 'https://evil.example')
+      .send({ token: 'irrelevant' })
+
+    expect(response.status).toBe(403)
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
   it('an invalid or expired sign-in token answers plainly', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
 
     const response = await request(app)
-      .get('/oauth/mcp/redeem')
-      .query({ token: 'not-a-real-token' })
+      .post('/oauth/mcp/redeem')
+      .type('form')
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ token: 'not-a-real-token' })
 
     expect(response.status).toBe(401)
     expect(response.text).toMatch(/invalid|expired/i)

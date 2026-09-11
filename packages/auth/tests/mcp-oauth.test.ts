@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { accounts, organizations, schema } from '@bloombot/db'
+import { accounts, mcpOauth, organizations, schema } from '@bloombot/db'
 import type { Database } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -184,6 +184,138 @@ describe('beginAuthorization / consentToPendingAuthorization', () => {
     expect(
       consentToPendingAuthorization(begun.id, firstAccountId, testDb.db)
     ).toBeDefined()
+  })
+})
+
+// MCP-7 security review — cheap fix: `beginAuthorization`'s own sweep of
+// all four `deleteExpired*` repo functions (this file's own module comment
+// on why they live there) had no test of its own; deleting all four calls
+// left the whole suite green. This is the regression test that would have
+// caught it, for every table `beginAuthorization` sweeps, not only pending
+// authorizations (which the "claims/consents" tests above already exercise
+// indirectly).
+describe('beginAuthorization — sweeps every expired credential table on write', () => {
+  it('an expired row in each table disappears; a live row and a row created by this same call both survive', () => {
+    testDb = createTestDatabase()
+    const client = registerOauthClient(
+      { redirectUris: ['https://client.example/callback'] },
+      testDb.db
+    )
+    const accountId = seedAccount(testDb.db)
+    const now = Date.now()
+
+    // One already-expired row in each of the three tables
+    // `beginAuthorization` does not otherwise touch (`deleteExpiredPendingAuthorizations`'s
+    // own sweep is already covered by the "claims/consents" tests above).
+    mcpOauth.createAuthorizationCode(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        codeHash: 'expired-code-hash',
+        codeChallenge: 'challenge-value',
+        redirectUri: 'https://client.example/callback',
+        accountId,
+        expiresAt: now - 1,
+      },
+      testDb.db
+    )
+    mcpOauth.createRefreshToken(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        tokenHash: 'expired-refresh-hash',
+        accountId,
+        expiresAt: now - 1,
+      },
+      testDb.db
+    )
+    mcpOauth.createAccessToken(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        tokenHash: 'expired-access-hash',
+        accountId,
+        expiresAt: now - 1,
+      },
+      testDb.db
+    )
+    // A live row in each — must survive the sweep this test triggers.
+    mcpOauth.createAuthorizationCode(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        codeHash: 'live-code-hash',
+        codeChallenge: 'challenge-value',
+        redirectUri: 'https://client.example/callback',
+        accountId,
+        expiresAt: now + 60_000,
+      },
+      testDb.db
+    )
+    mcpOauth.createRefreshToken(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        tokenHash: 'live-refresh-hash',
+        accountId,
+        expiresAt: now + 60_000,
+      },
+      testDb.db
+    )
+    mcpOauth.createAccessToken(
+      {
+        id: randomUUID(),
+        clientId: client.id,
+        tokenHash: 'live-access-hash',
+        accountId,
+        expiresAt: now + 60_000,
+      },
+      testDb.db
+    )
+
+    // The one call this file's own module comment says sweeps all four
+    // tables — a plain `/authorize`, with nothing else going on.
+    beginAuthorization(
+      {
+        clientId: client.id,
+        redirectUri: 'https://client.example/callback',
+        codeChallenge: 'a-fresh-challenge',
+      },
+      testDb.db
+    )
+
+    // Read the raw rows back, by hash, with no expiry filter of their own
+    // — every lookup function in `repos/mcp-oauth.ts` already filters out
+    // an expired row itself (the same `gt(expiresAt, now)` every one of
+    // them carries), so asserting through one of those would pass whether
+    // or not the sweep ever ran, and prove nothing about physical
+    // deletion. This is what actually pins "the row is gone", not merely
+    // "unreachable through the one path that already hides an expired
+    // row regardless".
+    const codeHashes = testDb.db
+      .select({ hash: schema.mcpOauthAuthorizationCodes.codeHash })
+      .from(schema.mcpOauthAuthorizationCodes)
+      .all()
+      .map((row) => row.hash)
+    const refreshHashes = testDb.db
+      .select({ hash: schema.mcpOauthRefreshTokens.tokenHash })
+      .from(schema.mcpOauthRefreshTokens)
+      .all()
+      .map((row) => row.hash)
+    const accessHashes = testDb.db
+      .select({ hash: schema.mcpOauthAccessTokens.tokenHash })
+      .from(schema.mcpOauthAccessTokens)
+      .all()
+      .map((row) => row.hash)
+
+    expect(codeHashes).not.toContain('expired-code-hash')
+    expect(refreshHashes).not.toContain('expired-refresh-hash')
+    expect(accessHashes).not.toContain('expired-access-hash')
+
+    // Live rows, and the row this very call just created, all still exist.
+    expect(codeHashes).toContain('live-code-hash')
+    expect(refreshHashes).toContain('live-refresh-hash')
+    expect(accessHashes).toContain('live-access-hash')
   })
 })
 

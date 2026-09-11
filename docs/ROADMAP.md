@@ -159,7 +159,7 @@ identity.
 
 ## Phase 13 — MCP server & agent access
 
-**In scope:** MCP-1..5
+**In scope:** MCP-1..5, MCP-7
 
 ## Phase 14 — Admin console, transcripts, audit & export
 

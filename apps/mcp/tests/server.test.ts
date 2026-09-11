@@ -23,6 +23,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
+import { buildOauthProvider } from '../src/oauth-provider.js'
 import {
   buildApp,
   MAX_SESSIONS_PER_ACCOUNT,
@@ -64,6 +65,16 @@ function createFakeLogger() {
 // `mcp-http-client.ts` helper for everything else) never falls back to its
 // own wildcard `app.listen(0)` — the intermittent-`404` bug D-24 already
 // named and fixed once, for `apps/api`, and this file had not yet copied.
+// MCP-7 — every test in this file builds a real provider against its own
+// throwaway database rather than a fake: `buildOauthProvider` is cheap
+// (plain hash lookups, no network), and a fake would risk drifting from
+// what `oauth-http.test.ts` actually proves the real one does. `resource`
+// is set here too (a security review found every test file omitting it
+// entirely, so the RFC 8707 check in `oauth-provider.ts#verifyAccessToken`
+// never ran anywhere) — this file's own tests exercise the legacy
+// session-bearer path, not OAuth, so it is exercised for real in
+// `oauth-http.test.ts`; setting it here is only about keeping this helper
+// truthful to what a real deployment configures.
 function buildTestApp(
   overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] },
   sessions?: Map<string, McpSession>,
@@ -72,6 +83,12 @@ function buildTestApp(
   const deps: ServerDependencies = {
     logger: createFakeLogger(),
     toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
+    oauthProvider: buildOauthProvider({
+      db: overrides.db,
+      consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+      resource: 'http://127.0.0.1:1/mcp',
+    }),
+    issuerUrl: new URL('http://127.0.0.1:1'),
     ...overrides,
   }
   return startTestServer(buildApp(deps, sessions, isShuttingDown))

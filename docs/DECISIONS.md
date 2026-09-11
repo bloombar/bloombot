@@ -11272,3 +11272,170 @@ existing §8.1, which this slice's own new subsection points to rather than dupl
 in the database this backs up) is not backed up by this step — §8.1's own manual, scheduled backup already
 covers it separately, and folding it in here would make an unconditional per-deploy step copy a directory
 whose size has nothing to do with the risk this slice exists to cover (a migration to the *database*).
+
+---
+
+## D-103 — `apps/mcp`, `apps/api`, `packages/auth`, `packages/db`: MCP-7 — this server is its own OAuth 2.1 authorization server, not a bespoke pairing flow, and not a proxy to an upstream IdP
+
+**Problem.** MCP-7's first brief specified a bespoke flow: an unauthenticated MCP session calls a
+`bloombot_connect` tool, gets a code and a URL, and a signed-in web account redeems the code on the
+panel. That design was built partway (`apps/mcp/src/server.ts`'s own session-lifecycle work, and the
+bounded-anonymous-session thinking, both carried into this rework) and then discarded before it
+shipped: ChatGPT's and Claude's own MCP connectors perform OAuth discovery automatically and expect
+an OAuth 2.1 protected resource — a client that cannot authenticate against a server this way may
+refuse to connect to it at all, regardless of how well a bespoke tool-based flow works once reached.
+Standard OAuth is not a nicer alternative; it is closer to the only shape these two specific clients
+actually exercise.
+
+**Choice: this server implements `OAuthServerProvider` itself, backed directly by this platform's
+own accounts, rather than proxying an upstream identity provider.** There is no upstream IdP this
+platform already trusts for account identity — sign-in is this platform's own (`AUTH-1..3`: email
+link or Google, both terminating in this platform's own `accounts`/`sessions` tables) — so a proxy
+provider (`@modelcontextprotocol/sdk`'s own `providers/proxyProvider.js`) would proxy to nothing real.
+Implementing the provider directly means `authorize()` reuses the *existing* sign-in and session
+cookie (`apps/api`'s own `middleware/session.ts`) rather than inventing a second login, and every
+issued token is this platform's own account, verified against this platform's own database — the
+same "an account authenticates, and carries that account's memberships and nothing more" MCP-3
+already establishes, extended to a second bearer shape rather than replaced.
+
+**Choice: the SDK's own protocol endpoints (`mcpAuthRouter`) are used verbatim; only the provider
+and persistence are this slice's own code.** `apps/mcp/src/server.ts`'s own module comment already
+holds this app to "vendor SDK confined to its own adapter" for the transport; `oauth-provider.ts` is
+the second, deliberate exception to that discipline (its own module comment), not a departure from
+it — every SDK type this file receives or returns is translated at its own boundary, and
+`@bloombot/auth`'s own `mcp-oauth.ts` (the actual business logic and persistence) imports nothing
+from the SDK at all. `redirect_uri` exact-matching, PKCE's own mandatory `code_challenge`/`S256`, and
+the local `code_verifier` check are all the SDK's own `handlers/authorize.js`/`handlers/token.js` —
+not reimplemented, and not weakened by anything this slice added on top (`exchangeAuthorizationCode`
+re-checks `redirect_uri` and `resource` a second time, at token exchange, for the same reason RFC
+6749 §4.1.3 asks for it: the SDK checks `redirect_uri` once, at `/authorize`, and does not re-verify
+it matches at `/token`).
+
+**Choice: registered clients are always public, PKCE-only — no client secret is ever issued.**
+`@modelcontextprotocol/sdk/server/auth/middleware/clientAuth.js#authenticateClient` compares a
+presented `client_secret` against `OAuthRegisteredClientsStore#getClient`'s own return value with a
+plain `!==`, which only works if that return value is the *plaintext* secret — this platform's own
+"hash every secret at rest" discipline (`secrets.ts`) cannot survive at that one call site without
+either weakening the discipline or bypassing the SDK's own client-auth middleware entirely (which
+the previous choice above already rules out — hand-rolling the protocol endpoints to work around one
+middleware call defeats the reason to use the SDK's router at all). Rather than resolve that tension,
+this slice avoids it: every registered client is public and PKCE-only
+(`schema.ts#mcpOauthClients`'s own doc comment; `oauth-provider.ts`'s `registerClient` forces
+`token_endpoint_auth_method: 'none'` regardless of what a registration request asked for), which is
+also the realistic shape for the two clients MCP-7 exists to serve — a ChatGPT or Claude connector is
+an installed, dynamically-registered client with no safe place to hold a confidential secret anyway,
+the same reasoning OAuth 2.1 itself gives for recommending PKCE over a client secret for exactly this
+class of client. If a future client genuinely needs a confidential secret, the fix is the same
+reversible-encryption shape `course-join-links.ts` already uses for ENRL-12 (a secret that must be
+shown again later, not merely hashed for lookup) — not attempted here, because no real client this
+slice serves needs it.
+
+**Choice: keep the existing session-token bearer path (MCP-3) working alongside OAuth, rather than
+migrating to OAuth-only.** `apps/mcp/src/server.ts`'s own `resolveCallerAccountId` tries an OAuth
+access token first, falling back to `authenticateBearerToken` (the original session-token check)
+when that fails. `bloombot_connectAssistant` (LINK-8) mints and redeems exactly this kind of session
+token, and this app's own existing test suite (MCP-3, MCP-4, MCP-6) is written against it — retiring
+it is a real, separate decision (updating a shipped tool, a documented flow, and every test that
+exercises it) with its own blast radius this slice does not take on incidentally. The two paths
+cannot be confused for one another: an OAuth access token is a hash lookup against
+`mcp_oauth_access_tokens`, a session token against `sessions`, and both are 256-bit CSPRNG secrets
+from the same `secrets.ts` generator, so the two hash spaces never collide.
+
+**Choice: a human-facing consent screen lives in `apps/api`, not `apps/web`.** `authorize()` cannot
+decide anything itself — `apps/mcp` has no session cookie of its own to read — so it writes a pending
+authorization to the database the whole platform already shares (`schema.ts#mcpOauthPendingAuthorizations`,
+D-2's "one filesystem") and redirects the browser to `apps/api/src/routes/mcp-oauth-consent.ts`, a
+plain server-rendered HTML route rather than a page in the React panel. This was forced by this
+slice's own concurrency constraints (another slice was mid-edit on `apps/web/src/pages/Shell.tsx` and
+its routing), not chosen for its own sake: a proper "continue where you left off after signing in"
+experience belongs in the panel, reusing `pages/SignIn.tsx` directly. Whoever next touches the
+panel's own connect/consent surface should fold this into it rather than leaving two consent
+experiences side by side.
+
+**Security review, must-fix 2 — this consent screen enabled an account takeover, and the fix
+required correcting a false claim in this very entry.** The first version shipped shown "An MCP
+assistant will act as your Bloombot account" with an `Allow`/`Deny` form and *nothing else* — no
+client name, no destination — while this document's own `schema.ts#mcpOauthPendingAuthorizations`
+comment claimed a pending authorization's `id` is "not a bearer credential ... nothing it names can
+be spent on its own." Both were true only in isolation. A review round chained them: register a
+client at the open `/register` with an attacker-controlled `redirect_uri`, drive `/authorize`
+without ever opening a browser (a script reading the `Location` header is enough to learn the
+`request` id), and mail that URL to a signed-in victim. The victim's browser genuinely was the first
+(and only) one to reach the screen, saw a placeholder that read as legitimate regardless of who was
+actually asking, and had nothing to refuse — one click leaked a 1-hour access token and a 30-day
+rotating refresh token, acting as the victim across every organization they belong to, to the
+attacker's own `redirect_uri`. `state` and PKCE's own `code_challenge` protect the *client* here;
+neither says anything to the *user*. Compounding it, this route set no `X-Frame-Options`/CSP
+`frame-ancestors`, so the (even corrected) screen could still be framed and the click harvested
+without the victim reading anything at all. The fix, all parts load-bearing together, none of them
+sufficient alone:
+ - the screen now names the client (or says plainly it has no registered name — never a reassuring
+   placeholder) and the redirect URI's own host;
+ - `mcp_oauth_pending_authorizations` gained a nullable `accountId`, bound to the first signed-in
+   account whose browser reaches the screen and checked again on every later request against that
+   same row (`claimPendingAuthorization`, `@bloombot/auth`) — the identical state-fixation defence
+   LINK-7's own `completeDiscordPersonLink` already holds itself to, "the exchange is tied to the
+   browser session that began it, so a link prepared by one person cannot be finished by another." As
+   that column's own doc comment says now, correcting the claim above: combined with a signed-in
+   account's cookie and one click, this row *is* the capability — the disclosure fix is what has to
+   stop the attack, not this column; this column's own job is a narrower, real one, closing a `request`
+   id that leaks a second time (a proxy log, browser history, a link shared twice) from being
+   completed by a second account after a first one already started deciding;
+ - `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` are now set on every response this router
+   sends;
+ - a signed-out visitor now round-trips through a real sign-in (`/oauth/mcp/sign-in`, `/oauth/mcp/redeem`)
+   rather than being told to open another tab and reload — the reviewer's own finding that this was
+   the *same* mechanism making the `request` id transferable between people in the first place, not a
+   separate defect from the disclosure one. The round trip reuses `@bloombot/auth`'s own
+   `requestSignInLink`/`redeemSignInLink` — the identical functions `routes/auth.ts`'s own
+   `/request-link`/`/redeem` already call — from a plain server-rendered form; it does not build a
+   second login, and the "belongs in the panel eventually" limit two paragraphs up still holds for
+   this round trip specifically.
+
+**Security review, third round — the sign-in round trip's own `GET /redeem` was new surface,
+establishing a session with no CSRF or navigation check at all.** The version that shipped in round
+two redeemed the token and set the session cookie directly inside the `GET` handler — the **first
+endpoint in `apps/api` to establish a session from a `GET`** — and `originCheck` deliberately exempts
+`GET` (that middleware's own module comment: "a `GET` is not supposed to change anything in the first
+place"), so nothing gated it. Reproduced live: a link requested for an arbitrary address through the
+panel's own `/auth/request-link`, then a plain cross-site, non-navigating `GET` — the
+`<img src="…/redeem?token=…">` shape, `Sec-Fetch-Dest: image` — silently replaced an already-signed-in
+person's cookie with a session for whichever account the attacker's own link was issued to. An
+instructor's next upload, believing they were still in their own account, would land in the
+attacker's. **Fix: `GET /redeem` no longer touches the database or the cookie jar at all** — it
+renders a plain interstitial containing a `<form method="POST">` (auto-submitted by one inline
+`<script>`, with a manual fallback button, mirroring `pages/RedeemLink.tsx`'s own auto-POST-on-mount)
+naming the *new* `POST /redeem`, which is the one call that actually redeems and sets the cookie —
+and which the globally-mounted `originCheck` already refuses for any cross-site caller, the identical
+protection `/auth/redeem` already has. Two honest caveats the reviewer raised, so this is not
+over-fixed: the *click* variant of this already exists on `master` (a person clicking `/sign-in/<token>`
+still auto-POSTs), and the `<img>` variant depends on a browser permitting a third-party cookie write
+at all (Safari already refuses it) — what this closes is specifically the no-JS, non-navigation shape
+this slice's own new endpoint introduced, which had no protection whatsoever.
+
+**Left alone, on the record.** `POST /oauth/mcp/sign-in` will issue a link for any address to any
+same-origin destination, repointing another address's own outstanding link — the reviewer's own
+finding that the identical primitive already exists on `master` via `POST /auth/request-link`
+(arbitrary email, arbitrary same-origin destination); this slice widens *reach*, not the primitive
+itself, and the consent screen's own disclosure (round two, above) is what stops it becoming an actual
+grant. Tracked separately, not fixed here. `/register`'s own lack of a length cap on `client_name`/
+`redirect_uris` was also left alone — open dynamic client registration is what OAuth 2.1 connectors
+require, and no display spoof was constructible through it once the consent screen renders the real
+redirect host rather than trusting a client-supplied name alone.
+
+**Limits.** `PUBLIC_MCP_URL` is optional and falls back to a loopback issuer for local development
+(`env.ts`'s own doc comment) — a real deployment that wants a ChatGPT/Claude connector to discover
+this server has to set it, *and* have nginx actually proxy both `MCP_PORT` (`apps/mcp`'s own
+`/mcp`/`/health`) *and* a `location /oauth/` block pointed at `apps/api` (the consent route above —
+the security review's own must-fix 1 found this second block missing entirely: without it, a real
+browser following `authorize()`'s own redirect gets the SPA's `index.html` fallback, a `200` with no
+matching route, and the flow can never complete). Neither block exists in `docs/DEPLOY_DROPLET.md`
+yet — that document is the maintainer's own, not edited by this slice — so both need adding there
+together when a deployment turns this on; `apps/web/vite.config.ts`'s own dev/preview proxy already
+carries the `/oauth` entry, the same allowlist nginx's own block has to mirror. Refresh tokens are
+not scoped by resource beyond a plain equality check on record, and there is no console yet for a
+person to see or revoke individual MCP connections (the brief's own "make it possible, don't build
+the UI") — both real, deliberately deferred rather than solved here. No cap or sweep exists yet on
+`mcp_oauth_clients` itself (`/register` is unauthenticated, rate-limited only by the SDK's own
+default) — left alone by the security review as acceptable for now, but worth adding if it is ever
+cheap to.

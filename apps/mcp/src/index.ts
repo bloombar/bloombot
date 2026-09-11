@@ -20,6 +20,7 @@ import {
 } from '@bloombot/db'
 import { createLogger, type Logger } from '@bloombot/logger'
 
+import { buildOauthProvider } from './oauth-provider.js'
 import { buildApp } from './server.js'
 import { createShutdown } from './shutdown.js'
 import { buildToolDefinitions } from './tool-surface.js'
@@ -45,6 +46,13 @@ async function main(): Promise<void> {
   // is what decides what is reachable, not what is registered — MCP-2's
   // own module comment).
   const attachmentStorageDir = CONFIG.ATTACHMENT_STORAGE_DIR
+  // MCP-7 — `env.ts`'s own doc comment on why this is optional and what
+  // falls back when it is not set: a real deployment that wants a client
+  // outside this machine to discover this server's OAuth metadata sets
+  // this once nginx actually proxies `MCP_PORT` publicly; the loopback
+  // fallback is a real, working issuer for local development, where no
+  // such client exists to discover it anyway.
+  const issuerUrl = new URL(CONFIG.PUBLIC_MCP_URL ?? `http://127.0.0.1:${port}`)
 
   const logger: Logger = createLogger(PROCESS_NAME, { logsDir })
   const db: Database = openDatabase(databasePath)
@@ -69,8 +77,17 @@ async function main(): Promise<void> {
   // on every request, the same `apps/bot`/`apps/worker` own pattern
   // (`gatewayConnected`/`workerHealthStatus`) for the same reason.
   let shuttingDown = false
+  // MCP-7 — `${PUBLIC_APP_URL}/oauth/mcp/authorize` (`apps/api`'s own
+  // consent route, mounted there rather than here — that route's own
+  // module comment on why the human-facing half of this flow lives in
+  // `apps/api`, not `apps/mcp`).
+  const oauthProvider = buildOauthProvider({
+    db,
+    consentUrl: `${CONFIG.PUBLIC_APP_URL}/oauth/mcp/authorize`,
+    resource: new URL('/mcp', issuerUrl).toString(),
+  })
   const app = buildApp(
-    { db, logger, toolDefinitions },
+    { db, logger, toolDefinitions, oauthProvider, issuerUrl },
     undefined,
     () => shuttingDown
   )

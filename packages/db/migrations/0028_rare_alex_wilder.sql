@@ -1,0 +1,1 @@
+ALTER TABLE `mcp_oauth_pending_authorizations` ADD `account_id` text REFERENCES accounts(id);

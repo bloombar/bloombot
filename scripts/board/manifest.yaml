@@ -2732,7 +2732,7 @@
   section: §25 MCP Server & Agent Access
   family: MCP
   phase: 13
-  status: In review
+  status: Done
   review: false
 - id: ADMIN-1
   title: An instructor can read their course's transcripts

@@ -27,6 +27,8 @@ import {
   chmodSync,
   rmSync,
   readFileSync,
+  readdirSync,
+  symlinkSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -105,6 +107,14 @@ function writeDefaultStubs({
   // path's own retry: the one that proves a stranded old name never gets a
   // duplicate started beside it, in either attempt.
   failDeleteAlways = null,
+  // OPS-18 — makes the fake `sqlite3 ... .backup` invocation fail, the
+  // scenario `backup_database` itself must abort the deploy over.
+  failBackup = false,
+  // OPS-18 — skips writing the `sqlite3` stub at all, for the "not on PATH"
+  // scenario specifically — a test using this must also supply its own PATH
+  // that excludes any real sqlite3 already installed on the host running
+  // this suite (see `pathWithoutRealSqlite3` below).
+  skipSqlite3 = false,
 } = {}) {
   const reloadMarker = join(base, 'reload-failed-once')
   const buildMarker = join(base, 'build-failed-once')
@@ -326,7 +336,70 @@ case "$1" in
 esac
 `
   )
+
+  // OPS-18 — stands in for SQLite's own online backup, invoked as
+  // `sqlite3 "$db" ".backup '$dest'"`. Parses the destination back out of the
+  // dot-command with a small sed rather than expecting `deploy.sh` to pass it
+  // any other way, since that is exactly the real command line the script
+  // itself builds.
+  if (skipSqlite3) {
+    // `binDir` is shared across every test in this file (created once in
+    // `before()`), so an earlier test's `sqlite3` stub would otherwise
+    // still be sitting there — a leftover stub is exactly as "present on
+    // PATH" as a fresh one, and would silently defeat the one test that
+    // needs it genuinely absent.
+    rmSync(join(binDir, 'sqlite3'), { force: true })
+  } else {
+    writeStub(
+      'sqlite3',
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${failBackup ? 1 : 0}" = "1" ]; then
+  echo "[fake sqlite3] simulated backup failure (test scenario)" >&2
+  exit 1
+fi
+db="$1"
+cmd="$2"
+dest="$(printf '%s' "$cmd" | sed -n "s/^\\.backup '\\(.*\\)'$/\\1/p")"
+cp "$db" "$dest"
+`
+    )
+  }
 }
+
+/**
+ * A PATH containing only symlinks to a small, explicit allow-list of real
+ * tools, each named after the tool alone — never a whole directory off the
+ * developer's or CI runner's own PATH. On macOS, `sqlite3` is bundled into
+ * `/usr/bin` alongside `sed`/`awk`/`du`/`sort`, so excluding sqlite3 by
+ * excluding a *directory* is not possible here; symlinking each tool
+ * individually is what actually leaves sqlite3 unreachable regardless of
+ * which directory it happens to ship in.
+ */
+async function pathWithoutRealSqlite3() {
+  const tools = [
+    'bash',
+    'git',
+    'node',
+    'mkdir',
+    'rm',
+    'date',
+    'du',
+    'sort',
+    'sed',
+    'sleep',
+    'cat',
+    'awk',
+  ]
+  const toolsDir = mkdtempSync(join(base, 'no-sqlite3-path-'))
+  for (const tool of tools) {
+    const { stdout } = await run('bash', ['-c', `command -v ${tool} || true`])
+    const resolved = stdout.trim()
+    if (resolved) symlinkSync(resolved, join(toolsDir, tool))
+  }
+  return toolsDir
+}
+
 /**
  * Creates a throwaway git repository with two commits, and clones a
  * checkout with `origin` pointed at it — entirely under a fresh, uniquely
@@ -688,6 +761,222 @@ test('deploy.sh: a migration failure aborts before reloading anything, and resto
     cwd: checkoutDir,
   })
   assert.equal(head.stdout.trim(), prevSha.stdout.trim())
+})
+
+/** Seeds a `.env` and a database file in `checkoutDir`, the shape a droplet
+ * that has already deployed once actually has — both are untracked, so
+ * writing them directly here (rather than through `setUpRepo`'s own git
+ * history) matches how a deploy actually finds them. */
+function seedDatabase(checkoutDir, { relativePath = './data/data.db' } = {}) {
+  writeFileSync(join(checkoutDir, '.env'), `DATABASE_PATH=${relativePath}\n`)
+  const dbPath = join(checkoutDir, relativePath)
+  mkdirSync(join(checkoutDir, 'data'), { recursive: true })
+  writeFileSync(dbPath, 'fake student data\n')
+  return dbPath
+}
+
+// OPS-18 — the whole point of the slice: a backup is taken, and it happens
+// strictly before the migration, not merely somewhere in the same run. This
+// checks the actual order the two log lines appear in stdout, not just that
+// both eventually appear.
+//
+// Rework finding — this used to match `'backing up'`, which is the
+// *caller's own* log line, emitted immediately before `backup_database` is
+// even entered — true on every path, including a no-op mutation of the
+// function's own body, so it caught nothing `backup_database` itself did.
+// `'backup complete:'` is only ever printed after `sqlite3 .backup` has
+// actually succeeded, so it pins the real work rather than the
+// announcement of it.
+test('deploy.sh: OPS-18 — backs up the database before migrating it, and the deploy still succeeds', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const dbPath = seedDatabase(checkoutDir)
+  const result = await runDeploy(checkoutDir, target)
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const backupAt = result.stdout.indexOf('backup complete:')
+  const migrateAt = result.stdout.indexOf(
+    'applying the platform database migration'
+  )
+  assert.ok(backupAt !== -1, 'no "backup complete:" log line found')
+  assert.ok(migrateAt !== -1, 'no migration log line found')
+  assert.ok(
+    backupAt < migrateAt,
+    `backup must be logged before the migration (backup at ${backupAt}, migration at ${migrateAt})`
+  )
+
+  // The backup is a genuine copy, not merely a file that exists — query it
+  // (the fake `sqlite3 .backup` stub does a real `cp`, so this is exactly
+  // as strong as it can be against a stubbed binary).
+  const backupDir = join(checkoutDir, 'data', 'backups')
+  const backups = readdirSync(backupDir).filter((f) => f.startsWith('backup_'))
+  assert.equal(backups.length, 1, `expected exactly one backup: ${backups}`)
+  assert.equal(
+    readFileSync(join(backupDir, backups[0]), 'utf8'),
+    readFileSync(dbPath, 'utf8'),
+    'the backup must be a genuine copy of the database'
+  )
+})
+
+// The failure-ordering half of the same requirement: a backup that cannot be
+// taken must abort before the migration runs, and before anything is
+// reloaded — not merely fail the deploy eventually.
+test('deploy.sh: OPS-18 — a failing backup aborts before the migration runs and before anything is reloaded', async () => {
+  writeDefaultStubs({ failBackup: true })
+  const { target, checkoutDir } = await setUpRepo()
+  seedDatabase(checkoutDir)
+  const result = await runDeploy(checkoutDir, target)
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /pre-migration database backup failed/)
+  assert.doesNotMatch(output, /applying the platform database migration/)
+  assert.doesNotMatch(output, /reloading every supervised process/)
+  const head = await run('git', ['rev-parse', 'HEAD'], { cwd: checkoutDir })
+  const prevSha = await run('git', ['rev-parse', `${target}~1`], {
+    cwd: checkoutDir,
+  })
+  assert.equal(
+    head.stdout.trim(),
+    prevSha.stdout.trim(),
+    'the checkout must be restored to the previous commit'
+  )
+})
+
+test('deploy.sh: OPS-18 — a first-ever deploy with no database yet skips the backup and still deploys', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  const result = await runDeploy(checkoutDir, target)
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /skipping the pre-migration backup/)
+})
+
+// Rework finding — `resolve_database_path` used to parse `.env` with a
+// hand-rolled `KEY=VALUE` bash `read` loop, which disagrees with
+// `process.loadEnvFile` (what `packages/config/src/dotenv.ts`'s own
+// `loadDotEnv` actually calls) on every shape below. A quoted value in
+// particular — the form a great many hand-written `.env` files use —
+// resolved to the literal string `"./data/other.db"`, including the
+// quote characters, which then failed the "does this file exist" check
+// and read as a first-ever deploy with nothing to back up: the backup was
+// silently skipped and the live database was migrated anyway. Each case
+// here seeds the database at a NON-default path (`./data/other.db`) named
+// only through the `.env` shape under test, so a parser that resolves the
+// wrong path also fails to find the file at all — the same failure mode
+// the real bug had.
+for (const [name, envLine] of [
+  ['a quoted value', 'DATABASE_PATH="./data/other.db"\n'],
+  ['an export-prefixed value', 'export DATABASE_PATH=./data/other.db\n'],
+  ['a value with trailing whitespace', 'DATABASE_PATH=./data/other.db   \n'],
+  ['a CRLF line ending', 'DATABASE_PATH=./data/other.db\r\n'],
+  ['a final line with no trailing newline', 'DATABASE_PATH=./data/other.db'],
+]) {
+  test(`deploy.sh: OPS-18 — resolves DATABASE_PATH from .env with ${name}`, async () => {
+    writeDefaultStubs()
+    const { target, checkoutDir } = await setUpRepo()
+    writeFileSync(join(checkoutDir, '.env'), envLine)
+    mkdirSync(join(checkoutDir, 'data'), { recursive: true })
+    const dbPath = join(checkoutDir, 'data', 'other.db')
+    writeFileSync(dbPath, 'fake student data\n')
+
+    const result = await runDeploy(checkoutDir, target)
+
+    assert.equal(result.code, 0, result.stdout + result.stderr)
+    assert.doesNotMatch(
+      result.stdout,
+      /skipping the pre-migration backup/,
+      'a configured database must not read as "nothing to back up yet"'
+    )
+    const backupDir = join(checkoutDir, 'data', 'backups')
+    const backups = readdirSync(backupDir).filter((f) =>
+      f.startsWith('backup_')
+    )
+    assert.equal(backups.length, 1, `expected exactly one backup: ${backups}`)
+    assert.equal(
+      readFileSync(join(backupDir, backups[0]), 'utf8'),
+      readFileSync(dbPath, 'utf8'),
+      'the backup must be a copy of the DATABASE_PATH-configured file, not the default'
+    )
+  })
+}
+
+// The second half of the fix: a configured DATABASE_PATH that does not
+// resolve to an existing file is a misconfiguration, not a fresh droplet —
+// it must abort the deploy (and never reach the migration), not be read as
+// "nothing to back up yet".
+test('deploy.sh: OPS-18 — a configured DATABASE_PATH that does not exist aborts, rather than skipping as a first deploy', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  writeFileSync(
+    join(checkoutDir, '.env'),
+    'DATABASE_PATH=./data/does-not-exist.db\n'
+  )
+
+  const result = await runDeploy(checkoutDir, target)
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /DATABASE_PATH is configured/)
+  assert.doesNotMatch(output, /skipping the pre-migration backup/)
+  assert.doesNotMatch(output, /applying the platform database migration/)
+})
+
+test('deploy.sh: OPS-18 — sqlite3 absent on PATH fails loudly rather than falling back to a plain copy', async () => {
+  writeDefaultStubs({ skipSqlite3: true })
+  const { target, checkoutDir } = await setUpRepo()
+  seedDatabase(checkoutDir)
+  const safePath = await pathWithoutRealSqlite3()
+  const result = await runDeploy(checkoutDir, target, {
+    PATH: `${binDir}:${safePath}`,
+  })
+
+  assert.notEqual(result.code, 0)
+  const output = result.stdout + result.stderr
+  assert.match(output, /sqlite3 is not on PATH/)
+  assert.doesNotMatch(output, /applying the platform database migration/)
+})
+
+test('deploy.sh: OPS-18 — retention prunes old backups to the last 5, keeping the newest', async () => {
+  writeDefaultStubs()
+  const { target, checkoutDir } = await setUpRepo()
+  seedDatabase(checkoutDir)
+  const backupDir = join(checkoutDir, 'data', 'backups')
+  mkdirSync(backupDir, { recursive: true })
+  // Seven pre-existing backups, deliberately out of chronological order in
+  // creation time — the timestamp in each name is what retention must sort
+  // by, not filesystem mtime.
+  for (let i = 0; i < 7; i++) {
+    const stamp = `2020010${i}T000000Z`
+    writeFileSync(join(backupDir, `backup_${stamp}_aaaaaaaa.db`), 'old\n')
+  }
+  const result = await runDeploy(checkoutDir, target)
+
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const remaining = readdirSync(backupDir).filter((f) =>
+    f.startsWith('backup_')
+  )
+  // The 7 pre-existing ones plus this run's own new one = 8; retention keeps
+  // 5, so 3 of the oldest pre-existing ones must be gone and the newest 2
+  // pre-existing ones plus the new one must remain.
+  assert.equal(remaining.length, 5, `expected 5 backups, found: ${remaining}`)
+  assert.ok(
+    !remaining.includes('backup_20200100T000000Z_aaaaaaaa.db'),
+    'the oldest backup should have been pruned'
+  )
+  assert.ok(
+    remaining.includes('backup_20200106T000000Z_aaaaaaaa.db'),
+    'the newest pre-existing backup should have survived'
+  )
+})
+
+// A cheap, standalone check that guards the worst outcome directly: the
+// backup directory this script writes into must be covered by .gitignore,
+// so a `git add -A` on a droplet checkout (or anywhere else) cannot commit
+// a backup of the student database to a public repository.
+test(".gitignore covers scripts/deploy.sh's own backup directory (data/backups/)", () => {
+  const gitignore = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
+  assert.match(gitignore, /^data\/backups\/$/m)
 })
 
 // Rework finding — must-fix 2: `install_deps` and `npm ci` in the forward

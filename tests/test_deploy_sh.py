@@ -1,12 +1,17 @@
 """
 Tests for scripts/deploy.sh (OPS-7).
 
-The script is exercised for real — bash, git and node all run — against a
-throwaway pair of git repositories in a temp directory. Only the two commands
-that would touch a live machine are faked: `pm2` and `pipenv` are replaced by
-stub executables on PATH that record how they were called, and the "interpreter
-pm2 uses" is a stub whose exit code the test controls. Nothing here reaches the
-network or the droplet.
+The script is exercised for real — bash and git both run for real — against
+a throwaway pair of git repositories in a temp directory. Every command that
+would touch a live machine, or a dependency this suite's own CI job does not
+install, is faked: `pm2` and `pipenv` are replaced by stub executables on
+PATH that record how they were called, the "interpreter pm2 uses" is a stub
+whose exit code the test controls, and `npm` is stubbed since this job never
+runs `npm ci` for real. `node` is mostly real (`resolve_database_path` and
+`pm2_field`'s own `-e` parsing both run against the genuine interpreter) —
+only `backup_database`'s two `better-sqlite3` calls are stubbed, and
+specifically because this job has no real `better-sqlite3` to reach: see
+`NODE_STUB`'s own comment. Nothing here reaches the network or the droplet.
 """
 
 import os
@@ -112,14 +117,50 @@ echo "$*" >> "$NPM_CALLS"
 exit "${FAKE_NPM_EXIT:-0}"
 """
 
-# `node` has two very different jobs in this script, and a stub that treats
+# `node` has three very different jobs in this script, and a stub that treats
 # them alike breaks the suite in a way that looks like a deploy failure:
 # `pm2_field` pipes `pm2 jlist` through `node -e` to parse it, so stubbing
 # every invocation makes every app's status read "unknown" and rolls back a
-# perfectly good deploy. Only the migration run (a script path) is stubbed;
-# `-e` is handed to the real interpreter.
+# perfectly good deploy, and `resolve_database_path` does the same for
+# `.env`. Both are handed to the real interpreter, unstubbed.
+#
+# OPS-19 — the third job, `backup_database`'s own two `better-sqlite3` calls
+# (the "is it resolvable at all" preflight, and the actual backup), IS
+# stubbed, deliberately: this suite's own `python` CI job never runs
+# `npm ci` (see this module's own header), so there is no real
+# `better-sqlite3` to reach here, on purpose — that would make this job
+# depend on Node dependencies it is designed not to need. What this suite
+# tests instead is `deploy.sh`'s own behaviour and ordering around the
+# backup step — invoked before the migration, a non-zero exit aborting
+# before the migration and before any reload, an unresolvable driver
+# failing loudly — the same "stub the binary, assert the ordering" shape
+# already used for `pm2`/`npm`/`git` above. The real `Database#backup()`
+# call, against a genuine database, is the JS suite's job
+# (`scripts/deploy.test.mjs`) — its own CI job DOES run `npm ci`, so a real
+# `node_modules` genuinely exists there. Distinguished from the other two
+# `node -e` calls by grepping the script text `deploy.sh` itself passes as
+# `$2`: only `backup_database`'s own calls ever mention `better-sqlite3`.
 NODE_STUB = """#!/usr/bin/env bash
 if [ "${1:-}" = "-e" ]; then
+  if [[ "$2" == *better-sqlite3* ]]; then
+    echo "$*" >> "$NODE_CALLS"
+    if [[ "$2" == *require.resolve* ]]; then
+      # backup_database's own preflight: is the driver resolvable at all.
+      [ "${FAKE_BETTER_SQLITE3_UNRESOLVABLE:-0}" = "1" ] && exit 1
+      exit 0
+    fi
+    # The actual backup call — "$3"/"$4" are the source db and the
+    # destination deploy.sh computed. FAKE_BACKUP_EXIT simulates a rejected
+    # Database#backup() Promise; on success, copy the file, which is enough
+    # for what this stub-based suite checks (ordering, error handling) —
+    # the driver's own SQLite internals are the JS suite's job, against a
+    # real database.
+    if [ "${FAKE_BACKUP_EXIT:-0}" != "0" ]; then
+      exit "${FAKE_BACKUP_EXIT}"
+    fi
+    cp "$3" "$4"
+    exit 0
+  fi
   exec "$REAL_NODE" "$@"
 fi
 echo "$*" >> "$NODE_CALLS"
@@ -204,7 +245,7 @@ OLD_NAMES_ECOSYSTEM = """module.exports = { apps: [
 """
 
 
-def _build_world(tmp_path, pre_rename_first_commit=False, link_node_modules=True):
+def _build_world(tmp_path, pre_rename_first_commit=False):
     """Builds the fake droplet `world` wraps. Factored out so a test that
     needs a differently-shaped history — OPS-16's `pre_rename_first_commit`
     — can call it directly rather than only through the fixture below.
@@ -217,15 +258,12 @@ def _build_world(tmp_path, pre_rename_first_commit=False, link_node_modules=True
     every deploy before this one while pm2 still knows a bare name) — the
     gap that made a real bug in the rollback path invisible to this suite.
 
-    `link_node_modules=False` — OPS-19's own sibling of OPS-18's "sqlite3 is
-    not on PATH" scenario: `backup_database` resolves `better-sqlite3` from
-    `$APP_DIR` (this fixture's own `app`, which `deploy.sh` `cd`s into before
-    anything else), the same way a real deploy relies on `npm ci` having
-    populated `node_modules` there first. This fixture has no `node_modules`
-    of its own — `npm ci` is stubbed out here — so a symlink to this
-    repository's real one stands in for it, matching what a droplet actually
-    has by the time `backup_database` runs. Set false only for the one test
-    that needs `better-sqlite3` genuinely unresolvable.
+    OPS-19 — no `node_modules` is created here at all, on purpose: this
+    fixture backs the Python suite, whose own CI job never runs `npm ci`
+    (this module's own header), so it must pass with no real
+    `better-sqlite3` reachable from `$APP_DIR` — the condition CI actually
+    runs under. `backup_database`'s own `better-sqlite3` calls are stubbed
+    by `NODE_STUB` instead; see its own comment for why.
     """
     upstream = tmp_path / "upstream"
     upstream.mkdir()
@@ -312,9 +350,6 @@ def _build_world(tmp_path, pre_rename_first_commit=False, link_node_modules=True
     fake_venv = tmp_path / "fakevenv"
     (fake_venv / "bin").mkdir(parents=True)
     _write_stub(fake_venv / "bin" / "python", PYTHON_STUB)
-
-    if link_node_modules:
-        (app / "node_modules").symlink_to(REPO_ROOT / "node_modules")
 
     # A minimal PATH: the stubs first, then only the directories holding the real
     # tools the script genuinely uses. Anything else on the developer's PATH is
@@ -901,40 +936,29 @@ def test_ops19_a_rejected_backup_promise_aborts_before_the_migration_and_before_
 
     OPS-19 — `Database#backup()` returns a Promise, and the one outcome that
     must never happen is an unawaited rejection reporting success. This
-    forces a genuine rejection out of the real driver (making the backup
-    directory unwritable, so SQLite itself cannot open the destination file)
-    rather than stubbing a CLI's exit code, so it also proves the rejection
-    is actually awaited and turned into a non-zero exit — a fire-and-forget
-    `backup()` call would let this deploy report success regardless."""
-    backups_dir = world.app / "data" / "backups"
-    backups_dir.mkdir(parents=True)
-    # Read-and-execute only: SQLite can still stat the directory (so
-    # `mkdir -p`/`git check-ignore` above it succeed) but cannot create the
-    # new backup file inside it, which is exactly what makes `.backup()`
-    # reject rather than merely fail to be attempted at all.
-    backups_dir.chmod(0o555)
-    try:
-        result = world.run(world.code_only)
+    suite stubs `node` rather than running a real driver (see `NODE_STUB`'s
+    own comment for why), so `FAKE_BACKUP_EXIT` stands in for a rejected
+    Promise: `deploy.sh`'s own `if ! node -e '...'` treats that non-zero
+    exit exactly the way it would treat an awaited rejection, which is what
+    this test actually pins — a fire-and-forget `backup()` call, unawaited,
+    would let this deploy report success regardless, and the JS suite
+    (`scripts/deploy.test.mjs`, against a real `better-sqlite3`) is what
+    proves the awaiting itself is real."""
+    result = world.run(world.code_only, FAKE_BACKUP_EXIT="1")
 
-        assert result.returncode != 0
-        output = result.stdout + result.stderr
-        assert "pre-migration database backup failed" in output
-        assert "applying the platform database migration" not in output
-        assert "reloading every supervised process" not in output
-        assert world.head() == world.first
-        # `pm2 jlist` alone is the half-migrated-names guard every deploy
-        # makes before touching anything (`check_pm2_names_migrated`) — a
-        # read-only call, not a reload or a start.
-        assert not any(
-            call.startswith("reload ") or call.startswith("start ")
-            for call in world.calls("pm2")
-        )
-    finally:
-        # `tmp_path`'s own cleanup needs to remove this directory's entry
-        # from its (writable) parent, which it can regardless — restoring
-        # the permission here just keeps this test's own intent from
-        # leaking into that cleanup at all.
-        backups_dir.chmod(0o755)
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "pre-migration database backup failed" in output
+    assert "applying the platform database migration" not in output
+    assert "reloading every supervised process" not in output
+    assert world.head() == world.first
+    # `pm2 jlist` alone is the half-migrated-names guard every deploy
+    # makes before touching anything (`check_pm2_names_migrated`) — a
+    # read-only call, not a reload or a start.
+    assert not any(
+        call.startswith("reload ") or call.startswith("start ")
+        for call in world.calls("pm2")
+    )
 
 
 def test_ops18_a_first_deploy_with_no_database_yet_skips_the_backup(world):
@@ -1016,18 +1040,18 @@ def test_ops18_a_configured_database_path_that_does_not_exist_aborts(world):
 
 
 def test_ops19_better_sqlite3_unresolvable_fails_loudly_rather_than_falling_back_to_a_copy(
-    tmp_path,
+    world,
 ):
     """OPS-19's own sibling of OPS-18's "sqlite3 is not on PATH" case: the
     CLI is gone from this script entirely now, so the equivalent hazard is
     `better-sqlite3` not being resolvable from `$APP_DIR` (a checkout whose
     `npm ci` never actually installed it, or ran somewhere else). Must fail
     loudly and never fall back to a plain copy — the same discipline the
-    removed check had. Needs its own world with no `node_modules` symlink —
-    see `_build_world`'s own `link_node_modules` docstring."""
-    world = _build_world(tmp_path, link_node_modules=False)
-
-    result = world.run(world.code_only)
+    removed check had. `FAKE_BETTER_SQLITE3_UNRESOLVABLE` drives `NODE_STUB`'s
+    own preflight branch — see its comment for why this suite stubs `node`
+    here rather than actually removing a real `node_modules` (there is none
+    to remove: this suite's own CI job never runs `npm ci`)."""
+    result = world.run(world.code_only, FAKE_BETTER_SQLITE3_UNRESOLVABLE="1")
 
     assert result.returncode != 0
     output = result.stdout + result.stderr

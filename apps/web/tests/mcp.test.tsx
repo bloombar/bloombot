@@ -1,9 +1,10 @@
 /**
  * `pages/Mcp.tsx` (WEB-47): the panel's own MCP setup instructions — a
- * connector URL a reader can copy, one step per client, and a plain
- * sentence on what connecting grants. No connection-state assertions here:
- * MCP-7's own read has not landed (`pages/Mcp.tsx`'s own module comment),
- * so this file only proves the instructions half.
+ * layman's explanation of what this is and why anyone would want it, a
+ * connector URL a reader can copy, and one step per client. No
+ * connection-state assertions here: MCP-7's own read has not landed
+ * (`pages/Mcp.tsx`'s own module comment), so this file only proves the
+ * explanation and instructions.
  */
 
 import { fireEvent, render, screen } from '@testing-library/react'
@@ -33,9 +34,27 @@ describe('Mcp (WEB-47)', () => {
     )
     expect(screen.getByText(/ChatGPT:/)).toBeInTheDocument()
     expect(screen.getByText(/Claude:/)).toBeInTheDocument()
-    // What connecting grants, plainly, without overstating it.
+  })
+
+  // The coordinator's own addition: a plain-language explanation for a
+  // reader who has never heard of MCP, ahead of any setup detail. Asserted
+  // by a stable phrase rather than the whole paragraph, so a copy edit does
+  // not fail this suite unnecessarily.
+  it("explains what this is and why anyone would want it, in layman's terms", () => {
+    render(<Mcp connectorUrl="https://panel.example.edu/mcp" />)
+
     expect(
-      screen.getByText(/can reach only the courses you can already reach/)
+      screen.getByText(/chat with Bloombot from an AI chat app you already use/)
+    ).toBeInTheDocument()
+  })
+
+  // The same explanation must render even when there is nothing configured
+  // to copy — it says what the tab is, not how to use it.
+  it('renders the explanation even when the connector is not configured', () => {
+    render(<Mcp connectorUrl={undefined} />)
+
+    expect(
+      screen.getByText(/chat with Bloombot from an AI chat app you already use/)
     ).toBeInTheDocument()
   })
 

@@ -138,10 +138,26 @@ describe('apps/web bundle (WEB-6)', () => {
     // running both and diffing `dist/`'s size). A superset bundle is
     // conservative for a "must not contain" check — nothing here was a
     // false negative — but the comment's claim was not true until this.
+    //
+    // `BLOOMBOT_SKIP_ROOT_ENV_FALLBACK: '1'` (WEB-47 rework, round 1) —
+    // `load-root-env.ts`'s own test-determinism hatch. This is a real `vite
+    // build`, not a mock, so without it this build would read whatever root
+    // `.env`/`.env.production`/`.env.local` files happen to exist on the
+    // machine running `npm test` — present on a developer's checkout,
+    // absent in CI — and this test would assert on a different bundle
+    // depending on who ran it. `load-root-env.test.ts` covers the hatch
+    // itself; this asserts it is actually wired up here, in the exact env
+    // object the child build process receives.
+    const buildEnv = {
+      ...process.env,
+      NODE_ENV: 'production',
+      BLOOMBOT_SKIP_ROOT_ENV_FALLBACK: '1',
+    }
+    expect(buildEnv['BLOOMBOT_SKIP_ROOT_ENV_FALLBACK']).toBe('1')
     execFileSync('npx', ['vite', 'build'], {
       cwd: APP_ROOT,
       stdio: 'pipe',
-      env: { ...process.env, NODE_ENV: 'production' },
+      env: buildEnv,
     })
   }, 60_000)
 

@@ -1560,6 +1560,19 @@ one. A `404` where a `401` was expected is exactly the shape that would hide the
 requirement is that the cause is identified and stated, that the fix follows from it, and that the
 suite gives the same answer over repeated runs.
 
+#### MCP-7 An assistant connects itself, over standard OAuth 2.1
+
+ChatGPT and Claude connectors perform OAuth discovery automatically and expect an OAuth 2.1
+protected resource, not a bespoke pairing flow — a connector that cannot authenticate against a
+server this way may never even offer to connect it. The MCP server is therefore its own
+authorization server: it publishes the standard metadata documents, issues a code through the
+existing web sign-in (never a second login), and exchanges it for an access token that authorizes
+exactly like MCP-3's own bearer session token does — an account and nothing more. PKCE is
+mandatory, a redirect URI is matched exactly against the one a client registered, and every
+credential is single-use where the protocol calls for it and hashed at rest. Connecting grants no
+course access by itself; every course-level decision still runs through the same admission
+predicate every other surface uses.
+
 ### 26. Admin Console, Transcripts & Export
 
 #### ADMIN-1 An instructor can read their course's transcripts

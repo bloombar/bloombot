@@ -1600,3 +1600,189 @@ export const rosterChannelAssignments = sqliteTable(
     ),
   ]
 )
+
+// MCP-7 — this server is its own OAuth 2.1 authorization server (the
+// rewritten brief for this requirement id; an earlier, bespoke
+// session-plus-connect-tool design was discarded before any of this shipped
+// — see `docs/DECISIONS.md`'s MCP-7 entry). Five tables, one per stage of
+// the flow, deliberately not one wide table: a client is long-lived and
+// reused across many authorizations; a pending authorization exists only
+// between `authorize()`'s own redirect and a person's consent; a code is
+// spent once, at `/token`; an access token is short-lived; a refresh token
+// rotates. Collapsing these into fewer tables would make every one of those
+// different lifetimes a nullable-column special case on top of the others.
+//
+// None of these five carry `organizationId` — MCP-3's own "a connection
+// authenticates as an account and carries that account's memberships and
+// nothing more" holds here exactly as it does for `person_link_challenges`
+// (that table's own module comment): an OAuth token proves an *account*,
+// never one organization, so every row here is scoped to `accountId` (or,
+// for a client, to no account at all — a client is registered once and
+// reused by whichever account later authorizes it). `tests/tenant-scoping-convention.test.ts`'s
+// own allowlist for `repos/mcp-oauth.ts` names every exported function here
+// for the identical reason `person-link-challenges.ts`'s own entry does.
+
+/**
+ * A dynamically registered OAuth client (RFC 7591) — one row per connector
+ * (a ChatGPT or Claude MCP install, in practice). **No client secret is
+ * stored, ever, because none is ever issued**: `repos/mcp-oauth.ts#createClient`
+ * always persists `tokenEndpointAuthMethod: 'none'`, regardless of what a
+ * registration request asks for — a deliberate scope decision, not an
+ * oversight (`docs/DECISIONS.md`), because the SDK's own `authenticateClient`
+ * middleware (`@modelcontextprotocol/sdk/server/auth/middleware/clientAuth.js`)
+ * compares a presented `client_secret` against `OAuthRegisteredClientsStore#getClient`'s
+ * own return value with a plain `!==`, which only works at all if that
+ * return value is the *plaintext* secret — the "hash every secret at rest"
+ * discipline this file holds every other secret in this migration to would
+ * have to be undone at the one call site that actually checks it. A public,
+ * PKCE-only client (OAuth 2.1's own recommended shape for exactly this kind
+ * of installed connector, which cannot hold a confidential secret safely
+ * regardless of what a database does) sidesteps the conflict entirely rather
+ * than resolving it: there is no secret, so there is nothing to leak, hash,
+ * or compare in the clear.
+ */
+export const mcpOauthClients = sqliteTable('mcp_oauth_clients', {
+  id: text('id').primaryKey(),
+  // RFC 7591's own array — this file's own module comment on why a JSON
+  // column, not a child table: a client's own redirect URIs are read and
+  // written together, in full, every time (registration, and every
+  // `authorize()`/`exchangeAuthorizationCode()` exact-match check), never
+  // queried by one URI alone.
+  redirectUris: text('redirect_uris').notNull(),
+  clientName: text('client_name'),
+  scope: text('scope'),
+  grantTypes: text('grant_types'),
+  // Always `'none'` — this table's own module comment.
+  tokenEndpointAuthMethod: text('token_endpoint_auth_method')
+    .notNull()
+    .default('none'),
+  createdAt: integer('created_at').notNull(),
+})
+
+/**
+ * The gap between `authorize()`'s own redirect and a person's consent
+ * (LINK-6's own "a visit is not consent," applied to OAuth rather than
+ * LINK-3's connect flow): `apps/mcp`'s `authorize()` writes one of these and
+ * redirects the browser to `apps/api`'s consent route rather than deciding
+ * anything itself — the two processes share one database (D-2, PLAT-4), so
+ * a row here is how the request's own client, redirect URI, PKCE challenge,
+ * `state` and scope survive that redirect with no other channel between the
+ * two processes at all. Never a secret: this id is a correlator carried in a
+ * URL, not a bearer credential — nothing it names can be spent on its own
+ * (`docs/DECISIONS.md`'s MCP-7 entry has the fuller reasoning for why this
+ * one row is not hashed the way every credential below it is).
+ */
+export const mcpOauthPendingAuthorizations = sqliteTable(
+  'mcp_oauth_pending_authorizations',
+  {
+    id: text('id').primaryKey(),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => mcpOauthClients.id),
+    redirectUri: text('redirect_uri').notNull(),
+    codeChallenge: text('code_challenge').notNull(),
+    state: text('state'),
+    scope: text('scope'),
+    resource: text('resource'),
+    expiresAt: integer('expires_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('mcp_oauth_pending_authorizations_client_id_idx').on(table.clientId),
+  ]
+)
+
+/**
+ * An issued authorization code (RFC 6749 §4.1) — single-use, short-lived,
+ * hashed at rest (`codeHash`, the same "returned once, stored only as a
+ * hash" discipline `person_link_challenges` already uses), bound to the
+ * client and the redirect URI it was issued for (checked again at
+ * `/token`, not only at `/authorize`), and to the PKCE challenge
+ * `challengeForAuthorizationCode` hands back for the SDK's own local
+ * verification. `accountId` is set once — when a signed-in person actually
+ * consents, in `apps/api`'s own consent route, never before: nothing about
+ * a pending authorization names an account, the same "an identity is never
+ * bound on a visit alone" LINK-3 already holds this platform to.
+ */
+export const mcpOauthAuthorizationCodes = sqliteTable(
+  'mcp_oauth_authorization_codes',
+  {
+    id: text('id').primaryKey(),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => mcpOauthClients.id),
+    codeHash: text('code_hash').notNull().unique(),
+    codeChallenge: text('code_challenge').notNull(),
+    redirectUri: text('redirect_uri').notNull(),
+    scope: text('scope'),
+    resource: text('resource'),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    expiresAt: integer('expires_at').notNull(),
+    usedAt: integer('used_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('mcp_oauth_authorization_codes_client_id_idx').on(table.clientId),
+  ]
+)
+
+/**
+ * A refresh token (RFC 6749 §6) — hashed at rest, single-use: exchanging one
+ * rotates it (`usedAt` set, a fresh row issued), rather than handing the
+ * same value back again, so a stolen-and-replayed refresh token is
+ * detectable (a second exchange of the same hash finds `usedAt` already
+ * set and refuses, `repos/mcp-oauth.ts#consumeAndRotateRefreshToken`).
+ * `revokedAt` is independent of `usedAt` — `/revoke` sets it directly,
+ * without touching `usedAt` at all, so a revoked-but-never-used token and a
+ * rotated one are both refused for their own, distinguishable reason if this
+ * were ever surfaced to an operator.
+ */
+export const mcpOauthRefreshTokens = sqliteTable('mcp_oauth_refresh_tokens', {
+  id: text('id').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => mcpOauthClients.id),
+  tokenHash: text('token_hash').notNull().unique(),
+  accountId: text('account_id')
+    .notNull()
+    .references(() => accounts.id),
+  scope: text('scope'),
+  resource: text('resource'),
+  expiresAt: integer('expires_at').notNull(),
+  usedAt: integer('used_at'),
+  revokedAt: integer('revoked_at'),
+  createdAt: integer('created_at').notNull(),
+})
+
+/**
+ * An access token (RFC 6749 §1.4) — hashed at rest, the same discipline
+ * every other credential on this page holds itself to. `refreshTokenId`
+ * (nullable — a code exchange's own first access token is issued alongside
+ * a refresh token, but a future client credentials-less flow might not be)
+ * is what lets revoking or rotating away a refresh token also revoke the
+ * access token it was issued with in the same call
+ * (`repos/mcp-oauth.ts#revokeAccessTokensForRefreshToken`) — RFC 6749 does
+ * not require this, but leaving the access token live after its own refresh
+ * token is gone is a real credential outliving the thing meant to bound its
+ * lifetime, not a case this schema should make easy to reach by accident.
+ */
+export const mcpOauthAccessTokens = sqliteTable('mcp_oauth_access_tokens', {
+  id: text('id').primaryKey(),
+  clientId: text('client_id')
+    .notNull()
+    .references(() => mcpOauthClients.id),
+  tokenHash: text('token_hash').notNull().unique(),
+  accountId: text('account_id')
+    .notNull()
+    .references(() => accounts.id),
+  scope: text('scope'),
+  resource: text('resource'),
+  refreshTokenId: text('refresh_token_id').references(
+    () => mcpOauthRefreshTokens.id
+  ),
+  expiresAt: integer('expires_at').notNull(),
+  revokedAt: integer('revoked_at'),
+  createdAt: integer('created_at').notNull(),
+})

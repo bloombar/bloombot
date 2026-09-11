@@ -117,6 +117,12 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    organization-scoped, first parameter and all (`mergePeople`'s own
 //    caller already knows the organization; nothing about a merge needs to
 //    find a challenge by secret alone).
+//  - mcp-oauth.ts: MCP-7, the same class as `person-link-challenges.ts` one
+//    level up — every table this file reads and writes is scoped to an
+//    account, a client, or a hash, never to an organization (`schema.ts`'s
+//    own module comment on why an OAuth connection is account-wide by
+//    design). Every exported function in this file is listed here for that
+//    one reason, not checked case by case.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
@@ -129,6 +135,28 @@ const ALLOWLIST: Record<string, string[]> = {
     'deleteExpiredInstallStates',
   ],
   'jobs.ts': ['claimNextJob', 'countQueuedJobs'],
+  'mcp-oauth.ts': [
+    'createClient',
+    'getClient',
+    'createPendingAuthorization',
+    'getPendingAuthorization',
+    'deletePendingAuthorization',
+    'deleteExpiredPendingAuthorizations',
+    'createAuthorizationCode',
+    'peekAuthorizationCode',
+    'consumeAuthorizationCode',
+    'deleteExpiredAuthorizationCodes',
+    'createRefreshToken',
+    'findRefreshTokenByHash',
+    'consumeRefreshToken',
+    'revokeRefreshToken',
+    'deleteExpiredRefreshTokens',
+    'createAccessToken',
+    'findAccessTokenByHash',
+    'revokeAccessToken',
+    'revokeAccessTokensForRefreshToken',
+    'deleteExpiredAccessTokens',
+  ],
   'membership-invitations.ts': ['redeemMembershipInvitation'],
   'memberships.ts': ['listMembershipsForAccount'],
   'people.ts': ['listConnectedOrganizationsForAccount'],
@@ -223,7 +251,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twenty-five repo files this test is written against', () => {
+  it('found the twenty-six repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -240,6 +268,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'discord-servers.ts',
         'enrolments.ts',
         'jobs.ts',
+        'mcp-oauth.ts',
         'membership-invitations.ts',
         'memberships.ts',
         'organizations.ts',

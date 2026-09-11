@@ -80,3 +80,28 @@ export {
   type PersonLinkPreview,
   type PersonLinkPreviewOutcome,
 } from './person-link.js'
+
+export {
+  registerOauthClient,
+  getOauthClient,
+  beginAuthorization,
+  peekPendingAuthorization,
+  declinePendingAuthorization,
+  consentToPendingAuthorization,
+  peekAuthorizationCodeChallenge,
+  exchangeAuthorizationCode,
+  exchangeRefreshToken,
+  verifyAccessToken,
+  revokeToken,
+  McpOauthError,
+  DEFAULT_PENDING_AUTHORIZATION_TTL_MS,
+  DEFAULT_AUTHORIZATION_CODE_TTL_MS,
+  DEFAULT_ACCESS_TOKEN_TTL_MS,
+  DEFAULT_REFRESH_TOKEN_TTL_MS,
+  type OauthClientRecord,
+  type BeginAuthorization,
+  type PendingAuthorizationView,
+  type IssuedAuthorizationCode,
+  type IssuedTokens,
+  type VerifiedAccessToken,
+} from './mcp-oauth.js'

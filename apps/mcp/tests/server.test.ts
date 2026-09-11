@@ -23,6 +23,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
+import { buildOauthProvider } from '../src/oauth-provider.js'
 import {
   buildApp,
   MAX_SESSIONS_PER_ACCOUNT,
@@ -64,6 +65,10 @@ function createFakeLogger() {
 // `mcp-http-client.ts` helper for everything else) never falls back to its
 // own wildcard `app.listen(0)` — the intermittent-`404` bug D-24 already
 // named and fixed once, for `apps/api`, and this file had not yet copied.
+// MCP-7 — every test in this file builds a real provider against its own
+// throwaway database rather than a fake: `buildOauthProvider` is cheap
+// (plain hash lookups, no network), and a fake would risk drifting from
+// what `oauth-provider.test.ts` actually proves the real one does.
 function buildTestApp(
   overrides: Partial<ServerDependencies> & { db: ServerDependencies['db'] },
   sessions?: Map<string, McpSession>,
@@ -72,6 +77,11 @@ function buildTestApp(
   const deps: ServerDependencies = {
     logger: createFakeLogger(),
     toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
+    oauthProvider: buildOauthProvider({
+      db: overrides.db,
+      consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+    }),
+    issuerUrl: new URL('http://127.0.0.1:1'),
     ...overrides,
   }
   return startTestServer(buildApp(deps, sessions, isShuttingDown))

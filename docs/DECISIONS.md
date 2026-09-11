@@ -11272,3 +11272,91 @@ existing §8.1, which this slice's own new subsection points to rather than dupl
 in the database this backs up) is not backed up by this step — §8.1's own manual, scheduled backup already
 covers it separately, and folding it in here would make an unconditional per-deploy step copy a directory
 whose size has nothing to do with the risk this slice exists to cover (a migration to the *database*).
+
+---
+
+## D-103 — `apps/mcp`, `apps/api`, `packages/auth`, `packages/db`: MCP-7 — this server is its own OAuth 2.1 authorization server, not a bespoke pairing flow, and not a proxy to an upstream IdP
+
+**Problem.** MCP-7's first brief specified a bespoke flow: an unauthenticated MCP session calls a
+`bloombot_connect` tool, gets a code and a URL, and a signed-in web account redeems the code on the
+panel. That design was built partway (`apps/mcp/src/server.ts`'s own session-lifecycle work, and the
+bounded-anonymous-session thinking, both carried into this rework) and then discarded before it
+shipped: ChatGPT's and Claude's own MCP connectors perform OAuth discovery automatically and expect
+an OAuth 2.1 protected resource — a client that cannot authenticate against a server this way may
+refuse to connect to it at all, regardless of how well a bespoke tool-based flow works once reached.
+Standard OAuth is not a nicer alternative; it is closer to the only shape these two specific clients
+actually exercise.
+
+**Choice: this server implements `OAuthServerProvider` itself, backed directly by this platform's
+own accounts, rather than proxying an upstream identity provider.** There is no upstream IdP this
+platform already trusts for account identity — sign-in is this platform's own (`AUTH-1..3`: email
+link or Google, both terminating in this platform's own `accounts`/`sessions` tables) — so a proxy
+provider (`@modelcontextprotocol/sdk`'s own `providers/proxyProvider.js`) would proxy to nothing real.
+Implementing the provider directly means `authorize()` reuses the *existing* sign-in and session
+cookie (`apps/api`'s own `middleware/session.ts`) rather than inventing a second login, and every
+issued token is this platform's own account, verified against this platform's own database — the
+same "an account authenticates, and carries that account's memberships and nothing more" MCP-3
+already establishes, extended to a second bearer shape rather than replaced.
+
+**Choice: the SDK's own protocol endpoints (`mcpAuthRouter`) are used verbatim; only the provider
+and persistence are this slice's own code.** `apps/mcp/src/server.ts`'s own module comment already
+holds this app to "vendor SDK confined to its own adapter" for the transport; `oauth-provider.ts` is
+the second, deliberate exception to that discipline (its own module comment), not a departure from
+it — every SDK type this file receives or returns is translated at its own boundary, and
+`@bloombot/auth`'s own `mcp-oauth.ts` (the actual business logic and persistence) imports nothing
+from the SDK at all. `redirect_uri` exact-matching, PKCE's own mandatory `code_challenge`/`S256`, and
+the local `code_verifier` check are all the SDK's own `handlers/authorize.js`/`handlers/token.js` —
+not reimplemented, and not weakened by anything this slice added on top (`exchangeAuthorizationCode`
+re-checks `redirect_uri` and `resource` a second time, at token exchange, for the same reason RFC
+6749 §4.1.3 asks for it: the SDK checks `redirect_uri` once, at `/authorize`, and does not re-verify
+it matches at `/token`).
+
+**Choice: registered clients are always public, PKCE-only — no client secret is ever issued.**
+`@modelcontextprotocol/sdk/server/auth/middleware/clientAuth.js#authenticateClient` compares a
+presented `client_secret` against `OAuthRegisteredClientsStore#getClient`'s own return value with a
+plain `!==`, which only works if that return value is the *plaintext* secret — this platform's own
+"hash every secret at rest" discipline (`secrets.ts`) cannot survive at that one call site without
+either weakening the discipline or bypassing the SDK's own client-auth middleware entirely (which
+the previous choice above already rules out — hand-rolling the protocol endpoints to work around one
+middleware call defeats the reason to use the SDK's router at all). Rather than resolve that tension,
+this slice avoids it: every registered client is public and PKCE-only
+(`schema.ts#mcpOauthClients`'s own doc comment; `oauth-provider.ts`'s `registerClient` forces
+`token_endpoint_auth_method: 'none'` regardless of what a registration request asked for), which is
+also the realistic shape for the two clients MCP-7 exists to serve — a ChatGPT or Claude connector is
+an installed, dynamically-registered client with no safe place to hold a confidential secret anyway,
+the same reasoning OAuth 2.1 itself gives for recommending PKCE over a client secret for exactly this
+class of client. If a future client genuinely needs a confidential secret, the fix is the same
+reversible-encryption shape `course-join-links.ts` already uses for ENRL-12 (a secret that must be
+shown again later, not merely hashed for lookup) — not attempted here, because no real client this
+slice serves needs it.
+
+**Choice: keep the existing session-token bearer path (MCP-3) working alongside OAuth, rather than
+migrating to OAuth-only.** `apps/mcp/src/server.ts`'s own `resolveCallerAccountId` tries an OAuth
+access token first, falling back to `authenticateBearerToken` (the original session-token check)
+when that fails. `bloombot_connectAssistant` (LINK-8) mints and redeems exactly this kind of session
+token, and this app's own existing test suite (MCP-3, MCP-4, MCP-6) is written against it — retiring
+it is a real, separate decision (updating a shipped tool, a documented flow, and every test that
+exercises it) with its own blast radius this slice does not take on incidentally. The two paths
+cannot be confused for one another: an OAuth access token is a hash lookup against
+`mcp_oauth_access_tokens`, a session token against `sessions`, and both are 256-bit CSPRNG secrets
+from the same `secrets.ts` generator, so the two hash spaces never collide.
+
+**Choice: a human-facing consent screen lives in `apps/api`, not `apps/web`.** `authorize()` cannot
+decide anything itself — `apps/mcp` has no session cookie of its own to read — so it writes a pending
+authorization to the database the whole platform already shares (`schema.ts#mcpOauthPendingAuthorizations`,
+D-2's "one filesystem") and redirects the browser to `apps/api/src/routes/mcp-oauth-consent.ts`, a
+plain server-rendered HTML route rather than a page in the React panel. This was forced by this
+slice's own concurrency constraints (another slice was mid-edit on `apps/web/src/pages/Shell.tsx` and
+its routing), not chosen for its own sake: a proper "continue where you left off after signing in"
+experience belongs in the panel, reusing `pages/SignIn.tsx` directly, and a signed-out visitor to
+this route today is told, plainly, to sign in in another tab and reload — workable, not polished.
+Whoever next touches the panel's own connect/consent surface should fold this into it rather than
+leaving two consent experiences side by side.
+
+**Limits.** `PUBLIC_MCP_URL` is optional and falls back to a loopback issuer for local development
+(`env.ts`'s own doc comment) — a real deployment that wants a ChatGPT/Claude connector to discover
+this server has to set it *and* have nginx actually proxy `MCP_PORT` publicly, neither of which this
+slice can do from inside the repository (`docs/DEPLOY_DROPLET.md` is the maintainer's own document).
+Refresh tokens are not scoped by resource beyond a plain equality check on record, and there is no
+console yet for a person to see or revoke individual MCP connections (the brief's own "make it
+possible, don't build the UI") — both real, deliberately deferred rather than solved here.

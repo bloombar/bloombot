@@ -2717,6 +2717,23 @@
   phase: 13
   status: Done
   review: false
+- id: MCP-7
+  title: An assistant connects itself, over standard OAuth 2.1
+  full: "ChatGPT and Claude connectors perform OAuth discovery automatically and
+    expect an OAuth 2.1 protected resource, not a bespoke pairing flow — a
+    connector that cannot authenticate against a server this way may never even
+    offer to connect it. The MCP server is therefore its own authorization
+    server: it publishes the standard metadata documents, issues a code through
+    the existing web sign-in (never a second login), and exchanges it for an
+    access token that authorizes exactly like MCP-3's own bearer session token
+    does — an account and nothing more. PKCE is mandatory, a redirect URI is
+    matched exactly against the one a client registered, and every credential is
+    single-use where the protocol calls…"
+  section: §25 MCP Server & Agent Access
+  family: MCP
+  phase: 13
+  status: Backlog
+  review: false
 - id: ADMIN-1
   title: An instructor can read their course's transcripts
   full: The conversations a course has had are readable in the panel, filtered by

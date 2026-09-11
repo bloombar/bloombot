@@ -80,6 +80,7 @@ import { createPlatformRegistry } from '@bloombot/actions'
 import { courseAttachments, jobs } from '@bloombot/db'
 import { describe, expect, it } from 'vitest'
 
+import { buildOauthProvider } from '../src/oauth-provider.js'
 import { buildApp, type ServerDependencies } from '../src/server.js'
 import { buildToolDefinitions } from '../src/tool-surface.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -188,6 +189,14 @@ async function setUp(options: {
     db: testDb.db,
     logger: createFakeLogger(),
     toolDefinitions: buildToolDefinitions(registry),
+    // MCP-7 — a real provider against this same throwaway database; this
+    // file exercises the legacy bearer-session path only, so the provider
+    // itself is never called, but `ServerDependencies` still requires one.
+    oauthProvider: buildOauthProvider({
+      db: testDb.db,
+      consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+    }),
+    issuerUrl: new URL('http://127.0.0.1:1'),
     elicitationTimeoutMs:
       options.elicitationTimeoutMs ?? ELICITATION_TIMEOUT_MS,
   })

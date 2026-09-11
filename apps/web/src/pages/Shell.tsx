@@ -839,10 +839,11 @@ function ShellInner({
       ) : effectiveTab === 'mcp' ? (
         // WEB-47 — no `key={activeOrganizationId}`, unlike every tab
         // above: `pages/Mcp.tsx` fetches nothing of this organization's own
-        // (the connector URL and instructions it renders do not vary by
-        // organization or course), so there is nothing an organization
-        // switch would need to reset.
-        <Mcp />
+        // (the connector URL and setup steps it renders do not vary by
+        // organization or course) — `organizationId` and `navigate` are
+        // threaded through only so its own manual-connection fallback link
+        // can build `{ kind: 'connect', organizationId }`.
+        <Mcp organizationId={activeOrganizationId} navigate={navigate} />
       ) : effectiveTab === 'account' ? (
         // WEB-30 — not organization-scoped (this file's own module comment
         // on why `effectiveTab` permits it for a non-member too), so unlike

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createAdmissionGate } from '@bloombot/jobs'
 import { discordHandledMessages } from '@bloombot/db'
 
+import { createInFlightMessageIds } from '../src/in-flight-messages.js'
 import { onMessageCreate } from '../src/message-handler.js'
 import { fakeMessage } from './helpers/fake-discord.js'
 import { createFakeLogger } from './helpers/fake-logger.js'
@@ -43,6 +44,7 @@ function baseDeps(testDatabase: TestDatabase, botId: string) {
     },
     connectUrl: 'https://app.bloombot.test',
     catchUpEnabled: true,
+    inFlight: createInFlightMessageIds(),
   }
 }
 
@@ -152,6 +154,39 @@ describe('onMessageCreate (SURF-9)', () => {
 
     expect(discordHandledMessages.isMessageHandled(message.id, testDb.db)).toBe(
       false
+    )
+  })
+
+  // SURF-9 follow-up — the id is claimed in `deps.inFlight` *before*
+  // `handleMention` runs (so a concurrent catch-up scan cannot dispatch it,
+  // `catch-up.test.ts`'s own gateway-hydration test), and removed only in
+  // `finally`, *after* the durable record lands — the table's own
+  // `isMessageHandled` check is what suppresses a later catch-up scan from
+  // here on, not this in-process set, which is now empty again.
+  it('claims the id in inFlight while handling runs, and removes it only after recording', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Week 1',
+    })
+    const botId = 'bot-1'
+    const message = fakeMessage({
+      guildId,
+      categoryName: 'Week 1',
+      content: `<@${botId}> when is the midterm?`,
+    })
+    const deps = baseDeps(testDb, botId)
+
+    const pending = onMessageCreate(message, deps)
+    // `deps.inFlight.add` runs synchronously, before `handleMention`'s own
+    // first `await` — by the time this line runs, the id is already
+    // claimed.
+    expect(deps.inFlight.has(message.id)).toBe(true)
+
+    await pending
+
+    expect(deps.inFlight.has(message.id)).toBe(false)
+    expect(discordHandledMessages.isMessageHandled(message.id, testDb.db)).toBe(
+      true
     )
   })
 })

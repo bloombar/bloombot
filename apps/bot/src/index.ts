@@ -47,6 +47,7 @@ import { wireCatchUp } from './catch-up.js'
 import { startConnectedMarkerHeartbeat } from './connected-marker.js'
 import { wireGatewayHealth } from './gateway-health.js'
 import { startHealthServer } from './health.js'
+import { createInFlightMessageIds } from './in-flight-messages.js'
 import { onMessageCreate } from './message-handler.js'
 import { SUPPRESS_ALL_MENTIONS } from './reply-port.js'
 import { createShutdown, InFlightTracker } from './shutdown.js'
@@ -184,6 +185,13 @@ async function main(): Promise<void> {
     )
   })
 
+  // SURF-9 follow-up — the message-id set the live path and the catch-up
+  // scan both consult to close the gateway-hydration double-answer window
+  // (`in-flight-messages.ts`'s own module comment). One instance, built
+  // here and threaded into both, not a module-level singleton either file
+  // reaches by import.
+  const inFlightMessageIds = createInFlightMessageIds()
+
   // SURF-9 — a fresh gateway session is exactly the moment a message sent
   // while this process was disconnected can finally be found and acted on
   // (`docs/SPEC.md` §32's own incident). `wireCatchUp` (`catch-up.ts`) is
@@ -197,6 +205,7 @@ async function main(): Promise<void> {
     pricing,
     connectUrl,
     bounds: catchUpBounds,
+    inFlight: inFlightMessageIds,
   })
 
   client.on(Events.Error, (error) => {
@@ -223,6 +232,7 @@ async function main(): Promise<void> {
           pricing,
           connectUrl,
           catchUpEnabled: catchUpBounds.lookbackMs > 0,
+          inFlight: inFlightMessageIds,
         }).catch((error: unknown) => {
           logger.error(
             { err: error },

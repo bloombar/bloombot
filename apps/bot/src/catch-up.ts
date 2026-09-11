@@ -75,6 +75,7 @@ import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import { buildInboundMention } from './inbound.js'
+import type { InFlightMessageIds } from './in-flight-messages.js'
 import { buildReplyPort } from './reply-port.js'
 import { today } from './today.js'
 
@@ -89,6 +90,8 @@ export interface CatchUpDependencies {
   pricing: PricingTable
   connectUrl: string
   bounds: CatchUpBounds
+  /** SURF-9 follow-up — the same in-process set the live path claims a message's id in (`MessageHandlerDeps`, `message-handler.ts`); see `in-flight-messages.ts`'s own module comment for why the gateway-hydration double-answer needs it. */
+  inFlight: InFlightMessageIds
 }
 
 /** Every text-based channel in `guild` the bot can currently view — a category, a voice channel, or one this account cannot see is never a candidate. */
@@ -347,7 +350,18 @@ export async function runCatchUp(
           // often, is answered live before this loop ever reaches their
           // earlier message. This is the check that actually stops the
           // double answer; the snapshot alone cannot.
-          if (discordHandledMessages.isMessageHandled(message.id, db)) {
+          //
+          // SURF-9 follow-up — `deps.inFlight` catches the narrower race
+          // `isMessageHandled` alone misses: a message whose live handling
+          // has *started* (claimed in `deps.inFlight`,
+          // `message-handler.ts`) but not yet finished has no
+          // `discord_handled_messages` row to be found by either. See
+          // `in-flight-messages.ts`'s own module comment for the exact
+          // gateway-hydration window this closes.
+          if (
+            discordHandledMessages.isMessageHandled(message.id, db) ||
+            deps.inFlight.has(message.id)
+          ) {
             skipped += 1
             continue
           }

@@ -16,6 +16,7 @@ import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 
 import { buildInboundMention } from './inbound.js'
+import type { InFlightMessageIds } from './in-flight-messages.js'
 import { buildReplyPort } from './reply-port.js'
 import { today } from './today.js'
 
@@ -33,6 +34,8 @@ export interface MessageHandlerDeps {
   connectUrl: string
   /** SURF-9 rework cheap-fix — `DISCORD_CATCHUP_LOOKBACK_MS <= 0` (`catchUpBounds.lookbackMs`, `main()`). Recording every handled id exists only to dedup against a catch-up scan; with catch-up disabled there is no scan to dedup against, so recording forever would grow the table for no reader ever to use. */
   catchUpEnabled: boolean
+  /** SURF-9 follow-up — the same in-process set threaded into `CatchUpDependencies` (`catch-up.ts`); see `in-flight-messages.ts`'s own module comment for why the gateway-hydration double-answer needs it. */
+  inFlight: InFlightMessageIds
 }
 
 /** Translate one discord.js message into `InboundMention` + `ReplyPort` and hand it to `handleMention`. */
@@ -45,38 +48,60 @@ export async function onMessageCreate(
   // types (`message.channel`, `message.guild`) to their guild-only shape.
   if (!message.inGuild()) return
 
-  const input = buildInboundMention(message, deps.botId)
-  const reply = buildReplyPort(message)
+  // SURF-9 follow-up — claimed *before* `handleMention` ever runs, so a
+  // catch-up scan whose own fetch races this exact message (the
+  // gateway-hydration window `in-flight-messages.ts`'s own module comment
+  // describes) sees it as already spoken for, not merely absent from
+  // `discord_handled_messages` yet. Removed in `finally`, below, only after
+  // the durable record has actually been written, so a scan running
+  // concurrently never sees this message unclaimed *while it is being
+  // handled*.
+  //
+  // The `finally` releases the claim unconditionally, including when
+  // `handleMention` throws, when the outcome is not one `isHandledOutcome`
+  // records, and whenever catch-up is disabled — in each of those the id
+  // ends up in neither the set nor the table, deliberately: that is what
+  // makes a later scan re-handle a message whose answer died mid-flight
+  // rather than bury it (`docs/SPEC.md` §32's own incident). Do not read
+  // this as "absent from the set implies present in the table" and build a
+  // guard on it; the retry depends on that implication being false.
+  deps.inFlight.add(message.id)
+  try {
+    const input = buildInboundMention(message, deps.botId)
+    const reply = buildReplyPort(message)
 
-  const result = await handleMention(input, {
-    db: deps.db,
-    model: deps.model,
-    logger: deps.logger,
-    reply,
-    day: today(),
-    botDisplayName: deps.botDisplayName,
-    admission: deps.admission,
-    pricing: deps.pricing,
-    connectUrl: deps.connectUrl,
-  })
+    const result = await handleMention(input, {
+      db: deps.db,
+      model: deps.model,
+      logger: deps.logger,
+      reply,
+      day: today(),
+      botDisplayName: deps.botDisplayName,
+      admission: deps.admission,
+      pricing: deps.pricing,
+      connectUrl: deps.connectUrl,
+    })
 
-  // SURF-9 — recorded *after* `handleMention` returns, for every outcome
-  // that actually reached this message's own handling (`isHandledOutcome`,
-  // shared with the catch-up path so the two never drift on which outcomes
-  // count): a crash mid-answer leaves the id unrecorded, so the next
-  // catch-up scan re-handles it rather than this message being silently
-  // lost the way `docs/SPEC.md` §32's own incident describes.
-  if (deps.catchUpEnabled && isHandledOutcome(result.kind)) {
-    discordHandledMessages.recordHandledMessage(
-      {
-        messageId: message.id,
-        serverId: message.guildId,
-        channelId: message.channelId,
-        handledAt: Date.now(),
-      },
-      deps.db
-    )
+    // SURF-9 — recorded *after* `handleMention` returns, for every outcome
+    // that actually reached this message's own handling (`isHandledOutcome`,
+    // shared with the catch-up path so the two never drift on which outcomes
+    // count): a crash mid-answer leaves the id unrecorded, so the next
+    // catch-up scan re-handles it rather than this message being silently
+    // lost the way `docs/SPEC.md` §32's own incident describes.
+    if (deps.catchUpEnabled && isHandledOutcome(result.kind)) {
+      discordHandledMessages.recordHandledMessage(
+        {
+          messageId: message.id,
+          serverId: message.guildId,
+          channelId: message.channelId,
+          handledAt: Date.now(),
+        },
+        deps.db
+      )
+    }
+
+    deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
+  } finally {
+    deps.inFlight.delete(message.id)
   }
-
-  deps.logger.debug({ result }, 'apps/bot: handled an incoming message')
 }

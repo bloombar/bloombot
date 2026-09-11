@@ -147,7 +147,6 @@ const ALLOWLIST: Record<string, string[]> = {
     'recordHandledMessage',
     'listHandledMessageIds',
     'isMessageHandled',
-    'maxHandledAt',
     'pruneHandledMessagesOlderThan',
   ],
   'discord-gateway-status.ts': [

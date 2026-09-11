@@ -20,7 +20,7 @@
  * themselves.
  */
 
-import { desc, eq, lt } from 'drizzle-orm'
+import { eq, lt } from 'drizzle-orm'
 
 import type { Executor } from '../client.js'
 import { discordHandledMessages } from '../schema.js'
@@ -97,31 +97,6 @@ export function isMessageHandled(messageId: string, db: Executor): boolean {
       .where(eq(discordHandledMessages.messageId, messageId))
       .get() !== undefined
   )
-}
-
-/**
- * SURF-9 rework, MF2 — the most recent `handledAt` this table has ever
- * recorded, or `undefined` for an empty table. `apps/bot`'s own
- * `runCatchUp` floors its scan window here rather than always scanning the
- * full `DISCORD_CATCHUP_LOOKBACK_MS`: an empty table means this process has
- * never (yet) recorded handling anything — the first boot after this
- * migration, most often — and a scan finding no baseline to work from must
- * not guess one, or every mention from the whole lookback window gets an
- * apology directly beneath the answer the bot already gave it live before
- * this table existed. A non-empty table's own maximum is the last moment
- * this process is *known* to have been handling messages, so flooring the
- * window there (rather than at the full lookback) tightens the scan to the
- * actual outage instead of re-walking a day of already-answered messages
- * every single restart.
- */
-export function maxHandledAt(db: Executor): number | undefined {
-  const row = db
-    .select({ handledAt: discordHandledMessages.handledAt })
-    .from(discordHandledMessages)
-    .orderBy(desc(discordHandledMessages.handledAt))
-    .limit(1)
-    .get()
-  return row?.handledAt
 }
 
 /**

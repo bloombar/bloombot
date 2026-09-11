@@ -68,6 +68,53 @@
  * is a trap this file does not try to paper over by deriving one from the
  * other. `defaultConnectorUrl`, below, reads `VITE_MCP_PUBLIC_URL` alone,
  * and renders "not configured" when it is unset.
+ *
+ * **WEB-47 defect fix — ChatGPT's setup path, and copy that survives the
+ * next vendor rename.** The two-line "open Settings → Connectors" list this
+ * file used to carry went stale: ChatGPT moved this to
+ * Settings → Plugins → Browse plugins → the `+` icon, and now asks for
+ * per-field values (a name, a description, the connection URL, an
+ * authentication mode, and an optional icon) rather than a single paste.
+ * Rather than pin that path as if it were permanent — the same mistake this
+ * copy is being rewritten to fix — the instructions below say plainly that
+ * the menu names drift between clients and versions ("Plugin",
+ * "Connector", and "MCP server" have all meant the same thing at different
+ * points) and tell the reader what to look for rather than exactly where to
+ * click. Claude's own current path is not something this slice's author
+ * could confirm, so its entry says only what is actually true — add a
+ * custom connector by URL, sign in, approve — rather than inventing a menu
+ * that might already be wrong by the time this ships.
+ *
+ * **The icon URL prefers `VITE_PUBLIC_APP_URL`, not `window.location.origin`
+ * — and that is a different rule from the connector URL just above, not the
+ * same one restated.** (Rework finding: an earlier version of this comment
+ * argued the icon should use the browser's own origin because "there is
+ * nothing to misconfigure" — that reasoning held for a URL the *reader's*
+ * browser resolves, which is true of nothing on this page, since neither
+ * URL is ever fetched by the reader's own browser.) The connector URL must
+ * not come from this app's own origin at all — it has to name the MCP
+ * server's own address, which need not even share a host with this app, the
+ * reasoning above stands unchanged. The icon URL is different: it must
+ * still be a publicly resolvable address of *this app's own* static asset,
+ * but "resolvable" here means resolvable by ChatGPT's servers, which fetch
+ * it from the public internet when rendering the connector's icon — not by
+ * the reader's own browser, which never fetches it at all. `window.location
+ * .origin` can be `http://localhost:4173` (`vite preview`), a bare droplet
+ * IP, an internal hostname, or a port-forwarded dev origin — sensible for a
+ * link the reader's own browser follows, unresolvable for one handed to a
+ * remote server. `VITE_PUBLIC_APP_URL` is this deployment's own declared
+ * public origin (`prerender-plugin.ts`'s own read of it, for exactly this
+ * reason — `robots.txt`/`sitemap.xml`/canonical links are also read by
+ * something other than the reader's browser), so `defaultIconUrl` prefers
+ * it when set, the same trailing-slash normalisation `defaultConnectorUrl`
+ * already applies, and falls back to `window.location.origin` only when it
+ * is unset — a plain local dev run with no `VITE_PUBLIC_APP_URL` configured
+ * must not regress to a worse result than before this fix. `Mcp` is not one
+ * of `prerender-plugin.ts`'s three prerendered paths (`/`, `/privacy`,
+ * `/terms` — it renders `Home`/`StaticDocument` directly, never `App`, and
+ * never this page), so `window` is always defined wherever this component
+ * actually renders today; `iconUrl` below still guards for it being
+ * undefined rather than assume that stays true forever.
  */
 
 import { useState } from 'react'
@@ -108,11 +155,61 @@ function defaultConnectorUrl(): string | undefined {
   return configured ? configured.replace(/\/+$/, '') : undefined
 }
 
+/**
+ * The optional icon field's own value — this app's own 512×512 icon, at a
+ * publicly resolvable address, since ChatGPT's servers (not the reader's
+ * own browser) are what actually fetch it. `VITE_PUBLIC_APP_URL` is this
+ * deployment's declared public origin (the module comment above has the
+ * full reasoning for why that differs from the connector URL's own rule) —
+ * preferred when set, its trailing slash stripped the same way
+ * `defaultConnectorUrl` normalises `VITE_MCP_PUBLIC_URL`. Falls back to
+ * `window.location.origin` only when it is unset, so a plain local dev run
+ * with nothing configured still gets today's behaviour rather than a worse
+ * one. Returns `undefined` rather than a bare `/icon-512.png` when `window`
+ * itself is missing and no env var is set either — `Mcp` is not one of
+ * `prerender-plugin.ts`'s three prerendered paths, so this should not
+ * happen today, but a relative path copied to a client's icon field would
+ * resolve against *that client's* origin, not this app's, which is worse
+ * than omitting it.
+ */
+function defaultIconUrl(): string | undefined {
+  const configured = import.meta.env['VITE_PUBLIC_APP_URL']
+  if (configured) return `${configured.replace(/\/+$/, '')}/icon-512.png`
+  if (typeof window === 'undefined') return undefined
+  return `${window.location.origin}/icon-512.png`
+}
+
 export function Mcp({ organizationId, navigate, ...props }: McpProps) {
   const connectorUrl =
     'connectorUrl' in props ? props.connectorUrl : defaultConnectorUrl()
+  const iconUrl = defaultIconUrl()
 
-  const [copied, setCopied] = useState(false)
+  // Two independently copyable values (the connector URL, the icon URL) —
+  // `copiedField` tracks which *one* was last copied successfully, rather
+  // than a single boolean that would claim both were copied at once.
+  //
+  // Rework finding (must-fix 1/2): `copyError` used to be a single shared
+  // slot too, rendered only beside the connector-URL row. A failed icon
+  // copy then reported its error above the *connector* URL — pointing the
+  // reader at the wrong value, with no feedback at all beside the button
+  // they actually clicked — and left a stale "Copied!" on the connector
+  // button if that one had succeeded earlier, since the catch below never
+  // cleared `copiedField`. `JoinLinks.tsx`'s own module comment already
+  // covers this exact failure mode for its `copied`/`copyError` pair vs.
+  // `revealCopied`/`revealCopyError`: sharing state between two copyable
+  // values on screen at once flips both labels together on a single click
+  // in whichever one a caller actually used. `copyErrorField` follows
+  // `copiedField`'s own shape so each row renders only its own error, and
+  // `handleCopy`'s `catch` only ever clears *its own* field's success
+  // state — the other field's `copiedField` is never touched — so a
+  // failure on one field never disturbs a genuine "Copied!" already
+  // showing on the other.
+  const [copiedField, setCopiedField] = useState<
+    'connector' | 'icon' | undefined
+  >(undefined)
+  const [copyErrorField, setCopyErrorField] = useState<
+    'connector' | 'icon' | undefined
+  >(undefined)
   const [copyError, setCopyError] = useState<ApiError | undefined>(undefined)
 
   // WEB-20's own clipboard handling (`components/JoinLinks.tsx#handleCopy`):
@@ -121,13 +218,18 @@ export function Mcp({ organizationId, navigate, ...props }: McpProps) {
   // and reported through the same synthesized `ApiError` so it reads
   // through `describeApiError`'s own `clipboard_unavailable` case rather
   // than a bespoke message.
-  const handleCopy = async () => {
-    if (!connectorUrl) return
+  const handleCopy = async (value: string, field: 'connector' | 'icon') => {
+    setCopyErrorField(undefined)
     setCopyError(undefined)
     try {
-      await navigator.clipboard.writeText(connectorUrl)
-      setCopied(true)
+      await navigator.clipboard.writeText(value)
+      setCopiedField(field)
     } catch {
+      // Clears this field's own stale success label (must-fix 2) without
+      // touching the other field's — a failure on one copy must never
+      // erase a genuine "Copied!" already showing on the other.
+      setCopiedField((current) => (current === field ? undefined : current))
+      setCopyErrorField(field)
       setCopyError(new ApiError(0, { error: 'clipboard_unavailable' }))
     }
   }
@@ -177,26 +279,107 @@ export function Mcp({ organizationId, navigate, ...props }: McpProps) {
             </code>
             <Button
               variant="secondary"
+              aria-label={
+                copiedField === 'connector'
+                  ? 'Connector URL copied'
+                  : 'Copy connector URL'
+              }
               icon={<CopyIcon aria-hidden="true" className="size-4" />}
-              onClick={() => void handleCopy()}
+              onClick={() => void handleCopy(connectorUrl, 'connector')}
             >
-              {copied ? 'Copied!' : 'Copy'}
+              {copiedField === 'connector' ? 'Copied!' : 'Copy'}
             </Button>
           </div>
-          {copyError && <ErrorMessage error={copyError} />}
+          {copyErrorField === 'connector' && copyError && (
+            <ErrorMessage error={copyError} />
+          )}
 
-          <ol className="flex flex-col gap-2 text-sm text-neutral-700">
-            <li>
-              <strong>ChatGPT:</strong> open Settings → Connectors → Add
-              connector, paste the URL above, then sign in and approve on the
-              screen that opens.
-            </li>
-            <li>
-              <strong>Claude:</strong> open Settings → Connectors → Add custom
-              connector, paste the URL above, then sign in and approve on the
-              screen that opens.
-            </li>
-          </ol>
+          {/* Menu names drift between clients and between versions of the
+              same client — "Plugin", "Connector" and "MCP server" have all
+              meant this exact setting at different points, which is why the
+              two-step list this replaced went stale. Said once, up front,
+              rather than re-litigated per client below. */}
+          <p className="text-sm text-neutral-600">
+            The exact menu names below may differ from what you see — look for
+            whichever your client calls a "connector", a "plugin", or an "MCP
+            server"; they are the same thing.
+          </p>
+
+          <div className="flex flex-col gap-4 text-sm text-neutral-700">
+            <div>
+              <p>
+                <strong>ChatGPT:</strong> Settings → Plugins → Browse plugins →
+                the <code className="rounded bg-neutral-100 px-1">+</code> icon
+                to add a new plugin, then fill in:
+              </p>
+              <dl className="mt-2 flex flex-col gap-1 pl-4">
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Name</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">
+                      Bloombot
+                    </code>
+                  </dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Description</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">
+                      Course Assistant
+                    </code>
+                  </dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Connection</dt>
+                  <dd>the connector URL above</dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Authentication</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">OAuth</code>
+                  </dd>
+                </div>
+                {iconUrl && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <dt className="text-neutral-500">Icon (optional)</dt>
+                    <dd className="flex flex-wrap items-center gap-2">
+                      <code
+                        data-testid="mcp-icon-url"
+                        className="break-all rounded bg-neutral-100 px-2 py-1 text-neutral-900"
+                      >
+                        {iconUrl}
+                      </code>
+                      <Button
+                        variant="secondary"
+                        aria-label={
+                          copiedField === 'icon'
+                            ? 'Icon URL copied'
+                            : 'Copy icon URL'
+                        }
+                        icon={
+                          <CopyIcon aria-hidden="true" className="size-4" />
+                        }
+                        onClick={() => void handleCopy(iconUrl, 'icon')}
+                      >
+                        {copiedField === 'icon' ? 'Copied!' : 'Copy'}
+                      </Button>
+                    </dd>
+                    {copyErrorField === 'icon' && copyError && (
+                      <ErrorMessage error={copyError} />
+                    )}
+                  </div>
+                )}
+              </dl>
+              <p className="mt-2 text-neutral-500">
+                Then sign in and approve on the screen that opens.
+              </p>
+            </div>
+            <p>
+              <strong>Claude:</strong> add a custom connector by URL, using the
+              connector URL above, then sign in and approve on the screen that
+              opens.
+            </p>
+          </div>
 
           {/* With more than one course, the assistant asks rather than
               guesses — stated here, not in the top explanation, since it is

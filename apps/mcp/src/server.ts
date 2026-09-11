@@ -85,7 +85,9 @@ import type { Express, Request, Response } from 'express'
 import express from 'express'
 
 import { issueMcpPersonLinkToken } from '@bloombot/auth'
+import type { ModelClient, PricingTable } from '@bloombot/core'
 import { organizations, type Database } from '@bloombot/db'
+import type { AdmissionGate } from '@bloombot/jobs'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
 
@@ -114,8 +116,17 @@ import {
   InvalidToolArgumentsError,
   UnknownMcpToolError,
 } from './call-tool.js'
+import {
+  askChatQuestion,
+  isAccountLinked,
+  listAskableCourses,
+  type AskChatResult,
+} from './chat-tools.js'
 import { checkHealth } from './health.js'
-import type { McpToolDefinition } from './tool-surface.js'
+import {
+  MCP_CHAT_TOOL_SURFACE,
+  type McpToolDefinition,
+} from './tool-surface.js'
 
 export interface ServerDependencies {
   db: Database
@@ -147,6 +158,24 @@ export interface ServerDependencies {
    * `oauth-provider.ts#verifyAccessToken`. Defaults to `${issuerUrl}/mcp`.
    */
   resourceServerUrl?: URL
+  /**
+   * MCP-8: the same three answering seams `apps/api`'s and `apps/bot`'s own
+   * `main()` build for `@bloombot/core#answerQuestion` — this process needs
+   * them too, for `registerChatTools`' own two tools, for the identical
+   * reason `routes/chat.ts`'s own module comment gives ("a different
+   * adapter, not a different brain"). All three are optional, the same
+   * "expose the seam, default to the safe choice" discipline
+   * `AnswerDependencies`' own fields hold themselves to (`answer.ts`'s own
+   * module comment) — `index.ts` wires the real, configured ones; a test
+   * that does not care about `chat.ask` at all omits every one of them and
+   * `registerChatTools` (below) falls back to `UNCONFIGURED_MODEL_CLIENT`,
+   * the identical `createUnconfiguredModelClient` shape `index.ts`'s own
+   * module comment describes, and `answerQuestion`'s own remaining
+   * defaults.
+   */
+  model?: ModelClient
+  admission?: AdmissionGate
+  pricing?: PricingTable
   /**
    * How long an `elicitation/create` request waits for a human before
    * giving up. Defaults to `DEFAULT_ELICITATION_TIMEOUT_MS` (30s);
@@ -533,6 +562,198 @@ function registerPersonLinkTool(
   )
 }
 
+/** A course this account may ask in, formatted for a comma-separated list in a refusal's own text — never the organization (`tool-surface.ts`'s own `MCP_CHAT_TOOL_SURFACE` module comment on why). */
+function describeCourseChoice(choice: {
+  courseId: string
+  courseTitle: string
+  projectName: string
+}): string {
+  return `${choice.projectName} — ${choice.courseTitle} (courseId: ${choice.courseId})`
+}
+
+/**
+ * `chat.ask`'s own result, mapped to what an MCP client actually sees.
+ * `unlinked` and `needs-course-selection` are `isError: true` — nothing was
+ * answered — but deliberately not the generic `describeToolError` text the
+ * dispatch catalog's own refusals get: this slice's own brief asks for a
+ * *specific* sentence explaining what to do next (ask an instructor; redeem
+ * a join link), because a hallucinated or refused `courseId` should
+ * self-correct rather than read as an opaque failure. Every other kind
+ * (`AnswerResult`'s own — this file's own module comment on `AskChatResult`:
+ * "do not silently drop parts of it") is not an error at all, the same
+ * ordinary-outcome treatment `routes/chat.ts` already gives every one of
+ * them over HTTP (a `200` naming `result.kind`, never a distinct status per
+ * kind) — the full result, including the course it answered in, is simply
+ * handed back as this tool's own JSON output.
+ */
+/** Both `chat.listCourses` and `chat.ask` give this exact refusal for an unlinked account (this slice's own brief: "an unlinked session is refused by both tools, naming the connect tool") — a shared constant so the wording literally cannot drift between them. */
+const NOT_LINKED_TEXT =
+  'This account is not yet connected to a person in any organization, so there is nothing to ask in. ' +
+  'Call bloombot_connectAssistant to connect one, and ask the person you are assisting to finish ' +
+  'connecting from the Bloombot panel.'
+
+function formatAskChatResult(result: AskChatResult): CallToolResult {
+  if (result.kind === 'unlinked') {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: NOT_LINKED_TEXT }],
+    }
+  }
+  if (result.kind === 'needs-course-selection') {
+    const list = result.choices.map(describeCourseChoice).join('; ')
+    const guidance =
+      result.reason === 'none-admitted'
+        ? 'This account may not currently ask a question in any course — ask an instructor, or redeem a join link, then try again.'
+        : result.reason === 'no-course-id'
+          ? `More than one course is available, so I cannot tell which one is meant — ask which, then call chat.ask again naming its courseId. Available: ${list}`
+          : `That course could not be found, or this account may not ask in it — ask an instructor, or redeem a join link, then try again. Available: ${list}`
+    return {
+      isError: true,
+      content: [
+        { type: 'text', text: guidance },
+        { type: 'text', text: JSON.stringify(result.choices) },
+      ],
+    }
+  }
+  return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+}
+
+/**
+ * `ServerDependencies.model`'s own fallback when a test (or a caller that
+ * genuinely has no need of `chat.ask`) omits it — the identical
+ * `createUnconfiguredModelClient` shape `index.ts`'s own module comment
+ * describes, duplicated here rather than exported and imported back: this
+ * one exists only to satisfy `registerChatTools`' own call, never this
+ * process's real, configured client, which `index.ts` always builds and
+ * passes through `ServerDependencies` instead.
+ */
+const UNCONFIGURED_MODEL_CLIENT: ModelClient = {
+  ask: () =>
+    Promise.reject(new Error('apps/mcp: no ModelClient was configured')),
+}
+
+/**
+ * MCP-8: `chat.listCourses`/`chat.ask`, registered directly rather than
+ * through `registerTools`' own `call-tool.ts` dispatch pipeline —
+ * `tool-surface.ts`'s own `MCP_CHAT_TOOL_SURFACE` module comment has the
+ * full reasoning for why (the same shape mismatch `registerPersonLinkTool`,
+ * just above, already found for LINK-8's own tool). Neither tool is
+ * destructive (asking is a read; the enrolment `chat.ask` may create on
+ * self-enrolment admission is the same silent, no-confirmation write
+ * `routes/chat.ts`'s and Discord's own `handle-mention.ts` already make on
+ * the identical signal — MCP-4's own trigger is a *destructive* write, not
+ * any write at all, and this slice's own judgement call, recorded in its
+ * brief, is that this one does not qualify), so neither needs
+ * `requestConfirmation` or `extra` at all.
+ */
+function registerChatTools(
+  mcpServer: McpServer,
+  deps: ServerDependencies,
+  accountId: string
+): void {
+  const [listEntry, askEntry] = MCP_CHAT_TOOL_SURFACE
+  if (!listEntry || !askEntry) {
+    throw new Error(
+      'apps/mcp: MCP_CHAT_TOOL_SURFACE is missing one of its two expected entries.'
+    )
+  }
+
+  mcpServer.registerTool(
+    listEntry.name,
+    {
+      description: listEntry.description,
+      inputSchema: listEntry.inputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (): Promise<CallToolResult> => {
+      try {
+        if (!isAccountLinked(accountId, deps.db)) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: NOT_LINKED_TEXT }],
+          }
+        }
+        const courses = listAskableCourses(accountId, deps.db)
+        return { content: [{ type: 'text', text: JSON.stringify(courses) }] }
+      } catch (error) {
+        // A thrown, unrecognised error — a busy SQLite file under this
+        // process's own write contention (`answerQuestion`'s own module
+        // comment on `appendMessage`'s `SQLITE_BUSY` retry — a plain read
+        // can hit the identical contention) — must never reach a client
+        // as-is: the same discipline `registerPersonLinkTool`'s own module
+        // comment holds itself to (D-44's "a raw error handed to an
+        // untrusted client"). Logged so a failed question is not invisible
+        // to this process's own logs, unlike before this fix.
+        deps.logger.error(
+          { err: error, accountId },
+          'apps/mcp: chat.listCourses failed'
+        )
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
+        }
+      }
+    }
+  )
+
+  mcpServer.registerTool(
+    askEntry.name,
+    {
+      description: askEntry.description,
+      inputSchema: askEntry.inputSchema,
+      // Not read-only (a self-enrolment write can happen on this call), and
+      // not destructive either (this function's own doc comment).
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args: Record<string, unknown>): Promise<CallToolResult> => {
+      // The SDK already validated `args` against `askEntry.inputSchema`
+      // before this callback ever runs — the same trust `registerTools`
+      // above places in its own zod-validated `args` — so this is a plain
+      // narrowing, not a second validation pass.
+      const input = {
+        text: String(args['text']),
+        ...(typeof args['courseId'] === 'string'
+          ? { courseId: args['courseId'] }
+          : {}),
+      }
+      try {
+        const result = await askChatQuestion(accountId, input, {
+          db: deps.db,
+          model: deps.model ?? UNCONFIGURED_MODEL_CLIENT,
+          logger: deps.logger,
+          ...(deps.admission ? { admission: deps.admission } : {}),
+          ...(deps.pricing ? { pricing: deps.pricing } : {}),
+        })
+        return formatAskChatResult(result)
+      } catch (error) {
+        // `answerQuestion` is documented to throw for a `courseId`/
+        // `personId`/conversation that does not resolve, or for a write
+        // that genuinely fails after retrying (`packages/core/src/answer.ts`'s
+        // own module comment names its two existing callers' `.catch` for
+        // exactly this) — this tool is the third caller, and needs the
+        // identical treatment `registerPersonLinkTool`'s own module comment
+        // already gives an unrecognised error: logged, and never handed to
+        // the client as-is (a "could not open a conversation for course
+        // <uuid> and person <uuid> in organization <uuid>" message would
+        // otherwise leak this platform's own internal ids to whatever MCP
+        // client is on the other end).
+        deps.logger.error(
+          { err: error, accountId },
+          'apps/mcp: chat.ask failed'
+        )
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
+        }
+      }
+    }
+  )
+}
+
 function buildMcpServer(
   deps: ServerDependencies,
   accountId: string
@@ -542,6 +763,7 @@ function buildMcpServer(
   })
   registerTools(mcpServer, deps, accountId)
   registerPersonLinkTool(mcpServer, deps, accountId)
+  registerChatTools(mcpServer, deps, accountId)
   return mcpServer
 }
 

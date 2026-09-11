@@ -14,8 +14,11 @@
     "@bloombot/actions": "*",
     "@bloombot/auth": "*",
     "@bloombot/config": "*",
+    "@bloombot/core": "*",
     "@bloombot/db": "*",
+    "@bloombot/jobs": "*",
     "@bloombot/logger": "*",
+    "@bloombot/openai": "*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "zod": "^4.5.4"

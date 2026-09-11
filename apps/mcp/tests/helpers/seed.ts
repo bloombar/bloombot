@@ -15,9 +15,11 @@ import {
   accounts,
   courseAttachments,
   courses,
+  enrolments,
   jobs,
   memberships,
   organizations,
+  people,
   projects,
   type Database,
 } from '@bloombot/db'
@@ -192,6 +194,136 @@ export function seedOtherOrganization(db: Database): string {
   organizations.createOrganization(
     organizationId,
     { name: 'Other Org', isPersonal: false },
+    db
+  )
+  return organizationId
+}
+
+/**
+ * MCP-8: `organizationId`'s own course, with an active enrolment admitting
+ * a `discord`-surface person into it via `enrolViaRoster` — the same
+ * admission path a real roster import uses, and the *only* kind of person
+ * any real enrolment in this system ever belongs to
+ * (`apps/api/tests/routes/chat.test.ts`'s own `seedEnrolledCourse`, this
+ * file's twin for the identical reason that file's own module comment
+ * gives: connecting the returned person to an account, when a scenario
+ * needs that, is `connectAccountTo`'s own explicit job, never this one's).
+ * Takes no flag overrides for `createCourse`'s own real defaults unless a
+ * test asks for one, so the "no-leak" tests this slice's own brief asks
+ * for run against real defaults, not pinned flags.
+ */
+export function seedEnrolledCourse(
+  db: Database,
+  organizationId: string,
+  options: {
+    enrol?: boolean
+    answerUnenrolled?: boolean
+    selfEnrolFromDiscord?: boolean
+    title?: string
+    maxRequestsPerDay?: number
+  } = {}
+): { courseId: string; projectId: string; discordPersonId: string } {
+  const project = projects.createProject(
+    organizationId,
+    { name: `Term ${randomUUID()}` },
+    db
+  )
+  const unique = randomUUID()
+  const created = courses.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: options.title ?? 'Intro to Testing',
+      enabled: true,
+      adminsRole: `Staff-${unique}`,
+      studentsRole: `Students-${unique}`,
+      promptId: 'prompt-1',
+      categories: [],
+      ...(options.answerUnenrolled !== undefined
+        ? { answerUnenrolled: options.answerUnenrolled }
+        : {}),
+      ...(options.selfEnrolFromDiscord !== undefined
+        ? { selfEnrolFromDiscord: options.selfEnrolFromDiscord }
+        : {}),
+      ...(options.maxRequestsPerDay !== undefined
+        ? { maxRequestsPerDay: options.maxRequestsPerDay }
+        : {}),
+    },
+    db
+  )
+  if (!created.ok) throw new Error('test setup: course creation refused')
+  const courseId = created.course.id
+
+  const discordPerson = people.resolvePersonByIdentity(
+    organizationId,
+    { surface: 'discord', externalId: `discord-user-${randomUUID()}` },
+    db
+  )
+  if (options.enrol ?? true) {
+    enrolments.enrolViaRoster(
+      organizationId,
+      { courseId, personId: discordPerson.id },
+      db
+    )
+  }
+
+  return { courseId, projectId: project.id, discordPersonId: discordPerson.id }
+}
+
+/**
+ * Connects `accountId`'s own web identity onto `personId` in
+ * `organizationId` — the real `people.connectIdentity` (LINK-3's merged
+ * path), standing in for whatever connect/join-link flow would do this for
+ * a real student, mirroring `apps/api/tests/routes/chat.test.ts`'s own
+ * identical helper.
+ */
+export function connectAccountTo(
+  db: Database,
+  organizationId: string,
+  accountId: string,
+  personId: string
+): void {
+  const connected = people.connectIdentity(
+    organizationId,
+    personId,
+    { surface: 'web', externalId: accountId },
+    db
+  )
+  if (!connected) throw new Error('test setup: connectIdentity refused')
+}
+
+/** `connectAccountTo`, onto a brand-new person with no enrolment anywhere — the shape every scenario that is not about a specific `discord`-surface enrolment needs. */
+export function connectAccountToFreshPerson(
+  db: Database,
+  organizationId: string,
+  accountId: string
+): string {
+  const person = people.createPerson(organizationId, {}, db)
+  connectAccountTo(db, organizationId, accountId, person.id)
+  return person.id
+}
+
+/**
+ * MCP-8: a *second* organization `accountId` also holds a membership in —
+ * proving `chat.listCourses`/`chat.ask` reach "across every organization
+ * the account can reach" (this slice's own brief), never only the one
+ * `seedSignedInAccount` returns.
+ */
+export function seedSecondOrganizationForAccount(
+  db: Database,
+  accountId: string,
+  options: { role?: memberships.MembershipRole } = {}
+): string {
+  const organizationId = randomUUID()
+  organizations.createOrganization(
+    organizationId,
+    { name: 'Second Org', isPersonal: false },
+    db
+  )
+  memberships.createMembership(
+    organizationId,
+    accountId,
+    options.role ?? 'owner',
     db
   )
   return organizationId

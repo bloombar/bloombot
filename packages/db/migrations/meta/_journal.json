@@ -183,6 +183,13 @@
       "when": 1788966928548,
       "tag": "0025_gray_dreaming_celestial",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1789077274249,
+      "tag": "0026_clear_stingray",
+      "breakpoints": true
     }
   ]
 }

@@ -226,8 +226,16 @@ export const courses = sqliteTable(
     // a course belongs to, whether it is archived) and needs to name the
     // conflicting course and project in its refusal, so it is enforced in
     // `repos/courses.ts`, not with a SQL constraint here — see that file.
-    adminsRole: text('admins_role').notNull(),
-    studentsRole: text('students_role').notNull(),
+    //
+    // PROJ-7 — nullable: a course may name no role at all, meaning the
+    // platform does not attempt role-based identification for it (it can
+    // still be reached by Discord category, or by join link/self-enrolment).
+    // `null` is "absent," not a role literally named "" — `routing.ts` and
+    // the PROJ-3 collision check in `repos/courses.ts` both treat the two
+    // very differently (an absent role never matches an author, and two
+    // role-less courses never collide with each other).
+    adminsRole: text('admins_role'),
+    studentsRole: text('students_role'),
     // CFG-2 / D-3 — answering settings. All nullable, and nullable means "not
     // configured, fall back to the platform default": no default value is
     // invented here, the same reasoning D-10 already applied to the YAML

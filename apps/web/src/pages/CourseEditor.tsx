@@ -334,8 +334,10 @@ function formFromCourse(course: Course) {
   return {
     title: course.title,
     enabled: course.enabled,
-    adminsRole: course.adminsRole,
-    studentsRole: course.studentsRole,
+    // PROJ-7: a role-less course reads back as a blank field, the same
+    // "null becomes ''" treatment `model`, just below, already gets.
+    adminsRole: course.adminsRole ?? '',
+    studentsRole: course.studentsRole ?? '',
     promptId: course.promptId ?? '',
     model: course.model ?? '',
     vectorStoreId: course.vectorStoreId ?? '',
@@ -724,8 +726,16 @@ export function CourseEditor({
         projectId: project.id,
         title: form.title,
         enabled: form.enabled,
-        adminsRole: form.adminsRole,
-        studentsRole: form.studentsRole,
+        // PROJ-7: a role name is optional — a blank field means this
+        // course does not route on that role at all, not a role literally
+        // named "" (`routing.ts`/`repos/courses.ts` both treat absent and
+        // present-but-empty very differently, so this form never lets
+        // "" reach either). Normalised the same way `model`, just below,
+        // already normalises a blank string to `null`.
+        adminsRole:
+          form.adminsRole.trim() === '' ? null : form.adminsRole.trim(),
+        studentsRole:
+          form.studentsRole.trim() === '' ? null : form.studentsRole.trim(),
         // Every optional field below is sent explicitly — `null` when the
         // input is empty, the value otherwise — per this module's own
         // comment on why this form never relies on "omitted." `promptId`
@@ -1067,7 +1077,15 @@ export function CourseEditor({
   const rolesAndServerFields = (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
-        <FormField label="Admins role" {...fieldErrorProp(error, 'adminsRole')}>
+        <FormField
+          label="Admins role"
+          // PROJ-7: naming no role is a valid choice — this course simply
+          // is not identified by role at all, the same "leave blank" help
+          // text `Max requests per day` above already uses for its own
+          // optional field.
+          help="Leave blank if this course should not route on a role."
+          {...fieldErrorProp(error, 'adminsRole')}
+        >
           <input
             aria-label="Admins role"
             value={form.adminsRole}
@@ -1082,6 +1100,7 @@ export function CourseEditor({
         </FormField>
         <FormField
           label="Students role"
+          help="Leave blank if this course should not route on a role."
           {...fieldErrorProp(error, 'studentsRole')}
         >
           <input
@@ -1199,8 +1218,9 @@ export function CourseEditor({
         Enabled
       </label>
       <p className="text-sm text-neutral-600">
-        Students can only ask this course while it is enabled. Like every other
-        setting here, this takes effect when you save.
+        {/* WEB-46: maintainer-reported copy correction. */}
+        Students in this course will not be able to chat with the bot unless it
+        is enabled here.
       </p>
     </div>
   )
@@ -1224,9 +1244,8 @@ export function CourseEditor({
         Students can enrol themselves by messaging this course
       </label>
       <p className="text-sm text-neutral-600">
-        When checked, a student who messages this course is enrolled in it —
-        immediately if they already have a connected account, or as soon as they
-        connect one afterwards.
+        {/* WEB-46: maintainer-reported copy correction. */}
+        Students who message the bot will be added to the course roster.
       </p>
     </div>
   )
@@ -1250,8 +1269,8 @@ export function CourseEditor({
         Answer students who are not enrolled
       </label>
       <p className="text-sm text-neutral-600">
-        When unchecked, only a student this course has enrolled gets an answer —
-        everyone else is told plainly that they are not enrolled.
+        {/* WEB-46: maintainer-reported copy correction. */}
+        Respond to messages from unenrolled students.
       </p>
     </div>
   )
@@ -1530,6 +1549,10 @@ export function CourseEditor({
         // that does not exist yet to be part of. This keeps the single-form
         // layout the whole screen always had, field for field.
         <>
+          {/* WEB-46: Title leads the form — a course is named before it is
+              told what it routes on. */}
+          {titleField}
+
           {/* WEB-9: what decides routing, shown together and up front. */}
           <section
             aria-label="What this course routes on"
@@ -1542,8 +1565,6 @@ export function CourseEditor({
             </p>
             {rolesAndServerFields}
           </section>
-
-          {titleField}
 
           {enabledControl}
           {selfEnrolControl}

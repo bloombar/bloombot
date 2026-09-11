@@ -429,8 +429,11 @@ export interface SaveCourseInput {
   projectId: string
   title: string
   enabled: boolean
-  adminsRole: string
-  studentsRole: string
+  // PROJ-7 — `null` means this course routes on no role at all;
+  // `pages/CourseEditor.tsx` always sends the key, `null` included, so this
+  // stays required rather than joining the `?:`-optional fields below.
+  adminsRole: string | null
+  studentsRole: string | null
   promptId?: string | null
   model?: string | null
   vectorStoreId?: string | null

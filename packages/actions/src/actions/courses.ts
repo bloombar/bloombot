@@ -94,8 +94,15 @@ const saveInputSchema = z.strictObject({
   projectId: z.string().min(1),
   title: z.string().min(1),
   enabled: z.boolean(),
-  adminsRole: z.string().min(1),
-  studentsRole: z.string().min(1),
+  // PROJ-7 — optional and nullable, like `model` below: a course may name
+  // no role at all, meaning the platform does not attempt role-based
+  // identification for it. `.min(1)` still refuses an *empty string*
+  // outright — an instructor clearing the field must send an explicit
+  // `null`, never `''`, the same "absent, not empty" distinction
+  // `schema.ts`'s own column carries; `execute`, below, writes whichever of
+  // the two a caller actually sent, never `''` itself.
+  adminsRole: z.string().min(1).nullable().optional(),
+  studentsRole: z.string().min(1).nullable().optional(),
   promptId: z.string().min(1).nullable().optional(),
   model: z.string().min(1).nullable().optional(),
   vectorStoreId: z.string().min(1).nullable().optional(),
@@ -204,8 +211,22 @@ export const saveCourseAction: Action<
       projectId: entity.project.id,
       title: input.title,
       enabled: input.enabled,
-      adminsRole: input.adminsRole,
-      studentsRole: input.studentsRole,
+      // PROJ-7 — the same omitted-preserves/explicit-null-clears rule
+      // `keepOrClear` already gives `promptId`/`model`/etc. below: an
+      // omitted key on update keeps whatever role is already stored, an
+      // explicit `null` clears it (an instructor blanking the field —
+      // `pages/CourseEditor.tsx` never sends `''`, see that form's own
+      // comment), and a create with the key omitted gets `null`, the same
+      // "nothing yet to preserve" default every other optional field here
+      // gets.
+      adminsRole: keepOrClear(
+        input.adminsRole,
+        entity.existingCourse?.adminsRole
+      ),
+      studentsRole: keepOrClear(
+        input.studentsRole,
+        entity.existingCourse?.studentsRole
+      ),
       // MDL-8 — a stored prompt id is only ever inherited from the Python
       // era (D-3's escape hatch), never newly acquired: a course being
       // *created* here (`entity.existingCourse` unset) gets `null`

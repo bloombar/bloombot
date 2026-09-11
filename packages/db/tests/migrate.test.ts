@@ -982,6 +982,192 @@ describe('runMigrations', () => {
       answer_unenrolled: 1,
     })
   })
+
+  // PROJ-7: 0026 rebuilds `courses` itself (drizzle-kit's own SQLite
+  // "rebuild the table" recipe for dropping `admins_role`/`students_role`'s
+  // `NOT NULL`) — the one migration in this file whose own `INSERT ...
+  // SELECT` could plausibly drop a column or lose a child row on the way
+  // through `__new_courses`. Seeded with every column populated (not an
+  // empty course, which would pass by accident) plus a `course_categories`
+  // child row, so a lost value or an orphaned child both have something to
+  // show up against.
+  it('applies 0026 to a database that already has a fully-populated course and a category, preserving both through the __new_courses rebuild', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0025 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 25
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0025) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0025,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const categoryId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    // Every column the `__new_courses` rebuild's own `INSERT ... SELECT`
+    // has to carry across.
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, enabled, admins_role,
+           students_role, prompt_id, instructions, model, vector_store_id,
+           max_requests_per_day, conversation_scope, discord_server_id,
+           self_enrol_from_discord, answer_unenrolled, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        1,
+        'admins-wd-fa26',
+        'students-wd-fa26',
+        'prompt-abc',
+        'Be helpful.',
+        'gpt-5',
+        'vs-abc',
+        40,
+        'course_surface',
+        null,
+        1,
+        0,
+        now
+      )
+    db.$client
+      .prepare(
+        'insert into course_categories (id, organization_id, course_id, name, ordering, created_at) values (?, ?, ?, ?, ?, ?)'
+      )
+      .run(categoryId, organizationId, courseId, 'Web Design - GLOBAL', 0, now)
+
+    // The migration under test: 0026, applied through the real migrations
+    // folder — this must not throw, including the new `foreign_key_check`
+    // safety net (`migrate.ts`) run right after it.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const course = db.$client
+      .prepare('select * from courses where id = ?')
+      .get(courseId)
+    expect(course).toMatchObject({
+      id: courseId,
+      admins_role: 'admins-wd-fa26',
+      students_role: 'students-wd-fa26',
+      prompt_id: 'prompt-abc',
+      instructions: 'Be helpful.',
+      model: 'gpt-5',
+      vector_store_id: 'vs-abc',
+      max_requests_per_day: 40,
+      conversation_scope: 'course_surface',
+      self_enrol_from_discord: 1,
+      answer_unenrolled: 0,
+    })
+    const category = db.$client
+      .prepare('select * from course_categories where id = ?')
+      .get(categoryId)
+    expect(category).toMatchObject({ id: categoryId, course_id: courseId })
+  })
+
+  // The safety net `migrate.ts` restored (review round 1): disabling
+  // `foreign_keys` for the whole batch (0026's own table rebuild needs it)
+  // used to mean a migration that left an orphan behind — a bad backfill,
+  // say — would commit silently, where before this file ever disabled
+  // anything that same mistake failed loudly. `PRAGMA foreign_key_check`
+  // now runs immediately afterward and refuses the whole batch if it finds
+  // one, checked against the *entire* database, not only the table 0026
+  // itself touches — which is exactly why this orphan can be seeded in
+  // `course_categories`, a table 0026 never rebuilds, and still be caught.
+  it('refuses a migration batch that would leave a foreign-key violation behind, even one that predates the batch', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0025 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 25
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0025) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0025,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const organizationId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+
+    // An orphan `course_categories` row — naming a course that does not
+    // exist — the shape a bad backfill migration could commit silently
+    // while `foreign_keys` is off. `PRAGMA foreign_keys=OFF` here, briefly,
+    // is only what lets this test insert the bad row at all (the
+    // connection otherwise enforces it on every write, `client.ts`'s own
+    // comment) — it does not simulate 0026 itself, which never writes to
+    // this table.
+    db.$client.pragma('foreign_keys = OFF')
+    db.$client
+      .prepare(
+        'insert into course_categories (id, organization_id, course_id, name, ordering, created_at) values (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        randomUUID(),
+        organizationId,
+        'course-that-does-not-exist',
+        'Orphan Category',
+        0,
+        now
+      )
+    db.$client.pragma('foreign_keys = ON')
+
+    // The migration under test: 0026 — must now refuse rather than commit
+    // silently alongside an orphan it never even touches.
+    expect(() => runMigrations(db as Database)).toThrow(/foreign_key_check/)
+  })
 })
 
 // ENRL-10 — 0017 adds `membership_invitations`, a brand-new table rather than

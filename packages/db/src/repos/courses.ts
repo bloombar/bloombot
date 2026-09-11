@@ -87,8 +87,15 @@ export interface NewCourse {
   projectId: string
   title: string
   enabled: boolean
-  adminsRole: string
-  studentsRole: string
+  // PROJ-7 — `null` means this course names no role at all (not a role
+  // literally named ""): the platform then does not attempt role-based
+  // identification for it (`schema.ts`'s own comment on the column). Not
+  // optional (unlike `promptId`/`model` below) — a caller must always say
+  // which of the two, `null` included; `@bloombot/actions`' `courses.save`
+  // resolves its own optional input to one or the other before this ever
+  // sees it (that action's own `keepOrClear`).
+  adminsRole: string | null
+  studentsRole: string | null
   promptId?: string | null
   instructions?: string | null
   model?: string | null
@@ -134,8 +141,8 @@ export interface NewCourse {
  * straight through.
  */
 interface NameCheckInput {
-  adminsRole: string
-  studentsRole: string
+  adminsRole: string | null
+  studentsRole: string | null
   categories: { name: string }[]
 }
 
@@ -167,8 +174,8 @@ export type SaveCourseResult =
 interface CollisionCandidate {
   id: string
   title: string
-  adminsRole: string
-  studentsRole: string
+  adminsRole: string | null
+  studentsRole: string | null
   projectName: string
   discordServerId: string | null
 }
@@ -363,6 +370,13 @@ function findCourseNameConflict(
       ['adminsRole', input.adminsRole],
       ['studentsRole', input.studentsRole],
     ] as const) {
+      // PROJ-7 — an absent role (`null`) is never a candidate for a
+      // collision: it names nothing to collide with, unlike an empty
+      // string, which this schema no longer even permits. Without this,
+      // `normalizeRoleName(null) === normalizeRoleName(null)` would be
+      // `true`, so two courses that both name no role would wrongly
+      // collide with each other the moment either one is (re-)saved.
+      if (roleName === null) continue
       const normalized = normalizeRoleName(roleName)
       const hit = candidates.find(
         (candidate) =>
@@ -374,10 +388,15 @@ function findCourseNameConflict(
         // necessarily `hit.adminsRole` — so the message can quote both
         // sides rather than telling an instructor their string collides
         // with a course that visibly uses a different one.
+        // Never actually `null`: `hit` only matched because one of its own
+        // role names normalized equal to `normalized`, which is itself
+        // never `null` here (the `roleName === null` guard above already
+        // `continue`d past that case) — the `?? undefined` is only to
+        // satisfy `conflict`'s optional `string`, not a real fallback.
         const candidateName =
-          normalizeRoleName(hit.adminsRole) === normalized
+          (normalizeRoleName(hit.adminsRole) === normalized
             ? hit.adminsRole
-            : hit.studentsRole
+            : hit.studentsRole) ?? undefined
         return conflict(field, roleName, hit, candidateName)
       }
     }
@@ -430,8 +449,10 @@ function findCourseNameConflict(
  * reasoning behind reaching into this repo from what started as a
  * worker-only slice.
  */
-function normalizeRoleName(name: string): string {
-  return name.trim().toLowerCase()
+// PROJ-7 — `null` in, `null` out: an absent role never normalizes to a
+// string another candidate's own normalized name could accidentally equal.
+function normalizeRoleName(name: string | null): string | null {
+  return name === null ? null : name.trim().toLowerCase()
 }
 
 /**
@@ -461,8 +482,14 @@ function findSelfConflict(
   options: { checkRoles?: boolean } = {}
 ): CourseNameConflict | undefined {
   const checkRoles = options.checkRoles ?? true
+  // PROJ-7 — both roles have to be *set* for this to mean anything: two
+  // absent roles are not "the same role name" (`normalizeRoleName(null) ===
+  // normalizeRoleName(null)` would otherwise say they are), and a course
+  // naming only one role has nothing here to alias with the other.
   if (
     checkRoles &&
+    input.adminsRole !== null &&
+    input.studentsRole !== null &&
     normalizeRoleName(input.adminsRole) ===
       normalizeRoleName(input.studentsRole)
   ) {
@@ -865,8 +892,10 @@ export interface RoutableCourseRow {
   id: string
   title: string
   categoryNames: string[]
-  adminsRole: string
-  studentsRole: string
+  // PROJ-7 — `null` means this course names no role at all; `RoutableCourse`
+  // (`@bloombot/core`'s `routing.ts`) carries the same nullability through.
+  adminsRole: string | null
+  studentsRole: string | null
   enabled: boolean
   discordServerId: string | null
 }

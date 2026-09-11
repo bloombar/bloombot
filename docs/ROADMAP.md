@@ -297,7 +297,7 @@ knowledge files, websites, categories, roster, people — as one form scrolled t
 gave every screen an address; this phase gives the biggest screen an internal structure worth
 addressing, and closes the gap between seeing a person’s name and reading what they asked.
 
-**In scope:** WEB-35, WEB-36, ROST-13, WEB-37, WEB-38, WEB-40, WEB-43, WEB-45
+**In scope:** WEB-35, WEB-36, ROST-13, WEB-37, WEB-38, WEB-40, WEB-43, WEB-45, WEB-46
 
 ## Phase 23 — A roster import that finishes the job
 
@@ -328,7 +328,7 @@ does not actually stop a category-routed student from asking. This phase gives a
 independent settings — whether asking it enrols the asker, and whether it answers a student it has
 not enrolled — and the intent record that lets "message the bot, then connect" admit somebody.
 
-**In scope:** ENRL-13, ENRL-14
+**In scope:** ENRL-13, ENRL-14, PROJ-7
 
 ## Phase 26 — A course that answers nothing says so
 

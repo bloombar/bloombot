@@ -497,9 +497,13 @@ export async function handleMention(
   // in `enrolViaDiscordRole` itself — this local has to track that widening,
   // or ENRL-6 would stop being enforceable for staff the moment they held no
   // student role of their own.
+  // PROJ-7 — a role that is absent (`null`) can never be held, so it never
+  // counts toward this, the same guard `enrolViaDiscordRole` itself applies.
   const holdsTeachingRole =
-    input.authorRoleNames.includes(routing.course.studentsRole) ||
-    input.authorRoleNames.includes(routing.course.adminsRole)
+    (routing.course.studentsRole !== null &&
+      input.authorRoleNames.includes(routing.course.studentsRole)) ||
+    (routing.course.adminsRole !== null &&
+      input.authorRoleNames.includes(routing.course.adminsRole))
   let enrolmentEnded = false
   try {
     const enrolment = enrolments.enrolViaDiscordRole(

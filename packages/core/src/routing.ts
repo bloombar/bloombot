@@ -19,8 +19,15 @@
 export interface RoutableCourse {
   id: string
   categoryNames: string[]
-  adminsRole: string
-  studentsRole: string
+  /**
+   * PROJ-7 — `null` means this course names no role at all: the platform
+   * does not attempt role-based identification for it. `routeMessage`'s own
+   * role fallback (below) never treats an absent role as a match for
+   * anybody — see that function's own comment for why this cannot be left
+   * to `roleNames.has(null)` alone.
+   */
+  adminsRole: string | null
+  studentsRole: string | null
   /** CORE-2: "a message that matches no enabled course is ignored" — a disabled course is dropped before either signal runs (see `routeMessage`). */
   enabled: boolean
 }
@@ -88,9 +95,19 @@ export function routeMessage(
   }
 
   const roleNames = new Set(arrival.roleNames)
+  // PROJ-7 — a role that is `null` is absent, not a role literally named ""
+  // or "null": it is never a match for anybody, and this is checked
+  // explicitly rather than left to `roleNames.has(null)` happening to be
+  // `false` (`roleNames` is a `Set<string>`, so that call would not even
+  // type-check) — the risk this guards against is a course whose role is
+  // absent nonetheless matching every author (if `null`/`''` were ever
+  // treated as a value), or two role-less courses colliding with each
+  // other and forcing every message into `ambiguous` (`courses.ts`'s own
+  // PROJ-3 comment covers the save-time half of the same rule).
   const roleMatches = enabledCourses.filter(
     (course) =>
-      roleNames.has(course.adminsRole) || roleNames.has(course.studentsRole)
+      (course.adminsRole !== null && roleNames.has(course.adminsRole)) ||
+      (course.studentsRole !== null && roleNames.has(course.studentsRole))
   )
   if (roleMatches.length > 1) {
     return {

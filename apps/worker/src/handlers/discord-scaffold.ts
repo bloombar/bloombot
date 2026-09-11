@@ -476,8 +476,13 @@ export function createDiscordScaffoldHandler(
     const unresolvedRoles: UnresolvedRoleEntry[] = []
     const rolesCreated: string[] = []
     async function resolveOrCreateRole(
-      roleName: string
+      roleName: string | null
     ): Promise<string | undefined> {
+      // PROJ-7: a course naming no role here has nothing to resolve or
+      // create — `undefined` is exactly what every caller below already
+      // treats as "no overwrite for this role," the same as a name that
+      // failed to resolve.
+      if (roleName === null) return undefined
       const existingId = resolveRoleId(roles, roleName)
       if (existingId) return existingId
       try {

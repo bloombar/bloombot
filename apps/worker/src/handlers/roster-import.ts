@@ -1226,25 +1226,32 @@ export function createRosterImportHandler(
     // import, but nothing repairs the admins overwrite the same way).
     const unresolvedRoles: UnresolvedRoleEntry[] = []
     const rolesCreated: string[] = []
-    let adminsRoleId = resolveRoleId(roles, course.adminsRole)
-    if (!adminsRoleId) {
-      try {
-        const created = await deps.discordRestClient.createGuildRole(
-          deps.botToken,
-          guildId,
-          { name: course.adminsRole }
-        )
-        roles.push(created)
-        adminsRoleId = created.id
-        rolesCreated.push(course.adminsRole)
-      } catch (error) {
-        if (error instanceof DiscordRequestError && error.permanent) {
-          unresolvedRoles.push({
-            role: course.adminsRole,
-            reason: describeDiscordError(error),
-          })
-        } else {
-          throw error
+    // PROJ-7: a course naming no admins role has nothing here to resolve or
+    // create — `adminsRoleId` stays `undefined`, the same value every
+    // downstream read below already treats as "no admins overwrite for
+    // this course" (an unresolved name got exactly this before).
+    let adminsRoleId: string | undefined
+    if (course.adminsRole !== null) {
+      adminsRoleId = resolveRoleId(roles, course.adminsRole)
+      if (!adminsRoleId) {
+        try {
+          const created = await deps.discordRestClient.createGuildRole(
+            deps.botToken,
+            guildId,
+            { name: course.adminsRole }
+          )
+          roles.push(created)
+          adminsRoleId = created.id
+          rolesCreated.push(course.adminsRole)
+        } catch (error) {
+          if (error instanceof DiscordRequestError && error.permanent) {
+            unresolvedRoles.push({
+              role: course.adminsRole,
+              reason: describeDiscordError(error),
+            })
+          } else {
+            throw error
+          }
         }
       }
     }

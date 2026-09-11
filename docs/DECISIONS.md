@@ -11065,3 +11065,56 @@ gets the new fallback; `pages/Connect.tsx`/`pages/JoinLink.tsx`/`pages/Invitatio
 none of their own `onRedeemed` callbacks ever pass `returnToShell` a destination naming a `ShellRoute` (they
 hand it none at all, letting it fall through to the ordinary home resolution the WEB-34 rework already
 covers).
+
+---
+
+## D-100 — `packages/db`: PROJ-7 — `foreign_keys` is disabled for a whole migration batch, at the connection level, with a `PRAGMA foreign_key_check` afterward
+
+**Problem.** PROJ-7 made `courses.admins_role`/`students_role` nullable — a column constraint SQLite cannot
+`ALTER` in place, so drizzle-kit generated the standard "rebuild the table" migration (`0026_clear_stingray.sql`):
+create `__new_courses`, copy every row across, `DROP TABLE courses`, rename the new one into place. `courses`
+is the first table this project has ever rebuilt that other tables hold real foreign keys into
+(`course_categories`, `enrolments`, `transcript_access_log`, …), and the migration's own `PRAGMA
+foreign_keys=OFF;` — needed so `DROP TABLE courses` does not fail the moment any of them holds a row — turned
+out to be a silent no-op: SQLite only lets `foreign_keys` change *outside* a pending transaction, and
+drizzle-orm's own migrator (`node_modules/drizzle-orm/sqlite-core/dialect.js`) wraps every pending migration
+file in one `BEGIN`/`COMMIT`. A `PRAGMA` inside the file runs *inside* that transaction and does nothing;
+`DROP TABLE courses` then failed outright against a database seeded with a real `transcript_access_log` row
+(`migrate.test.ts`'s own "applies 0013…" case, which seeds exactly that).
+
+**Choice: `runMigrations` toggles `foreign_keys` off before calling drizzle's `migrate()`, and back on in a
+`finally`, at the connection level rather than inside any one migration file.** This is outside any
+transaction (`migrate()` has not opened its `BEGIN` yet), so the pragma actually takes effect for the whole
+batch — verified against a reproduction seeded the same way the test is before choosing this fix. It is a
+batch-wide toggle, not a per-migration one: every migration file this project writes from here on runs with
+enforcement off, not only the one that happens to need it, since `runMigrations` cannot know in advance which
+pending file in the batch is the one doing a rebuild.
+
+**Choice: `PRAGMA foreign_key_check` runs immediately after `migrate()` succeeds, still inside the `try`, and
+throws if it returns any row.** Adversarial review (round 1) found the cost of the choice above: with
+enforcement off for the whole batch, a migration that inserts or backfills a row with a dangling foreign key —
+a bad `course_id` written by some future migration's own data fix — now commits silently, where before this
+file ever disabled anything that same mistake failed loudly at the offending statement. `foreign_key_check`
+is SQLite's own prescribed last step of the rebuild recipe this migration already follows; running it here
+restores exactly the safety net the pragma toggle removed, for every migration this project will ever write,
+not only 0026. It checks the *whole* database, not only the table the current batch touched — deliberately,
+since a violation left behind by an *earlier* migration (this repo has none today, but nothing physically
+prevents one) is exactly as real a problem as one this batch just introduced, and this is the only place a
+fresh connection reliably re-checks it. `migrate.test.ts` pins both directions: 0026 still applies cleanly
+against a fully-populated course and its child category, and a batch is refused if a foreign-key violation
+exists anywhere afterward, even one seeded in a table 0026 never touches.
+
+**Not chosen: leaving the migration file's own `PRAGMA foreign_keys=OFF;` as the only mechanism, undiagnosed.**
+That is what drizzle-kit generated, and would have shipped a migration that fails the moment any real
+deployment's `courses` table has a single referencing row anywhere — every deployment past the very first
+one. Diagnosing *why* it failed (the transaction-scoping rule above) was the actual fix; the migration file
+itself is unmodified drizzle-kit output.
+
+**Limits.** `foreign_keys` is off for the *entire* pending batch, not scoped to the one migration that needs
+it — a batch of five pending migrations where only the third rebuilds a table still runs the other four with
+enforcement off. This is deliberately coarse rather than trying to detect which migration needs it (drizzle's
+own migrator gives `runMigrations` no such hook), and the `foreign_key_check` afterward is what keeps that
+coarseness from being a silent hole: nothing behind the toggle can now reach an applied database without
+being re-checked. If a future migration needs `foreign_keys` to stay *on* mid-batch for its own correctness —
+unlikely, since a single batch's migrations are not typically depended on to enforce each other's writes —
+this choice would need revisiting.

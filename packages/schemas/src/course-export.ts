@@ -57,8 +57,14 @@ const categorySchema = z.strictObject({
  */
 export const exportedCourseSchema = z.strictObject({
   title: z.string().min(1),
-  adminsRole: z.string().min(1),
-  studentsRole: z.string().min(1),
+  // PROJ-7 — nullable, not a version bump: an older file's non-null role
+  // name still parses exactly as it always did, so no export written before
+  // this slice means anything different now. `null` means the source course
+  // named no role at all (the platform did not attempt role-based
+  // identification for it), the same "absent, not an empty string" meaning
+  // `schema.ts`'s own columns carry.
+  adminsRole: z.string().min(1).nullable(),
+  studentsRole: z.string().min(1).nullable(),
   model: z.string().min(1).nullable(),
   instructions: z.string().nullable(),
   maxRequestsPerDay: z.number().int().positive().nullable(),

@@ -3572,6 +3572,23 @@
   phase: 22
   status: Done
   review: false
+- id: WEB-46
+  title: The course form's copy, field order, and optional Discord roles
+  full: "Three maintainer-reported corrections to the course form's own copy: the
+    Enabled checkbox's description now reads \"Students in this course will not
+    be able to chat with the bot unless it is enabled here\"; the self-enrolment
+    checkbox's description now reads \"Students who message the bot will be
+    added to the course roster\"; and the answer-unenrolled checkbox's
+    description now reads \"Respond to messages from unenrolled students.\" Only
+    the description text changed — every label, aria-label, field name and
+    behaviour is unchanged. The course's Title field now leads the new-course
+    form, above the Admins role and Students role fields — a course is named
+    before it is told what it routes on. The…"
+  section: §34 Web Control Panel
+  family: WEB
+  phase: 22
+  status: Backlog
+  review: false
 - id: ROST-14
   title: Two students whose emails share a local part both get a channel
   full: "A per-student channel is named after the local part of the student's
@@ -3843,6 +3860,23 @@
   family: ENRL
   phase: 25
   status: Done
+  review: false
+- id: PROJ-7
+  title: A course may name no Discord role at all
+  full: "A course's two Discord role names (admins, students) are optional. A
+    course that names neither is not identified by role at all — it can still be
+    reached by Discord category, or by a join link or self-enrolment — the
+    platform simply does not attempt role-based routing for it. An absent role
+    is not a role literally named the empty string: PROJ-3's collision check
+    treats two courses that both name no role as not colliding with each other
+    (absent is not a value to collide over), and routeMessage's role fallback
+    never treats an absent role as a match for any author. A course export
+    carries null for an absent role and imports it back unchanged; an export
+    written before this existed still names…"
+  section: §16 Projects
+  family: PROJ
+  phase: 25
+  status: Backlog
   review: false
 - id: SURF-8
   title: A course that answers nothing says so, rather than saying nothing

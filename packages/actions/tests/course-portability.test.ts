@@ -330,6 +330,81 @@ describe('courses.import', () => {
     expect(result.course.id).not.toBe(course.id)
   })
 
+  // PROJ-7: a course naming no role at all round-trips cleanly — the
+  // exported file carries `null` for both (`exportedCourseSchema`'s own
+  // nullable, not a version bump — that schema's own comment), and the
+  // import writes `null` back, not an empty string or a name it invented.
+  it('a course with no roles round-trips through export and import', async () => {
+    testDb = createTestDatabase()
+    const source = seedOrganizationWithProject(testDb.db, 'Fall 2026')
+    const course = seedFullCourse(
+      source.organizationId,
+      source.projectId,
+      testDb.db,
+      {
+        adminsRole: null,
+        studentsRole: null,
+      }
+    )
+    const text = await exportText(source.organizationId, course.id, testDb.db)
+    expect(parseYaml(text)).toMatchObject({
+      course: { adminsRole: null, studentsRole: null },
+    })
+
+    const destination = seedOrganizationWithProject(testDb.db, 'Spring 2027')
+    const result = await dispatch(
+      importCourseAction,
+      { projectId: destination.projectId, content: text },
+      {
+        organizationId: destination.organizationId,
+        db: testDb.db,
+        accountId: accountId(destination.organizationId),
+      }
+    )
+
+    expect(result.course.adminsRole).toBeNull()
+    expect(result.course.studentsRole).toBeNull()
+  })
+
+  // The other half: an export written before PROJ-7 existed always named
+  // both roles (`exportedCourseSchema`'s own `.nullable()`, not new keys —
+  // an older file's non-null string still parses exactly as it always did),
+  // so it must still import with those names intact.
+  it('an older export naming both roles still imports with those names intact', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const oldFile = [
+      'bloombotCourseExport: 1',
+      'kind: bloombot.course',
+      "exportedAt: '2026-01-01T00:00:00.000Z'",
+      'course:',
+      '  title: Intro to CS',
+      '  adminsRole: admins-cs-fa26',
+      '  studentsRole: students-cs-fa26',
+      '  model: null',
+      '  instructions: null',
+      '  maxRequestsPerDay: null',
+      '  conversationScope: course',
+      '  categories: []',
+      '  websites: []',
+      'notCarried:',
+      '  vectorStore: false',
+      '  storedPrompt: false',
+      '  attachments: 0',
+      '  discordServer: false',
+      '',
+    ].join('\n')
+
+    const result = await dispatch(
+      importCourseAction,
+      { projectId, content: oldFile },
+      { organizationId, db: testDb.db, accountId: accountId(organizationId) }
+    )
+
+    expect(result.course.adminsRole).toBe('admins-cs-fa26')
+    expect(result.course.studentsRole).toBe('students-cs-fa26')
+  })
+
   it('numbers a title already used in the destination project (PORT-5)', async () => {
     testDb = createTestDatabase()
     const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)

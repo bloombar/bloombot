@@ -988,6 +988,128 @@ describe('courses repo', () => {
       if (!result || result.ok) throw new Error('expected a conflict')
       expect(result.conflict.field).toBe('studentsRole')
     })
+
+    // PROJ-7: a course may name no role at all. Absent is not a value —
+    // two role-less courses must not collide with each other, and a
+    // role-less course must not collide with (or be collided into by) a
+    // course that names one. These fail without the fix: a naive port of
+    // the null-safety above (`normalizeRoleName(null) === normalizeRoleName(null)`)
+    // would say two absent roles are "the same role name."
+    it('two courses that both name no role at all do not collide with each other', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            adminsRole: null,
+            studentsRole: null,
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: null,
+          studentsRole: null,
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
+
+    // A course naming one role and no role at all — the "one absent, one
+    // present" case — must not collide either: the role-less course has
+    // nothing to compare, and the other course's one set role is simply
+    // not shared.
+    it('a role-less course and a course naming one role do not collide', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            adminsRole: 'admins-wd-fa26',
+            studentsRole: null,
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: null,
+          studentsRole: null,
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
+
+    // The control on the two tests above: two courses that *do* share a
+    // present role must still collide — PROJ-7 only exempts an absent role,
+    // never a real one.
+    it('two courses sharing a present role still collide', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            adminsRole: 'shared-admins-role',
+            studentsRole: null,
+            categories: [{ name: 'Web Design - GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'shared-admins-role',
+          studentsRole: null,
+          categories: [{ name: 'Data Science - GLOBAL', channels: [] }],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('adminsRole')
+    })
+
+    // The self-conflict half (`findSelfConflict`): a course naming no role
+    // at all must not be refused for "the admin and student role are the
+    // same name" — two absent roles are not the same name, they are both
+    // absent.
+    it('a course naming no role at all does not self-conflict', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          adminsRole: null,
+          studentsRole: null,
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
   })
 
   // SRV-10 made a course's *own* two role names compare case- and

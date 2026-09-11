@@ -891,6 +891,17 @@ archive already is: reversible, non-destructive, and subject to PROJ-1's own
 one-active-name-per-organization uniqueness, so a rename onto a live project's name is
 refused by naming the project it collides with rather than by a constraint error.
 
+#### PROJ-7 A course may name no Discord role at all
+
+A course's two Discord role names (admins, students) are optional. A course that names neither is
+not identified by role at all — it can still be reached by Discord category, or by a join link or
+self-enrolment — the platform simply does not attempt role-based routing for it. An absent role is
+not a role literally named the empty string: PROJ-3's collision check treats two courses that both
+name no role as not colliding with each other (absent is not a value to collide over), and
+`routeMessage`'s role fallback never treats an absent role as a match for any author. A course
+export carries `null` for an absent role and imports it back unchanged; an export written before
+this existed still names both roles and still imports.
+
 ### 17. Quality, Types & Tooling
 
 #### QA-1 Tests fail before they pass
@@ -2645,6 +2656,23 @@ own error guard already refused to show the old placeholder alongside a refusal 
 admin console) keeps refusing to show a skeleton there either — a skeleton is never an error state
 wearing a different shape. `prefers-reduced-motion: reduce` suppresses the pulse everywhere it
 appears, once, in the stylesheet's own global rules.
+
+#### WEB-46 The course form's copy, field order, and optional Discord roles
+
+Three maintainer-reported corrections to the course form's own copy: the Enabled checkbox's
+description now reads "Students in this course will not be able to chat with the bot unless it is
+enabled here"; the self-enrolment checkbox's description now reads "Students who message the bot
+will be added to the course roster"; and the answer-unenrolled checkbox's description now reads
+"Respond to messages from unenrolled students." Only the description text changed — every label,
+`aria-label`, field name and behaviour is unchanged.
+
+The course's Title field now leads the new-course form, above the Admins role and Students role
+fields — a course is named before it is told what it routes on.
+
+The Admins role and Students role fields are now optional (PROJ-7 describes what an absent role
+means to routing and collision checking); the form marks both optional the same way it already
+marks `Max requests per day` optional, and an instructor clearing either field saves successfully,
+storing `null` rather than an empty string.
 
 ### 35. Course Portability
 

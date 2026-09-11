@@ -217,6 +217,7 @@ export function buildApp(deps: ServerDependencies): Express {
     buildMcpOauthConsentRouter({
       db: deps.db,
       publicAppUrl: deps.publicAppUrl,
+      emailSender: deps.emailSender,
     })
   )
   app.use(

@@ -35,7 +35,15 @@ function createFakeLogger() {
 }
 
 const ISSUER_URL = new URL('http://127.0.0.1:1')
+const RESOURCE_URL = 'http://127.0.0.1:1/mcp'
 
+// MCP-7 security review — `resource` set here, on the one provider every
+// test in this file builds against: omitted, the RFC 8707 check in
+// `oauth-provider.ts#verifyAccessToken` never runs at all, in this file or
+// any other (a fake, easy-to-miss gap this file was in the best position
+// to catch, and did not). Every test that never asks for a `resource` at
+// `/authorize` is unaffected — `verifyAccessToken` only compares when
+// *both* sides actually name one.
 async function buildTestApp(db: ServerDependencies['db']) {
   const deps: ServerDependencies = {
     db,
@@ -44,6 +52,7 @@ async function buildTestApp(db: ServerDependencies['db']) {
     oauthProvider: buildOauthProvider({
       db,
       consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+      resource: RESOURCE_URL,
     }),
     issuerUrl: ISSUER_URL,
   }
@@ -67,7 +76,11 @@ async function registerClient(
     .post('/register')
     .send({ redirect_uris: redirectUris, token_endpoint_auth_method: 'none' })
   expect(response.status).toBe(201)
-  return response.body as { client_id: string; redirect_uris: string[] }
+  return response.body as {
+    client_id: string
+    client_secret?: string
+    redirect_uris: string[]
+  }
 }
 
 /** Drives `/authorize` far enough to obtain the pending-authorization id `apps/api`'s consent route would read — this file never runs that route (it lives in `apps/api`, its own test file), so it reaches into the shared database directly, the same way `apps/api`'s own consent-route test reaches into it from the other side. */
@@ -99,8 +112,10 @@ describe('dynamic client registration (RFC 7591)', () => {
     expect(client.redirect_uris).toEqual(['https://client.example/callback'])
     // MCP-7's own deliberate scope narrowing (`schema.ts#mcpOauthClients`'s
     // own module comment): no secret is ever issued, regardless of what
-    // was asked for.
-    expect(client.client_id).not.toMatch(/secret/i)
+    // was asked for. A security review found the previous assertion here
+    // (`client_id` does not match /secret/i) held trivially for any UUID
+    // and proved nothing about this rule — this is the actual check.
+    expect(client.client_secret).toBeUndefined()
   })
 
   it('refuses an unregistered client id at /authorize', async () => {
@@ -325,8 +340,7 @@ describe('the authorization-code flow with PKCE', () => {
     })
     const caller = seedSignedInAccount(testDb.db)
     const pendingId = findPendingAuthorizationId(testDb.db)
-    const { consentToPendingAuthorization, DEFAULT_AUTHORIZATION_CODE_TTL_MS } =
-      await import('@bloombot/auth')
+    const { consentToPendingAuthorization } = await import('@bloombot/auth')
     const issued = consentToPendingAuthorization(
       pendingId,
       caller.accountId,
@@ -334,7 +348,6 @@ describe('the authorization-code flow with PKCE', () => {
       -1 // already expired, the instant it is minted
     )
     if (!issued) throw new Error('setup failed')
-    void DEFAULT_AUTHORIZATION_CODE_TTL_MS
 
     const response = await request(server).post('/token').type('form').send({
       grant_type: 'authorization_code',
@@ -500,6 +513,125 @@ describe('refresh rotation and revocation', () => {
   })
 })
 
+// MCP-7 security review — resource indicators (RFC 8707) were completely
+// unexercised in this file: no test ever passed `resource` to `/authorize`
+// or `/token`, so `oauth-provider.ts#verifyAccessToken`'s own resource
+// check never ran, anywhere in the suite. `buildTestApp`'s own `resource`
+// (this file's own module comment) is what makes it reachable at all; this
+// block is what actually reaches it.
+describe('resource indicators (RFC 8707)', () => {
+  it('a token minted for this resource authenticates /mcp', async () => {
+    testDb = createTestDatabase()
+    const server = await buildTestApp(testDb.db)
+    const client = await registerClient(server)
+    const { codeVerifier, codeChallenge } = pkcePair()
+
+    await request(server).get('/authorize').query({
+      client_id: client.client_id,
+      redirect_uri: client.redirect_uris[0],
+      response_type: 'code',
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      resource: RESOURCE_URL,
+    })
+    const caller = seedSignedInAccount(testDb.db)
+    const pendingId = findPendingAuthorizationId(testDb.db)
+    const { consentToPendingAuthorization } = await import('@bloombot/auth')
+    const issued = consentToPendingAuthorization(
+      pendingId,
+      caller.accountId,
+      testDb.db
+    )
+    if (!issued) throw new Error('setup failed')
+
+    const tokenResponse = await request(server)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        code: issued.code,
+        code_verifier: codeVerifier,
+        client_id: client.client_id,
+        redirect_uri: client.redirect_uris[0],
+        resource: RESOURCE_URL,
+      })
+    expect(tokenResponse.status).toBe(200)
+
+    const mcpResponse = await request(server)
+      .post('/mcp')
+      .set('Content-Type', 'application/json')
+      .set('Accept', 'application/json, text/event-stream')
+      .set('Authorization', `Bearer ${tokenResponse.body.access_token}`)
+      .send({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '0' },
+        },
+      })
+    expect(mcpResponse.status).toBe(200)
+  })
+
+  it('a token minted for a different resource is refused at /mcp — never accepted here, and vice versa', async () => {
+    testDb = createTestDatabase()
+    const server = await buildTestApp(testDb.db)
+    const client = await registerClient(server)
+    const { codeVerifier, codeChallenge } = pkcePair()
+
+    await request(server).get('/authorize').query({
+      client_id: client.client_id,
+      redirect_uri: client.redirect_uris[0],
+      response_type: 'code',
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      resource: 'https://a-different-mcp-server.example/mcp',
+    })
+    const caller = seedSignedInAccount(testDb.db)
+    const pendingId = findPendingAuthorizationId(testDb.db)
+    const { consentToPendingAuthorization } = await import('@bloombot/auth')
+    const issued = consentToPendingAuthorization(
+      pendingId,
+      caller.accountId,
+      testDb.db
+    )
+    if (!issued) throw new Error('setup failed')
+
+    const tokenResponse = await request(server)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        code: issued.code,
+        code_verifier: codeVerifier,
+        client_id: client.client_id,
+        redirect_uri: client.redirect_uris[0],
+        resource: 'https://a-different-mcp-server.example/mcp',
+      })
+    expect(tokenResponse.status).toBe(200)
+
+    // Minted for a different server entirely — this one refuses it.
+    const mcpResponse = await request(server)
+      .post('/mcp')
+      .set('Content-Type', 'application/json')
+      .set('Accept', 'application/json, text/event-stream')
+      .set('Authorization', `Bearer ${tokenResponse.body.access_token}`)
+      .send({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '0' },
+        },
+      })
+    expect(mcpResponse.status).toBe(401)
+  })
+})
+
 describe('metadata documents (RFC 8414 / RFC 9728)', () => {
   it('serves authorization-server metadata derived from the configured issuer', async () => {
     testDb = createTestDatabase()
@@ -512,6 +644,29 @@ describe('metadata documents (RFC 8414 / RFC 9728)', () => {
     expect(response.status).toBe(200)
     expect(response.body.issuer).toBe(ISSUER_URL.href)
     expect(response.body.authorization_endpoint).toContain(ISSUER_URL.origin)
+  })
+
+  // MCP-7 security review — the SDK's own default metadata advertises
+  // `client_secret_post` for both fields below, which this deployment does
+  // not support at all (no client ever holds a secret,
+  // `schema.ts#mcpOauthClients`'s own module comment) — a strict client
+  // that trusts the metadata literally could pick an auth method that
+  // never works, or decide `/revoke` needs credentials this deployment
+  // never issues and skip it entirely.
+  it('advertises only the "none" client auth method this deployment actually supports', async () => {
+    testDb = createTestDatabase()
+    const server = await buildTestApp(testDb.db)
+
+    const response = await request(server).get(
+      '/.well-known/oauth-authorization-server'
+    )
+
+    expect(response.body.token_endpoint_auth_methods_supported).toEqual([
+      'none',
+    ])
+    expect(response.body.revocation_endpoint_auth_methods_supported).toEqual([
+      'none',
+    ])
   })
 
   it("serves protected-resource metadata naming this server's own /mcp resource", async () => {

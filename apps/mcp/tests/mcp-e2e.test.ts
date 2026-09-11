@@ -192,9 +192,12 @@ async function setUp(options: {
     // MCP-7 — a real provider against this same throwaway database; this
     // file exercises the legacy bearer-session path only, so the provider
     // itself is never called, but `ServerDependencies` still requires one.
+    // `resource` set for the same "keep the fixture truthful" reason
+    // `server.test.ts`'s own `buildTestApp` sets it.
     oauthProvider: buildOauthProvider({
       db: testDb.db,
       consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+      resource: 'http://127.0.0.1:1/mcp',
     }),
     issuerUrl: new URL('http://127.0.0.1:1'),
     elicitationTimeoutMs:

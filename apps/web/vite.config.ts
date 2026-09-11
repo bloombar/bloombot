@@ -59,6 +59,17 @@ const proxy = {
   // same "a proxied API path and a page path cannot share one top-level
   // segment" rule `/join-links`/`/join/:secret` already hold themselves to.
   '/membership-invitations': apiOrigin,
+  // MCP-7 — `apps/api`'s own `routes/mcp-oauth-consent.ts` mount: the
+  // browser lands here on the redirect `apps/mcp`'s own `authorize()`
+  // issues, carrying a pending-authorization id — with no entry here, this
+  // path falls through to the SPA's own `index.html` fallback (both this
+  // dev proxy and the nginx block `docs/DEPLOY_DROPLET.md` documents), a
+  // 200 with no route the client-side router recognises, and the OAuth
+  // flow never completes in any environment. Deliberately a different
+  // top-level segment from anything this app's own router renders, the
+  // same "a proxied API path and a page path cannot share one top-level
+  // segment" rule every entry above already holds itself to.
+  '/oauth': apiOrigin,
 }
 
 export default defineConfig({

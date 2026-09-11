@@ -144,7 +144,17 @@ export function beginAuthorization(
   ttlMs: number = DEFAULT_PENDING_AUTHORIZATION_TTL_MS
 ): BeginAuthorization {
   const now = Date.now()
+  // Sweep-on-write, the same "person-link-challenges.ts" discipline this
+  // file's own module comment already holds itself to — every credential
+  // table this file writes gets swept here, on the one call every OAuth
+  // flow makes exactly once (a fresh `/authorize`), rather than only the
+  // pending-authorizations table: a security review found the other three
+  // `deleteExpired*` functions in `repos/mcp-oauth.ts` defined and never
+  // called, so a spent code and an expired token accumulated forever.
   mcpOauth.deleteExpiredPendingAuthorizations(now, db)
+  mcpOauth.deleteExpiredAuthorizationCodes(now, db)
+  mcpOauth.deleteExpiredRefreshTokens(now, db)
+  mcpOauth.deleteExpiredAccessTokens(now, db)
   const expiresAt = now + ttlMs
   const row = mcpOauth.createPendingAuthorization(
     {
@@ -177,6 +187,13 @@ export function peekPendingAuthorization(
 ): PendingAuthorizationView | undefined {
   const row = mcpOauth.getPendingAuthorization(id, Date.now(), db)
   if (!row) return undefined
+  return toPendingAuthorizationView(row, db)
+}
+
+function toPendingAuthorizationView(
+  row: mcpOauth.McpOauthPendingAuthorization,
+  db: Executor
+): PendingAuthorizationView {
   const client = mcpOauth.getClient(row.clientId, db)
   return {
     id: row.id,
@@ -187,9 +204,47 @@ export function peekPendingAuthorization(
   }
 }
 
-/** MCP-7's own non-negotiable: a pending authorization proves nothing by itself — declining simply drops the row, never issuing anything, and the caller (`apps/api`'s consent route) redirects to the client's own `redirectUri` with an `access_denied`-shaped error, never a code. */
-export function declinePendingAuthorization(id: string, db: Database): void {
+/**
+ * `schema.ts#mcpOauthPendingAuthorizations`'s own state-fixation defence
+ * (that table's own doc comment) — the *only* other function in this
+ * module besides `consentToPendingAuthorization`/`declinePendingAuthorization`
+ * below that is allowed to bind or check `accountId` at all. Binds this
+ * pending authorization to `accountId` if nobody has claimed it yet, and
+ * refuses (`undefined`) — the same shape as an unknown or expired id,
+ * never a distinguishable error — if it is already claimed by a
+ * *different* account. `apps/api`'s consent route calls this on every
+ * signed-in request against a pending id, not only once: reloading the
+ * consent screen and submitting a decision both re-assert the same claim.
+ */
+export function claimPendingAuthorization(
+  id: string,
+  accountId: string,
+  db: Executor
+): PendingAuthorizationView | undefined {
+  const row = mcpOauth.claimPendingAuthorization(id, accountId, Date.now(), db)
+  if (!row) return undefined
+  return toPendingAuthorizationView(row, db)
+}
+
+/**
+ * MCP-7's own non-negotiable: a pending authorization proves nothing by
+ * itself — declining simply drops the row, never issuing anything, and the
+ * caller (`apps/api`'s consent route) redirects to the client's own
+ * `redirectUri` with an `access_denied`-shaped error, never a code.
+ * `accountId` is required and checked the same way `consentToPendingAuthorization`
+ * checks it (`claimPendingAuthorization`, above) — a decline is a decision
+ * too, and must be the *claiming* account's own decision, not any signed-in
+ * caller's.
+ */
+export function declinePendingAuthorization(
+  id: string,
+  accountId: string,
+  db: Database
+): PendingAuthorizationView | undefined {
+  const claimed = claimPendingAuthorization(id, accountId, db)
+  if (!claimed) return undefined
   mcpOauth.deletePendingAuthorization(id, db)
+  return claimed
 }
 
 /** What consenting to a pending authorization returns — everything `apps/api`'s consent route needs to build the final redirect back to the client. */
@@ -207,11 +262,17 @@ export interface IssuedAuthorizationCode {
  * never from a request field, the identical "the survivor is asserted by
  * the caller, but the other side is fixed at issue" shape `person-link.ts`'s
  * own module comment gives for why that ordering is not an account
- * takeover. The pending row is deleted here, in the same transaction as the
- * code's own insert (`writeTransaction` is not used because both writes are
- * simple enough not to need rollback-on-partial-failure in practice, but see
- * `docs/DECISIONS.md` if this ever needs strengthening) — consenting twice
- * to the same pending id is not possible once this runs once.
+ * takeover. `claimPendingAuthorization` (above) is what actually enforces
+ * that binding — a security review found the earlier version of this
+ * function trusted its own caller to have already checked it, which held
+ * only because the one caller that existed did; calling it here instead
+ * makes the check load-bearing regardless of what a future caller
+ * remembers to do first. The pending row is deleted here, in the same
+ * transaction as the code's own insert (`writeTransaction` is not used
+ * because both writes are simple enough not to need rollback-on-partial-
+ * failure in practice, but see `docs/DECISIONS.md` if this ever needs
+ * strengthening) — consenting twice to the same pending id is not possible
+ * once this runs once.
  */
 export function consentToPendingAuthorization(
   id: string,
@@ -220,7 +281,7 @@ export function consentToPendingAuthorization(
   ttlMs: number = DEFAULT_AUTHORIZATION_CODE_TTL_MS
 ): IssuedAuthorizationCode | undefined {
   const now = Date.now()
-  const pending = mcpOauth.getPendingAuthorization(id, now, db)
+  const pending = mcpOauth.claimPendingAuthorization(id, accountId, now, db)
   if (!pending) return undefined
   mcpOauth.deletePendingAuthorization(id, db)
 
@@ -314,7 +375,19 @@ export function exchangeAuthorizationCode(
       'This authorization code is unknown, expired, or already used.'
     )
   }
-  if (redirectUri !== undefined && redirectUri !== consumed.redirectUri) {
+  // RFC 6749 §4.1.3 — `redirect_uri` is REQUIRED at the token endpoint
+  // whenever it was present in the authorization request, which every
+  // authorization request `beginAuthorization` records always is (the
+  // column is `NOT NULL`). A security review found this check optional by
+  // omission: the SDK's own `AuthorizationCodeGrantSchema` makes
+  // `redirect_uri` an optional field at `/token`, so a client (or an
+  // attacker replaying a stolen code) that simply left it out skipped this
+  // check entirely rather than being refused by it. Not exploitable on its
+  // own — the redirect URI is already fixed, exactly, at `/authorize`, and
+  // this check only ever *rejects*, never *widens*, what a code is good
+  // for — but the check must not be something a caller can opt out of by
+  // omitting the field.
+  if (redirectUri === undefined || redirectUri !== consumed.redirectUri) {
     throw new McpOauthError(
       'invalid_grant',
       'redirect_uri does not match the one this code was issued for.'

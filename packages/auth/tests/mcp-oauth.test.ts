@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   beginAuthorization,
+  claimPendingAuthorization,
   consentToPendingAuthorization,
   declinePendingAuthorization,
   exchangeAuthorizationCode,
@@ -116,6 +117,7 @@ describe('beginAuthorization / consentToPendingAuthorization', () => {
       { redirectUris: ['https://client.example/callback'] },
       testDb.db
     )
+    const accountId = seedAccount(testDb.db)
     const begun = beginAuthorization(
       {
         clientId: client.id,
@@ -125,7 +127,7 @@ describe('beginAuthorization / consentToPendingAuthorization', () => {
       testDb.db
     )
 
-    declinePendingAuthorization(begun.id, testDb.db)
+    declinePendingAuthorization(begun.id, accountId, testDb.db)
 
     expect(peekPendingAuthorization(begun.id, testDb.db)).toBeUndefined()
     expect(
@@ -139,6 +141,49 @@ describe('beginAuthorization / consentToPendingAuthorization', () => {
     expect(
       consentToPendingAuthorization(randomUUID(), accountId, testDb.db)
     ).toBeUndefined()
+  })
+
+  // MCP-7 security review — the state-fixation defence
+  // (`schema.ts#mcpOauthPendingAuthorizations`'s own doc comment): the
+  // first signed-in account to touch a pending authorization claims it,
+  // and a second, different account can neither view its real client name
+  // nor complete it.
+  it('claims a pending authorization for the first account, and refuses a second, different account', () => {
+    testDb = createTestDatabase()
+    const client = registerOauthClient(
+      { redirectUris: ['https://client.example/callback'] },
+      testDb.db
+    )
+    const firstAccountId = seedAccount(testDb.db)
+    const secondAccountId = seedAccount(testDb.db)
+    const begun = beginAuthorization(
+      {
+        clientId: client.id,
+        redirectUri: 'https://client.example/callback',
+        codeChallenge: 'challenge-value',
+      },
+      testDb.db
+    )
+
+    expect(
+      claimPendingAuthorization(begun.id, firstAccountId, testDb.db)
+    ).toBeDefined()
+    // Reclaiming as the same account is idempotent.
+    expect(
+      claimPendingAuthorization(begun.id, firstAccountId, testDb.db)
+    ).toBeDefined()
+    // A different account is refused, indistinguishably from an unknown id.
+    expect(
+      claimPendingAuthorization(begun.id, secondAccountId, testDb.db)
+    ).toBeUndefined()
+
+    // Consenting and declining both enforce the identical claim.
+    expect(
+      consentToPendingAuthorization(begun.id, secondAccountId, testDb.db)
+    ).toBeUndefined()
+    expect(
+      consentToPendingAuthorization(begun.id, firstAccountId, testDb.db)
+    ).toBeDefined()
   })
 })
 
@@ -295,7 +340,7 @@ describe('exchangeAuthorizationCode', () => {
 })
 
 describe('exchangeRefreshToken', () => {
-  function issueTokens() {
+  function issueTokens(options: { resource?: string } = {}) {
     const client = registerOauthClient(
       { redirectUris: ['https://client.example/callback'] },
       testDb.db
@@ -306,6 +351,7 @@ describe('exchangeRefreshToken', () => {
         clientId: client.id,
         redirectUri: 'https://client.example/callback',
         codeChallenge: 'challenge-value',
+        ...(options.resource ? { resource: options.resource } : {}),
       },
       testDb.db
     )
@@ -315,7 +361,7 @@ describe('exchangeRefreshToken', () => {
       issued.code,
       client.id,
       issued.redirectUri,
-      undefined,
+      options.resource,
       testDb.db
     )
     return { client, accountId, tokens }
@@ -343,6 +389,46 @@ describe('exchangeRefreshToken', () => {
     expect(() =>
       exchangeRefreshToken(tokens.refreshToken, client.id, undefined, testDb.db)
     ).toThrow(McpOauthError)
+  })
+
+  // MCP-7 security review — resource indicators (RFC 8707) were completely
+  // unexercised: no test constructed a token bound to a `resource` at all,
+  // so this check never ran in the whole suite.
+  it('refuses a resource that does not match the one the refresh token was issued for', () => {
+    testDb = createTestDatabase()
+    const { client, tokens } = issueTokens({
+      resource: 'https://mcp.example/mcp',
+    })
+
+    let caught: unknown
+    try {
+      exchangeRefreshToken(
+        tokens.refreshToken,
+        client.id,
+        'https://other.example/mcp',
+        testDb.db
+      )
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(McpOauthError)
+    expect((caught as McpOauthError).code).toBe('invalid_target')
+  })
+
+  it('accepts the matching resource, and the resulting access token still verifies to it', () => {
+    testDb = createTestDatabase()
+    const { client, tokens } = issueTokens({
+      resource: 'https://mcp.example/mcp',
+    })
+
+    const rotated = exchangeRefreshToken(
+      tokens.refreshToken,
+      client.id,
+      'https://mcp.example/mcp',
+      testDb.db
+    )
+    const verified = verifyAccessToken(rotated.accessToken, testDb.db)
+    expect(verified?.resource).toBe('https://mcp.example/mcp')
   })
 })
 
@@ -383,6 +469,67 @@ describe('revokeToken', () => {
     // The owning client's own revoke actually revokes.
     revokeToken(tokens.accessToken, client.id, testDb.db)
     expect(verifyAccessToken(tokens.accessToken, testDb.db)).toBeUndefined()
+  })
+
+  // MCP-7 security review — this branch had zero coverage: dropping the
+  // `clientId` scoping on `findRefreshTokenByHash` inside `revokeToken`
+  // (this file's own doc comment) failed nothing, because no test ever
+  // revoked a refresh token at all. This is also the credential a person
+  // would actually revoke, not the short-lived access token.
+  it('revokes a refresh token, scoped to the client that owns it', () => {
+    testDb = createTestDatabase()
+    const client = registerOauthClient(
+      { redirectUris: ['https://client.example/callback'] },
+      testDb.db
+    )
+    const accountId = seedAccount(testDb.db)
+    const begun = beginAuthorization(
+      {
+        clientId: client.id,
+        redirectUri: 'https://client.example/callback',
+        codeChallenge: 'challenge-value',
+      },
+      testDb.db
+    )
+    const issued = consentToPendingAuthorization(begun.id, accountId, testDb.db)
+    if (!issued) throw new Error('setup failed')
+    const tokens = exchangeAuthorizationCode(
+      issued.code,
+      client.id,
+      issued.redirectUri,
+      undefined,
+      testDb.db
+    )
+    const otherClient = registerOauthClient(
+      { redirectUris: ['https://other.example/callback'] },
+      testDb.db
+    )
+
+    // A different client revoking a refresh token it does not own does
+    // nothing — the refresh token still rotates successfully afterward.
+    revokeToken(tokens.refreshToken, otherClient.id, testDb.db)
+    const stillWorks = exchangeRefreshToken(
+      tokens.refreshToken,
+      client.id,
+      undefined,
+      testDb.db
+    )
+    expect(stillWorks.accessToken).toBeDefined()
+
+    // The owning client's own revoke actually revokes — the *new* refresh
+    // token this rotation just issued no longer exchanges.
+    revokeToken(stillWorks.refreshToken, client.id, testDb.db)
+    expect(() =>
+      exchangeRefreshToken(
+        stillWorks.refreshToken,
+        client.id,
+        undefined,
+        testDb.db
+      )
+    ).toThrow(McpOauthError)
+    // Revoking a refresh token also revokes the access token it was
+    // issued alongside (`schema.ts`'s own module comment).
+    expect(verifyAccessToken(stillWorks.accessToken, testDb.db)).toBeUndefined()
   })
 
   it('is a no-op, not a throw, for a token that was never issued', () => {

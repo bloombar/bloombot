@@ -140,6 +140,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'getClient',
     'createPendingAuthorization',
     'getPendingAuthorization',
+    'claimPendingAuthorization',
     'deletePendingAuthorization',
     'deleteExpiredPendingAuthorizations',
     'createAuthorizationCode',

@@ -11348,15 +11348,63 @@ D-2's "one filesystem") and redirects the browser to `apps/api/src/routes/mcp-oa
 plain server-rendered HTML route rather than a page in the React panel. This was forced by this
 slice's own concurrency constraints (another slice was mid-edit on `apps/web/src/pages/Shell.tsx` and
 its routing), not chosen for its own sake: a proper "continue where you left off after signing in"
-experience belongs in the panel, reusing `pages/SignIn.tsx` directly, and a signed-out visitor to
-this route today is told, plainly, to sign in in another tab and reload — workable, not polished.
-Whoever next touches the panel's own connect/consent surface should fold this into it rather than
-leaving two consent experiences side by side.
+experience belongs in the panel, reusing `pages/SignIn.tsx` directly. Whoever next touches the
+panel's own connect/consent surface should fold this into it rather than leaving two consent
+experiences side by side.
+
+**Security review, must-fix 2 — this consent screen enabled an account takeover, and the fix
+required correcting a false claim in this very entry.** The first version shipped shown "An MCP
+assistant will act as your Bloombot account" with an `Allow`/`Deny` form and *nothing else* — no
+client name, no destination — while this document's own `schema.ts#mcpOauthPendingAuthorizations`
+comment claimed a pending authorization's `id` is "not a bearer credential ... nothing it names can
+be spent on its own." Both were true only in isolation. A review round chained them: register a
+client at the open `/register` with an attacker-controlled `redirect_uri`, drive `/authorize`
+without ever opening a browser (a script reading the `Location` header is enough to learn the
+`request` id), and mail that URL to a signed-in victim. The victim's browser genuinely was the first
+(and only) one to reach the screen, saw a placeholder that read as legitimate regardless of who was
+actually asking, and had nothing to refuse — one click leaked a 1-hour access token and a 30-day
+rotating refresh token, acting as the victim across every organization they belong to, to the
+attacker's own `redirect_uri`. `state` and PKCE's own `code_challenge` protect the *client* here;
+neither says anything to the *user*. Compounding it, this route set no `X-Frame-Options`/CSP
+`frame-ancestors`, so the (even corrected) screen could still be framed and the click harvested
+without the victim reading anything at all. The fix, all parts load-bearing together, none of them
+sufficient alone:
+ - the screen now names the client (or says plainly it has no registered name — never a reassuring
+   placeholder) and the redirect URI's own host;
+ - `mcp_oauth_pending_authorizations` gained a nullable `accountId`, bound to the first signed-in
+   account whose browser reaches the screen and checked again on every later request against that
+   same row (`claimPendingAuthorization`, `@bloombot/auth`) — the identical state-fixation defence
+   LINK-7's own `completeDiscordPersonLink` already holds itself to, "the exchange is tied to the
+   browser session that began it, so a link prepared by one person cannot be finished by another." As
+   that column's own doc comment says now, correcting the claim above: combined with a signed-in
+   account's cookie and one click, this row *is* the capability — the disclosure fix is what has to
+   stop the attack, not this column; this column's own job is a narrower, real one, closing a `request`
+   id that leaks a second time (a proxy log, browser history, a link shared twice) from being
+   completed by a second account after a first one already started deciding;
+ - `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` are now set on every response this router
+   sends;
+ - a signed-out visitor now round-trips through a real sign-in (`/oauth/mcp/sign-in`, `/oauth/mcp/redeem`)
+   rather than being told to open another tab and reload — the reviewer's own finding that this was
+   the *same* mechanism making the `request` id transferable between people in the first place, not a
+   separate defect from the disclosure one. The round trip reuses `@bloombot/auth`'s own
+   `requestSignInLink`/`redeemSignInLink` — the identical functions `routes/auth.ts`'s own
+   `/request-link`/`/redeem` already call — from a plain server-rendered form; it does not build a
+   second login, and the "belongs in the panel eventually" limit two paragraphs up still holds for
+   this round trip specifically.
 
 **Limits.** `PUBLIC_MCP_URL` is optional and falls back to a loopback issuer for local development
 (`env.ts`'s own doc comment) — a real deployment that wants a ChatGPT/Claude connector to discover
-this server has to set it *and* have nginx actually proxy `MCP_PORT` publicly, neither of which this
-slice can do from inside the repository (`docs/DEPLOY_DROPLET.md` is the maintainer's own document).
-Refresh tokens are not scoped by resource beyond a plain equality check on record, and there is no
-console yet for a person to see or revoke individual MCP connections (the brief's own "make it
-possible, don't build the UI") — both real, deliberately deferred rather than solved here.
+this server has to set it, *and* have nginx actually proxy both `MCP_PORT` (`apps/mcp`'s own
+`/mcp`/`/health`) *and* a `location /oauth/` block pointed at `apps/api` (the consent route above —
+the security review's own must-fix 1 found this second block missing entirely: without it, a real
+browser following `authorize()`'s own redirect gets the SPA's `index.html` fallback, a `200` with no
+matching route, and the flow can never complete). Neither block exists in `docs/DEPLOY_DROPLET.md`
+yet — that document is the maintainer's own, not edited by this slice — so both need adding there
+together when a deployment turns this on; `apps/web/vite.config.ts`'s own dev/preview proxy already
+carries the `/oauth` entry, the same allowlist nginx's own block has to mirror. Refresh tokens are
+not scoped by resource beyond a plain equality check on record, and there is no console yet for a
+person to see or revoke individual MCP connections (the brief's own "make it possible, don't build
+the UI") — both real, deliberately deferred rather than solved here. No cap or sweep exists yet on
+`mcp_oauth_clients` itself (`/register` is unauthenticated, rate-limited only by the SDK's own
+default) — left alone by the security review as acceptable for now, but worth adding if it is ever
+cheap to.

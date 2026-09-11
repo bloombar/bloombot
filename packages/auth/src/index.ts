@@ -86,6 +86,7 @@ export {
   getOauthClient,
   beginAuthorization,
   peekPendingAuthorization,
+  claimPendingAuthorization,
   declinePendingAuthorization,
   consentToPendingAuthorization,
   peekAuthorizationCodeChallenge,

@@ -126,6 +126,36 @@ export function getPendingAuthorization(
     .get()
 }
 
+/**
+ * `schema.ts#mcpOauthPendingAuthorizations`'s own state-fixation defence:
+ * binds this row to `accountId` if it is not yet bound to anyone (the
+ * conditional `UPDATE`, guarded on `isNull(accountId)` so a second caller's
+ * claim can never overwrite a first one's), then reads the row back and
+ * refuses (`undefined`) unless it is now bound to *this* caller —
+ * indistinguishable, on purpose, from an unknown or expired id: a caller
+ * that lost the race to claim it learns nothing about who won.
+ */
+export function claimPendingAuthorization(
+  id: string,
+  accountId: string,
+  now: number,
+  db: Executor
+): McpOauthPendingAuthorization | undefined {
+  db.update(mcpOauthPendingAuthorizations)
+    .set({ accountId })
+    .where(
+      and(
+        eq(mcpOauthPendingAuthorizations.id, id),
+        isNull(mcpOauthPendingAuthorizations.accountId),
+        gt(mcpOauthPendingAuthorizations.expiresAt, now)
+      )
+    )
+    .run()
+  const row = getPendingAuthorization(id, now, db)
+  if (!row || row.accountId !== accountId) return undefined
+  return row
+}
+
 export function deletePendingAuthorization(id: string, db: Executor): number {
   const result = db
     .delete(mcpOauthPendingAuthorizations)

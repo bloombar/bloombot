@@ -89,7 +89,10 @@ import { organizations, type Database } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 import { z, type ZodRawShape } from 'zod'
 
-import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js'
+import {
+  createOAuthMetadata,
+  mcpAuthRouter,
+} from '@modelcontextprotocol/sdk/server/auth/router.js'
 import type { OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -631,19 +634,46 @@ export function buildApp(
   app.disable('x-powered-by')
   app.use(express.json())
 
+  const resourceServerUrl =
+    deps.resourceServerUrl ?? new URL('/mcp', deps.issuerUrl)
+
+  // MCP-7 security review — the SDK's own `createOAuthMetadata` hard-codes
+  // `token_endpoint_auth_methods_supported: ['client_secret_post', 'none']`
+  // and `revocation_endpoint_auth_methods_supported: ['client_secret_post']`,
+  // with no option on `mcpAuthRouter` to override either — but this
+  // deployment supports only `none` (`schema.ts#mcpOauthClients`'s own
+  // module comment: no client secret is ever issued). A strict client that
+  // trusts the metadata literally may pick `client_secret_post` and fail to
+  // authenticate, or read the (accurate, per-client) `client_secret_expires_at:
+  // undefined` as "unsupported" and skip `/revoke` entirely. Mounted
+  // *before* `mcpAuthRouter` below, at the exact metadata path, so this
+  // corrected document answers first — Express never reaches the SDK's own
+  // (still-mounted, for every other path) metadata route for this one.
+  app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+    const metadata = createOAuthMetadata({
+      provider: deps.oauthProvider,
+      issuerUrl: deps.issuerUrl,
+    })
+    res.status(200).json({
+      ...metadata,
+      token_endpoint_auth_methods_supported: ['none'],
+      revocation_endpoint_auth_methods_supported: ['none'],
+    })
+  })
+
   // MCP-7 — mounted at this app's own root, the SDK's own required
   // position (`server/auth/router.js`'s own doc comment). Publishes
   // `/authorize`, `/token`, `/register`, `/revoke`,
-  // `/.well-known/oauth-authorization-server` and
+  // `/.well-known/oauth-authorization-server` (superseded by the corrected
+  // route above, for every request that actually reaches it) and
   // `/.well-known/oauth-protected-resource` — every one of them derived
-  // from `deps.issuerUrl`/`deps.resourceServerUrl`, never a hard-coded
-  // domain (this file's own module comment).
+  // from `deps.issuerUrl`/`resourceServerUrl`, never a hard-coded domain
+  // (this file's own module comment).
   app.use(
     mcpAuthRouter({
       provider: deps.oauthProvider,
       issuerUrl: deps.issuerUrl,
-      resourceServerUrl:
-        deps.resourceServerUrl ?? new URL('/mcp', deps.issuerUrl),
+      resourceServerUrl,
     })
   )
 

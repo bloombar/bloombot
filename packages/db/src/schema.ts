@@ -1667,10 +1667,40 @@ export const mcpOauthClients = sqliteTable('mcp_oauth_clients', {
  * anything itself — the two processes share one database (D-2, PLAT-4), so
  * a row here is how the request's own client, redirect URI, PKCE challenge,
  * `state` and scope survive that redirect with no other channel between the
- * two processes at all. Never a secret: this id is a correlator carried in a
- * URL, not a bearer credential — nothing it names can be spent on its own
- * (`docs/DECISIONS.md`'s MCP-7 entry has the fuller reasoning for why this
- * one row is not hashed the way every credential below it is).
+ * two processes at all.
+ *
+ * **Not a bearer secret in the usual sense — but not harmless either; say
+ * what is actually true.** `id` is a correlator carried in a URL, not
+ * hashed the way every credential below it is, because it alone proves no
+ * identity and spends nothing by itself. But combined with a signed-in
+ * account's own cookie and one click on the consent screen, this row *is*
+ * the capability: whoever's browser completes it grants that account's
+ * authority to the client `clientId` names, at whatever `redirectUri`
+ * names. A security review (`docs/DECISIONS.md`'s MCP-7 entry) found
+ * exactly that gap exploitable — an attacker-registered client's own
+ * `request` id, handed to a signed-in victim, produced a consent screen
+ * naming neither the client nor the destination, and one click leaked a
+ * full grant to the attacker's own `redirectUri`. `accountId`, below, and
+ * the consent screen's own rendering of the client name and the redirect
+ * host (`apps/api/src/routes/mcp-oauth-consent.ts`) are the fix.
+ *
+ * `accountId` — nullable, set once: the first signed-in account whose
+ * browser loads this pending authorization's own consent screen "claims"
+ * it, and every later request against this same row (a reload, the
+ * `Allow`/`Deny` POST) is refused if it names a *different* account — the
+ * identical state-fixation defence `person-link.ts`'s own
+ * `completeDiscordPersonLink` doc comment describes for LINK-7 ("the
+ * exchange is tied to the browser session that began it, so a link
+ * prepared by one person cannot be finished by another"), applied here to
+ * a request a real MCP client began rather than a person. This does not by
+ * itself stop the disclosed attack above — the victim genuinely is the
+ * first (and only) account to see the screen, so it "claims" them
+ * correctly — the consent screen's own honesty is what has to stop that;
+ * this column is the second, independent guard against a *different*
+ * failure mode: the same `request` id, if it ever leaks further (a proxy
+ * log, browser history, a copy-pasted link shared twice), being completed
+ * by a second signed-in account after a first one has already started
+ * deciding.
  */
 export const mcpOauthPendingAuthorizations = sqliteTable(
   'mcp_oauth_pending_authorizations',
@@ -1684,6 +1714,10 @@ export const mcpOauthPendingAuthorizations = sqliteTable(
     state: text('state'),
     scope: text('scope'),
     resource: text('resource'),
+    // This table's own doc comment — set once, by the first signed-in
+    // account to load the consent screen; every later request against
+    // this row must match it.
+    accountId: text('account_id').references(() => accounts.id),
     expiresAt: integer('expires_at').notNull(),
     createdAt: integer('created_at').notNull(),
   },

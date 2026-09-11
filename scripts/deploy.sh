@@ -8,13 +8,15 @@
 #   ssh <user>@<host> 'bash -s -- <commit-sha>' < scripts/deploy.sh
 #
 # It updates the existing git checkout to an exact commit, installs
-# dependencies only when they changed, builds the TypeScript workspace,
-# applies the platform's database migration exactly once (OPS-8: before any
-# process that would otherwise race to apply it starts), then reloads every
-# supervised process — the legacy Python bot plus the four Node processes
-# `ecosystem.config.cjs` names (API, bot, worker, MCP server) and OPS-12's
-# alerting monitor — verifying each one stayed up and rolling every one of
-# them back to the previous commit if any did not.
+# dependencies only when they changed, builds the TypeScript workspace, backs
+# up the database (OPS-18 — before every migration, not only a risky-looking
+# one: see `backup_database`'s own comment for why), applies the platform's
+# database migration exactly once (OPS-8: before any process that would
+# otherwise race to apply it starts), then reloads every supervised process —
+# the legacy Python bot plus the four Node processes `ecosystem.config.cjs`
+# names (API, bot, worker, MCP server) and OPS-12's alerting monitor —
+# verifying each one stayed up and rolling every one of them back to the
+# previous commit if any did not.
 #
 # It never touches untracked files: `.env`, `data/*.db` and `logs/` are left
 # exactly as they are, and `git clean` is deliberately never run. It also
@@ -30,7 +32,11 @@
 # through: `runMigrations` applies whatever it reaches before the failure and
 # there is no automatic way to undo that (the same limit `npm run db:migrate`
 # already has run by hand). See docs/CUTOVER.md's own "rollback does not
-# un-migrate" note for what an operator does about that case.
+# un-migrate" note for what an operator does about that case. OPS-18's own
+# backup, taken immediately before the migration runs, is what makes that
+# case recoverable at all — by hand, deliberately; this script does not
+# restore from it itself (docs/DEPLOY_DROPLET.md's own §8.1 has the restore
+# procedure).
 #
 # Environment overrides (all optional):
 #   APP_DIR             checkout to deploy    (default $HOME/discord-channel-manager)
@@ -201,6 +207,135 @@ install_deps() {
     log "no pipenv virtualenv here; installing with $PM2_INTERPRETER -m pip"
     "$PM2_INTERPRETER" -m pip install --requirement requirements.txt
   fi
+}
+
+# OPS-18 — how many pre-migration backups to keep beside the database. Five
+# is enough to recover from a migration noticed wrong a few deploys later,
+# without letting a small droplet's disk fill silently from a file this
+# script itself keeps writing on every deploy that has a database yet.
+BACKUP_RETENTION=5
+
+# OPS-18 — resolves the platform's own SQLite file the same way its four
+# Node processes do: `DATABASE_PATH` from `.env`, defaulting to
+# `./data/data.db` (`packages/config/src/env.ts`'s own zod default),
+# resolved against `$APP_DIR` — `ecosystem.config.cjs`'s own comment on why
+# pm2's `cwd` (== `$APP_DIR` here, since this script `cd`s there before
+# anything else) is what every relative path in `.env` resolves against.
+# Deliberately not hard-coded to `data/data.db`: a droplet that has moved
+# the database (docs/DEPLOY_DROPLET.md's own "own boot disk over a term"
+# note) must be backed up at the path it actually uses, not the default.
+# Parsed with a plain bash `read` loop rather than `sed`/`grep`/`cut` — one
+# fewer external command this step depends on being on PATH, on top of the
+# `sqlite3` check below that already refuses to guess.
+resolve_database_path() {
+  local db_rel="./data/data.db" key value
+  if [ -f "$APP_DIR/.env" ]; then
+    while IFS='=' read -r key value; do
+      if [ "$key" = "DATABASE_PATH" ]; then
+        db_rel="$value"
+      fi
+    done <"$APP_DIR/.env"
+  fi
+  case "$db_rel" in
+    /*) printf '%s' "$db_rel" ;;
+    *) printf '%s' "$APP_DIR/$db_rel" ;;
+  esac
+}
+
+# OPS-18 — keeps only the newest $BACKUP_RETENTION backups in `$1`, so a
+# droplet that never runs the restore-and-delete-by-hand this script
+# deliberately does not attempt cannot fill its own disk with them over a
+# term. Filenames sort chronologically (the UTC timestamp is the first
+# component — see `backup_database`'s own naming below), so a plain
+# lexical sort is enough to find the oldest without touching mtimes, which
+# a `cp`/rsync of this directory could otherwise disturb.
+prune_old_backups() {
+  local dir="$1"
+  local -a backups=()
+  local f
+  for f in "$dir"/backup_*.db; do
+    [ -e "$f" ] || continue
+    backups+=("$f")
+  done
+  mapfile -t backups < <(printf '%s\n' "${backups[@]}" | sort)
+  local count=${#backups[@]}
+  if [ "$count" -gt "$BACKUP_RETENTION" ]; then
+    local i
+    for ((i = 0; i < count - BACKUP_RETENTION; i++)); do
+      log "pruning old backup ${backups[$i]} (keeping the newest $BACKUP_RETENTION)"
+      rm -f "${backups[$i]}"
+    done
+  fi
+}
+
+# OPS-18 — takes a SQLite-consistent backup of the platform database
+# immediately before the migration below runs, and returns non-zero (never
+# exits directly — the caller decides what a backup failure means, the same
+# shape every other checked forward-path step in this file already uses) if
+# it could not.
+#
+# `sqlite3 "$db" ".backup '$dest'"` rather than `cp`: WAL mode
+# (`packages/db/src/client.ts`'s own pragmas) means the file can have a
+# `-wal` beside it with committed data that has not been checkpointed into
+# the main file yet, and up to four processes (API, bot, worker, MCP server)
+# hold it open at deploy time — a `cp` could copy the main file mid-write or
+# miss the WAL entirely, producing a "backup" that looks fine and restores
+# wrong. SQLite's own online backup API is safe against exactly that
+# (docs/DEPLOY_DROPLET.md's own §8.1 already documents this for the manual,
+# scheduled backup; this is the same tool, run automatically, right before
+# the one operation on this file with no way back). `sqlite3` not being on
+# PATH is refused outright rather than silently falling back to `cp` — a
+# backup that is unsafe under concurrent writers is worse than an operator
+# knowing there is no backup at all.
+#
+# Unconditional rather than gated on "does this deploy actually have a
+# pending migration": this script does not know that ahead of time (it
+# hands `--i-know` to `run-migrate.js` and lets that script decide what, if
+# anything, is pending) — see this file's own header for why applying it is
+# never gated the way a dependency install is. Backing up on every deploy
+# that already has a database is the safe default; the cost is one
+# `.backup` invocation and a bounded amount of disk (`prune_old_backups`).
+#
+# Skips cleanly, rather than failing, when there is no database yet — a
+# first-ever deploy on a fresh droplet has nothing to back up.
+backup_database() {
+  local db_path backup_dir dest size
+  db_path="$(resolve_database_path)"
+
+  if [ ! -f "$db_path" ]; then
+    log "no database at $db_path yet; skipping the pre-migration backup (first deploy)"
+    return 0
+  fi
+
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "ERROR: sqlite3 is not on PATH. Refusing to back up $db_path with
+anything less safe than SQLite's own .backup — a plain file copy of a live
+database with a -wal file beside it is not consistent under the four
+processes that hold it open at deploy time. Install sqlite3 on this droplet
+before deploying a migration." >&2
+    return 1
+  fi
+
+  backup_dir="$(dirname "$db_path")/backups"
+  mkdir -p "$backup_dir"
+  # Timestamp first, so the newest backup always sorts last — the ordering
+  # `prune_old_backups` above relies on — and the target commit second, for
+  # an operator scanning the directory for which run a given file belongs to.
+  dest="$backup_dir/backup_$(date -u +%Y%m%dT%H%M%SZ)_${TARGET_SHA:0:8}.db"
+
+  log "backing up $db_path to $dest before the migration"
+  if ! sqlite3 "$db_path" ".backup '$dest'"; then
+    rm -f "$dest"
+    echo "ERROR: backing up $db_path to $dest failed." >&2
+    return 1
+  fi
+
+  size="$(du -h "$dest" 2>/dev/null | cut -f1)"
+  log "backup complete: $dest (${size:-unknown size}). Restore with (stop
+every supervised process first — docs/DEPLOY_DROPLET.md's own §8.1 has the
+full procedure): sqlite3 $db_path \".restore '$dest'\""
+
+  prune_old_backups "$backup_dir"
 }
 
 # Reads one field of a named pm2 app record out of `pm2 jlist`. Parsing is
@@ -620,6 +755,21 @@ if ! npm_build --workspace apps/web; then
   restore_previous_checkout
   fail "the control panel failed to build at ${TARGET_SHA:0:8}. Nothing was
 restarted and the checkout was put back."
+fi
+
+# OPS-18 — taken immediately before the migration below, and before it,
+# never after: this repository has no down migrations, and the migration in
+# flight the first time this ran (0026_clear_stingray.sql) drops and
+# recreates `courses`, which fourteen other tables hold foreign keys into. A
+# failed backup must abort here — before the migration and before anything
+# is reloaded — rather than let a migration run against a database with no
+# way back if it is wrong.
+log "backing up the database before migrating it"
+if ! backup_database; then
+  restore_previous_checkout
+  fail "the pre-migration database backup failed at ${TARGET_SHA:0:8}.
+Refusing to run the migration against an unbacked-up database — nothing was
+migrated and nothing was reloaded. The checkout was put back."
 fi
 
 # OPS-8 — applied exactly once, here, before any of the four Node processes

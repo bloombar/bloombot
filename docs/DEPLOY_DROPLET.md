@@ -868,6 +868,20 @@ checkout at `DEPLOY_PATH`. **It is a dry run unless `apply` is checked** — rea
 plan output (which files it found, and why each is or is not deletable) before ever checking
 that box, since setting it deletes files from the live OpenAI account permanently.
 
+### The pre-migration database backup (OPS-18)
+
+Every deploy backs up the database with SQLite's own `.backup` immediately before running the
+platform migration, and aborts — before the migration and before any process reloads — if the
+backup itself fails. Backups live in `data/backups/` (a `git`-ignored sibling of `data/data.db`,
+resolved the same way `DATABASE_PATH` is), named `backup_<UTC timestamp>_<short sha>.db`; the
+newest 5 are kept and older ones are pruned automatically. A fresh droplet with no database yet
+skips the step and says so in the deploy log, rather than failing over nothing to back up.
+
+**This does not restore anything by itself** — restoring is a deliberate, by-hand act, on purpose
+(see D-101). The deploy log names the exact restore command for that run's own backup; §8.1 below
+has the full procedure (stopping every process first, clearing stale WAL/shared-memory sidecars,
+restoring, then re-running the migration in case the restored file predates a later one).
+
 ### What this deployment actually uses
 
 Recorded because every one of these was got wrong once, and the failures were not

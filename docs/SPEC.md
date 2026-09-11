@@ -1654,6 +1654,18 @@ SSH channel OPS-16 already proved sufficient. It defaults to a dry run: an `appl
 by an exact-string comparison, is what actually deletes anything, because GitHub renders an unset
 boolean input as the string `false`, which is truthy in shell if compared carelessly.
 
+#### OPS-18 The deploy backs up the database before migrating it
+
+This repository has no down migrations, so a migration that fails partway through, or is simply
+wrong, is otherwise unrecoverable — and one that drops and recreates a table other tables hold
+foreign keys into is exactly the kind of migration this matters for. `scripts/deploy.sh` takes a
+SQLite-consistent backup (`.backup`, not a file copy, which is not safe against the live
+processes writing to the database at deploy time) immediately before running the platform
+migration, and aborts the deploy — before the migration and before any process is reloaded — if
+the backup itself cannot be taken. A first-ever deploy with no database yet skips the backup
+rather than failing over nothing to back up. Restoring from a backup stays a deliberate,
+by-hand act; this only ensures a good one exists.
+
 #### OPS-13 A server administrator can set the platform up from documentation alone
 
 The path from an empty Discord application to a bot answering a student's question is written down,

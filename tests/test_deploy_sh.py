@@ -137,6 +137,24 @@ cat > /dev/null
 exit "${FAKE_PY_EXIT:-0}"
 """
 
+# OPS-18 — stands in for SQLite's own online backup, invoked as
+# `sqlite3 "$db" ".backup '$dest'"`. FAKE_SQLITE_EXIT simulates a backup that
+# cannot be taken. A raw string: the dot-command's own single quotes have to
+# survive into the file exactly as written, and a plain triple-quoted string
+# would have Python's own `\'` escape strip the backslash bash needs to keep
+# that quote from starting a bash quoted context of its own.
+SQLITE_STUB = r"""#!/usr/bin/env bash
+echo "$*" >> "$SQLITE3_CALLS"
+if [ "${FAKE_SQLITE_EXIT:-0}" != "0" ]; then
+  exit "${FAKE_SQLITE_EXIT}"
+fi
+db="$1"
+cmd="$2"
+dest="${cmd#.backup \'}"
+dest="${dest%\'}"
+cp "$db" "$dest"
+"""
+
 
 def _git(cwd, *args):
     """Run a git command, failing the test loudly if it errors."""
@@ -166,7 +184,7 @@ OLD_NAMES_ECOSYSTEM = """module.exports = { apps: [
 """
 
 
-def _build_world(tmp_path, pre_rename_first_commit=False):
+def _build_world(tmp_path, pre_rename_first_commit=False, skip_sqlite3=False):
     """Builds the fake droplet `world` wraps. Factored out so a test that
     needs a differently-shaped history — OPS-16's `pre_rename_first_commit`
     — can call it directly rather than only through the fixture below.
@@ -178,6 +196,13 @@ def _build_world(tmp_path, pre_rename_first_commit=False):
     never actually be rolled back to (`check_pm2_names_migrated` refuses
     every deploy before this one while pm2 still knows a bare name) — the
     gap that made a real bug in the rollback path invisible to this suite.
+
+    `skip_sqlite3=True` — OPS-18's own "sqlite3 is not on PATH" scenario:
+    no `sqlite3` stub is written, and the PATH built below carries only
+    symlinks to the specific real tools the script needs rather than the
+    ordinary `/usr/bin`/`/bin` catch-all, since a real `sqlite3` often lives
+    in one of those two directories right alongside tools this script
+    genuinely needs (`sed`/`awk`/`du` on a typical Linux droplet).
     """
     upstream = tmp_path / "upstream"
     upstream.mkdir()
@@ -254,6 +279,8 @@ def _build_world(tmp_path, pre_rename_first_commit=False):
     _write_stub(bin_dir / "python3", PYTHON_STUB)
     _write_stub(bin_dir / "npm", NPM_STUB)
     _write_stub(bin_dir / "node", NODE_STUB)
+    if not skip_sqlite3:
+        _write_stub(bin_dir / "sqlite3", SQLITE_STUB)
 
     # A directory shaped like a pipenv virtualenv, so the script's "is there a
     # virtualenv here?" probe — which requires an executable bin/python — can
@@ -262,17 +289,34 @@ def _build_world(tmp_path, pre_rename_first_commit=False):
     (fake_venv / "bin").mkdir(parents=True)
     _write_stub(fake_venv / "bin" / "python", PYTHON_STUB)
 
-    # A minimal PATH: the stubs first, then only the directories holding the real
-    # tools the script genuinely uses. Anything else on the developer's PATH is
-    # excluded so the tests behave the same everywhere.
-    real_dirs = []
-    for tool in ("git", "node", "bash", "cat", "sleep"):
-        found = shutil.which(tool)
-        if found:
-            parent = str(Path(found).parent)
-            if parent not in real_dirs:
-                real_dirs.append(parent)
-    path = os.pathsep.join([str(bin_dir), *real_dirs, "/usr/bin", "/bin"])
+    if skip_sqlite3:
+        # OPS-18's own "not on PATH" scenario: symlink only the specific real
+        # tools deploy.sh needs (never a whole directory — see this
+        # function's own docstring for why `/usr/bin`/`/bin` are unsafe
+        # here), so a real `sqlite3` on this machine is genuinely
+        # unreachable rather than merely unstubbed.
+        no_sqlite3_dir = tmp_path / "no-sqlite3-path"
+        no_sqlite3_dir.mkdir()
+        for tool in (
+            "git", "node", "bash", "cat", "sleep",
+            "mkdir", "rm", "date", "du", "sort", "sed", "awk",
+        ):
+            found = shutil.which(tool)
+            if found:
+                (no_sqlite3_dir / tool).symlink_to(found)
+        path = os.pathsep.join([str(bin_dir), str(no_sqlite3_dir)])
+    else:
+        # A minimal PATH: the stubs first, then only the directories holding the real
+        # tools the script genuinely uses. Anything else on the developer's PATH is
+        # excluded so the tests behave the same everywhere.
+        real_dirs = []
+        for tool in ("git", "node", "bash", "cat", "sleep"):
+            found = shutil.which(tool)
+            if found:
+                parent = str(Path(found).parent)
+                if parent not in real_dirs:
+                    real_dirs.append(parent)
+        path = os.pathsep.join([str(bin_dir), *real_dirs, "/usr/bin", "/bin"])
 
     state = tmp_path / "state"
     state.mkdir()
@@ -308,6 +352,7 @@ def _build_world(tmp_path, pre_rename_first_commit=False):
         "FAKE_PIPENV_VENV": "0",
         "FAKE_VENV": str(fake_venv),
         "FAKE_PY_EXIT": "0",
+        "SQLITE3_CALLS": str(state / "sqlite3.log"),
     }
 
     def run(sha, **overrides):
@@ -793,3 +838,107 @@ def test_migrate_pm2_names_is_a_noop_on_an_already_migrated_droplet(world):
     assert result.returncode == 0, result.stdout + result.stderr
     pm2 = world.calls("pm2")
     assert not any(call.startswith("delete ") for call in pm2), pm2
+
+
+# OPS-18 — the deploy backs up the database before migrating it.
+#
+# `world`'s own fixture already gives every test in this file a `.env` (no
+# DATABASE_PATH override, so the default `./data/data.db` applies) and a
+# `data/data.db` file (`test_untracked_files_survive_a_deploy`'s own
+# fixture), which is exactly the shape a droplet that has deployed before
+# actually has — no extra setup needed for the ordinary cases below.
+
+
+def test_ops18_backup_runs_before_the_migration(world):
+    """The whole point of the slice, pinned on the actual order the two log
+    lines appear in, not merely that both appear somewhere."""
+    result = world.run(world.code_only)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    backup_at = result.stdout.find("backing up")
+    migrate_at = result.stdout.find("applying the platform database migration")
+    assert backup_at != -1, result.stdout
+    assert migrate_at != -1, result.stdout
+    assert backup_at < migrate_at, (
+        f"backup must be logged before the migration "
+        f"(backup at {backup_at}, migration at {migrate_at})"
+    )
+    sqlite_calls = world.calls("sqlite3")
+    assert any(".backup" in call for call in sqlite_calls), sqlite_calls
+
+
+def test_ops18_a_failing_backup_aborts_before_the_migration_and_before_anything_is_reloaded(
+    world,
+):
+    """The failure-ordering half: a backup that cannot be taken must abort
+    before the migration runs and before any process is reloaded — the same
+    "aborts before reloading anything" family every other forward-path
+    failure in this file already belongs to."""
+    result = world.run(world.code_only, FAKE_SQLITE_EXIT="1")
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "pre-migration database backup failed" in output
+    assert "applying the platform database migration" not in output
+    assert "reloading every supervised process" not in output
+    assert world.head() == world.first
+    # `pm2 jlist` alone is the half-migrated-names guard every deploy makes
+    # before touching anything (`check_pm2_names_migrated`) — a read-only
+    # call, not a reload or a start.
+    assert not any(
+        call.startswith("reload ") or call.startswith("start ")
+        for call in world.calls("pm2")
+    )
+
+
+def test_ops18_a_first_deploy_with_no_database_yet_skips_the_backup(world):
+    """A fresh droplet with no database yet must not fail over having
+    nothing to back up."""
+    (world.app / "data" / "data.db").unlink()
+
+    result = world.run(world.code_only)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "skipping the pre-migration backup" in result.stdout
+    assert world.calls("sqlite3") == []
+
+
+def test_ops18_sqlite3_absent_fails_loudly_rather_than_falling_back_to_a_copy(
+    tmp_path,
+):
+    """`sqlite3` not being on PATH must abort the deploy with a clear
+    message, rather than silently falling back to something less safe than
+    SQLite's own online backup. Needs its own world with no `sqlite3` stub
+    and a PATH that cannot reach a real one either — see `_build_world`'s
+    own `skip_sqlite3` docstring."""
+    world = _build_world(tmp_path, skip_sqlite3=True)
+
+    result = world.run(world.code_only)
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "sqlite3 is not on PATH" in output
+    assert "applying the platform database migration" not in output
+    assert world.head() == world.first
+
+
+def test_ops18_retention_prunes_old_backups_to_the_last_five(world):
+    """Keeps only the newest 5 backups, so a droplet that never restores and
+    deletes them by hand cannot fill its own disk over a term."""
+    backups_dir = world.app / "data" / "backups"
+    backups_dir.mkdir(parents=True)
+    # Filenames sort chronologically by their own leading UTC timestamp, not
+    # by mtime — seven pre-existing backups, all with a timestamp that
+    # sorts before any backup this run itself takes.
+    for i in range(7):
+        (backups_dir / f"backup_2020010{i}T000000Z_aaaaaaaa.db").write_text(
+            "old\n", encoding="utf-8"
+        )
+
+    result = world.run(world.code_only)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    remaining = sorted(p.name for p in backups_dir.glob("backup_*.db"))
+    assert len(remaining) == 5, remaining
+    assert "backup_20200100T000000Z_aaaaaaaa.db" not in remaining
+    assert "backup_20200106T000000Z_aaaaaaaa.db" in remaining

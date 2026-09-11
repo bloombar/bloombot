@@ -13,7 +13,8 @@ This is the **TypeScript platform**, not the Python bot. They can run side by si
 | **API** (`apps/api`) | Express, port 3000 | everything — the panel talks only to this |
 | **Web** (`apps/web`) | Vite dev server, port 5173 | the browser UI |
 | **Bot** (`apps/bot`) | the Discord gateway connection | answering messages in Discord |
-| **Worker** (`apps/worker`) | background jobs | later phases; not needed to browse |
+| **Worker** (`apps/worker`) | background jobs | roster imports, knowledge files, scaffolding, transcript exports |
+| **MCP** (`apps/mcp`) | the MCP server an assistant connects to | reaching courses from ChatGPT or Claude (MCP-1..8) |
 
 The API and the web dev server are enough to sign in and click around. Add the bot when you want a question
 in Discord answered.
@@ -109,6 +110,7 @@ npm run api:dev     # http://127.0.0.1:3000
 npm run web:dev     # http://localhost:5173
 npm run worker:dev  # background jobs — scaffolding a server, importing a roster
 npm run bot:dev     # only when you want Discord answered
+npm run mcp:dev     # only when you want to connect an MCP client
 ```
 
 The **worker** is the one that is easy to forget: actions that enqueue a job — scaffolding a course's

@@ -56,20 +56,23 @@ sync derives an issue's state from its status. **Commit the manifest change** �
 board that disagrees with the repository, and the next `--reconcile` from a clean checkout undoes it.
 
 > **Why this is not automatic.** `Closes #N` in a pull request body only closes an issue when the pull
-> request merges into the repository's **default branch**. The platform build merges every slice into
-> `feat/PLAT-1-multi-surface-platform`, so no keyword ever fires: the issues stay open, the cards stay in
-> Backlog, and the board silently stops describing the project. PR bodies still carry `Closes #N` — it is
-> the durable link between a change and its requirement, and it will fire when the integration branch is
-> promoted — but the card is moved by hand, with the command above.
+> request merges into the repository's **default branch**, and even then it only ever closes — it cannot
+> move a card to `In progress` or `In review`. During the platform build every slice merged into
+> `feat/PLAT-1-multi-surface-platform`, so no keyword fired at all and the board silently stopped describing
+> the project; slices now branch off `master` and merge back, so the `Done` transition does fire on its own.
+> The other two never will. PR bodies still carry `Closes #N` — it is the durable link between a change and
+> its requirement — and the card is moved with the command above.
 
 ## Adding a phase or a family
 
 Both mean editing `scripts/board/config.mjs`:
 
-- **A phase** — add its number to `PHASES` and its title to `MILESTONE_TITLE`, matching the `##` heading in
-  `docs/ROADMAP.md` exactly. Sync creates the milestone.
-- **A family** — add a `FAMILY_LABEL` entry (`area:*` name, colour, description). Any uppercase family name
-  parses; the label is what makes it legible on the board.
+- **A phase** — add its title to `MILESTONE_TITLE`, matching the `##` heading in `docs/ROADMAP.md` exactly;
+  that is the map `sync.mjs` iterates to create milestones. Add its number to `PHASES` as well, which is
+  what `derive.mjs` tallies against.
+- **A family** — add a `FAMILY_LABEL` entry, whose value is `{ name, color, description }` — the `area:*`
+  label name, a hex colour, and what the family covers. Any uppercase family name parses; the label is what
+  makes it legible on the board.
 
 ## Two failure modes that are silent
 
@@ -82,9 +85,13 @@ Both mean editing `scripts/board/config.mjs`:
 
 ## Requirement families
 
-`CFG` configuration · `DSC` Discord client · `SRV` server scaffolding · `ROST` rosters and student channels ·
-`BOT` chatbot behaviour · `AI` OpenAI integration · `DATA` persistence · `CLI` command-line administration ·
-`ANLY` analytics · `OPS` operations and deployment · `BOARD` spec and board tooling.
+The Python baseline: `CFG` configuration · `DSC` Discord client · `SRV` server scaffolding · `ROST` rosters
+and student channels · `BOT` chatbot behaviour · `AI` OpenAI integration · `DATA` persistence · `CLI`
+command-line administration · `ANLY` analytics · `OPS` operations and deployment · `BOARD` spec and board
+tooling.
 
-The platform build adds `PLAT` · `ACT` · `AUTH` · `TEN` · `PROJ` · `SURF` · `WEB` · `API` · `JOB` · `FILE` ·
-`COST` · `MCP` · `ADMIN` · `QA`.
+The platform adds `PLAT` · `ACT` · `AUTH` · `TEN` · `PROJ` · `SURF` · `WEB` · `API` · `JOB` · `FILE` ·
+`COST` · `MCP` · `ADMIN` · `QA` · `CORE` · `CONV` · `PPL` · `MDL` · `MIG` · `ENRL` · `LINK` · `PORT`.
+
+`scripts/board/config.mjs`'s `FAMILY_LABEL` is the authoritative list — it carries one entry per family, and
+a family with no entry lands on the board unlabelled.

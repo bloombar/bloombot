@@ -47,6 +47,75 @@ describe('Mcp (WEB-47)', () => {
     expect(screen.getByText(/Claude:/)).toBeInTheDocument()
   })
 
+  // ChatGPT's current Plugins flow asks for these exact field values — a
+  // reader who cannot find them cannot complete setup. Each value must
+  // render as text a reader can find and copy by hand, distinguishable from
+  // the surrounding prose (`<code>`, the same treatment the connector URL
+  // itself already gets).
+  it("renders ChatGPT's Plugins path and the exact field values to enter", () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    expect(
+      screen.getByText(/Settings → Plugins → Browse plugins/)
+    ).toBeInTheDocument()
+    expect(screen.getByText('Bloombot')).toBeInTheDocument()
+    expect(screen.getByText('Course Assistant')).toBeInTheDocument()
+    expect(screen.getByText('OAuth')).toBeInTheDocument()
+  })
+
+  // The copy must not pin a menu path as if it were permanent — the same
+  // mistake being fixed here — so it must say plainly that the wording
+  // drifts between clients and versions.
+  it('says the menu names vary by client and version', () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    expect(
+      screen.getByText(/menu names below may differ from what you see/)
+    ).toBeInTheDocument()
+  })
+
+  // The icon URL must be `${window.location.origin}/icon-512.png`, derived
+  // at render time from the browser's own origin — not a hardcoded
+  // deployment address and not read from any env var. jsdom's default test
+  // origin is `http://localhost:3000`, so a hardcoded
+  // `https://bloombot.wonkledge.com/icon-512.png` (or any other fixed
+  // string) would fail this assertion; only a genuine `window.location
+  // .origin` read produces it.
+  it("renders the icon URL, derived from this app's own origin", () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    expect(screen.getByTestId('mcp-icon-url')).toHaveTextContent(
+      `${window.location.origin}/icon-512.png`
+    )
+  })
+
+  // The connector URL and the icon URL are two independently copyable
+  // values — copying one must not claim the other was copied, and each
+  // button must copy its own value.
+  it('copies the icon URL, not the connector URL, from its own copy control', async () => {
+    render(
+      <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy icon URL' }))
+
+    await screen.findByRole('button', { name: 'Icon URL copied' })
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/icon-512.png`
+    )
+    // The connector URL's own copy control is unaffected — still offering
+    // to copy, not claiming it already did.
+    expect(
+      screen.getByRole('button', { name: 'Copy connector URL' })
+    ).toBeInTheDocument()
+  })
+
   // A stable phrase from the top explanation, not the whole paragraph, so
   // a copy edit does not fail this suite unnecessarily.
   it("explains what this is and why anyone would want it, in layman's terms", () => {
@@ -195,9 +264,9 @@ describe('Mcp (WEB-47)', () => {
       <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy connector URL' }))
 
-    await screen.findByRole('button', { name: 'Copied!' })
+    await screen.findByRole('button', { name: 'Connector URL copied' })
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       'https://panel.example.edu/mcp'
     )
@@ -215,13 +284,13 @@ describe('Mcp (WEB-47)', () => {
       <Mcp {...mcpProps({ connectorUrl: 'https://panel.example.edu/mcp' })} />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy connector URL' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not copy the link — copy it from the text above by hand.'
     )
     expect(
-      screen.queryByRole('button', { name: 'Copied!' })
+      screen.queryByRole('button', { name: 'Connector URL copied' })
     ).not.toBeInTheDocument()
     expect(screen.getByTestId('mcp-connector-url')).toHaveTextContent(
       'https://panel.example.edu/mcp'

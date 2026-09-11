@@ -68,6 +68,38 @@
  * is a trap this file does not try to paper over by deriving one from the
  * other. `defaultConnectorUrl`, below, reads `VITE_MCP_PUBLIC_URL` alone,
  * and renders "not configured" when it is unset.
+ *
+ * **WEB-47 defect fix — ChatGPT's setup path, and copy that survives the
+ * next vendor rename.** The two-line "open Settings → Connectors" list this
+ * file used to carry went stale: ChatGPT moved this to
+ * Settings → Plugins → Browse plugins → the `+` icon, and now asks for
+ * per-field values (a name, a description, the connection URL, an
+ * authentication mode, and an optional icon) rather than a single paste.
+ * Rather than pin that path as if it were permanent — the same mistake this
+ * copy is being rewritten to fix — the instructions below say plainly that
+ * the menu names drift between clients and versions ("Plugin",
+ * "Connector", and "MCP server" have all meant the same thing at different
+ * points) and tell the reader what to look for rather than exactly where to
+ * click. Claude's own current path is not something this slice's author
+ * could confirm, so its entry says only what is actually true — add a
+ * custom connector by URL, sign in, approve — rather than inventing a menu
+ * that might already be wrong by the time this ships.
+ *
+ * **The icon URL comes from `window.location.origin`, not `PUBLIC_APP_URL`
+ * — deliberately the opposite rule from the connector URL just above.** The
+ * connector URL has to name the MCP server's own address, which is why
+ * deriving it from anything about *this* app (this deployment's own origin
+ * included) is wrong — the two need not even share a host. The icon is the
+ * opposite case: `/icon-512.png` is a static asset genuinely served by this
+ * very app, at whatever origin it is actually reached on, so
+ * `window.location.origin` is definitionally correct and has nothing to
+ * misconfigure — there is no separate "where is the icon really served"
+ * question the way there is for the MCP server. `Mcp` is not one of
+ * `prerender-plugin.ts`'s three prerendered paths (`/`, `/privacy`,
+ * `/terms` — it renders `Home`/`StaticDocument` directly, never `App`, and
+ * never this page), so `window` is always defined wherever this component
+ * actually renders today; `iconUrl` below still guards for it being
+ * undefined rather than assume that stays true forever.
  */
 
 import { useState } from 'react'
@@ -108,11 +140,37 @@ function defaultConnectorUrl(): string | undefined {
   return configured ? configured.replace(/\/+$/, '') : undefined
 }
 
+/**
+ * The optional icon field's own value — `${window.location.origin}/icon-512.png`,
+ * this app's own 512×512 icon, served by this same app at whatever origin
+ * it is actually reached on. Unlike `defaultConnectorUrl` above, there is
+ * no separate config key to read here on purpose: the icon is a static
+ * asset of *this* deployment, so the deployment's own origin is
+ * definitionally where it lives, with nothing to misconfigure. Returns
+ * `undefined` rather than a bare `/icon-512.png` when `window` itself is
+ * missing — `Mcp` is not one of `prerender-plugin.ts`'s three prerendered
+ * paths, so this should not happen today, but a relative path copied to a
+ * client's icon field would resolve against *that client's* origin, not
+ * this app's, which is worse than omitting it.
+ */
+function defaultIconUrl(): string | undefined {
+  if (typeof window === 'undefined') return undefined
+  return `${window.location.origin}/icon-512.png`
+}
+
 export function Mcp({ organizationId, navigate, ...props }: McpProps) {
   const connectorUrl =
     'connectorUrl' in props ? props.connectorUrl : defaultConnectorUrl()
+  const iconUrl = defaultIconUrl()
 
-  const [copied, setCopied] = useState(false)
+  // Two independently copyable values (the connector URL, the icon URL)
+  // share one `ApiError` slot — a clipboard failure is a clipboard failure
+  // regardless of which value triggered it — but need separate "Copied!"
+  // affordances, so each tracks which *field* was last copied rather than
+  // a single boolean that would claim both were copied at once.
+  const [copiedField, setCopiedField] = useState<
+    'connector' | 'icon' | undefined
+  >(undefined)
   const [copyError, setCopyError] = useState<ApiError | undefined>(undefined)
 
   // WEB-20's own clipboard handling (`components/JoinLinks.tsx#handleCopy`):
@@ -121,12 +179,11 @@ export function Mcp({ organizationId, navigate, ...props }: McpProps) {
   // and reported through the same synthesized `ApiError` so it reads
   // through `describeApiError`'s own `clipboard_unavailable` case rather
   // than a bespoke message.
-  const handleCopy = async () => {
-    if (!connectorUrl) return
+  const handleCopy = async (value: string, field: 'connector' | 'icon') => {
     setCopyError(undefined)
     try {
-      await navigator.clipboard.writeText(connectorUrl)
-      setCopied(true)
+      await navigator.clipboard.writeText(value)
+      setCopiedField(field)
     } catch {
       setCopyError(new ApiError(0, { error: 'clipboard_unavailable' }))
     }
@@ -177,26 +234,102 @@ export function Mcp({ organizationId, navigate, ...props }: McpProps) {
             </code>
             <Button
               variant="secondary"
+              aria-label={
+                copiedField === 'connector'
+                  ? 'Connector URL copied'
+                  : 'Copy connector URL'
+              }
               icon={<CopyIcon aria-hidden="true" className="size-4" />}
-              onClick={() => void handleCopy()}
+              onClick={() => void handleCopy(connectorUrl, 'connector')}
             >
-              {copied ? 'Copied!' : 'Copy'}
+              {copiedField === 'connector' ? 'Copied!' : 'Copy'}
             </Button>
           </div>
           {copyError && <ErrorMessage error={copyError} />}
 
-          <ol className="flex flex-col gap-2 text-sm text-neutral-700">
-            <li>
-              <strong>ChatGPT:</strong> open Settings → Connectors → Add
-              connector, paste the URL above, then sign in and approve on the
-              screen that opens.
-            </li>
-            <li>
-              <strong>Claude:</strong> open Settings → Connectors → Add custom
-              connector, paste the URL above, then sign in and approve on the
-              screen that opens.
-            </li>
-          </ol>
+          {/* Menu names drift between clients and between versions of the
+              same client — "Plugin", "Connector" and "MCP server" have all
+              meant this exact setting at different points, which is why the
+              two-step list this replaced went stale. Said once, up front,
+              rather than re-litigated per client below. */}
+          <p className="text-sm text-neutral-600">
+            The exact menu names below may differ from what you see — look for
+            whichever your client calls a "connector", a "plugin", or an "MCP
+            server"; they are the same thing.
+          </p>
+
+          <div className="flex flex-col gap-4 text-sm text-neutral-700">
+            <div>
+              <p>
+                <strong>ChatGPT:</strong> Settings → Plugins → Browse plugins →
+                the <code className="rounded bg-neutral-100 px-1">+</code> icon
+                to add a new plugin, then fill in:
+              </p>
+              <dl className="mt-2 flex flex-col gap-1 pl-4">
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Name</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">
+                      Bloombot
+                    </code>
+                  </dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Description</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">
+                      Course Assistant
+                    </code>
+                  </dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Connection</dt>
+                  <dd>the connector URL above</dd>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <dt className="text-neutral-500">Authentication</dt>
+                  <dd>
+                    <code className="rounded bg-neutral-100 px-1">OAuth</code>
+                  </dd>
+                </div>
+                {iconUrl && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <dt className="text-neutral-500">Icon (optional)</dt>
+                    <dd className="flex flex-wrap items-center gap-2">
+                      <code
+                        data-testid="mcp-icon-url"
+                        className="break-all rounded bg-neutral-100 px-2 py-1 text-neutral-900"
+                      >
+                        {iconUrl}
+                      </code>
+                      <Button
+                        variant="secondary"
+                        aria-label={
+                          copiedField === 'icon'
+                            ? 'Icon URL copied'
+                            : 'Copy icon URL'
+                        }
+                        icon={
+                          <CopyIcon aria-hidden="true" className="size-4" />
+                        }
+                        onClick={() => void handleCopy(iconUrl, 'icon')}
+                      >
+                        {copiedField === 'icon' ? 'Copied!' : 'Copy'}
+                      </Button>
+                    </dd>
+                  </div>
+                )}
+              </dl>
+              <p className="mt-2 text-neutral-500">
+                Then sign in and approve on the screen that opens.
+              </p>
+            </div>
+            <p>
+              <strong>Claude:</strong> add a custom connector by URL, using the
+              connector URL above, then sign in and approve on the screen that
+              opens.
+            </p>
+          </div>
 
           {/* With more than one course, the assistant asks rather than
               guesses — stated here, not in the top explanation, since it is

@@ -46,6 +46,11 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    boundary was already enforced by whoever built `activeBindings` — so
 //    requiring one on this function specifically would be decorative, not
 //    load-bearing.
+//  - discord-servers.ts#listActiveDiscordServerBindings: SURF-9, the same
+//    class as `resolveDiscordServerBinding` above — the catch-up scan's own
+//    `Events.ClientReady` handler has no organization to start from, only
+//    every server the bot is currently bound to, so this lists across every
+//    organization on purpose.
 //  - memberships.ts#listMembershipsForAccount: the same class as
 //    accounts.ts#getAccountByEmail — an account can hold a membership in
 //    more than one organization, so this is how a caller (apps/api's
@@ -123,12 +128,39 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    own module comment on why an OAuth connection is account-wide by
 //    design). Every exported function in this file is listed here for that
 //    one reason, not checked case by case.
+//  - discord-handled-messages.ts: SURF-9, the same class as
+//    `discord-install-states.ts` one level up — a Discord message snowflake
+//    is already globally unique on Discord's own side, so the only question
+//    this table ever answers ("has this exact message been handled before")
+//    never needs an organization id to disambiguate it. Every exported
+//    function in this file is keyed on the message id (or, for the prune
+//    sweep, a timestamp) instead.
+//  - discord-gateway-status.ts: SURF-9 rework round 2, MF-B — the same class
+//    one level up again: this table's one row is not scoped to any tenant at
+//    all, it names the whole process's own last-known-connected moment,
+//    which is a property of the gateway connection `apps/bot` holds, not of
+//    any one organization.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': ['getAccountByEmail', 'getAccountById', 'disableAccount'],
   'cost-ledger.ts': ['listOrganizationTotals'],
+  'discord-handled-messages.ts': [
+    'recordHandledMessage',
+    'listHandledMessageIds',
+    'isMessageHandled',
+    'maxHandledAt',
+    'pruneHandledMessagesOlderThan',
+  ],
+  'discord-gateway-status.ts': [
+    'recordLastKnownConnected',
+    'getLastKnownConnectedAt',
+  ],
   'organizations.ts': ['listTenantDeletions'],
   'course-join-links.ts': ['redeemJoinLink', 'redeemJoinLinkForWebAccount'],
-  'discord-servers.ts': ['resolveDiscordServerBinding', 'pickCourseServerId'],
+  'discord-servers.ts': [
+    'resolveDiscordServerBinding',
+    'pickCourseServerId',
+    'listActiveDiscordServerBindings',
+  ],
   'discord-install-states.ts': [
     'createInstallState',
     'consumeInstallState',
@@ -252,7 +284,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twenty-six repo files this test is written against', () => {
+  it('found the twenty-eight repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -265,6 +297,8 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'course-join-links.ts',
         'course-web-sources.ts',
         'courses.ts',
+        'discord-gateway-status.ts',
+        'discord-handled-messages.ts',
         'discord-install-states.ts',
         'discord-servers.ts',
         'enrolments.ts',

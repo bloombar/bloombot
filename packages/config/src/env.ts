@@ -201,6 +201,28 @@ export const envSchema = z.object({
   // the way `OPENAI_BASE_URL` has one — a sending address is always
   // institution-specific.
   MAIL_FROM: z.string().default(''),
+
+  // SURF-9 — the two bounds `apps/bot`'s own catch-up scan reads on every
+  // fresh gateway session (`Events.ShardReady`/`Events.ClientReady`) to
+  // decide what a message missed while disconnected gets, from
+  // `packages/discord/src/catch-up.ts`'s own pure decision
+  // function: a missed message younger than `DISCORD_CATCHUP_ANSWER_MAX_AGE_MS`
+  // is answered exactly as it would have been live; one older than that but
+  // still within `DISCORD_CATCHUP_LOOKBACK_MS` gets a short apology instead;
+  // one older than the lookback is ignored entirely — a bot returning from a
+  // long outage must not wake a server with either a burst of stale answers
+  // or a burst of apologies. `DISCORD_CATCHUP_LOOKBACK_MS: 0` disables
+  // catch-up completely (`env.example`'s own comment).
+  DISCORD_CATCHUP_ANSWER_MAX_AGE_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(600_000),
+  DISCORD_CATCHUP_LOOKBACK_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(86_400_000),
 })
 
 /** The validated environment. */

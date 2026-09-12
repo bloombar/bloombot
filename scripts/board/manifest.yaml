@@ -4035,3 +4035,17 @@
   phase: 28
   status: Done
   review: false
+- id: COST-7
+  title: Spend is attributed to the surface that caused it
+  full: Every recorded model call names the surface it was asked through,
+    alongside the course and person it is already attributed to. Where usage is
+    shown or exported, it can be read per surface as well as in total, so an
+    owner can tell what Discord, the web panel and connected assistant clients
+    each cost rather than only what the organization spent altogether. A call
+    the platform cannot attribute to a surface is a defect, not a row with a
+    blank.
+  section: §24 Cost Ledger, Caps & Monitoring
+  family: COST
+  phase: 29
+  status: In progress
+  review: false

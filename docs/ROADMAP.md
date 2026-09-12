@@ -368,3 +368,13 @@ bot look for what it missed when it reconnects, answer what is still worth answe
 what is not.
 
 **In scope:** SURF-9
+
+## Phase 29 — What each surface actually costs
+
+The cost ledger attributes every model call to an organization, a course and a person, but not to the
+surface it arrived on — so "what is MCP costing us against Discord" is a question the platform cannot
+answer, even though `answerQuestion` already knows the surface and hands it to every other writer. This
+phase records it, and breaks the instructor's and the platform administrator's own usage reads down by
+surface rather than only in total.
+
+**In scope:** COST-7

@@ -112,6 +112,7 @@ describe('Admin (ADMIN-4)', () => {
           totalCostMicros: 1_500_000,
           estimatedCostMicros: 0,
           callCount: 3,
+          bySurface: [],
         },
       ],
       platformHealth: PLATFORM_HEALTH,
@@ -121,6 +122,47 @@ describe('Admin (ADMIN-4)', () => {
 
     expect(await screen.findByText('A Real Tenant')).toBeInTheDocument()
     expect(screen.getByText(/\$1\.50 spent/)).toBeInTheDocument()
+  })
+
+  // COST-7 — a per-organization total broken down by surface, with
+  // `'unknown'` (a row written before this column existed) rendered as
+  // prose rather than the bare enum value.
+  it('breaks a per-organization total down by surface, rendering `unknown` as prose', async () => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [
+        {
+          organizationId: 'org-1',
+          organizationName: 'A Real Tenant',
+          totalCostMicros: 1_200_000,
+          estimatedCostMicros: 0,
+          callCount: 4,
+          bySurface: [
+            {
+              surface: 'mcp',
+              costMicros: 1_000_000,
+              estimatedCostMicros: 0,
+              callCount: 3,
+            },
+            {
+              surface: 'unknown',
+              costMicros: 200_000,
+              estimatedCostMicros: 0,
+              callCount: 1,
+            },
+          ],
+        },
+      ],
+      platformHealth: PLATFORM_HEALTH,
+    })
+
+    renderAdmin()
+
+    await screen.findByText('A Real Tenant')
+    const bySurfaceLine = screen.getByText(/By surface:/)
+    expect(bySurfaceLine).toHaveTextContent('MCP: $1.00 · 3 call(s)')
+    expect(bySurfaceLine).toHaveTextContent(
+      'recorded before surfaces were tracked: $0.20 · 1 call(s)'
+    )
   })
 
   // WEB-45: row-shaped skeletons while the read is in flight, gone once the
@@ -154,6 +196,7 @@ describe('Admin (ADMIN-4)', () => {
           totalCostMicros: 0,
           estimatedCostMicros: 0,
           callCount: 0,
+          bySurface: [],
         },
       ],
       platformHealth: PLATFORM_HEALTH,
@@ -253,6 +296,7 @@ describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
           totalCostMicros: 0,
           estimatedCostMicros: 0,
           callCount: 0,
+          bySurface: [],
         },
       ],
       platformHealth: PLATFORM_HEALTH,
@@ -300,6 +344,7 @@ describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
           totalCostMicros: 0,
           estimatedCostMicros: 0,
           callCount: 0,
+          bySurface: [],
         },
       ],
       platformHealth: PLATFORM_HEALTH,
@@ -331,6 +376,7 @@ describe('Admin — WEB-33’s own screens', () => {
           totalCostMicros: 1_500_000,
           estimatedCostMicros: 0,
           callCount: 3,
+          bySurface: [],
         },
       ],
       platformHealth: PLATFORM_HEALTH,

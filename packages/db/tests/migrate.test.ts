@@ -1249,4 +1249,115 @@ describe('0017 — membership_invitations', () => {
       )
     ).toThrow(/UNIQUE constraint failed/)
   })
+
+  // COST-7 — `0030`'s own `ALTER TABLE cost_ledger_entries ADD surface`
+  // (via the `__new_cost_ledger_entries` rebuild `cost_ledger_entries_surface_
+  // check` requires) has to run against a `cost_ledger_entries` table a real
+  // deployment has already been writing rows to since COST-1 shipped, long
+  // before this column existed. Same "seed what a real deployment already
+  // has, then apply the real migration on top" shape as 0002/0013/0023
+  // above — seeded through 0029, the last migration before this one, with a
+  // row written the way it looked before `surface` existed at all — and
+  // this is the test that proves the hand-edited backfill (`'unknown'` by
+  // literal, not a `SELECT` of a column the old table never had) actually
+  // works on a populated table rather than only an empty one.
+  it("applies 0030 to a database with a pre-existing cost_ledger_entries row, backfilling surface to 'unknown' and keeping it in the organization total", () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0029 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 29
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0029) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0029,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    // Seed exactly what one pre-COST-7 `recordCostLedgerEntry` call left —
+    // an organization, a project, a course, a person and one
+    // `cost_ledger_entries` row — with raw SQL, since `surface` does not
+    // exist as a column yet at this point in the migration history.
+    const organizationId = randomUUID()
+    const projectId = randomUUID()
+    const courseId = randomUUID()
+    const personId = randomUUID()
+    const entryId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into organizations (id, name, is_personal, created_at) values (?, ?, ?, ?)'
+      )
+      .run(organizationId, 'Org A', 0, now)
+    db.$client
+      .prepare(
+        'insert into projects (id, organization_id, name, archived_at, created_at) values (?, ?, ?, null, ?)'
+      )
+      .run(projectId, organizationId, 'Fall 2026', now)
+    db.$client
+      .prepare(
+        `insert into courses
+          (id, organization_id, project_id, title, enabled, admins_role, students_role, conversation_scope, self_enrol_from_discord, answer_unenrolled, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        courseId,
+        organizationId,
+        projectId,
+        'Web Design',
+        1,
+        'admins-wd',
+        'students-wd',
+        'course',
+        0,
+        1,
+        now
+      )
+    db.$client
+      .prepare(
+        'insert into people (id, organization_id, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(personId, organizationId, 'A', now)
+    db.$client
+      .prepare(
+        `insert into cost_ledger_entries
+          (id, organization_id, course_id, person_id, model, input_tokens, output_tokens, cost_micros, measurement, created_at)
+         values (?, ?, ?, ?, 'gpt-4o', 100, 50, 1000, 'measured', ?)`
+      )
+      .run(entryId, organizationId, courseId, personId, now)
+
+    // The migration under test: 0030, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const row = db.$client
+      .prepare('select * from cost_ledger_entries where id = ?')
+      .get(entryId) as { id: string; surface: string } | undefined
+    expect(row).toMatchObject({ id: entryId, surface: 'unknown' })
+
+    // The pre-existing row still sums into the organization's own total —
+    // COST-3's cap and COST-4's instructor read both trust this sum, and
+    // COST-7 must not have quietly dropped a row backfilling it.
+    const total = db.$client
+      .prepare(
+        'select sum(cost_micros) as total from cost_ledger_entries where organization_id = ?'
+      )
+      .get(organizationId) as { total: number }
+    expect(total.total).toBe(1000)
+  })
 })

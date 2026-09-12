@@ -906,6 +906,24 @@ export const courseInstructionRevisions = sqliteTable(
 export const COST_MEASUREMENTS = ['measured', 'estimated'] as const
 export type CostMeasurement = (typeof COST_MEASUREMENTS)[number]
 
+// COST-7 — which surface asked for the call the row prices. Deliberately
+// wider than `SURFACES`: `'unknown'` exists for exactly one row shape — the
+// ones written before this column existed at all, which genuinely cannot be
+// attributed to `discord`/`web`/`mcp` after the fact. Backfilling them to a
+// real surface (say, `discord`, the surface this platform started on) would
+// write a false fact into a ledger that COST-3's cap and COST-4's instructor
+// read both trust; `'unknown'` says, honestly, "asked before we could tell."
+// Nothing writes `'unknown'` after this migration — every call through
+// `repos/cost-ledger.ts#recordCostLedgerEntry` now carries a real `Surface`
+// (see `NewCostLedgerEntry.surface` below, typed to the narrower three-value
+// type for exactly that reason). Added here **and** to
+// `cost_ledger_entries_surface_check` below — a value absent from that SQL
+// check fails at write time, not compile time (`ENROLMENT_SOURCES`' own
+// `'self_enrolment'` comment above describes what goes wrong when only one
+// of the two is updated).
+export const COST_LEDGER_SURFACES = [...SURFACES, 'unknown'] as const
+export type CostLedgerSurface = (typeof COST_LEDGER_SURFACES)[number]
+
 // COST-1/COST-2 — one row per model call, attributed to the organization,
 // course and person it was made for. `organizationId`, `courseId` and
 // `personId` are all `.notNull()` — COST-2's "a call that cannot be
@@ -943,18 +961,47 @@ export const costLedgerEntries = sqliteTable(
     outputTokens: integer('output_tokens'),
     costMicros: integer('cost_micros').notNull(),
     measurement: text('measurement', { enum: COST_MEASUREMENTS }).notNull(),
+    // COST-7 — see `COST_LEDGER_SURFACES` above for why this enum is wider
+    // than the `Surface` type every write path outside a migration is typed
+    // to. `.notNull()` — every row names a surface; rows written before this
+    // column existed backfill to `'unknown'` (this column's own migration),
+    // never left null.
+    surface: text('surface', { enum: COST_LEDGER_SURFACES }).notNull(),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
     // COST-3's cap check sums every row for an organization; COST-4's
     // instructor read sums by course within it — both index the columns
     // they filter by, the same "index what a real query filters by" pattern
-    // `messages`/`course_attachments` already follow above.
+    // `messages`/`course_attachments` already follow above. `surface` has no
+    // index of its own — COST-7's per-surface breakdown is always read
+    // grouped within an already-filtered `organizationId`/`courseId` scan
+    // (the two indexes above), never filtered by `surface` alone, so a third
+    // index here would sit unused.
     index('cost_ledger_entries_organization_id_idx').on(table.organizationId),
     index('cost_ledger_entries_course_id_idx').on(table.courseId),
     check(
       'cost_ledger_entries_measurement_check',
       sql`${table.measurement} in ('measured', 'estimated')`
+    ),
+    // COST-7 rework — derived from `COST_LEDGER_SURFACES` itself (`sql.raw`,
+    // below), not hardcoded the way `enrolments_source_check`/
+    // `ENROLMENT_SOURCES` above still is: that comment's own warning ("a
+    // value absent from that SQL check fails at write time, not compile
+    // time") describes exactly the hazard a hardcoded list here would
+    // reopen — a fourth entry added to `SURFACES` would compile everywhere
+    // (including the widened `COST_LEDGER_SURFACES`) and fail only at
+    // insert time, silently, inside `answer.ts`'s own try/catch around
+    // `recordCostLedgerEntry` (COST-3's cap would then under-count that
+    // surface's spend with no error a reviewer would see). Deriving the SQL
+    // list from the same constant the TypeScript enum already uses makes
+    // that divergence impossible rather than merely documented; left
+    // `ENROLMENT_SOURCES`'s own check hardcoded rather than changing it too
+    // — this is a deliberate improvement on that pattern for a new column,
+    // not evidence the old one was wrong to begin with.
+    check(
+      'cost_ledger_entries_surface_check',
+      sql`${table.surface} in (${sql.raw(COST_LEDGER_SURFACES.map((surface) => `'${surface}'`).join(', '))})`
     ),
   ]
 )

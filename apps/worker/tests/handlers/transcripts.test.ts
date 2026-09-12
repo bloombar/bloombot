@@ -14,6 +14,7 @@ import { eq } from 'drizzle-orm'
 import {
   accounts,
   conversations,
+  costLedger,
   createFilesystemAttachmentStorage,
   jobs,
   organizations,
@@ -126,7 +127,22 @@ async function setUp() {
 describe('transcripts.export handler (ADMIN-3)', () => {
   it('produces a file, marks the export ready, and writes the ADMIN-2 audit entry', async () => {
     const storage = await setUp()
-    const { organizationId, course, instructor } = seedCourseWithTranscript(
+    const { organizationId, course, instructor, student } =
+      seedCourseWithTranscript(testDb.db)
+    // COST-7 — a ledger row on a real surface, so the export's own usage
+    // block (below) has something to carry the breakdown for.
+    costLedger.recordCostLedgerEntry(
+      organizationId,
+      {
+        courseId: course.id,
+        personId: student.id,
+        model: 'gpt-4o',
+        inputTokens: 10,
+        outputTokens: 10,
+        costMicros: 500,
+        measurement: 'measured',
+        surface: 'web',
+      },
       testDb.db
     )
     const exportRow = transcriptExports.createPendingExport(
@@ -173,9 +189,18 @@ describe('transcripts.export handler (ADMIN-3)', () => {
     expect(bytes).toBeDefined()
     const parsed = JSON.parse(bytes?.toString('utf8') ?? '{}') as {
       transcript: { content: string }[]
+      usage: { bySurface: costLedger.CostBySurface[] } | null
     }
     expect(parsed.transcript).toHaveLength(1)
     expect(parsed.transcript[0]?.content).toBe('When is office hours?')
+
+    // COST-7 — the export's own usage block carries the same per-surface
+    // breakdown `getOrganizationUsageSummary` reports on-screen, not merely
+    // the un-split total — confirms it actually reaches the written JSON
+    // rather than being stripped by an intermediate shape.
+    expect(parsed.usage?.bySurface).toEqual([
+      { surface: 'web', costMicros: 500, estimatedCostMicros: 0, callCount: 1 },
+    ])
 
     // ADMIN-2 / ADMIN-3 — the export's own read went through the same
     // audited function an on-screen read does.

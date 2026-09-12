@@ -267,6 +267,8 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
     expect(rows[0]?.model).toBe('gpt-4o')
     expect(rows[0]?.inputTokens).toBe(100)
     expect(rows[0]?.outputTokens).toBe(50)
+    // COST-7 — the row carries the surface `answerQuestion` was called with.
+    expect(rows[0]?.surface).toBe('discord')
 
     const summary = costLedger.getOrganizationUsageSummary(
       organizationId,
@@ -282,9 +284,52 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
         costMicros: 0,
         estimatedCostMicros: 0,
         callCount: 1,
+        bySurface: [
+          {
+            surface: 'discord',
+            costMicros: 0,
+            estimatedCostMicros: 0,
+            callCount: 1,
+          },
+        ],
       },
     ])
   })
+
+  // COST-7 — the one test that fails loudest without the change: each of
+  // the three real surfaces writes its own value onto the row, not a
+  // constant or a different surface entirely.
+  it.each(['discord', 'web', 'mcp'] as const)(
+    'writes %s onto the ledger row when answerQuestion is called with that surface',
+    async (surface) => {
+      testDb = createTestDatabase()
+      const { organizationId, courseId, personId } = seedCourseAndPerson(
+        testDb.db
+      )
+      const model = new FakeModelClient({
+        model: 'gpt-4o',
+        usage: { inputTokens: 10, outputTokens: 10 },
+      })
+      const logger = createFakeLogger()
+
+      const result = await answerQuestion(
+        {
+          organizationId,
+          courseId,
+          personId,
+          surface,
+          text: 'q1',
+          day: '2026-01-01',
+        },
+        { db: testDb.db, model, logger }
+      )
+      expect(result.kind).toBe('answered')
+
+      const rows = testDb.db.select().from(schema.costLedgerEntries).all()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.surface).toBe(surface)
+    }
+  )
 
   it('cannot write a second, unattributed ledger row — the ordinary path always attributes organization, course and person', async () => {
     testDb = createTestDatabase()
@@ -316,6 +361,7 @@ describe('answerQuestion (COST-1/COST-2): a successful answer writes exactly one
         outputTokens: 1,
         costMicros: 1,
         measurement: 'measured',
+        surface: 'discord',
       },
       testDb.db
     )
@@ -455,6 +501,7 @@ describe('answerQuestion (COST-3): an organization at its spending cap is refuse
         outputTokens: 1,
         costMicros: 100,
         measurement: 'measured',
+        surface: 'discord',
       },
       testDb.db
     )
@@ -504,6 +551,7 @@ describe('answerQuestion (COST-3): an organization at its spending cap is refuse
         outputTokens: 1,
         costMicros: 1,
         measurement: 'measured',
+        surface: 'discord',
       },
       testDb.db
     )

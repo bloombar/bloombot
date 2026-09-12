@@ -91,6 +91,7 @@ describe('costLedger.organizationUsage', () => {
         outputTokens: 10,
         costMicros: 500,
         measurement: 'measured',
+        surface: 'discord',
       },
       testDb.db
     )
@@ -110,6 +111,25 @@ describe('costLedger.organizationUsage', () => {
       {
         courseId: course.id,
         courseTitle: 'Test Course',
+        costMicros: 500,
+        estimatedCostMicros: 0,
+        callCount: 1,
+        bySurface: [
+          {
+            surface: 'discord',
+            costMicros: 500,
+            estimatedCostMicros: 0,
+            callCount: 1,
+          },
+        ],
+      },
+    ])
+    // COST-7 — the action passes the widened summary straight through: the
+    // organization-level breakdown reconciles with `totalCostMicros` the
+    // same way the per-course one reconciles with `costMicros` above.
+    expect(result.bySurface).toEqual([
+      {
+        surface: 'discord',
         costMicros: 500,
         estimatedCostMicros: 0,
         callCount: 1,
@@ -135,6 +155,7 @@ describe('costLedger.organizationUsage', () => {
     expect(otherResult.totalCostMicros).toBe(0)
     expect(otherResult.courses).toEqual([])
     expect(otherResult.studentsNearLimit).toEqual([])
+    expect(otherResult.bySurface).toEqual([])
   })
 
   it('rejects a malformed day rather than silently reading against the wrong boundary', async () => {

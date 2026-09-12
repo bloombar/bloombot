@@ -2940,3 +2940,71 @@ dropped onto it or the zone can be clicked to choose one. The modal names the pr
 into and says that imported courses arrive disabled before the import runs, not after. On success it
 shows the PORT-7 report — the title the course was given, and anything the file could not carry — and
 the course appears in that project's list. A refused file leaves the modal open with the reason.
+
+### 36. Course Administration Through an Assistant
+
+#### ACT-7 A course's settings change without replacing its structure
+
+Changing what a course *is* — its title, whether it is enabled, its Discord role names, whether
+students may enrol themselves, whether it answers people who are not enrolled, and its model,
+daily cap and conversation scope — is its own action, separate from the one that writes its
+categories and channels. `courses.save` replaces a course's whole structure on every call, so a
+caller that wants to flip one switch has to read the course first and resupply every category and
+channel it already had; a caller that resupplies a stale or partial list silently destroys the
+rest. That is a trap for a person and a certainty for an assistant, which has no reason to know
+the whole record exists.
+
+An omitted field keeps whatever is stored, and an explicit `null` clears one — the same
+"absent is not empty" distinction `courses.save` already draws. The action touches no category
+and no channel, ever, so it is not destructive and needs no confirmation. `courses.save` keeps
+its existing meaning for the panel's whole-form save.
+
+#### SRV-12 A course's Discord structure is edited one piece at a time
+
+A category is added, a channel is added to one, a channel's name or its admins-only flag is
+changed, and a category or channel is removed — each on its own, naming the one thing it acts on,
+without restating the rest of the course. Only removal discards anything, so only removal is
+destructive; the rest are ordinary writes. Removing a category removes the channels declared
+inside it, and says how many, because a caller that meant to remove one channel must not discover
+it removed six.
+
+Editing the declaration is not the same operation as changing Discord: nothing here creates,
+renames or deletes anything in a live server. SRV-6's scaffold remains the one thing that does,
+and SRV-8's "scaffolding never deletes" is unchanged — a channel dropped from the declaration is
+reported by the next scaffold, never removed from the server.
+
+#### ENRL-17 A join link's expiry is chosen from named durations
+
+An expiry is picked from a small set of durations — never, a day, a week, a month, a term — rather
+than supplied as an absolute timestamp, and the chosen duration is resolved against the clock at
+the moment the link is issued. A caller thinking in weeks should not have to do date arithmetic to
+be refused for a value that fell into the past between choosing it and sending it.
+
+The set of durations is defined once, in the shared schema package, and both the panel and the
+action read it from there; the panel stops computing timestamps of its own. An absolute
+`expiresAt` is still accepted for a caller that genuinely has one, but supplying both it and a
+named duration in the same call is refused rather than silently resolved in favour of either.
+
+#### MCP-9 An assistant lists the courses its account administers
+
+An assistant asks which courses the connected account administers and is told, across every
+organization that account can reach — the organization, the project and the course for each, with
+the ids every other tool needs. Every other tool on the surface acts within one organization named
+in the call (MCP-3), so without this an assistant has no way to learn an organization id at all
+and must be handed one by the person it is helping.
+
+Authority comes from the account's own membership in each organization, checked per organization
+at call time — the same rule the panel enforces, not a weaker one. An account with no
+administrative membership anywhere is told exactly that, and never that the organizations it
+cannot reach exist. This is the administrative counterpart to MCP-8's account-wide list of courses
+a person may *ask* in, and the two are separate: being enrolled in a course is not authority to
+configure it.
+
+#### MCP-10 An assistant can create a course's Discord structure
+
+The scaffold SRV-6 already performs on request is reachable from an assistant, enqueued as the same
+job the panel's own button enqueues (JOB-1) and reported by the job id it returns. Because the run
+acts on a live Discord server rather than on this platform's own records, the confirmation a
+destructive tool must raise (MCP-4) is raised for it too, naming the course and the server it is
+about to build in — a scaffold creates nothing twice (SRV-7) and deletes nothing (SRV-8), but it is
+still the one tool here whose effects are visible to every member of a server the moment it runs.

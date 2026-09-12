@@ -379,3 +379,18 @@ phase records it, and breaks the instructor's and the platform administrator's o
 surface rather than only in total.
 
 **In scope:** COST-7
+
+## Phase 30 — Course administration from an assistant
+
+A course owner should be able to run the everyday administration of a course from an MCP client —
+list the courses they administer, issue a join link that expires, change enrolment and answering
+settings, edit the Discord structure the course declares, and build that structure in the server.
+Most of what stands in the way is not the MCP surface but the action layer behind it: the only way
+to change a course's settings today is `courses.save`, which replaces every category and channel on
+every call, and the only account-wide list an assistant can read is the one for courses a person may
+*ask* in. This phase splits the settings write from the structure write, makes the structure editable
+one piece at a time, gives the join-link expiry the same named durations the panel offers, and puts
+the resulting tools — plus the scaffold — on the assistant's surface. Every part of it except the
+surface entries themselves is surface-agnostic action work the panel and the HTTP API get too.
+
+**In scope:** ACT-7, SRV-12, ENRL-17, MCP-9, MCP-10

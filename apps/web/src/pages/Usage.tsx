@@ -54,7 +54,11 @@ import {
   fetchOrganizationUsage,
   setSpendingCap,
 } from '../api/client.js'
-import type { OrganizationUsageReport, UsageNearLimit } from '../api/types.js'
+import type {
+  CostBySurface,
+  OrganizationUsageReport,
+  UsageNearLimit,
+} from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
@@ -115,6 +119,46 @@ function parseCapAmount(
   const value = Number(trimmed)
   if (!Number.isFinite(value) || value < 0) return { ok: false }
   return { ok: true, value }
+}
+
+/**
+ * COST-7 — a human label for one ledger surface. `'unknown'` reads as prose
+ * ("recorded before surfaces were tracked"), not the bare enum value — a
+ * row carries it only because it predates this column
+ * (`@bloombot/db`'s own `COST_LEDGER_SURFACES` comment), and a reader
+ * should understand that as history, not as a fourth surface alongside
+ * Discord/Web/MCP.
+ */
+function surfaceLabel(surface: CostBySurface['surface']): string {
+  switch (surface) {
+    case 'discord':
+      return 'Discord'
+    case 'web':
+      return 'Web'
+    case 'mcp':
+      return 'MCP'
+    case 'unknown':
+      return 'recorded before surfaces were tracked'
+  }
+}
+
+/**
+ * COST-7 — the same terse, inline register this screen's own per-course
+ * total already uses (`{formatMicros(...)} · {callCount} call(s) ·
+ * includes an estimate`), applied per surface rather than a second table or
+ * chart. Joined with ` · ` into one line — `bySurface` only ever carries a
+ * handful of entries (at most `discord`/`web`/`mcp`/`unknown`), so this
+ * reads as a short list, not a wall of text.
+ */
+function formatBySurface(bySurface: CostBySurface[]): string {
+  return bySurface
+    .map((entry) => {
+      const calls = entry.callCount === 1 ? 'call' : 'calls'
+      const estimateNote =
+        entry.estimatedCostMicros > 0 ? ' (includes an estimate)' : ''
+      return `${surfaceLabel(entry.surface)}: ${formatMicros(entry.costMicros)} · ${entry.callCount} ${calls}${estimateNote}`
+    })
+    .join(' · ')
 }
 
 /** What a near-limit row shows in place of a name — `personDisplayName` when the person has one, `personId` otherwise (this file's own module comment on why never email). */
@@ -273,6 +317,14 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
             not answer until this is raised or cleared.
           </div>
         )}
+        {report && report.bySurface.length > 0 && (
+          // COST-7 — the organization's own total above, broken down by
+          // surface: the same terse register the total itself uses, not a
+          // second table.
+          <p className="text-sm text-neutral-500">
+            By surface: {formatBySurface(report.bySurface)}
+          </p>
+        )}
 
         {isOwner && (
           <div className="flex flex-wrap items-end gap-2">
@@ -330,19 +382,29 @@ export function Usage({ organizationId, isOwner }: UsageScreenProps) {
             {report.courses.map((course) => (
               <li
                 key={course.courseId}
-                className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
+                className="flex flex-col gap-1 rounded-md border border-neutral-200 p-3"
               >
-                <p className="text-sm font-medium text-neutral-900">
-                  {course.courseTitle}
-                </p>
-                <p className="text-sm text-neutral-500">
-                  {formatMicros(course.costMicros)} · {course.callCount}{' '}
-                  {course.callCount === 1 ? 'call' : 'calls'}
-                  {/* COST-6: an estimate is never presented as a
-                      measurement — said plainly whenever any part of this
-                      course's own total came from one. */}
-                  {course.estimatedCostMicros > 0 && ' · includes an estimate'}
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-neutral-900">
+                    {course.courseTitle}
+                  </p>
+                  <p className="text-sm text-neutral-500">
+                    {formatMicros(course.costMicros)} · {course.callCount}{' '}
+                    {course.callCount === 1 ? 'call' : 'calls'}
+                    {/* COST-6: an estimate is never presented as a
+                        measurement — said plainly whenever any part of this
+                        course's own total came from one. */}
+                    {course.estimatedCostMicros > 0 &&
+                      ' · includes an estimate'}
+                  </p>
+                </div>
+                {course.bySurface.length > 0 && (
+                  // COST-7 — this course's own total above, broken down by
+                  // surface: the same terse register the total itself uses.
+                  <p className="text-xs text-neutral-400">
+                    By surface: {formatBySurface(course.bySurface)}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

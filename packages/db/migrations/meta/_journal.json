@@ -211,6 +211,13 @@
       "when": 1789137405211,
       "tag": "0029_purple_pretty_boy",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1789183866607,
+      "tag": "0030_uneven_human_torch",
+      "breakpoints": true
     }
   ]
 }

@@ -113,6 +113,7 @@ function seedFullTenant(testDatabase: TestDatabase) {
       outputTokens: 10,
       costMicros: 100,
       measurement: 'measured',
+      surface: 'discord',
     },
     testDatabase.db
   )

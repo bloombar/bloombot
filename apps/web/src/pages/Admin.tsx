@@ -61,6 +61,7 @@ import {
 import type {
   AdminOrganizationsResponse,
   AdminOrganizationSummary,
+  CostBySurface,
   OrganizationDeletionPreview,
   TenantDeletion,
 } from '../api/types.js'
@@ -82,6 +83,37 @@ export interface AdminScreenProps {
 /** Integer micros (COST-1) to a plain dollar figure — the same unit `costLedger`'s own summaries use platform-wide; this app has no other place that formats one yet, so the conversion lives here rather than a shared module one caller does not justify. */
 function formatMicros(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`
+}
+
+/**
+ * COST-7 — a human label for one ledger surface, the same reasoning
+ * `pages/Usage.tsx#surfaceLabel` gives for its own hand-written copy of
+ * this: `'unknown'` reads as prose ("recorded before surfaces were
+ * tracked"), not the bare enum value a row written before this column
+ * existed carries.
+ */
+function surfaceLabel(surface: CostBySurface['surface']): string {
+  switch (surface) {
+    case 'discord':
+      return 'Discord'
+    case 'web':
+      return 'Web'
+    case 'mcp':
+      return 'MCP'
+    case 'unknown':
+      return 'recorded before surfaces were tracked'
+  }
+}
+
+/** COST-7 — the same terse, inline register this screen's own per-organization total already uses ("$1.00 spent · 3 call(s) · partly estimated"), applied per surface. */
+function formatBySurface(bySurface: CostBySurface[]): string {
+  return bySurface
+    .map((entry) => {
+      const estimateNote =
+        entry.estimatedCostMicros > 0 ? ' · partly estimated' : ''
+      return `${surfaceLabel(entry.surface)}: ${formatMicros(entry.costMicros)} · ${entry.callCount} call(s)${estimateNote}`
+    })
+    .join(' · ')
 }
 
 function ProcessBadge({
@@ -322,6 +354,12 @@ function OrganizationsList({
                   {organization.estimatedCostMicros > 0 &&
                     ' · partly estimated'}
                 </p>
+                {organization.bySurface.length > 0 && (
+                  // COST-7 — the total above, broken down by surface.
+                  <p className="text-xs text-neutral-400">
+                    By surface: {formatBySurface(organization.bySurface)}
+                  </p>
+                )}
               </div>
               <Button
                 variant="destructive"
@@ -410,6 +448,12 @@ function OrganizationDetail({
             {organization.callCount} call(s)
             {organization.estimatedCostMicros > 0 && ' · partly estimated'}
           </p>
+          {organization.bySurface.length > 0 && (
+            // COST-7 — the total above, broken down by surface.
+            <p className="text-xs text-neutral-400">
+              By surface: {formatBySurface(organization.bySurface)}
+            </p>
+          )}
         </div>
         <Button
           variant="destructive"

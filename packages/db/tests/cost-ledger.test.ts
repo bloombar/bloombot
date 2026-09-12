@@ -107,6 +107,7 @@ function ledgerEntry(
     outputTokens: 50,
     costMicros: 1_000,
     measurement: 'measured',
+    surface: 'discord',
     ...overrides,
   }
 }
@@ -175,7 +176,7 @@ describe('cost-ledger repo', () => {
     expect(() =>
       testDb.db.$client
         .prepare(
-          `insert into cost_ledger_entries (id, organization_id, course_id, person_id, model, cost_micros, measurement, created_at) values (?, null, ?, ?, 'gpt-4o', 0, 'measured', 0)`
+          `insert into cost_ledger_entries (id, organization_id, course_id, person_id, model, cost_micros, measurement, surface, created_at) values (?, null, ?, ?, 'gpt-4o', 0, 'measured', 'discord', 0)`
         )
         .run('x', courseA.id, personA.id)
     ).toThrow()
@@ -246,6 +247,22 @@ describe('cost-ledger repo', () => {
         costMicros: 700,
         estimatedCostMicros: 0,
         callCount: 1,
+        bySurface: [
+          {
+            surface: 'discord',
+            costMicros: 700,
+            estimatedCostMicros: 0,
+            callCount: 1,
+          },
+        ],
+      },
+    ])
+    expect(summary.bySurface).toEqual([
+      {
+        surface: 'discord',
+        costMicros: 700,
+        estimatedCostMicros: 0,
+        callCount: 1,
       },
     ])
   })
@@ -278,6 +295,91 @@ describe('cost-ledger repo', () => {
     expect(summary.totalEstimatedCostMicros).toBe(300)
     expect(summary.courses[0]?.costMicros).toBe(1_000)
     expect(summary.courses[0]?.estimatedCostMicros).toBe(300)
+    // Both rows were recorded on the same surface (`ledgerEntry`'s own
+    // `'discord'` default) — the breakdown must still reconcile with the
+    // course's own total rather than carry two entries for one surface.
+    expect(summary.courses[0]?.bySurface).toEqual([
+      {
+        surface: 'discord',
+        costMicros: 1_000,
+        estimatedCostMicros: 300,
+        callCount: 2,
+      },
+    ])
+  })
+
+  it('splits a course`s own total by surface, reconciling with the un-split totals', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 100,
+        measurement: 'measured',
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 200,
+        measurement: 'estimated',
+        surface: 'web',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 300,
+        measurement: 'measured',
+        surface: 'mcp',
+      }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db)
+    const course = summary.courses[0]
+    const bySurface = new Map(
+      course?.bySurface.map((entry) => [entry.surface, entry])
+    )
+
+    expect(bySurface.get('discord')).toEqual({
+      surface: 'discord',
+      costMicros: 100,
+      estimatedCostMicros: 0,
+      callCount: 1,
+    })
+    expect(bySurface.get('web')).toEqual({
+      surface: 'web',
+      costMicros: 200,
+      estimatedCostMicros: 200,
+      callCount: 1,
+    })
+    expect(bySurface.get('mcp')).toEqual({
+      surface: 'mcp',
+      costMicros: 300,
+      estimatedCostMicros: 0,
+      callCount: 1,
+    })
+    // A course that has never been asked through a surface does not carry a
+    // zero entry for it — exactly the three surfaces used above, no more.
+    expect(bySurface.size).toBe(3)
+
+    // The breakdown reconciles with the un-split totals — it adds detail,
+    // it does not replace them.
+    expect(course?.costMicros).toBe(600)
+    expect(course?.estimatedCostMicros).toBe(200)
+    expect(course?.callCount).toBe(3)
+    expect(summary.totalCostMicros).toBe(600)
+    expect(summary.totalEstimatedCostMicros).toBe(200)
+    const summaryBySurface = new Map(
+      summary.bySurface.map((entry) => [entry.surface, entry])
+    )
+    expect(summaryBySurface.get('discord')?.costMicros).toBe(100)
+    expect(summaryBySurface.get('web')?.costMicros).toBe(200)
+    expect(summaryBySurface.get('mcp')?.costMicros).toBe(300)
   })
 
   it('reports totals per organization, and nothing about a conversation', () => {
@@ -304,6 +406,14 @@ describe('cost-ledger repo', () => {
       totalCostMicros: 500,
       estimatedCostMicros: 0,
       callCount: 1,
+      bySurface: [
+        {
+          surface: 'discord',
+          costMicros: 500,
+          estimatedCostMicros: 0,
+          callCount: 1,
+        },
+      ],
     })
     expect(byId.get(orgB)).toEqual({
       organizationId: orgB,
@@ -311,12 +421,22 @@ describe('cost-ledger repo', () => {
       totalCostMicros: 250,
       estimatedCostMicros: 0,
       callCount: 1,
+      bySurface: [
+        {
+          surface: 'discord',
+          costMicros: 250,
+          estimatedCostMicros: 0,
+          callCount: 1,
+        },
+      ],
     })
-    // COST-4/ADMIN-4 — every field here is a name or a number; there is no
-    // key this response could carry a transcript's content under.
+    // COST-4/ADMIN-4 — every field here is a name or a number, or the same
+    // per-surface breakdown of those numbers; there is no key this response
+    // could carry a transcript's content under.
     for (const row of totals) {
       expect(Object.keys(row).sort()).toEqual(
         [
+          'bySurface',
           'callCount',
           'estimatedCostMicros',
           'organizationId',
@@ -325,5 +445,35 @@ describe('cost-ledger repo', () => {
         ].sort()
       )
     }
+  })
+
+  it('splits an organization`s own total by surface, reconciling with the un-split totals', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 100,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 200, surface: 'mcp' }),
+      testDb.db
+    )
+
+    const totals = costLedger.listOrganizationTotals(testDb.db)
+    const orgATotal = totals.find((row) => row.organizationId === orgA)
+    const bySurface = new Map(
+      orgATotal?.bySurface.map((entry) => [entry.surface, entry])
+    )
+
+    expect(orgATotal?.totalCostMicros).toBe(300)
+    expect(orgATotal?.callCount).toBe(2)
+    expect(bySurface.get('discord')?.costMicros).toBe(100)
+    expect(bySurface.get('mcp')?.costMicros).toBe(200)
+    expect(bySurface.size).toBe(2)
   })
 })

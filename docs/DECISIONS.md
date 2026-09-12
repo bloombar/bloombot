@@ -11732,3 +11732,41 @@ config resolution (itself Vite-based, rooted at the repository root) had already
 developer's real root `.env` into `process.env` before the test ever ran. The test's `beforeEach`
 clears the one key it exercises from the real `process.env` and restores it in `afterEach`, making
 "unset" a fact of the test rather than an accident of the machine that runs it.
+
+## D-107 — COST-7: the ledger's own surface enum is wider than `Surface`, and `NewCostLedgerEntry.surface` is typed to the narrower one on purpose
+
+**Why `cost_ledger_entries.surface` has a fourth value `SURFACES` does not.** `COST_LEDGER_SURFACES` (`schema.ts`)
+is `[...SURFACES, 'unknown']`, not `SURFACES` itself, because `cost_ledger_entries` predates this column —
+COST-1 shipped rows into it long before COST-7 existed, and this slice's own migration (`0030`) has to
+backfill every one of them to _something_. The three real surfaces are all wrong answers for a row this
+migration cannot actually attribute: writing `'discord'` onto a row that might have been asked through the
+web chat or MCP just as easily would put a false fact into a ledger COST-3's cap and COST-4's instructor read
+both trust, for the sake of one column looking tidier. `'unknown'` says, honestly, "asked before we could
+tell" — the same reasoning `enrolments`' own `ENROLMENT_SOURCES` gives for why a source is recorded rather
+than inferred, applied here to a column the platform did not always have. Nothing writes `'unknown'` after
+this migration: `repos/cost-ledger.ts#recordCostLedgerEntry`'s only caller, `@bloombot/core`'s `answer.ts`,
+always has a real `Surface` in scope at the call site (`answerQuestion`'s own `input.surface`), so the value
+never comes from thin air.
+
+**Why `NewCostLedgerEntry.surface` is typed `Surface` (three values), not `CostLedgerSurface` (four).** This is
+the other half of the same design, and the point of writing it down together: if `NewCostLedgerEntry.surface`
+were typed to the wider, four-value enum, "nothing writes `'unknown'` after this migration" would be a
+sentence in a comment — true only until a future caller, reading the column's own type, passed `'unknown'`
+through in good faith (a default value, a fallback in some new integration) and the compiler would have no
+objection. Typed to the narrower `Surface` instead, that same mistake is a compile error: there is no value a
+real caller can supply that reaches the column as `'unknown'`, only the literal the migration's own SQL writes
+directly (a hand-edited backfill, never a repo function). A future reader tempted to "simplify" this pairing
+by widening `NewCostLedgerEntry.surface` to match the column should read this entry first — the mismatch is
+deliberate, and matching the two types is exactly what would reopen the gap COST-7 closed.
+
+**The migration itself (`0030_uneven_human_torch.sql`)** rebuilds the table (SQLite has no `ALTER TABLE ADD
+COLUMN` that also adds a `CHECK` constraint in one statement, and `cost_ledger_entries` already carries one
+for `measurement` — the same `__new_<table>` rebuild `0025`/`0026` already use for `enrolments`/`courses`),
+with the new column given `DEFAULT 'unknown'` and the `INSERT ... SELECT` backfilling it from the literal
+`'unknown'` rather than a `SELECT` of a column the old table never had (the shape `0013`'s own
+`transcript_access_log.sequence` fix, and this file's own entry on it, already establish for a `NOT NULL`
+column added to a populated table). `packages/db/tests/migrate.test.ts` gained a test seeded through `0029`
+— the real migration files and journal entries, not invented ones — with one pre-`surface` row, asserting
+`0030` applies without throwing, backfills it to `'unknown'`, and that the row still sums into the
+organization's own total. Reverting the `DEFAULT` (or the literal backfill) reproduces the same "refuses to
+apply to a populated table" failure `0013`'s own finding names.

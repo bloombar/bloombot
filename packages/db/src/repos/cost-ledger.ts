@@ -20,7 +20,9 @@ import {
   courses,
   organizations,
   people,
+  type CostLedgerSurface,
   type CostMeasurement,
+  type Surface,
 } from '../schema.js'
 
 export type CostLedgerEntry = typeof costLedgerEntries.$inferSelect
@@ -48,6 +50,14 @@ export interface NewCostLedgerEntry {
   outputTokens: number | null
   costMicros: number
   measurement: CostMeasurement
+  // COST-7 — typed `Surface` (the three-value type every real caller has in
+  // scope), deliberately narrower than the column's own `CostLedgerSurface`.
+  // That mismatch is the point: `'unknown'` is not a value any caller of
+  // this function can assert, so "nothing writes `'unknown'` after this
+  // migration" (`COST_LEDGER_SURFACES`'s own comment, `schema.ts`) is a
+  // compile-time fact about this interface, not a convention a future caller
+  // could quietly break.
+  surface: Surface
 }
 
 /**
@@ -106,6 +116,7 @@ export function recordCostLedgerEntry(
       outputTokens: entry.outputTokens,
       costMicros: entry.costMicros,
       measurement: entry.measurement,
+      surface: entry.surface,
       createdAt: Date.now(),
     })
     .returning()
@@ -167,6 +178,25 @@ export function hasReachedSpendingCap(
 }
 
 /**
+ * One surface's own slice of a `CourseUsageSummary`/`OrganizationUsageSummary`/
+ * `OrganizationTotal`'s totals (COST-7). Reuses the same three fields those
+ * summaries already report — `costMicros`, `estimatedCostMicros`,
+ * `callCount` — rather than a second vocabulary a reader would have to learn
+ * just for the per-surface view. A summary carries an entry here only for a
+ * surface it actually has rows for: a course never asked through MCP does
+ * not carry a zero `mcp` entry, the same way a course with genuinely no
+ * ledger rows at all still appears in its parent summary at zero
+ * (`getOrganizationUsageSummary`'s own comment) — that is a statement about
+ * the course, not about every surface it has never been asked through.
+ */
+export interface CostBySurface {
+  surface: CostLedgerSurface
+  costMicros: number
+  estimatedCostMicros: number
+  callCount: number
+}
+
+/**
  * One course's usage, as `getOrganizationUsageSummary` reports it.
  *
  * `estimatedCostMicros` — the portion of `costMicros` that came from a row
@@ -178,6 +208,12 @@ export function hasReachedSpendingCap(
  * against real token counts. `estimatedCostMicros === costMicros` is "take
  * this number with a grain of salt"; `0` is "every micro of this was
  * priced against a real measurement."
+ *
+ * `bySurface` (COST-7) breaks that same total down by which surface the
+ * call was asked through, without changing or removing `costMicros`/
+ * `estimatedCostMicros`/`callCount` above — those stay the course's whole
+ * total, `bySurface`'s own entries reconcile to them rather than replacing
+ * them.
  */
 export interface CourseUsageSummary {
   courseId: string
@@ -185,6 +221,7 @@ export interface CourseUsageSummary {
   costMicros: number
   estimatedCostMicros: number
   callCount: number
+  bySurface: CostBySurface[]
 }
 
 /** COST-4's instructor read: usage across every course in the caller's own organization, plus what its cap looks like. */
@@ -195,6 +232,8 @@ export interface OrganizationUsageSummary {
   /** The sum of every course's own `estimatedCostMicros` — see `CourseUsageSummary`'s own comment for why this exists at all. */
   totalEstimatedCostMicros: number
   courses: CourseUsageSummary[]
+  /** COST-7 — the organization's own totals above, broken down by surface across every course rather than per course. */
+  bySurface: CostBySurface[]
 }
 
 /**
@@ -220,32 +259,73 @@ export function getOrganizationUsageSummary(
     .where(eq(courses.organizationId, organizationId))
     .all()
 
+  // COST-7 — grouped by course *and* surface in the one query, the same
+  // "a CASE inside the aggregate, not a second SELECT" style the existing
+  // `estimatedCostMicros` column already uses (finding 2 of the COST-1
+  // rework): one row per (course, surface) that actually has ledger rows,
+  // rather than a second pass over `cost_ledger_entries` to get the
+  // per-surface breakdown this row set already carries.
   const totals = db
     .select({
       courseId: costLedgerEntries.courseId,
+      surface: costLedgerEntries.surface,
       costMicros: sum(costLedgerEntries.costMicros),
-      // Finding 2 of the COST-1 rework — the estimated portion of
-      // `costMicros`, summed in the same query rather than a second pass
-      // over the rows: a `CASE` inside the aggregate costs nothing extra a
-      // second `SELECT` grouped by `measurement` wouldn't, and keeps one row
-      // per course instead of two.
       estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
       callCount: sql<number>`count(*)`,
     })
     .from(costLedgerEntries)
     .where(eq(costLedgerEntries.organizationId, organizationId))
-    .groupBy(costLedgerEntries.courseId)
+    .groupBy(costLedgerEntries.courseId, costLedgerEntries.surface)
     .all()
-  const totalsByCourseId = new Map(
-    totals.map((row) => [
-      row.courseId,
-      {
-        costMicros: Number(row.costMicros ?? 0),
-        estimatedCostMicros: Number(row.estimatedCostMicros ?? 0),
-        callCount: Number(row.callCount),
-      },
-    ])
-  )
+
+  // One entry per course (summed across its own surfaces) plus that
+  // course's own `bySurface` breakdown, and — separately — the
+  // organization's `bySurface` breakdown across every course. All three
+  // come from the single `totals` row set above; none of this re-reads
+  // `cost_ledger_entries`.
+  const totalsByCourseId = new Map<
+    string,
+    {
+      costMicros: number
+      estimatedCostMicros: number
+      callCount: number
+      bySurface: CostBySurface[]
+    }
+  >()
+  const organizationBySurface = new Map<CostLedgerSurface, CostBySurface>()
+  for (const row of totals) {
+    const costMicros = Number(row.costMicros ?? 0)
+    const estimatedCostMicros = Number(row.estimatedCostMicros ?? 0)
+    const callCount = Number(row.callCount)
+
+    const courseTotals = totalsByCourseId.get(row.courseId) ?? {
+      costMicros: 0,
+      estimatedCostMicros: 0,
+      callCount: 0,
+      bySurface: [],
+    }
+    courseTotals.costMicros += costMicros
+    courseTotals.estimatedCostMicros += estimatedCostMicros
+    courseTotals.callCount += callCount
+    courseTotals.bySurface.push({
+      surface: row.surface,
+      costMicros,
+      estimatedCostMicros,
+      callCount,
+    })
+    totalsByCourseId.set(row.courseId, courseTotals)
+
+    const surfaceTotals = organizationBySurface.get(row.surface) ?? {
+      surface: row.surface,
+      costMicros: 0,
+      estimatedCostMicros: 0,
+      callCount: 0,
+    }
+    surfaceTotals.costMicros += costMicros
+    surfaceTotals.estimatedCostMicros += estimatedCostMicros
+    surfaceTotals.callCount += callCount
+    organizationBySurface.set(row.surface, surfaceTotals)
+  }
 
   const coursesSummary: CourseUsageSummary[] = courseRows.map((row) => {
     const totalsForCourse = totalsByCourseId.get(row.id)
@@ -255,6 +335,7 @@ export function getOrganizationUsageSummary(
       costMicros: totalsForCourse?.costMicros ?? 0,
       estimatedCostMicros: totalsForCourse?.estimatedCostMicros ?? 0,
       callCount: totalsForCourse?.callCount ?? 0,
+      bySurface: totalsForCourse?.bySurface ?? [],
     }
   })
 
@@ -270,6 +351,7 @@ export function getOrganizationUsageSummary(
       0
     ),
     courses: coursesSummary,
+    bySurface: [...organizationBySurface.values()],
   }
 }
 
@@ -298,29 +380,53 @@ export interface OrganizationTotal {
   /** The portion of `totalCostMicros` that came from an `estimated` row rather than a `measured` one — see `CourseUsageSummary`'s own comment (`getOrganizationUsageSummary`, above) for why this exists at all. */
   estimatedCostMicros: number
   callCount: number
+  /** COST-7 — the organization's own totals above, broken down by surface. */
+  bySurface: CostBySurface[]
 }
 
 export function listOrganizationTotals(db: Database): OrganizationTotal[] {
+  // COST-7 — grouped by organization *and* surface in the one query, the
+  // same style `getOrganizationUsageSummary` above extends.
   const totals = db
     .select({
       organizationId: costLedgerEntries.organizationId,
+      surface: costLedgerEntries.surface,
       costMicros: sum(costLedgerEntries.costMicros),
       estimatedCostMicros: sql<number>`sum(case when ${costLedgerEntries.measurement} = 'estimated' then ${costLedgerEntries.costMicros} else 0 end)`,
       callCount: sql<number>`count(*)`,
     })
     .from(costLedgerEntries)
-    .groupBy(costLedgerEntries.organizationId)
+    .groupBy(costLedgerEntries.organizationId, costLedgerEntries.surface)
     .all()
-  const totalsByOrganizationId = new Map(
-    totals.map((row) => [
-      row.organizationId,
-      {
-        costMicros: Number(row.costMicros ?? 0),
-        estimatedCostMicros: Number(row.estimatedCostMicros ?? 0),
-        callCount: Number(row.callCount),
-      },
-    ])
-  )
+
+  const totalsByOrganizationId = new Map<
+    string,
+    {
+      costMicros: number
+      estimatedCostMicros: number
+      callCount: number
+      bySurface: CostBySurface[]
+    }
+  >()
+  for (const row of totals) {
+    const costMicros = Number(row.costMicros ?? 0)
+    const estimatedCostMicros = Number(row.estimatedCostMicros ?? 0)
+    const callCount = Number(row.callCount)
+
+    const organizationTotals = totalsByOrganizationId.get(
+      row.organizationId
+    ) ?? { costMicros: 0, estimatedCostMicros: 0, callCount: 0, bySurface: [] }
+    organizationTotals.costMicros += costMicros
+    organizationTotals.estimatedCostMicros += estimatedCostMicros
+    organizationTotals.callCount += callCount
+    organizationTotals.bySurface.push({
+      surface: row.surface,
+      costMicros,
+      estimatedCostMicros,
+      callCount,
+    })
+    totalsByOrganizationId.set(row.organizationId, organizationTotals)
+  }
 
   const organizationRows = db
     .select({ id: organizations.id, name: organizations.name })
@@ -335,6 +441,7 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
       totalCostMicros: totalsForOrganization?.costMicros ?? 0,
       estimatedCostMicros: totalsForOrganization?.estimatedCostMicros ?? 0,
       callCount: totalsForOrganization?.callCount ?? 0,
+      bySurface: totalsForOrganization?.bySurface ?? [],
     }
   })
 }

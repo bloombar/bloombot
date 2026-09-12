@@ -48,6 +48,8 @@ export interface OrganizationUsageReport {
   totalEstimatedCostMicros: number
   courses: costLedger.CourseUsageSummary[]
   studentsNearLimit: usage.UsageNearLimit[]
+  /** COST-7 — the organization's own totals above, broken down by surface across every course; each course in `courses` carries its own breakdown the same way. */
+  bySurface: costLedger.CostBySurface[]
 }
 
 /**
@@ -89,6 +91,7 @@ export const organizationUsageAction: Action<
       totalEstimatedCostMicros: summary.totalEstimatedCostMicros,
       courses: summary.courses,
       studentsNearLimit,
+      bySurface: summary.bySurface,
     }
   },
 }

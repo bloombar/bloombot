@@ -623,6 +623,7 @@ export async function answerQuestion(
             outputTokens: priced.outputTokens,
             costMicros: priced.costMicros,
             measurement: priced.measurement,
+            surface, // COST-7 — the surface this call was asked through.
           },
           db
         )

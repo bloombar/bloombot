@@ -18,7 +18,7 @@ the loop close without a human watching it.
 
 **Phase:** <n> — <phase title>
 **SPEC ids:** <FAMILY-N, …> (must already exist in docs/SPEC.md and be claimed in docs/ROADMAP.md)
-**Branch:** feat/<REQ-ID>-<slug>, cut from feat/PLAT-1-multi-surface-platform
+**Branch:** feat/<REQ-ID>-<slug>, cut from the default branch (`master`)
 
 ### Goal
 
@@ -72,9 +72,10 @@ the implementation.
    **note** → `docs/DECISIONS.md` or a ROADMAP line, and ship.
 6. Commit, push, open the PR with `Closes #N` (verify the number — issues are not numbered in family order),
    then `npm run board:status -- "In review" <ids>` and set auto-merge.
-7. When it merges: `npm run board:status -- Done <ids>`, and commit the manifest change on the integration
-   branch. `Closes #N` does not fire on a merge into a non-default branch, so this is the only thing that
-   moves the card.
+7. When it merges: `npm run board:status -- Done <ids>`, and commit the manifest change on `master`.
+   Slices target the default branch now, so `Closes #N` does close the issue on merge — but closing an
+   issue is not the same as moving its card, and no keyword can reach the `In progress`/`In review`
+   columns at all. `board:status` is still the only thing that moves the card.
 
 **Two rounds of rework, maximum.** A third means the slice was mis-scoped rather than merely wrong — re-split
 it and write a sharper brief. Grinding on a bad brief is the most expensive thing this loop can do.

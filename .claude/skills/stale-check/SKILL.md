@@ -17,7 +17,6 @@ gh pr list --state open --json number,title,headRefName,updatedAt,files \
 # 2. Is this branch behind its base? A slice built on a stale base merges dirty.
 git fetch origin --quiet
 git rev-list --count HEAD..origin/master        # commits on master we do not have
-git rev-list --count HEAD..origin/feat/PLAT-1-multi-surface-platform 2>/dev/null || true
 
 # 3. Which remote branches are merged and can be deleted?
 git branch -r --merged origin/master | grep -v 'origin/master\|origin/HEAD' || echo "none"
@@ -36,8 +35,16 @@ git for-each-ref --sort=-committerdate refs/remotes/origin \
 | A merged branch still exists on the remote | Report it for deletion. Do not delete branches yourself — the supervisor owns the git history. |
 | A branch is quiet, unmerged, and has no open PR | Report it. It is either abandoned work to drop or unfinished work to finish, and both need a human-level decision. |
 
-## Known state at the start of this build
+## Known state
 
-`feat/BOT-11-phase-1-defect-fixes`, `feat/OPS-7-continuous-deployment` and `feat/OPS-7-bump-action-versions`
-were all merged to `master` and their remote branches can be deleted. `feat/PLAT-1-multi-surface-platform`
-is the long-lived integration branch — it is *supposed* to be long-lived, so age is not staleness there.
+The platform build has merged. `master` is the default branch, slices cut from it and merge back to it,
+and there is no long-lived integration branch any more.
+
+`feat/PLAT-1-multi-surface-platform` no longer receives work. Its remote branch still exists because
+GitHub branch protection refuses to delete it; ignore it rather than treating it as a base or as drift.
+
+Because slices are short-lived now, a branch that is quiet for more than a day or two is genuinely stale
+rather than merely long-running. Check whether its content already reached `master` through a squash merge
+before concluding anything is unlanded: `git diff --diff-filter=A --name-only master <branch>` lists only
+the files the branch has that `master` does not, which is the question that actually matters — commit
+counts and `git branch --merged` both mislead after a squash.

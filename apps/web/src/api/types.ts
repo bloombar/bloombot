@@ -638,6 +638,8 @@ export interface AdminOrganizationSummary {
   totalCostMicros: number
   estimatedCostMicros: number
   callCount: number
+  /** COST-7 — the totals above, broken down by surface. */
+  bySurface: CostBySurface[]
 }
 
 /** COST-5's own aggregate, as `checkPlatformHealth` (`@bloombot/actions`) reports it — mirrored by hand, the same boundary this file's own module comment already explains. */
@@ -680,6 +682,14 @@ export interface TenantDeletion {
   deletedAt: number
 }
 
+/** COST-7 — one surface's own slice of a `CourseUsageSummary`/`OrganizationUsageReport`'s totals. Mirrors `@bloombot/db`'s own `CostBySurface` by hand. */
+export interface CostBySurface {
+  surface: 'discord' | 'web' | 'mcp' | 'unknown'
+  costMicros: number
+  estimatedCostMicros: number
+  callCount: number
+}
+
 /** COST-4 — one course's own usage, as `costLedger.organizationUsage` reports it. Mirrors `@bloombot/db`'s own `CourseUsageSummary` by hand, the same boundary this file's own module comment already explains. */
 export interface CourseUsageSummary {
   courseId: string
@@ -688,6 +698,8 @@ export interface CourseUsageSummary {
   /** The portion of `costMicros` that came from an estimate rather than a measurement (COST-6) — see `pages/Usage.tsx`'s own module comment for what this changes about how a total is shown. */
   estimatedCostMicros: number
   callCount: number
+  /** COST-7 — the totals above, broken down by which surface the call was asked through. */
+  bySurface: CostBySurface[]
 }
 
 /**
@@ -716,6 +728,8 @@ export interface OrganizationUsageReport {
   totalEstimatedCostMicros: number
   courses: CourseUsageSummary[]
   studentsNearLimit: UsageNearLimit[]
+  /** COST-7 — the organization's own totals above, broken down by surface across every course. */
+  bySurface: CostBySurface[]
 }
 
 /** COST-3 — `costLedger.setSpendingCap`'s own return: what is now stored, after the call. Mirrors `@bloombot/actions`' own `SetSpendingCapResult` by hand. */

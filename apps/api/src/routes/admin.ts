@@ -101,6 +101,8 @@ export interface AdminOrganizationSummary {
   totalCostMicros: number
   estimatedCostMicros: number
   callCount: number
+  /** COST-7 — the totals above, broken down by surface. */
+  bySurface: costLedger.CostBySurface[]
 }
 
 export interface AdminOrganizationsResponse {
@@ -173,6 +175,7 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
             totalCostMicros: total.totalCostMicros,
             estimatedCostMicros: total.estimatedCostMicros,
             callCount: total.callCount,
+            bySurface: total.bySurface, // COST-7
           })),
           platformHealth,
         }

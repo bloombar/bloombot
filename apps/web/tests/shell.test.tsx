@@ -498,6 +498,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       totalEstimatedCostMicros: 0,
       courses: [],
       studentsNearLimit: [],
+      bySurface: [],
     })
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
@@ -526,6 +527,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       totalEstimatedCostMicros: 0,
       courses: [],
       studentsNearLimit: [],
+      bySurface: [],
     })
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })

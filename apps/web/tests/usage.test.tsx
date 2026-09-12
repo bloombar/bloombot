@@ -41,6 +41,7 @@ function report(
     totalEstimatedCostMicros: 0,
     courses: [],
     studentsNearLimit: [],
+    bySurface: [],
     ...overrides,
   }
 }
@@ -95,6 +96,7 @@ describe('Usage (COST-3/COST-4)', () => {
             costMicros: 1_500_000,
             estimatedCostMicros: 0,
             callCount: 3,
+            bySurface: [],
           },
           {
             courseId: 'course-2',
@@ -102,6 +104,7 @@ describe('Usage (COST-3/COST-4)', () => {
             costMicros: 250_000,
             estimatedCostMicros: 250_000,
             callCount: 1,
+            bySurface: [],
           },
         ],
       })
@@ -114,6 +117,70 @@ describe('Usage (COST-3/COST-4)', () => {
     expect(
       screen.getByText(/\$0\.25 · 1 call · includes an estimate/)
     ).toBeInTheDocument()
+  })
+
+  // COST-7 — the per-course, and the organization's own, totals broken down
+  // by surface: `'unknown'` must read as prose an instructor understands,
+  // not the bare enum value a row before this column existed carries.
+  it('breaks a course`s own total, and the organization`s own total, down by surface — and renders `unknown` as prose', async () => {
+    fetchOrganizationUsage.mockResolvedValue(
+      report({
+        totalCostMicros: 1_200_000,
+        courses: [
+          {
+            courseId: 'course-1',
+            courseTitle: 'Web Design',
+            costMicros: 1_200_000,
+            estimatedCostMicros: 0,
+            callCount: 4,
+            bySurface: [
+              {
+                surface: 'discord',
+                costMicros: 1_000_000,
+                estimatedCostMicros: 0,
+                callCount: 3,
+              },
+              {
+                surface: 'unknown',
+                costMicros: 200_000,
+                estimatedCostMicros: 0,
+                callCount: 1,
+              },
+            ],
+          },
+        ],
+        bySurface: [
+          {
+            surface: 'discord',
+            costMicros: 1_000_000,
+            estimatedCostMicros: 0,
+            callCount: 3,
+          },
+          {
+            surface: 'unknown',
+            costMicros: 200_000,
+            estimatedCostMicros: 0,
+            callCount: 1,
+          },
+        ],
+      })
+    )
+
+    renderWithModal(<Usage organizationId="org-1" isOwner={true} />)
+
+    await screen.findByText('Web Design')
+    // Two "By surface:" lines — one for the organization total, one for
+    // this course — both naming Discord and both reading `unknown` as
+    // prose rather than the bare word.
+    const bySurfaceLines = screen.getAllByText(/By surface:/)
+    expect(bySurfaceLines).toHaveLength(2)
+    for (const line of bySurfaceLines) {
+      expect(line).toHaveTextContent('Discord: $1.00 · 3 calls')
+      expect(line).toHaveTextContent(
+        'recorded before surfaces were tracked: $0.20 · 1 call'
+      )
+    }
+    expect(screen.queryByText(/·\s*unknown:/)).not.toBeInTheDocument()
   })
 
   it('lists students approaching their limit, falling back to the person id when displayName is null — never an email', async () => {

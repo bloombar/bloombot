@@ -15,15 +15,15 @@ declares by name which capabilities it takes; it gets the rest for free, and get
 **Which surfaces can actually send, and when.** This is stated here rather than left to be inferred from the
 build sequence, because the honest answer is not "all three at once".
 
-- **During Phase 29, before S5 merges:** none. S1–S3C build the schema, the action, the transport and the
+- **During Phase 30, before S5 merges:** none. S1–S3C build the schema, the action, the transport and the
   outbox; nothing is exposed to a human yet.
-- **At the end of Phase 29:** the **panel** can send (S5 — compose, confirm, report) and **MCP** can send
+- **At the end of Phase 30:** the **panel** can send (S5 — compose, confirm, report) and **MCP** can send
   (S7 — the tool plus the elicitation adapter that actually mints the grant). **Discord delivers but cannot
   originate**: a student is reached in a Discord channel or DM, and a student who replies to a DM gets a
   reply telling them where to ask — a fixed, model-free answer, not an assistant answer (S3C, MSG-18) — but
   an owner standing in Discord still has no way to _ask_ for a send. That is not an oversight: the Discord
-  ask needs a confirmation primitive (§7) and a tool-calling loop (§8), both of which are Phase 30 work.
-- **At the end of Phase 30:** all three ask. The panel's own assistant and the Discord bot both invoke
+  ask needs a confirmation primitive (§7) and a tool-calling loop (§8), both of which are Phase 31 work.
+- **At the end of Phase 31:** all three ask. The panel's own assistant and the Discord bot both invoke
   `messages.send` through `invokeCapability`, each behind its own `ConfirmationPort`.
 
 ## What exists today
@@ -1059,7 +1059,7 @@ returns `boolean` (`apps/mcp/src/server.ts:273`–`:307`) and `call-tool.ts:218`
 the elicitation response _is_ the human's act, arriving over a channel the tool-calling model does not
 write — and returns its id; everything else, including a client that declares no elicitation capability at
 all, returns `undefined`. `call-tool.ts` passes that id through as `dispatch(..., { confirmation })`.
-**This change ships in S7, in Phase 29**, with the tool that needs it — not in S8 — because a tool that
+**This change ships in S7, in Phase 30**, with the tool that needs it — not in S8 — because a tool that
 refuses unconditionally is not an exposure, it is a defect.
 
 _Web adapter_ (CAP-9): **three round trips, and the middle one is the human's.** The previous draft minted
@@ -1082,11 +1082,11 @@ substance, and a parity test asserting only that a port was _called_ would have 
 
 The panel's own compose screen (MSG-12) is the only place a `messages.send` originates on the web today.
 
-_Discord adapter_ (CAP-4, Phase 30): the primitive `apps/bot` already has is a `MessageCreate` in a
+_Discord adapter_ (CAP-4, Phase 31): the primitive `apps/bot` already has is a `MessageCreate` in a
 channel. The bot replies with the target label and a four-word code; a following message from the **same
 authenticated speaker in the same channel** quoting that code within a short window sets `agreed_at` on the
 pending grant. That is a request from the platform to a human outside the model's own output channel, which
-is D-36's actual requirement — no `InteractionCreate` wiring, no new intents, and it ships in Phase 30
+is D-36's actual requirement — no `InteractionCreate` wiring, no new intents, and it ships in Phase 31
 rather than being deferred, because "send from within Discord" is half of what the maintainer asked for and
 a `DENY_ALL` port would make the Discord answer a permanent refusal. Three existing behaviours it has to
 reconcile, stated here so S10 does not discover them: (a) `handleMention` only sees messages that address
@@ -1869,7 +1869,7 @@ action with one authorization — which is not observable until a second surface
 first. _Fails without it:_ `apps/mcp/tests/mcp-e2e.test.ts` — a full accept → grant → send; a client with
 no elicitation capability refused; and an MCP non-owner receiving the byte-identical refusal the panel's
 non-owner receives (MSG-1's actual property) — **failing without S7 alone**, not spanning two phases.
-**Serialise after S5.** — end of Phase 29. **At this point the panel and MCP can send; Discord delivers and
+**Serialise after S5.** — end of Phase 30. **At this point the panel and MCP can send; Discord delivers and
 answers DM replies but cannot originate.**
 
 **S8 — The capability catalog and the invoker.** Branch `feat/CAP-1-capability-catalog`. Files:
@@ -1895,7 +1895,7 @@ authority and the invoker), a new owner-assistant endpoint in `apps/api` authori
 enrolment (the student chat routes resolve a connected person and then `resolveChatAdmission`, so an owner
 who is not enrolled on the course is refused there — the invoker does not belong in that route),
 `apps/web/src/pages/*`. _Ids:_ **CAP-4**. _Fails without it:_ `apps/bot/tests/confirmation.test.ts` and
-`e2e/assistant-capabilities.spec.ts`. **Serialise after S9.** — end of Phase 30. **All three surfaces can
+`e2e/assistant-capabilities.spec.ts`. **Serialise after S9.** — end of Phase 31. **All three surfaces can
 now ask.**
 
 ### The slice-to-id map, in one place
@@ -2428,10 +2428,15 @@ repeatedly, and a turn with no deadline holds a student's reply open indefinitel
 
 ## ROADMAP.md additions
 
+> **Renumbered, 2026-09-12.** This plan was written proposing phases 29 and 30. Phase 29 was taken
+> in the meantime by COST-7 ("What each surface actually costs"), which has shipped, so the two
+> phases below are now **30 and 31** and every reference in this document was renumbered to match.
+> The requirement ids (MSG-1..29, CAP-1..12) are unchanged — only the phase numbers moved.
+
 Append after `## Phase 28 — A message the bot never received` (the last phase block, at line 362).
 
 ```markdown
-## Phase 29 — A message the platform sends first
+## Phase 30 — A message the platform sends first
 
 Everything this platform does today begins with somebody asking it a question. An instructor who needs to
 tell a class that the exam moved has no way to make that happen through the platform at all. This phase
@@ -2446,11 +2451,11 @@ from the control panel and from an MCP client; Discord delivers but does not yet
 
 **In scope:** MSG-1..29, CAP-8..11
 
-## Phase 30 — One set of capabilities, every surface
+## Phase 31 — One set of capabilities, every surface
 
 An MCP client's own model can invoke this platform's actions; the assistant the platform runs on Discord
 and in the panel cannot invoke anything at all, because the model port is one-shot text in, text out. So
-the capability Phase 29 built is reachable from a panel form and an MCP tool, and an owner who simply asks
+the capability Phase 30 built is reachable from a panel form and an MCP tool, and an owner who simply asks
 the bot is answered with prose. This phase gives the platform's own assistant a bounded tool-calling loop,
 moves the list of what an assistant may reach out of the MCP server and into the platform, and generalizes
 MCP's destructive-tool confirmation into one that every surface — including the next one — has to
@@ -2462,8 +2467,8 @@ implement before it can offer anything irreversible.
 `scripts/board/config.mjs` needs three edits in the same commit, and the previous draft got the reasoning
 for one of them backwards:
 
-- **`MILESTONE_TITLE` gains** `29: 'Phase 29 — A message the platform sends first'` and
-  `30: 'Phase 30 — One set of capabilities, every surface'`, matching the `##` headings character for
+- **`MILESTONE_TITLE` gains** `29: 'Phase 30 — A message the platform sends first'` and
+  `30: 'Phase 31 — One set of capabilities, every surface'`, matching the `##` headings character for
   character including the em dash. **This is the edit that creates the milestones** —
   `scripts/board/sync.mjs:178` iterates `Object.entries(MILESTONE_TITLE)`, and
   `scripts/board/derive.test.mjs:115`–`:130` asserts on `MILESTONE_TITLE`. Omitting it fails CI.
@@ -2560,7 +2565,7 @@ course or a person.
    a quiet file is strictly better than a busy one for a rebuild of `messages`.
 5. **Does the Discord confirmation's follow-up-code flow feel acceptable, or is a slash-command /
    interaction-button surface worth the new gateway wiring?** _Recommendation:_ the follow-up code, in
-   Phase 30, because it needs no new intents and no `InteractionCreate` handler; buttons are a later
+   Phase 31, because it needs no new intents and no `InteractionCreate` handler; buttons are a later
    polish slice, not a prerequisite for shipping "send from within Discord". Note that S3C does add one
    new intent (`DirectMessages`) for a different reason — receiving a student's reply — and that it is not
    a privileged intent, so it needs no developer-portal change.

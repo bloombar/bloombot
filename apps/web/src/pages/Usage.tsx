@@ -64,6 +64,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
 import { InfoIcon, WarningIcon } from '../icons.js'
+import { surfaceLabel } from '../surface-label.js'
 
 export interface UsageScreenProps {
   organizationId: string
@@ -119,27 +120,6 @@ function parseCapAmount(
   const value = Number(trimmed)
   if (!Number.isFinite(value) || value < 0) return { ok: false }
   return { ok: true, value }
-}
-
-/**
- * COST-7 — a human label for one ledger surface. `'unknown'` reads as prose
- * ("recorded before surfaces were tracked"), not the bare enum value — a
- * row carries it only because it predates this column
- * (`@bloombot/db`'s own `COST_LEDGER_SURFACES` comment), and a reader
- * should understand that as history, not as a fourth surface alongside
- * Discord/Web/MCP.
- */
-function surfaceLabel(surface: CostBySurface['surface']): string {
-  switch (surface) {
-    case 'discord':
-      return 'Discord'
-    case 'web':
-      return 'Web'
-    case 'mcp':
-      return 'MCP'
-    case 'unknown':
-      return 'recorded before surfaces were tracked'
-  }
 }
 
 /**

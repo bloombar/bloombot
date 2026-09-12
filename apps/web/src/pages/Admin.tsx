@@ -71,6 +71,7 @@ import { useModal } from '../components/modal/ModalProvider.js'
 import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import { DeleteIcon, FailureIcon, SuccessIcon } from '../icons.js'
 import type { AdminRoute, Route } from '../routing/route.js'
+import { surfaceLabel } from '../surface-label.js'
 import { NotFound } from './NotFound.js'
 
 export interface AdminScreenProps {
@@ -83,26 +84,6 @@ export interface AdminScreenProps {
 /** Integer micros (COST-1) to a plain dollar figure — the same unit `costLedger`'s own summaries use platform-wide; this app has no other place that formats one yet, so the conversion lives here rather than a shared module one caller does not justify. */
 function formatMicros(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`
-}
-
-/**
- * COST-7 — a human label for one ledger surface, the same reasoning
- * `pages/Usage.tsx#surfaceLabel` gives for its own hand-written copy of
- * this: `'unknown'` reads as prose ("recorded before surfaces were
- * tracked"), not the bare enum value a row written before this column
- * existed carries.
- */
-function surfaceLabel(surface: CostBySurface['surface']): string {
-  switch (surface) {
-    case 'discord':
-      return 'Discord'
-    case 'web':
-      return 'Web'
-    case 'mcp':
-      return 'MCP'
-    case 'unknown':
-      return 'recorded before surfaces were tracked'
-  }
 }
 
 /** COST-7 — the same terse, inline register this screen's own per-organization total already uses ("$1.00 spent · 3 call(s) · partly estimated"), applied per surface. */

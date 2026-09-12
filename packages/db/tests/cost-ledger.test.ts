@@ -476,4 +476,126 @@ describe('cost-ledger repo', () => {
     expect(bySurface.get('mcp')?.costMicros).toBe(200)
     expect(bySurface.size).toBe(2)
   })
+
+  // COST-7 rework — `seedTwoOrganizations` puts exactly one course in each
+  // organization, so nothing above ever exercises the organization-level
+  // `bySurface` accumulation (`getOrganizationUsageSummary`'s own
+  // `organizationBySurface` map) with two *different* courses in the same
+  // organization contributing to the same surface. A regression from `+=`
+  // to `push` on that map would silently emit two separate `discord`
+  // entries for this one organization instead of summing them into one —
+  // every test above would still pass, since each only ever has a single
+  // course per organization.
+  it('sums two courses` own contributions to the same surface into one organization-level entry, not two', () => {
+    testDb = createTestDatabase()
+    const { orgA, personA } = seedTwoOrganizations(testDb)
+    const projectA = projects.createProject(
+      orgA,
+      { name: 'Second Project' },
+      testDb.db
+    )
+    const secondCourseResult = courses.createCourse(
+      orgA,
+      courseInput(projectA.id, {
+        title: 'Second Course',
+        adminsRole: 'admins-second',
+        studentsRole: 'students-second',
+      }),
+      testDb.db
+    )
+    if (!secondCourseResult.ok) throw new Error('seed course creation failed')
+    const secondCourse = secondCourseResult.course
+
+    // `courseA` — resolved from the seed above via a fresh
+    // `getOrganizationUsageSummary` read below — and `secondCourse` are two
+    // distinct courses in `orgA`, each with their own `discord` entry.
+    const firstSummaryBefore = costLedger.getOrganizationUsageSummary(
+      orgA,
+      testDb.db
+    )
+    const courseA = firstSummaryBefore.courses[0]
+    if (!courseA) throw new Error('expected the seeded course to be present')
+
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.courseId, personA.id, {
+        costMicros: 100,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(secondCourse.id, personA.id, {
+        costMicros: 400,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db)
+    const bySurface = new Map(
+      summary.bySurface.map((entry) => [entry.surface, entry])
+    )
+
+    // One `discord` entry at the organization level, summing both courses'
+    // own contributions — not two entries, one per course.
+    expect(bySurface.size).toBe(1)
+    expect(bySurface.get('discord')).toEqual({
+      surface: 'discord',
+      costMicros: 500,
+      estimatedCostMicros: 0,
+      callCount: 2,
+    })
+    expect(summary.totalCostMicros).toBe(500)
+  })
+
+  // COST-7 rework — both grouped queries build `bySurface` from a SQL
+  // `GROUP BY`, whose own row order SQLite makes no guarantee about.
+  // Recorded in an order that would defeat an alphabetical (or incidental
+  // insertion-order) sort — `mcp` before `discord` before `web` — so this
+  // fails unless `bySurface` is actually sorted to
+  // `COST_LEDGER_SURFACES`'s own declaration order (`discord`, `web`,
+  // `mcp`, `unknown`) rather than left as whatever the query happened to
+  // return.
+  it('orders `bySurface` deterministically — the SURFACES declaration order, `unknown` last — regardless of insertion order', () => {
+    testDb = createTestDatabase()
+    const { orgA, courseA, personA } = seedTwoOrganizations(testDb)
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 1, surface: 'mcp' }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, {
+        costMicros: 1,
+        surface: 'discord',
+      }),
+      testDb.db
+    )
+    costLedger.recordCostLedgerEntry(
+      orgA,
+      ledgerEntry(courseA.id, personA.id, { costMicros: 1, surface: 'web' }),
+      testDb.db
+    )
+
+    const summary = costLedger.getOrganizationUsageSummary(orgA, testDb.db)
+    expect(summary.bySurface.map((entry) => entry.surface)).toEqual([
+      'discord',
+      'web',
+      'mcp',
+    ])
+    expect(summary.courses[0]?.bySurface.map((entry) => entry.surface)).toEqual(
+      ['discord', 'web', 'mcp']
+    )
+
+    const totals = costLedger.listOrganizationTotals(testDb.db)
+    const orgATotal = totals.find((row) => row.organizationId === orgA)
+    expect(orgATotal?.bySurface.map((entry) => entry.surface)).toEqual([
+      'discord',
+      'web',
+      'mcp',
+    ])
+  })
 })

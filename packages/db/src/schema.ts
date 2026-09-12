@@ -984,9 +984,24 @@ export const costLedgerEntries = sqliteTable(
       'cost_ledger_entries_measurement_check',
       sql`${table.measurement} in ('measured', 'estimated')`
     ),
+    // COST-7 rework — derived from `COST_LEDGER_SURFACES` itself (`sql.raw`,
+    // below), not hardcoded the way `enrolments_source_check`/
+    // `ENROLMENT_SOURCES` above still is: that comment's own warning ("a
+    // value absent from that SQL check fails at write time, not compile
+    // time") describes exactly the hazard a hardcoded list here would
+    // reopen — a fourth entry added to `SURFACES` would compile everywhere
+    // (including the widened `COST_LEDGER_SURFACES`) and fail only at
+    // insert time, silently, inside `answer.ts`'s own try/catch around
+    // `recordCostLedgerEntry` (COST-3's cap would then under-count that
+    // surface's spend with no error a reviewer would see). Deriving the SQL
+    // list from the same constant the TypeScript enum already uses makes
+    // that divergence impossible rather than merely documented; left
+    // `ENROLMENT_SOURCES`'s own check hardcoded rather than changing it too
+    // — this is a deliberate improvement on that pattern for a new column,
+    // not evidence the old one was wrong to begin with.
     check(
       'cost_ledger_entries_surface_check',
-      sql`${table.surface} in ('discord', 'web', 'mcp', 'unknown')`
+      sql`${table.surface} in (${sql.raw(COST_LEDGER_SURFACES.map((surface) => `'${surface}'`).join(', '))})`
     ),
   ]
 )

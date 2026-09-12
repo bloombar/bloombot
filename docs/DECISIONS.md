@@ -11762,11 +11762,25 @@ deliberate, and matching the two types is exactly what would reopen the gap COST
 **The migration itself (`0030_uneven_human_torch.sql`)** rebuilds the table (SQLite has no `ALTER TABLE ADD
 COLUMN` that also adds a `CHECK` constraint in one statement, and `cost_ledger_entries` already carries one
 for `measurement` — the same `__new_<table>` rebuild `0025`/`0026` already use for `enrolments`/`courses`),
-with the new column given `DEFAULT 'unknown'` and the `INSERT ... SELECT` backfilling it from the literal
-`'unknown'` rather than a `SELECT` of a column the old table never had (the shape `0013`'s own
-`transcript_access_log.sequence` fix, and this file's own entry on it, already establish for a `NOT NULL`
-column added to a populated table). `packages/db/tests/migrate.test.ts` gained a test seeded through `0029`
-— the real migration files and journal entries, not invented ones — with one pre-`surface` row, asserting
-`0030` applies without throwing, backfills it to `'unknown'`, and that the row still sums into the
-organization's own total. Reverting the `DEFAULT` (or the literal backfill) reproduces the same "refuses to
-apply to a populated table" failure `0013`'s own finding names.
+and the new column carries **no** `DEFAULT` — `schema.ts` declares none, and neither does
+`0030_snapshot.json`. That absence is deliberate, not an oversight this file needs to defend: this
+migration's own rebuild strategy — `CREATE __new_cost_ledger_entries`, then `INSERT ... SELECT` from the old
+table into it, then drop and rename — populates every row through that one `INSERT`, and the `SELECT`
+supplies the literal `'unknown'` in the `surface` position rather than reading a column the old table never
+had. Nothing about `NOT NULL` ever needs a `DEFAULT` to satisfy it here, because nothing about this strategy
+ever inserts a row without a value for that column already in hand. A rework round on this same slice
+originally gave the new column `DEFAULT 'unknown'` anyway, reasoning by analogy to `0013`'s own
+`transcript_access_log.sequence integer NOT NULL DEFAULT 0` fix (a bare `ALTER TABLE ... ADD COLUMN ...
+NOT NULL`, which *does* need a default to apply to a populated table at all) — but `0030` is not that
+shape, and two reviewers independently caught the mismatch: the default sat there unused by this migration
+but permanently on the deployed column, invisible to every model of the schema that matters
+(`schema.ts`, the snapshot), and a future raw `INSERT` omitting `surface` would silently write `'unknown'`
+rather than fail the `NOT NULL` constraint it looks like it should — softening the exact invariant
+`NewCostLedgerEntry.surface`'s own narrower type (above) exists to hold. Removed; the literal in the
+`SELECT` was always the thing doing the work, verified by re-running `packages/db/tests/migrate.test.ts`'s
+own 0030 backfill test with the `DEFAULT` absent — it still passes, because nothing in the rebuild ever
+depended on it.
+
+`packages/db/tests/migrate.test.ts` gained a test seeded through `0029` — the real migration files and
+journal entries, not invented ones — with one pre-`surface` row, asserting `0030` applies without throwing,
+backfills it to `'unknown'`, and that the row still sums into the organization's own total.

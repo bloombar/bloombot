@@ -16,6 +16,7 @@ import { and, eq, sql, sum } from 'drizzle-orm'
 
 import type { Database } from '../client.js'
 import {
+  COST_LEDGER_SURFACES,
   costLedgerEntries,
   courses,
   organizations,
@@ -197,6 +198,25 @@ export interface CostBySurface {
 }
 
 /**
+ * COST-7 rework — a fixed, deterministic order for a `bySurface` array:
+ * `COST_LEDGER_SURFACES`'s own declaration order (`SURFACES` first, then
+ * `'unknown'` last). Both grouped queries below build these arrays from a
+ * SQL `GROUP BY`, whose own row order SQLite makes no guarantee about — two
+ * reads of the same, unchanged data could otherwise render the "By
+ * surface: ..." line in a different order each time. `'unknown'` last
+ * reads better than a plain alphabetical sort (which would put it between
+ * `mcp` and `web`) — it is the historical bucket, and a reader expects the
+ * real surfaces grouped together ahead of it.
+ */
+function sortBySurface(entries: CostBySurface[]): CostBySurface[] {
+  return [...entries].sort(
+    (a, b) =>
+      COST_LEDGER_SURFACES.indexOf(a.surface) -
+      COST_LEDGER_SURFACES.indexOf(b.surface)
+  )
+}
+
+/**
  * One course's usage, as `getOrganizationUsageSummary` reports it.
  *
  * `estimatedCostMicros` — the portion of `costMicros` that came from a row
@@ -335,7 +355,7 @@ export function getOrganizationUsageSummary(
       costMicros: totalsForCourse?.costMicros ?? 0,
       estimatedCostMicros: totalsForCourse?.estimatedCostMicros ?? 0,
       callCount: totalsForCourse?.callCount ?? 0,
-      bySurface: totalsForCourse?.bySurface ?? [],
+      bySurface: sortBySurface(totalsForCourse?.bySurface ?? []),
     }
   })
 
@@ -351,7 +371,7 @@ export function getOrganizationUsageSummary(
       0
     ),
     courses: coursesSummary,
-    bySurface: [...organizationBySurface.values()],
+    bySurface: sortBySurface([...organizationBySurface.values()]),
   }
 }
 
@@ -441,7 +461,7 @@ export function listOrganizationTotals(db: Database): OrganizationTotal[] {
       totalCostMicros: totalsForOrganization?.costMicros ?? 0,
       estimatedCostMicros: totalsForOrganization?.estimatedCostMicros ?? 0,
       callCount: totalsForOrganization?.callCount ?? 0,
-      bySurface: totalsForOrganization?.bySurface ?? [],
+      bySurface: sortBySurface(totalsForOrganization?.bySurface ?? []),
     }
   })
 }

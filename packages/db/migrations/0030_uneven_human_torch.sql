@@ -9,7 +9,7 @@ CREATE TABLE `__new_cost_ledger_entries` (
 	`output_tokens` integer,
 	`cost_micros` integer NOT NULL,
 	`measurement` text NOT NULL,
-	`surface` text DEFAULT 'unknown' NOT NULL,
+	`surface` text NOT NULL,
 	`created_at` integer NOT NULL,
 	FOREIGN KEY (`organization_id`) REFERENCES `organizations`(`id`) ON UPDATE no action ON DELETE no action,
 	FOREIGN KEY (`course_id`) REFERENCES `courses`(`id`) ON UPDATE no action ON DELETE no action,

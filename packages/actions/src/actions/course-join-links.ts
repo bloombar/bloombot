@@ -38,6 +38,7 @@
  */
 
 import { courseJoinLinks, courses, type Database } from '@bloombot/db'
+import { joinLinkExpirySchema, resolveJoinLinkExpiry } from '@bloombot/schemas'
 import {
   createCipheriv,
   createDecipheriv,
@@ -124,26 +125,49 @@ function requireAccountId(accountId: string | undefined): string {
   return accountId
 }
 
-const createInputSchema = z.object({
-  courseId: z.string().min(1),
-  /**
-   * Epoch milliseconds. Omitted or `null`: no expiry, valid until revoked
-   * (ENRL-4). Rework finding 7: must be strictly in the future — a past
-   * value would create a link that reports success but can never be
-   * redeemed (`courseJoinLinks.redeemJoinLink`'s own expiry check refuses
-   * anything at or before `now`), which is a confusing way to fail an
-   * instructor never sees the reason for.
-   */
-  expiresAt: z
-    .number()
-    .int()
-    .positive()
-    .refine((value) => value > Date.now(), {
-      message: 'expiresAt must be in the future',
-    })
-    .nullable()
-    .optional(),
-})
+const createInputSchema = z
+  .object({
+    courseId: z.string().min(1),
+    /**
+     * Epoch milliseconds. Omitted or `null`: no expiry, valid until revoked
+     * (ENRL-4). Rework finding 7: must be strictly in the future — a past
+     * value would create a link that reports success but can never be
+     * redeemed (`courseJoinLinks.redeemJoinLink`'s own expiry check refuses
+     * anything at or before `now`), which is a confusing way to fail an
+     * instructor never sees the reason for.
+     */
+    expiresAt: z
+      .number()
+      .int()
+      .positive()
+      .refine((value) => value > Date.now(), {
+        message: 'expiresAt must be in the future',
+      })
+      .nullable()
+      .optional(),
+    // ENRL-17 — one of `@bloombot/schemas`' named durations
+    // (`JOIN_LINK_EXPIRY_OPTIONS`), resolved against the clock at the
+    // moment `execute` (below) actually runs, rather than a caller computing
+    // an absolute timestamp itself the way `expiresAt` requires. `'none'`
+    // (the default when this is omitted) means no expiry, same as omitting
+    // both fields.
+    expiresIn: joinLinkExpirySchema
+      .optional()
+      .describe(
+        'Prefer this over expiresAt — one of "none" (default, no expiry), "1d", "1w", "1mo" or "1term" (16 weeks). Resolved against the current time when the link is actually created, so you never have to compute a timestamp yourself.'
+      ),
+  })
+  // Rework finding 7's same reasoning extended to a second way of naming an
+  // expiry: a caller sending both is refused outright (`ActionInputError`,
+  // a zod-level refusal, not a policy one) rather than one silently
+  // overriding the other with no way for a caller to tell which happened.
+  .refine(
+    (value) => !(value.expiresIn !== undefined && value.expiresAt != null),
+    {
+      message: 'Supply either expiresIn or expiresAt, not both.',
+      path: ['expiresIn'],
+    }
+  )
 type CreateInput = z.infer<typeof createInputSchema>
 
 /** What `courseJoinLinks.create` hands back — the plaintext secret, exactly once, never recoverable afterward. */
@@ -197,6 +221,18 @@ export function createCourseJoinLinkAction(
         ? encryptSecret(secret, encryptionKey)
         : undefined
 
+      // ENRL-17 — resolved against the clock right here, at the moment this
+      // action actually runs, never earlier: `resolveJoinLinkExpiry`'s own
+      // doc comment (`@bloombot/schemas`) on why `now` is an explicit
+      // argument rather than something it reads for itself. `input.expiresAt`
+      // takes precedence when both could otherwise apply, but the schema's
+      // own `.refine` above already refuses a call that actually sends both.
+      const expiresAt =
+        input.expiresAt ??
+        (input.expiresIn
+          ? resolveJoinLinkExpiry(input.expiresIn, Date.now())
+          : null)
+
       const link = courseJoinLinks.createJoinLink(
         organizationId,
         {
@@ -205,7 +241,7 @@ export function createCourseJoinLinkAction(
           secretCiphertext: encrypted?.ciphertext ?? null,
           secretNonce: encrypted?.nonce ?? null,
           secretAuthTag: encrypted?.authTag ?? null,
-          expiresAt: input.expiresAt ?? null,
+          expiresAt,
           createdByAccountId,
         },
         db

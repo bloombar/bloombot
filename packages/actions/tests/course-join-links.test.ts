@@ -149,6 +149,70 @@ describe('courseJoinLinks.create/.revoke, redeemCourseJoinLink (ENRL-3, ENRL-4)'
     ).rejects.toThrow()
   })
 
+  // ENRL-17 — resolved against the clock at the moment `execute` runs, not
+  // at some earlier point. Fails without the change: before `expiresIn`
+  // existed on `createInputSchema`, this call was refused outright
+  // (an unrecognized key — the schema was a plain `z.object`, not
+  // `z.strictObject`, so it would actually have been silently stripped, and
+  // `link.expiresAt` would be `null` instead of the expected window).
+  it('ENRL-17: expiresIn "1d" resolves to roughly one day from now', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+    const before = Date.now()
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(),
+      { courseId: course.id, expiresIn: '1d' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    const oneDayMs = 24 * 60 * 60 * 1000
+    expect(created.expiresAt).not.toBeNull()
+    expect(created.expiresAt).toBeGreaterThanOrEqual(before + oneDayMs)
+    // Generous upper bound — this test's own execution, not the resolution
+    // itself, is what could ever push it past a few seconds.
+    expect(created.expiresAt).toBeLessThan(before + oneDayMs + 60_000)
+  })
+
+  // `'none'` means the same thing omitting the field entirely already does.
+  it('ENRL-17: expiresIn "none" means no expiry', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    const created = await dispatch(
+      createCourseJoinLinkAction(),
+      { courseId: course.id, expiresIn: 'none' },
+      { organizationId, db: testDb.db, accountId: ownerId }
+    )
+
+    expect(created.expiresAt).toBeNull()
+  })
+
+  // Refused at the schema, before `execute` ever runs — an
+  // `ActionInputError`, not an ambiguous "one silently wins."
+  it('ENRL-17: refuses supplying both expiresIn and a non-null expiresAt', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, ownerId, course } = seedOrganizationWithCourse(
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        createCourseJoinLinkAction(),
+        {
+          courseId: course.id,
+          expiresIn: '1d',
+          expiresAt: Date.now() + 60_000,
+        },
+        { organizationId, db: testDb.db, accountId: ownerId }
+      )
+    ).rejects.toThrow()
+  })
+
   it('revoking stops the link admitting anyone new, but does not un-enrol somebody it already admitted', async () => {
     testDb = createTestDatabase()
     const { organizationId, ownerId, course } = seedOrganizationWithCourse(

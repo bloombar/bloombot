@@ -29,19 +29,21 @@
  * a copy attempt), so a failed copy always leaves the secret still
  * copyable by hand.
  *
- * **WEB-23: an expiry is chosen at issue, not left to default forever.**
- * `createCourseJoinLink`/`courseJoinLinks.create` have always accepted an
- * `expiresAt`, but nothing before this offered it, so every link this
- * panel issued was permanent and `formatExpiry` below could only ever print
- * "No expiry" for one. The control is a small set of relative durations
- * (`EXPIRY_OPTIONS`), not a raw datetime field: an instructor issuing a
- * link for a term is thinking in weeks, not timestamps, and a picker
- * invites exactly the past-value refusal `createInputSchema` exists to
- * catch (`packages/actions/src/actions/course-join-links.ts`'s own comment
- * on why). The chosen duration is only ever added to `Date.now()` at the
- * moment `handleCreate` actually sends the request — never at the moment
- * the option was selected — so an instructor who pauses between choosing
- * and clicking never has the request's own value fall behind.
+ * **WEB-23/ENRL-17: an expiry is chosen at issue, not left to default
+ * forever.** `createCourseJoinLink`/`courseJoinLinks.create` have always
+ * accepted an `expiresAt`, but nothing before WEB-23 offered it, so every
+ * link this panel issued was permanent and `formatExpiry` below could only
+ * ever print "No expiry" for one. The control is a small set of named
+ * durations (`JOIN_LINK_EXPIRY_OPTIONS`, `@bloombot/schemas`), not a raw
+ * datetime field: an instructor issuing a link for a term is thinking in
+ * weeks, not timestamps. ENRL-17 moved that table — and the arithmetic that
+ * used to turn a chosen duration into an absolute timestamp — out of this
+ * component entirely: this panel now sends the *name* of the chosen option
+ * (`expiresIn`) and lets `courseJoinLinks.create`'s own `execute` resolve it
+ * against the clock at the moment the link is actually created, on the
+ * server, closing the skew window a client-side `Date.now() + durationMs`
+ * used to leave open between an instructor pausing after choosing an option
+ * and actually clicking "Create join link."
  *
  * **ENRL-12: a live link's secret can be shown again, per row, not only at
  * creation.** `handleReveal` calls `revealCourseJoinLink`
@@ -67,6 +69,11 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+
+import {
+  JOIN_LINK_EXPIRY_OPTIONS,
+  type JoinLinkExpiryValue,
+} from '@bloombot/schemas'
 
 import {
   ApiError,
@@ -101,27 +108,6 @@ export interface JoinLinksProps {
 function joinUrl(secret: string): string {
   return `${window.location.origin}/join/${secret}`
 }
-
-// WEB-23: the durations this panel offers, in place of a raw datetime field
-// — see the module comment above for why. `durationMs: null` is "no
-// expiry", the default and today's unchanged behaviour; every other value
-// is added to `Date.now()` at send time, never stored as an absolute
-// timestamp before then.
-const EXPIRY_OPTIONS: {
-  value: string
-  label: string
-  durationMs: number | null
-}[] = [
-  { value: 'none', label: 'Never', durationMs: null },
-  { value: '1d', label: '1 day', durationMs: 24 * 60 * 60 * 1000 },
-  { value: '1w', label: '1 week', durationMs: 7 * 24 * 60 * 60 * 1000 },
-  { value: '1mo', label: '1 month', durationMs: 30 * 24 * 60 * 60 * 1000 },
-  {
-    value: '1term',
-    label: '1 term (16 weeks)',
-    durationMs: 16 * 7 * 24 * 60 * 60 * 1000,
-  },
-]
 
 /** A link this panel has never seen redeemed against is still either "not yet due" or "past due" — `revokedAt` is a distinct, instructor-caused state from an expiry the clock alone produced, so the two must never read the same way (WEB-23). */
 function formatExpiry(link: CourseJoinLinkSummary): string {
@@ -188,10 +174,10 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
   const [revealCopyError, setRevealCopyError] = useState<ApiError | undefined>(
     undefined
   )
-  // WEB-23: which `EXPIRY_OPTIONS` entry is selected for the *next* link —
-  // `'none'` (no expiry) is the default, so an instructor who never touches
-  // this control gets exactly today's behaviour.
-  const [expiryOption, setExpiryOption] = useState('none')
+  // WEB-23/ENRL-17: which `JOIN_LINK_EXPIRY_OPTIONS` entry is selected for
+  // the *next* link — `'none'` (no expiry) is the default, so an instructor
+  // who never touches this control gets exactly today's behaviour.
+  const [expiryOption, setExpiryOption] = useState<JoinLinkExpiryValue>('none')
   const { confirm } = useModal()
 
   const refresh = useCallback(
@@ -218,22 +204,17 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
     setCopied(false)
     setCreating(true)
     try {
-      // WEB-23: the chosen duration is added to `Date.now()` right here, at
-      // send time, never earlier — this file's own module comment has the
-      // reasoning. `durationMs: null` (the default, "Never") sends no third
-      // argument at all, matching `createCourseJoinLink`'s own "omitted
-      // means no expiry" and leaving today's behaviour exactly unchanged.
-      const durationMs = EXPIRY_OPTIONS.find(
-        (option) => option.value === expiryOption
-      )?.durationMs
+      // ENRL-17: the *name* of the chosen option is sent, not a timestamp
+      // this component computed — `createCourseJoinLink` (`api/client.js`)
+      // forwards it straight through to `courseJoinLinks.create`, which
+      // resolves it against the clock at the moment the link is actually
+      // created. `'none'` (the default) sends no `expiresIn` at all,
+      // matching `createCourseJoinLink`'s own "omitted means no expiry" and
+      // leaving today's behaviour exactly unchanged.
       const result =
-        durationMs == null
+        expiryOption === 'none'
           ? await createCourseJoinLink(organizationId, courseId)
-          : await createCourseJoinLink(
-              organizationId,
-              courseId,
-              Date.now() + durationMs
-            )
+          : await createCourseJoinLink(organizationId, courseId, expiryOption)
       setCreated(result)
       setExpiryOption('none')
       await refresh()
@@ -506,10 +487,12 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
           <FormField label="Expiry">
             <select
               value={expiryOption}
-              onChange={(event) => setExpiryOption(event.target.value)}
+              onChange={(event) =>
+                setExpiryOption(event.target.value as JoinLinkExpiryValue)
+              }
               className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
             >
-              {EXPIRY_OPTIONS.map((option) => (
+              {JOIN_LINK_EXPIRY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

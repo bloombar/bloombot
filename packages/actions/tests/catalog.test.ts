@@ -99,6 +99,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'projects.list',
         'projects.duplicate',
         'courses.save',
+        // ACT-7 — added by this slice.
+        'courses.updateSettings',
         'courses.enable',
         'courses.disable',
         'courses.list',

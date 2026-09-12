@@ -775,6 +775,21 @@ export function getCourse(
     .get()
   if (!courseRow) return undefined
 
+  const categories = loadCourseCategories(organizationId, courseId, db)
+  return { ...courseRow, categories }
+}
+
+/**
+ * `courseId`'s categories, with their channels, in declared order —
+ * `getCourse`'s own middle two selects, factored out so `updateCourseSettings`
+ * (ACT-7) below can read a course's *current* categories back onto its
+ * result without touching them, the same shape `getCourse` already returns.
+ */
+function loadCourseCategories(
+  organizationId: string,
+  courseId: string,
+  db: Executor
+): CourseCategoryWithChannels[] {
   const categoryRows = db
     .select()
     .from(courseCategories)
@@ -787,7 +802,7 @@ export function getCourse(
     .orderBy(courseCategories.ordering)
     .all()
 
-  const categories = categoryRows.map((category) => ({
+  return categoryRows.map((category) => ({
     ...category,
     channels: db
       .select()
@@ -801,8 +816,6 @@ export function getCourse(
       .orderBy(courseChannels.ordering)
       .all(),
   }))
-
-  return { ...courseRow, categories }
 }
 
 /**
@@ -1103,6 +1116,171 @@ export function updateCourse(
       input.categories
     )
 
+    return { ok: true, course: { ...courseRow, categories } }
+  })
+}
+
+/**
+ * ACT-7: the fields `courses.updateSettings` may change on an existing
+ * course, without moving it to another project and without touching its
+ * categories or channels — unlike `NewCourse` above, there is no `projectId`
+ * or `categories` here at all, and no `instructions`/`promptId` either
+ * (WEB-19/D-54, MDL-8 — the same two fields `courses.save`'s own
+ * `saveInputSchema` already keeps off its schema, for the same reasons).
+ * Every field is required here, not optional the way `courses.updateSettings`'s
+ * own zod input is: `@bloombot/actions`' `updateSettingsCourseAction` resolves
+ * its optional input against what is already stored (its own `keepOrClear`)
+ * before this ever sees it, exactly the way `courses.save`'s `execute`
+ * resolves `NewCourse` today — this file only ever writes fully-resolved
+ * values.
+ */
+export interface CourseSettingsUpdate {
+  title: string
+  enabled: boolean
+  adminsRole: string | null
+  studentsRole: string | null
+  model: string | null
+  vectorStoreId: string | null
+  maxRequestsPerDay: number | null
+  conversationScope: ConversationScope
+  selfEnrolFromDiscord: boolean
+  answerUnenrolled: boolean
+  discordServerId: string | null
+}
+
+/**
+ * Update a course's settings, leaving its project, categories and channels
+ * exactly as they are — `updateCourse`'s narrower sibling, for callers that
+ * never touch CFG-4's category list at all (ACT-7). Runs the same PROJ-3/TEN-9
+ * checks `updateCourse` runs, scoped against the course's *existing*
+ * category names (`loadCourseCategories`, above) since this can never change
+ * them, rather than against an `input.categories` that does not exist here.
+ *
+ * `undefined` when `courseId` does not exist or does not belong to
+ * `organizationId` (TEN-2), matching `updateCourse`. There is no `projectId`
+ * to validate ownership of (TEN-5 does not apply — this never moves a
+ * course), so unlike `updateCourse` there is no `loadOwnedProject` call; the
+ * course's own `projectId` is read straight off the row already proven to
+ * belong to this organization.
+ */
+export function updateCourseSettings(
+  organizationId: string,
+  courseId: string,
+  input: CourseSettingsUpdate,
+  db: Database
+): SaveCourseResult | undefined {
+  const existing = db
+    .select()
+    .from(courses)
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .get()
+  if (!existing) return undefined
+
+  // The project this course already belongs to — read, never written, since
+  // `CourseSettingsUpdate` has no `projectId` for a caller to move it with.
+  // Only its `archivedAt` matters here, the same "does not route" gate
+  // `updateCourse` checks before running the PROJ-3/TEN-9 checks below.
+  const project = db
+    .select({ archivedAt: projects.archivedAt })
+    .from(projects)
+    .where(eq(projects.id, existing.projectId))
+    .get()
+
+  // This course's own categories, unaffected by this save — the candidate
+  // set `findSelfConflict`/`findCourseNameConflict` check `input` against,
+  // in place of the `input.categories` `updateCourse` would otherwise read.
+  const existingCategoryNames = loadCourseCategories(
+    organizationId,
+    courseId,
+    db
+  ).map((category) => ({ name: category.name }))
+  const nameCheckInput: NameCheckInput = {
+    adminsRole: input.adminsRole,
+    studentsRole: input.studentsRole,
+    categories: existingCategoryNames,
+  }
+
+  // SRV-10 round 3, must-fix 1's same gate as `updateCourse`, above: only
+  // check the role-aliasing half of `findSelfConflict` when this save
+  // actually changes a role name.
+  const rolesChanged =
+    input.adminsRole !== existing.adminsRole ||
+    input.studentsRole !== existing.studentsRole
+  const selfConflict = findSelfConflict(nameCheckInput, {
+    checkRoles: rolesChanged,
+  })
+  if (selfConflict) return { ok: false, conflict: selfConflict }
+
+  return writeTransaction(db, (tx) => {
+    if (input.enabled && project?.archivedAt === null) {
+      const serverResolution = resolveCourseDiscordServer(
+        organizationId,
+        input.discordServerId ?? null,
+        tx
+      )
+      if (!serverResolution.ok) {
+        return {
+          ok: false,
+          conflict: serverResolutionConflict(
+            serverResolution.reason,
+            input.title
+          ),
+        }
+      }
+      // `couldIntroduceCrossCourseCollision` mirrors `updateCourse`'s own,
+      // minus `input.projectId !== existing.projectId` — this action never
+      // changes a course's project, so that half of the condition can never
+      // be true here.
+      const couldIntroduceCrossCourseCollision =
+        rolesChanged ||
+        input.enabled !== existing.enabled ||
+        (input.discordServerId ?? null) !== existing.discordServerId
+      const conflictFound = findCourseNameConflict(
+        organizationId,
+        nameCheckInput,
+        serverResolution.binding?.serverId,
+        tx,
+        {
+          excludeCourseId: courseId,
+          checkRoles: couldIntroduceCrossCourseCollision,
+        }
+      )
+      if (conflictFound) return { ok: false, conflict: conflictFound }
+    }
+
+    const courseRow = tx
+      .update(courses)
+      .set({
+        title: input.title,
+        enabled: input.enabled,
+        adminsRole: input.adminsRole,
+        studentsRole: input.studentsRole,
+        model: input.model,
+        vectorStoreId: input.vectorStoreId,
+        maxRequestsPerDay: input.maxRequestsPerDay,
+        conversationScope: input.conversationScope,
+        selfEnrolFromDiscord: input.selfEnrolFromDiscord,
+        answerUnenrolled: input.answerUnenrolled,
+        discordServerId: input.discordServerId,
+      })
+      .where(
+        and(
+          eq(courses.id, courseId),
+          eq(courses.organizationId, organizationId)
+        )
+      )
+      .returning()
+      .get()
+
+    // ACT-7, the whole point of this function: `projectId`, `categories` and
+    // `channels` are never written here at all — `loadCourseCategories` reads
+    // them back unchanged, rather than `updateCourse`'s
+    // `deleteCourseCategories`/`insertCourseCategories` replace path, which
+    // would give every category and channel a new id even when their
+    // contents end up identical.
+    const categories = loadCourseCategories(organizationId, courseId, tx)
     return { ok: true, course: { ...courseRow, categories } }
   })
 }

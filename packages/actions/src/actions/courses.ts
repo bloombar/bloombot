@@ -2,8 +2,10 @@
  * Actions over `packages/db`'s `courses` repo (PROJ-1, PROJ-3, PROJ-5),
  * proving the action shape against a real repository — `courses.save`
  * (create or update, through the same collision handling `packages/db`
- * already runs), `courses.enable`, `courses.disable`, and PROJ-5's own
- * reads: `courses.list` and `courses.get`.
+ * already runs), `courses.updateSettings` (ACT-7 — the same settings,
+ * without replacing categories and channels), `courses.enable`,
+ * `courses.disable`, and PROJ-5's own reads: `courses.list` and
+ * `courses.get`.
  */
 
 import {
@@ -20,6 +22,46 @@ import type { Action } from '../types.js'
 
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
+
+// Finding 2 (rework pass): an *omitted* optional field on update must keep
+// whatever is already stored, not get wiped to `null` — an *explicit* `null`
+// is the caller's way to clear one. `exactOptionalPropertyTypes` is what
+// makes "omitted" (`undefined`) and "explicitly cleared" (`null`) two
+// different values a field can carry, rather than both collapsing to the
+// same thing. Module scope, not local to `courses.save`'s own `execute`
+// (where this used to live): `courses.updateSettings` (ACT-7) needs the same
+// rule for every nullable field it accepts, and a second copy of this would
+// be exactly the kind of duplicated logic that drifts the moment one copy is
+// fixed and the other is not.
+function keepOrClear<Value>(
+  given: Value | null | undefined,
+  stored: Value | null | undefined
+): Value | null {
+  return given !== undefined ? given : (stored ?? null)
+}
+
+/**
+ * TEN-9/TEN-5 — `true` when `discordServerId` is either not supplied at all
+ * (nothing to check) or names a server actively bound to `organizationId`.
+ * Shared by `courses.save` and `courses.updateSettings`'s policies, both of
+ * which refuse the whole call the same "not found" way TEN-5 refuses a
+ * foreign `projectId` when this is `false` — never a distinct error a caller
+ * could use to probe whether some other organization holds that server.
+ */
+function isOwnDiscordServerOrAbsent(
+  organizationId: string,
+  discordServerId: string | null | undefined,
+  db: Database
+): boolean {
+  if (!discordServerId) return true
+  return Boolean(
+    discordServers.getActiveDiscordServerBinding(
+      organizationId,
+      discordServerId,
+      db
+    )
+  )
+}
 
 const listCoursesInputSchema = z.object({
   projectId: z.string().min(1),
@@ -145,7 +187,7 @@ export const saveCourseAction: Action<
 > = {
   name: 'courses.save',
   description:
-    "Create or update a course in the caller's organization, replacing its categories and channels.",
+    "Create or update a course in the caller's organization, replacing its categories and channels. Changing only a setting (title, roles, model, etc.) on an existing course? Use courses.updateSettings instead — this always replaces the whole category/channel list, even when the caller never touched it.",
   inputSchema: saveInputSchema,
   policy: {
     descriptor: { resource: 'project', access: 'write' },
@@ -157,15 +199,10 @@ export const saveCourseAction: Action<
       )
       if (!project) return undefined
 
-      // TEN-9/TEN-5 — a caller-supplied server id must actively belong to
-      // this organization; anything else (another organization's binding, a
-      // removed one, a snowflake nobody ever claimed) refuses the whole call
-      // the same way a foreign `projectId` does, rather than a distinct
-      // error a caller could use to probe whether some other organization
-      // holds that server.
+      // TEN-9/TEN-5 — `isOwnDiscordServerOrAbsent` (module scope, above),
+      // shared with `courses.updateSettings`'s own policy below.
       if (
-        input.discordServerId &&
-        !discordServers.getActiveDiscordServerBinding(
+        !isOwnDiscordServerOrAbsent(
           context.organizationId,
           input.discordServerId,
           context.db
@@ -198,12 +235,8 @@ export const saveCourseAction: Action<
     // omitted field there falls back to `null`, matching `createCourse`'s
     // own previous behaviour. `instructions` is deliberately not part of
     // this list any more — see this action's own `instructions:` line
-    // below.
-    const keepOrClear = <Value>(
-      given: Value | null | undefined,
-      stored: Value | null | undefined
-    ): Value | null => (given !== undefined ? given : (stored ?? null))
-
+    // below. `keepOrClear` itself is module scope now (above) — shared with
+    // `courses.updateSettings`.
     const newCourse: courses.NewCourse = {
       // `id` is never supplied here — `entity.existingCourse` set is the
       // only case that reaches `updateCourse`, which does not read `id`
@@ -312,6 +345,122 @@ export const saveCourseAction: Action<
     // organization moments earlier.
     if (!result) throw new ActionRefusedError()
     // PROJ-3's own collision, named — see `docs/DECISIONS.md`.
+    if (!result.ok) throw new ActionConflictError(result.conflict)
+    return result.course
+  },
+}
+
+/**
+ * ACT-7: a partial update over an existing course's settings — every field
+ * but `id` is optional, an omitted one keeps whatever is stored, and an
+ * explicit `null` clears a nullable one, exactly `saveInputSchema`'s own
+ * `keepOrClear` rule, reused rather than a second copy of it (module scope,
+ * above). Its categories and channels are never read or written at all: the
+ * only fields here overlap `saveInputSchema`'s at all are the ones
+ * `courses.save` itself would keep or clear the same way — this schema has
+ * no `categories` for a caller to send in the first place.
+ *
+ * `projectId` is deliberately absent — this never moves a course to another
+ * project, unlike `courses.save`. `instructions` and `promptId` are
+ * deliberately absent too, for the same reasons `saveInputSchema` (above)
+ * already gives: `instructions` is `courseInstructions.save`'s job alone
+ * (WEB-19/D-54), and `promptId` is MDL-8's legacy-only field, never newly
+ * acquired through either action. `z.strictObject`, matching `saveInputSchema`
+ * — an unknown key (`categories` included) is refused outright, not silently
+ * stripped.
+ */
+const updateSettingsInputSchema = z.strictObject({
+  id: z.string().min(1),
+  title: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  adminsRole: z.string().min(1).nullable().optional(),
+  studentsRole: z.string().min(1).nullable().optional(),
+  model: z.string().min(1).nullable().optional(),
+  vectorStoreId: z.string().min(1).nullable().optional(),
+  maxRequestsPerDay: z.number().int().positive().nullable().optional(),
+  conversationScope: z.enum(schema.CONVERSATION_SCOPES).optional(),
+  selfEnrolFromDiscord: z.boolean().optional(),
+  answerUnenrolled: z.boolean().optional(),
+  // TEN-9 — same field, same validation, as `saveInputSchema`'s own —
+  // checked in this action's policy below, reusing
+  // `isOwnDiscordServerOrAbsent`.
+  discordServerId: z.string().min(1).nullable().optional(),
+})
+type UpdateSettingsInput = z.infer<typeof updateSettingsInputSchema>
+
+export const updateSettingsCourseAction: Action<
+  'courses.updateSettings',
+  UpdateSettingsInput,
+  Course,
+  Course
+> = {
+  name: 'courses.updateSettings',
+  description:
+    "Change one or more of an existing course's settings (title, enabled, roles, model, vector store, request limit, conversation scope, self-enrolment, Discord server) in the caller's organization, leaving its categories and channels untouched. Prefer this over courses.save for any change that is not to the category/channel list — courses.save always replaces that whole list, even when the caller never touched it.",
+  inputSchema: updateSettingsInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'write' },
+    resolve: (input, context) => {
+      const existingCourse = courses.getCourse(
+        context.organizationId,
+        input.id,
+        context.db
+      )
+      if (!existingCourse) return undefined
+
+      // TEN-9/TEN-5 — `isOwnDiscordServerOrAbsent` (module scope, above),
+      // the same check `courses.save`'s own policy runs.
+      if (
+        !isOwnDiscordServerOrAbsent(
+          context.organizationId,
+          input.discordServerId,
+          context.db
+        )
+      ) {
+        return undefined
+      }
+
+      return existingCourse
+    },
+  },
+  execute: ({ organizationId, input, entity, db }) => {
+    // `keepOrClear` — module scope, shared with `courses.save`'s own
+    // `execute` above. `title` and `enabled` have no "clear" state to
+    // distinguish (neither is nullable on `updateSettingsInputSchema`), so
+    // an omitted one falls straight back to what is already stored via `??`
+    // rather than `keepOrClear` — there is no explicit `null` case for
+    // either to carry.
+    const settingsUpdate: courses.CourseSettingsUpdate = {
+      title: input.title ?? entity.title,
+      enabled: input.enabled ?? entity.enabled,
+      adminsRole: keepOrClear(input.adminsRole, entity.adminsRole),
+      studentsRole: keepOrClear(input.studentsRole, entity.studentsRole),
+      model: keepOrClear(input.model, entity.model),
+      vectorStoreId: keepOrClear(input.vectorStoreId, entity.vectorStoreId),
+      maxRequestsPerDay: keepOrClear(
+        input.maxRequestsPerDay,
+        entity.maxRequestsPerDay
+      ),
+      conversationScope: input.conversationScope ?? entity.conversationScope,
+      selfEnrolFromDiscord:
+        input.selfEnrolFromDiscord ?? entity.selfEnrolFromDiscord,
+      answerUnenrolled: input.answerUnenrolled ?? entity.answerUnenrolled,
+      discordServerId: keepOrClear(
+        input.discordServerId,
+        entity.discordServerId
+      ),
+    }
+
+    const result = courses.updateCourseSettings(
+      organizationId,
+      entity.id,
+      settingsUpdate,
+      db
+    )
+    // Same TEN-2 race `courses.save`'s own `execute` guards against, above —
+    // the policy already proved the course existed and belonged to this
+    // organization moments earlier.
+    if (!result) throw new ActionRefusedError()
     if (!result.ok) throw new ActionConflictError(result.conflict)
     return result.course
   },

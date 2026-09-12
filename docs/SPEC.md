@@ -1507,6 +1507,14 @@ reports it.
 Where a provider does not report usage, the ledger records that the number is an estimate rather
 than quietly storing a guess in the same column as a fact.
 
+#### COST-7 Spend is attributed to the surface that caused it
+
+Every recorded model call names the surface it was asked through, alongside the course and person
+it is already attributed to. Where usage is shown or exported, it can be read per surface as well
+as in total, so an owner can tell what Discord, the web panel and connected assistant clients each
+cost rather than only what the organization spent altogether. A call the platform cannot attribute
+to a surface is a defect, not a row with a blank.
+
 ### 25. MCP Server & Agent Access
 
 #### MCP-1 An assistant reaches the platform through the action layer

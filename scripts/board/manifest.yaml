@@ -4064,7 +4064,7 @@
   section: §36 Course Administration Through an Assistant
   family: ACT
   phase: 30
-  status: Backlog
+  status: In progress
   review: false
 - id: ENRL-17
   title: A join link's expiry is chosen from named durations
@@ -4081,7 +4081,7 @@
   section: §36 Course Administration Through an Assistant
   family: ENRL
   phase: 30
-  status: Backlog
+  status: In progress
   review: false
 - id: MCP-9
   title: An assistant lists the courses its account administers

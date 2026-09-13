@@ -12115,11 +12115,15 @@ this exact regression is what `e2e/mobile-viewport.spec.ts` (WEB-48's own e2e sp
 project added alongside the existing desktop one) actually caught before this fix landed, rather than being
 found by inspection.
 
-**Left for a follow-up rather than done in this slice**: the audit covered the shell (`AppShell.tsx`,
-`Shell.tsx`), every modal, every table-like list screen (Team, Transcripts, Usage, Roster, join links,
-membership invitations), `CourseEditor.tsx`'s own field grids, and `ChatMessage.tsx`'s markdown tables
-(already wrapped in their own `overflow-x-auto` by an earlier slice) — all found already mobile-first
-(`flex-col`/`sm:flex-row`, `grid`/`sm:grid-cols-*`, `flex-wrap`) with no further defect. `apps/api`'s
+**What the audit checked and found already correct**, recorded because a clean sweep is otherwise
+indistinguishable from one nobody did: the shell (`AppShell.tsx`, `Shell.tsx`), every modal, every
+table-like list screen (Team, Transcripts, Usage, Roster, join links, membership invitations),
+`CourseEditor.tsx`'s own field grids, and `ChatMessage.tsx`'s markdown tables (already wrapped in their
+own `overflow-x-auto` by an earlier slice) — all already mobile-first (`flex-col`/`sm:flex-row`,
+`grid`/`sm:grid-cols-*`, `flex-wrap`), no unprefixed `grid-cols-N` anywhere, and the only two fixed
+widths in the tree (`AppShell.tsx`'s `w-64 max-w-[80vw]` drawer and `ChatMessage.tsx`'s `max-w-[85%]`
+bubble) both bounded by a relative ceiling. Nothing was deferred out of this slice.
+
 **The SPEC's "any page served directly by the API is held to the same standard" now has nothing to hold.**
 `routes/mcp-oauth-consent.ts` was the one place in this codebase that emitted its own `<head>`, and its
 `htmlPage()` had a charset and a title and no viewport at all, so a phone laid those pages out at ~980px

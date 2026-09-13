@@ -73,11 +73,20 @@ async function assertNoHorizontalOverflow(page: Page, screen: string) {
 /**
  * The other half of the report: focusing a field must never change the
  * page's own zoom level. `visualViewport.scale` is the browser's own
- * record of that — unlike `document.documentElement.scrollWidth` above,
- * this is a property a real iOS Safari changes out from under a page (and
- * never restores) when a focused input's font-size falls under 16px; a
- * fixed `fieldStyles.ts` token is what keeps this assertion meaningful
- * rather than trivially true everywhere.
+ * record of that.
+ *
+ * **This assertion documents the intent; it is not what pins the 16px
+ * rule** (a reviewer's finding, recorded here rather than quietly left for
+ * the next reader to discover). Focus auto-zoom is an iOS Safari
+ * behaviour, and headless Chromium does not implement it under any
+ * emulation — `scale` reads `1` before and after, whatever the field's
+ * font-size, so this helper passes against the *pre-fix* token too. It
+ * earns its place by catching a future regression Chromium *does* model —
+ * an `initial-scale` other than 1, or a `maximum-scale` added to
+ * `index.html` (WEB-48 forbids that: see `docs/DECISIONS.md` D-112 on
+ * WCAG 1.4.4) — and by stating in the suite what the requirement is. The
+ * test that actually fails when the token regresses is the unit one,
+ * `apps/web/tests/field-styles.test.ts`.
  */
 async function assertFocusDoesNotZoom(field: Locator, page: Page) {
   const readScale = () =>
@@ -145,8 +154,19 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
 
   // Every tab, not only the first — WEB-35's own tab row is five buttons
   // wide, the highest-risk row in this screen at 375px.
+  //
+  // Each panel is waited on before it is measured, not merely clicked
+  // (a reviewer's finding): `CourseEditor.tsx` mounts a tab's panel lazily
+  // on its first visit and then fetches, so an assertion fired straight
+  // after the click reads an empty panel, finds no overflow, and passes —
+  // while the content that would actually have overflowed (a long
+  // `@example.edu` address in a People row, say) arrives a beat later. A
+  // green run on a page that does overflow is worse than no test.
   for (const tabName of ['AI', 'Discord', 'Roster', 'People', 'General']) {
-    await page.getByRole('tab', { name: tabName }).click()
+    const tab = page.getByRole('tab', { name: tabName })
+    await tab.click()
+    await expect(tab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('tabpanel')).toBeVisible()
     await assertNoHorizontalOverflow(page, `the course editor (${tabName} tab)`)
   }
 

@@ -15,7 +15,7 @@
  * (MCP-4) and requires `describeTarget` — `buildToolDefinitions` throws at
  * build time if a destructive entry omits one (this file's own module
  * comment further down has why: a confirmation that only names the tool,
- * not the record, is not a real confirmation). Four entries qualify today:
+ * not the record, is not a real confirmation). Five entries qualify today:
  *
  *   - `courseAttachments.detach` removes a knowledge-file both from the
  *     model provider and from this platform's own record of it, and there
@@ -56,6 +56,17 @@
  *     (`describeRemoveCourseChannelTarget`, below) names the channel and its
  *     category, since a course may declare the same channel name in more
  *     than one category.
+ *   - `discordServers.scaffold` (MCP-10) does not delete or discard
+ *     anything — SRV-7 makes it idempotent (running it again fills in only
+ *     what is still missing) and SRV-8 forbids it from removing a category
+ *     or channel a caller has since deleted by hand — but its effects are
+ *     visible to every member of a live Discord server the moment it runs,
+ *     the same "a human should see what is about to happen before it does"
+ *     reason MCP-4 exists for, applied to a blast radius outside this
+ *     platform's own records rather than inside them. `describeTarget`
+ *     (`describeScaffoldTarget`, below) names the course and, when the
+ *     course's own row already names one, the Discord server it will build
+ *     in.
  *
  * Nothing else registered today qualifies: `discordServers.remove` "marks
  * the binding inactive without deleting anything" (its own description),
@@ -69,14 +80,19 @@
  * explicitly rather than by default (`docs/DECISIONS.md` D-36):
  * `courseAttachments.attach` (an arbitrary base64 file upload — a large,
  * unusual argument shape for a model to be filling in without a size
- * conversation this slice has not had), `discordServers.remove`/
- * `.scaffold` (operational actions against a live Discord server —
- * meaningful blast radius for a first cut), `roster.import` (a bulk write
- * of students' own names and emails — PII at a different scale than
- * anything else here), and `memberships.grant` (grants account-level
- * authority within the organization — a privilege change deserving its own
- * confirmation design, not folded into MCP-4's "destructive" bucket as an
- * afterthought).
+ * conversation this slice has not had), `discordServers.remove` (an
+ * operational action against a live Discord server binding — meaningful
+ * blast radius for a first cut), `roster.import` (a bulk write of students'
+ * own names and emails — PII at a different scale than anything else here),
+ * and `memberships.grant` (grants account-level authority within the
+ * organization — a privilege change deserving its own confirmation design,
+ * not folded into MCP-4's "destructive" bucket as an afterthought).
+ * `discordServers.scaffold` (MCP-10) is on the surface, below — it is *also*
+ * an operational action against a live Discord server, but it is the one
+ * such action a course's own instructor plainly needs to reach without a
+ * person pasting a job id at their assistant, and SRV-7/SRV-8 (idempotent,
+ * no deletion) bound its blast radius the way `discordServers.remove` and
+ * `roster.import` are not yet bounded.
  *
  * `jobs.get` is on the surface, but its output is reduced to an allowlist
  * (`sanitizeOutput`, below: `allowlistJobFields`) — never a denylist of one
@@ -262,6 +278,48 @@ function describeRemoveCourseChannelTarget(entity: unknown): string {
     : `the channel "${channelName}" in category "${categoryName}"`
 }
 
+/**
+ * MCP-10: `discordServers.scaffold`'s own entity — a `courses.getCourse`
+ * row (`CourseWithCategories`, `packages/db/src/repos/courses.ts`), the
+ * same shape the action's own `policy.resolve` hands `execute`. Names the
+ * course; also names the Discord server the run will build in, but only
+ * when the course's own `discordServerId` is set — a `null` here falls back
+ * to the organization's single active binding at run time
+ * (`resolveCourseDiscordServer`, that same file), a resolution this
+ * function cannot repeat without a second database read `describeTarget`'s
+ * own contract (this file's own module comment: "the same record `execute`
+ * itself will act on, read once") does not give it, so it says only what
+ * the entity itself already knows rather than guessing.
+ *
+ * **This is not the under-informative gap it looks like.** A `null`
+ * `discordServerId` only ever falls back silently when the organization has
+ * exactly one active Discord server binding to fall back to —
+ * `resolveCourseDiscordServer` returns `ambiguous` (and `execute` never
+ * runs at all) the moment a `null` course would have to choose between two
+ * or more active bindings, which is the identical case `apps/web`'s own
+ * course editor only offers a server *selector* for in the first place
+ * (one binding needs no choice; several does). So the server name is
+ * omitted from this confirmation only when there is exactly one candidate
+ * (nothing to disambiguate) or none at all (nothing to name) — never the
+ * case where naming it would actually have told a human something they
+ * could not already infer, or that this action itself could not already
+ * resolve unambiguously by the time it runs.
+ */
+function describeScaffoldTarget(entity: unknown): string {
+  const course = entity as { title?: unknown; discordServerId?: unknown } | null
+  const title = typeof course?.title === 'string' ? course.title : undefined
+  const serverId =
+    typeof course?.discordServerId === 'string'
+      ? course.discordServerId
+      : undefined
+  if (title === undefined) {
+    return serverId ? `a course, in Discord server ${serverId}` : 'a course'
+  }
+  return serverId
+    ? `the course "${title}" — its declared categories and channels, in Discord server ${serverId}`
+    : `the course "${title}" — its declared categories and channels`
+}
+
 export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   // Reads — every one of these declares `access: 'read'` in its own policy
   // descriptor (`packages/actions/tests/access-audit.test.ts` pins that),
@@ -325,6 +383,13 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
     actionName: 'courseAttachments.detach',
     destructive: true,
     describeTarget: describeAttachmentTarget,
+  },
+  // MCP-10 — not a delete, but a live-Discord-server side effect a human
+  // must see before it runs (this file's own module comment above).
+  {
+    actionName: 'discordServers.scaffold',
+    destructive: true,
+    describeTarget: describeScaffoldTarget,
   },
 ]
 
@@ -472,6 +537,34 @@ export const MCP_CHAT_TOOL_SURFACE: readonly ChatToolSurfaceEntry[] = [
         .max(ASK_TEXT_MAX_LENGTH)
         .describe("The question to ask the course's assistant."),
     },
+  },
+]
+
+/**
+ * MCP-9: `courses.listAdministered`, declared here the same way
+ * `MCP_CHAT_TOOL_SURFACE` declares its own two tools — a real zod shape
+ * (`ChatToolSurfaceEntry`), registered directly by `server.ts`'s own
+ * `registerAdminTools`, never dispatched through `call-tool.ts`.
+ * `admin-tools.ts`'s own module comment has the full reasoning for why: this
+ * tool is explicitly cross-organization, the identical shape mismatch
+ * `chat.listCourses` already has with `MCP_TOOL_SURFACE`'s single-organization
+ * dispatch contract.
+ *
+ * Takes no input at all (an empty shape, the same as `chat.listCourses`'s
+ * own): every other tool on `MCP_TOOL_SURFACE` needs an `organizationId`
+ * named by the caller, and this is the one place that id is discoverable in
+ * the first place, so it cannot itself require one.
+ */
+export const MCP_ADMIN_TOOL_SURFACE: readonly ChatToolSurfaceEntry[] = [
+  {
+    name: 'courses.listAdministered',
+    description:
+      'Every organization this account administers, with every course in each — the organization, the project and the course for each. ' +
+      'An organization is listed even when it has no courses yet (a brand-new organization, say), so this is also how to find an organizationId ' +
+      'before the first projects.create or courses.save call. ' +
+      'Every other tool on this server acts within one organizationId named in the call; this is how you learn what those ids are. ' +
+      'An account with no administrative membership anywhere gets an empty list back, not an error.',
+    inputSchema: {},
   },
 ]
 

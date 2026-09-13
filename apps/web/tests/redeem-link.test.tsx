@@ -102,6 +102,27 @@ describe('RedeemLink (AUTH-1, WEB-2)', () => {
     expect(redeemSignInLink).toHaveBeenCalledTimes(1)
   })
 
+  // MCP-12 — a transport failure is not a spent link. Fails without the
+  // status check in `RedeemLink`: a `network_error` used to render the
+  // "this link no longer works" recovery page, sending someone to request
+  // a replacement they do not need — which the anti-flood guard then
+  // silently declines, so no second email ever arrives.
+  it('a network failure reports itself as one, not as an expired link', async () => {
+    redeemSignInLink.mockRejectedValue(
+      new ApiError(0, { error: 'network_error' })
+    )
+
+    render(<RedeemLink token="tok-abc" onRedeemed={vi.fn()} />)
+
+    expect(
+      await screen.findByText(/could not reach bloombot/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/no longer works/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Email me a sign-in link' })
+    ).not.toBeInTheDocument()
+  })
+
   // MCP-12 — fails without the fix: before `buildSignInLink` carried
   // `destination` as a query parameter, this page had no way to recover it
   // once the token that carried it had already expired, so a retry request

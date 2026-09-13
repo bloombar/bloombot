@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, redeemSignInLink } from '../api/client.js'
+import { ErrorMessage } from '../components/ErrorMessage.js'
 import { SignInHeader } from '../components/SignInHeader.js'
 import { SignIn } from './SignIn.js'
 
@@ -100,6 +101,23 @@ export function RedeemLink({ token, onRedeemed }: RedeemLinkProps) {
   }, [token])
 
   if (state.kind === 'error') {
+    // MCP-12 — only a *refused* redemption means the link itself is spent.
+    // A `network_error` (`api/client.ts`: `fetch` rejected, nothing ever
+    // arrived) or a 5xx says nothing about the token, and telling someone
+    // their link expired when the network merely blinked pushes them into
+    // requesting a replacement they do not need — which `requestSignInLink`'s
+    // own anti-flood guard (`@bloombot/auth`) then silently declines while a
+    // live token is still outstanding, so they wait for a second email that
+    // is never sent. Those cases keep the plain `ErrorMessage` they had
+    // before this slice, which already says "try again" rather than "start
+    // over".
+    if (state.error.status !== 401 && state.error.status !== 400) {
+      return (
+        <div className="mx-auto mt-16 max-w-sm">
+          <ErrorMessage error={state.error} />
+        </div>
+      )
+    }
     // MCP-12 — read once, not on every render: the query string cannot
     // change under this page (a fresh `/sign-in/:token` navigation
     // unmounts and remounts it with a new `token` entirely), so this is a

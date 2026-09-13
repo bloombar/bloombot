@@ -201,7 +201,12 @@ export function RosterImport({
           A CSV with exactly these five column headers, spelled and capitalized
           this way:
         </p>
-        <p className="mt-1 font-mono text-xs">
+        {/* WEB-48: `break-all` — a comma-separated header row has no space
+            for the browser's own default word-break to land on, so at
+            375px this line (and the example row below) simply ran past
+            the edge of the panel rather than wrapping, unlike every plain-
+            English `<p>` around it. */}
+        <p className="mt-1 break-all font-mono text-xs">
           First,Last,Email,Discord,GitHub
         </p>
         <ul className="mt-2 list-disc pl-5">
@@ -216,7 +221,7 @@ export function RosterImport({
           </li>
         </ul>
         <p className="mt-2">Example row:</p>
-        <p className="font-mono text-xs">
+        <p className="break-all font-mono text-xs">
           Ada,Lovelace,ada@example.edu,adalovelace,adalovelace-gh
         </p>
       </div>
@@ -258,7 +263,7 @@ export function RosterImport({
               onChange={(event) =>
                 setStudentCategoryBaseName(event.target.value)
               }
-              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+              className="rounded-md border border-neutral-300 px-2 py-1 text-base sm:text-sm"
             />
           </FormField>
         )}

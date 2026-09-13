@@ -12082,3 +12082,50 @@ widened port is kept because it makes the hint explicit at the boundary where th
 made — a `buildLink` that silently closes over a destination its own signature does not mention is the
 kind of thing the next reader has to go find — but the narrower option is recorded here as the one that
 should be preferred if this ever has to be undone.
+
+## D-112 — WEB-48: a focused field is `text-base sm:text-sm` (16px on a phone), never a viewport `maximum-scale`
+
+**The field report was "the panel is difficult to read on mobile, and pages sometimes zoom in
+automatically" — diagnosed as iOS Safari's own documented behaviour, not something random.** Safari on iOS
+magnifies the whole page whenever a focused input, select or textarea has a computed font-size under 16px,
+and it does not zoom back out again once the field blurs — which is exactly "sometimes zoomed in, sometimes
+not": it happens on any screen with a form and not on any screen without one. `fieldStyles.ts`'s shared
+`textInputClasses` carried `text-sm` (14px) unconditionally, which every text input, select and textarea in
+the panel that used the token inherited, and a further sweep of the panel found several fields that had
+copied the same `text-sm` literal rather than the token (`Team.tsx`'s role select,
+`OrganizationSwitcher.tsx`, `JoinLinks.tsx`'s expiry select, both selects in `MembershipInvitations.tsx`,
+`Chat.tsx`'s course select and composer, and one plain input in `RosterImport.tsx`).
+
+**The fix is `text-base sm:text-sm` everywhere a field is focusable — 16px below the `sm` breakpoint, the
+existing 14px at `sm` and up** — not a viewport `maximum-scale=1`/`user-scalable=no`. The two read as
+equivalent (both "stop the zoom"), but they are not: `maximum-scale`/`user-scalable=no` forbids a person
+from zooming *at all*, on a page that may still have small text elsewhere, which is a WCAG 1.4.4 (Resize
+Text) failure and makes the app less usable on a phone, not more. The field report's own text is that
+nothing zooms *on its own* — a font size a phone-sized browser never has reason to auto-correct achieves
+that without touching what a person is still free to do to the page themselves.
+
+**Also found and fixed in the same slice**: `CourseEditor.tsx`'s five-tab settings bar (`role="tablist"`)
+had no overflow handling of its own — at 375px, five tab buttons plus their own padding and gaps come close
+to the viewport's own width, and the fix is `overflow-x-auto` on the tab row itself, so a bar that does tip
+over scrolls locally rather than widening the page body. `RosterImport.tsx`'s two example CSV lines
+(`First,Last,Email,Discord,GitHub` and the "Ada,Lovelace,…" row) are comma-separated with no spaces, so the
+browser's own default word-break had nowhere to land and the line ran past the panel's edge at 375px
+instead of wrapping like the plain-English text around it — `break-all` on those two lines fixed it, and
+this exact regression is what `e2e/mobile-viewport.spec.ts` (WEB-48's own e2e spec, a `375x667` Playwright
+project added alongside the existing desktop one) actually caught before this fix landed, rather than being
+found by inspection.
+
+**Left for a follow-up rather than done in this slice**: the audit covered the shell (`AppShell.tsx`,
+`Shell.tsx`), every modal, every table-like list screen (Team, Transcripts, Usage, Roster, join links,
+membership invitations), `CourseEditor.tsx`'s own field grids, and `ChatMessage.tsx`'s markdown tables
+(already wrapped in their own `overflow-x-auto` by an earlier slice) — all found already mobile-first
+(`flex-col`/`sm:flex-row`, `grid`/`sm:grid-cols-*`, `flex-wrap`) with no further defect. `apps/api`'s
+**The SPEC's "any page served directly by the API is held to the same standard" now has nothing to hold.**
+`routes/mcp-oauth-consent.ts` was the one place in this codebase that emitted its own `<head>`, and its
+`htmlPage()` had a charset and a title and no viewport at all, so a phone laid those pages out at ~980px
+and scaled them down. That file served JSON only by the time this slice landed (D-111, MCP-11) and the
+audit confirmed by grep that no `<!doctype`/`<head>` is written anywhere outside `apps/web/index.html`,
+whose viewport tag is already correct. The requirement is satisfied by there being no such page rather
+than by fixing one — recorded here because "we checked and found none" is the kind of thing that is
+otherwise indistinguishable from "we forgot to look", and because the next thing to hand-write an HTML
+response in `apps/api` needs to know the standard applies to it.

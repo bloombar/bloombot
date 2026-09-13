@@ -4147,7 +4147,7 @@
   section: §36 Course Administration Through an Assistant
   family: MCP
   phase: 31
-  status: In review
+  status: Done
   review: false
 - id: MCP-12
   title: A connection survives the time an email takes to arrive
@@ -4164,7 +4164,7 @@
   section: §36 Course Administration Through an Assistant
   family: MCP
   phase: 31
-  status: In review
+  status: Done
   review: false
 - id: WEB-48
   title: The panel is readable on a phone without pinching

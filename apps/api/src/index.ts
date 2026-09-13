@@ -258,7 +258,16 @@ async function main(): Promise<void> {
       smtp,
       logger
     ),
-    buildSignInLink: (token) => `${publicAppUrl}/sign-in/${token}`,
+    // MCP-12 — `destination` rides along as a query parameter, not only on
+    // the token itself: `RedeemLink.tsx`'s own failure state reads it back
+    // off this URL to offer "request a new link that returns here" once the
+    // token it was issued for has already expired and the destination
+    // stored against *that* token is unrecoverable (`sign-in.ts`'s own
+    // `buildLink` doc comment has the fuller reasoning).
+    buildSignInLink: (token, destination) =>
+      destination === undefined
+        ? `${publicAppUrl}/sign-in/${token}`
+        : `${publicAppUrl}/sign-in/${token}?destination=${encodeURIComponent(destination)}`,
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.
     googleVerifier: createGoogleIdTokenVerifier(),

@@ -11980,9 +11980,75 @@ separately hand-written, smaller `BrandHeader`) rendered a bare `SignIn` with no
 Google's own OAuth homepage requirement both pin it). `SignIn` itself gained `headline`/`description` props,
 used only by `ConnectAssistant.tsx` to name the connecting client in the sign-in prompt — safe by
 construction as a React interpolation, one more reason this screen was worth moving off hand-escaped HTML
-strings. Separately, the Google button's own gate was drifting from `SignIn.tsx`'s own module comment
-("the gate is a disabled control plus `aria-disabled`, not a silent no-op"): it had regressed to hiding the
-button slot outright behind a stand-in paragraph. Fixed to match what was already documented — the slot
-renders always once a client id is configured, wrapped in `aria-disabled`/`pointer-events-none`/dimmed
-styling while the documents are unaccepted, with the explanatory sentence kept beside it rather than in its
-place.
+strings. **The Google button's own gate is a deliberate trade of a hard gate (fully hidden until accepted)
+for a legible one (shown, disabled, with the reason stated beside it) — not a regression being corrected.**
+The two shapes were both real, at different times, for different reasons: fully hiding the slot until
+accepted is unambiguous but tells a person nothing exists to be gated at all; showing it, visibly disabled,
+is what MCP-11's own SPEC text and this file's "a button that looks live and does nothing is worse than one
+that says why" both ask for, and is only defensible with a *second* mechanism closing the gap a merely
+visual disable leaves open — see the next paragraph. Getting only the legible half of that trade shipped
+first (`SignIn.tsx`'s slot rendered unconditionally, gated by `pointer-events-none`/`aria-disabled` alone)
+was the actual defect a review round found, not the choice to show the slot at all.
+
+**Rework round 1, must-fix 1 — the gate has to be real, not merely visual, which is the second mechanism
+the previous paragraph refers to.** `pointer-events-none` blocks a pointer only, and `aria-disabled` is
+advisory — neither stops a keyboard user tabbing to Google Identity Services' own rendered
+`div[role="button"][tabindex="0"]` and pressing Enter, which reaches the credential callback regardless of
+either attribute. Closed three ways together: `inert` on the slot while unaccepted (the one attribute that
+actually removes an element from the tab order and the accessibility tree, not merely its visual affordance);
+a check inside the credential callback itself refusing when `accepted` is false, so a person reaching that
+callback by any path still cannot complete a sign-in they never agreed to; and `accepted` restored to the
+`renderButton` effect's own dependency array, which an earlier pass had dropped — dropping it left the
+callback's closure holding whatever `accepted` was at mount, so a guard added *inside* that closure without
+also fixing the dependency array would have captured a stale `false` regardless of what the checkbox later
+became. `tests/sign-in.test.tsx` fires a fake Identity Services credential callback directly (never reaching
+`accounts.google.com`, QA-2) and asserts `signInWithGoogle` is never called while unaccepted — the assertion
+that would have caught the original gap, which only ever checked the slot's own attributes.
+
+**Rework round 1, must-fix 2 — clickjacking, the security review's own fourth defence, lost in the move off
+`apps/api`'s server-rendered route.** `X-Frame-Options`/CSP `frame-ancestors` on the JSON router
+(`routes/mcp-oauth-consent.ts`) protect an XHR response, which nothing renders — the actual clickable Allow
+button now lives on `ConnectAssistant.tsx`, served by nginx's SPA fallback, with no framing header of its
+own, and `SameSite=Lax` still carries a signed-in cookie into a same-site iframe: a frame on any same-site
+origin could claim the pending row, render consent, and harvest one decoy click as a full account-wide
+grant. **The defence that ships is in the app**: `ConnectAssistant.tsx` checks `window.top !== window.self`
+(a `SecurityError` from a cross-origin ancestor reads as framed too — fail closed, never open) before its
+data effect even runs, and renders only a plain refusal when framed, so a framed load neither claims the
+pending authorization nor ever shows a decision to harvest. This needs no root on the droplet, unlike an
+nginx change. `deploy/nginx/mcp.conf`/`deploy/nginx/README.md` document the transport-level version of the
+same header pair as an **optional, manual, defence-in-depth** step for the operator to paste into their own
+site's `location / { ... }` block — explicitly not the defence a deployment depends on, since the in-app
+check already holds without it. While in those two files: the `/oauth/` block's own comment and the
+README's smoke test both still described the retired server-rendered `/oauth/mcp/authorize` HTML page;
+both now describe and curl the JSON endpoints this router actually answers.
+
+**Rework round 1, must-fix 3 — MCP-12's own second half was unimplemented: an expired-and-unbranded error
+box, with no way back, for a link that failed for exactly the reason MCP-12 exists to make survivable.**
+`RedeemLink.tsx`'s failure state now carries `SignInHeader` and the panel's own layout, and re-embeds
+`SignIn` so a new link can be requested without leaving the page — the SPEC's own two literal requirements.
+Going further, so the retry actually returns somewhere useful: `buildSignInLink` (`apps/api/src/index.ts`)
+now appends the request's own `destination` to the emailed link as a `?destination=` query parameter, purely
+as a *recovery hint* — never a second source of truth for a successful redemption, which still returns the
+server's own stored `destination` (`consumeSignInToken`). The hint exists because the authoritative copy
+dies with the token: once a token has expired, nothing before this fix let `RedeemLink.tsx` recover what it
+would have carried, and a person who arrived from an assistant with no destination in hand had no way back
+except starting over from scratch. `RedeemLink.tsx` re-validates the hint with the identical
+`isSameOriginPath` check `App.tsx`'s own duplicated copy already uses (`docs/DECISIONS.md` D-34's "small,
+deliberately duplicated pure function" precedent, now a third copy) before ever handing it to `SignIn` — a
+malformed or off-origin hint is dropped silently, the same "untrusted input" treatment `routes/auth.ts`
+already gives every other caller-supplied `destination`. `e2e/support/read-sign-in-token.ts`'s own token
+extraction now strips the query string too, since the token is only the part of the link before it.
+
+**Rework round 1, must-fix 4 — a `POST /oauth/mcp/decide` 404 (the request expired or was consumed between
+load and the click) used to render a generic error beside Allow/Deny buttons that could only 404 again.**
+`ConnectAssistant.tsx` now transitions to its own `unavailable` state for exactly that response, the same
+screen a load-time 404 already renders — reachable whenever the underlying pending authorization disappears
+in the gap between this page reading it and a person deciding.
+
+**Rework round 1, must-fix 5 — `apps/mcp/tests/oauth-http.test.ts`'s own redirect assertion could not have
+failed even if the pending-authorization id were dropped from the redirect entirely** (`.toContain('/oauth/mcp/authorize/')`
+matches that literal substring regardless of what follows it). Now asserts the exact `Location`, and
+round-trips it through `apps/web/src/routing/route.ts#parseRoute` — a deliberate, one-off cross-app import
+(`apps/mcp` otherwise has nothing to do with `apps/web`) chosen because "shaped like the right path" and "an
+address `apps/web`'s own router actually recognises" are different claims, and this is the one seam where a
+typo in either app would otherwise ship silently.

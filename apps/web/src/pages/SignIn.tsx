@@ -10,18 +10,21 @@
  * an account comes into being — so this is the only place agreement can be
  * asked for, and it has to gate the Google button as much as the email form.
  *
- * **The gate is a disabled control plus `aria-disabled`, not a silent
- * no-op** — a button that looks live and does nothing is worse than one that
- * says why. Google Identity Services' own `renderButton` has no disabled
- * state of its own, so the button is always drawn once its script has
- * loaded; before the checkbox is ticked, the slot it draws into sits inside
- * a wrapper carrying `aria-disabled="true"` and `pointer-events-none`
- * (dimmed, and inert to a click or a screen reader alike), with the
- * explanatory sentence kept *beside* it rather than shown *instead of* it —
- * MCP-11's own fix for where this had drifted from the behaviour this
- * comment already described: the disabled wrapper used to be replaced
- * outright by a paragraph standing in for the button, so a person who had
- * not yet ticked the box never saw that Google sign-in existed at all.
+ * **The gate is a real gate, not a visual one — rework round 1 found the
+ * first cut of this only looked like one.** Google Identity Services' own
+ * `renderButton` has no disabled state of its own, so the button is always
+ * drawn once its script has loaded; before the checkbox is ticked, the slot
+ * it draws into carries the HTML `inert` attribute (below), which is what
+ * actually removes it from both the tab order and the accessibility tree —
+ * `pointer-events-none`/dimmed opacity is the *visible* half of the same
+ * gate, but blocks a pointer only, and `aria-disabled` alone is advisory:
+ * a keyboard user could still tab to GIS's own `div[role="button"]` and
+ * press Enter, and the credential callback below has its own `accepted`
+ * check besides, since a person can reach that callback by any path.
+ * The explanatory sentence is kept *beside* the slot rather than shown
+ * *instead of* it, so a person who has not yet ticked the box still sees
+ * that Google sign-in exists at all — the earlier, fully-hidden shape hid
+ * that from them entirely.
  *
  * MCP-11: `headline` overrides the default title, and `description` renders
  * beneath it — `pages/ConnectAssistant.tsx`'s own caller uses this to name
@@ -115,11 +118,16 @@ export function SignIn(props: SignInProps) {
   // The script is still fetched only when a client id is configured, so a
   // deployment without Google sign-in never reaches accounts.google.com (QA-2).
   //
-  // MCP-11 — no longer gated on `accepted`: the slot is now always in the
-  // DOM once a client id is configured (this file's own module comment on
-  // why), so the button is drawn once, on mount, and the *wrapper* around
-  // it — not whether it exists at all — is what carries the disabled
-  // treatment while the documents are unaccepted.
+  // MCP-11, rework round 1 — the slot is always in the DOM once a client id
+  // is configured (this file's own module comment on why), but `accepted`
+  // is back in this effect's own dependency array rather than left out of
+  // it: the credential `callback` below closes over whatever `accepted` was
+  // at the moment this effect last ran, so leaving it out of the deps would
+  // let a person tick the box *after* this effect first ran and still reach
+  // a callback holding a stale, captured `false` — the exact gap a reviewer
+  // found. Re-running `initialize`/`renderButton` on every toggle is the
+  // cost of keeping that closure honest; Google's own script is already
+  // loaded by then, so this is a redraw, not a refetch.
   useEffect(() => {
     if (!googleClientId) return
     const parent = googleButtonRef.current
@@ -135,6 +143,12 @@ export function SignIn(props: SignInProps) {
         google.accounts.id.initialize({
           client_id: googleClientId,
           callback: (response) => {
+            // The real gate, not merely the visual one (this file's own
+            // module comment) — `inert` on the slot already keeps a
+            // keyboard user from reaching this callback at all while
+            // unaccepted, but this checks the fact the gate exists to
+            // protect, not only the one path presumed to reach it.
+            if (!accepted) return
             signInWithGoogle(response.credential).then(
               onSignedIn,
               (caught: unknown) => {
@@ -165,7 +179,7 @@ export function SignIn(props: SignInProps) {
     return () => {
       cancelled = true
     }
-  }, [googleClientId, onSignedIn])
+  }, [googleClientId, accepted, onSignedIn])
 
   if (linkRequested) {
     return (
@@ -232,15 +246,21 @@ export function SignIn(props: SignInProps) {
           {/* Google draws its own button in here once the script has
               loaded — always, whether or not the documents are accepted
               yet (this file's own module comment on why `renderButton` has
-              no disabled state of its own to hand it). `aria-disabled` plus
-              `pointer-events-none`/dimmed opacity is the gate while
-              unaccepted: dead to a click and announced as unavailable,
-              rather than absent — a testid rather than a role, since there
-              is nothing to query by role until Google has rendered into it. */}
+              no disabled state of its own to hand it). `inert` while
+              unaccepted is the real gate: it drops the slot from the tab
+              order and the accessibility tree, not only from pointer
+              events, so a keyboard user cannot reach GIS's own
+              `div[role="button"]` and press Enter on it either.
+              `pointer-events-none`/dimmed opacity is the *visible* half of
+              the same gate; `aria-disabled` is kept alongside for a reader
+              that exposes it despite `inert` — a testid rather than a
+              role, since there is nothing to query by role until Google
+              has rendered into it. */}
           <div
             ref={googleButtonRef}
             data-testid="google-button-slot"
             aria-disabled={!accepted}
+            inert={!accepted}
             className={
               accepted
                 ? 'flex justify-center'

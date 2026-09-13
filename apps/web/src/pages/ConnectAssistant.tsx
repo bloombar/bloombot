@@ -34,7 +34,27 @@
  *    different account, indistinguishably (the same "no oracle" discipline
  *    every other single-use secret in this platform holds itself to) — so
  *    this page renders one message for all three, rather than guessing
- *    which actually happened.
+ *    which actually happened. A `POST /oauth/mcp/decide` that itself 404s
+ *    (the request expired or was consumed between load and click) lands
+ *    here too, rather than in `decideError` next to buttons that can never
+ *    succeed again.
+ *
+ * **Rework round 1, must-fix 2 — clickjacking, the fourth defence the
+ * security review's must-fix 2 named, lost when this screen moved off
+ * `apps/api`'s own server-rendered route.** `X-Frame-Options`/CSP
+ * `frame-ancestors` on the JSON router (`routes/mcp-oauth-consent.ts`)
+ * protect an XHR response, which nothing renders — the actual clickable
+ * Allow button now lives on this page, served by nginx's SPA fallback, with
+ * no framing header of its own, and `SameSite=Lax` still carries a signed-in
+ * cookie into a same-site iframe. This component refuses to render anything
+ * but a plain refusal whenever `window.top !== window.self` — checked before
+ * the data effect even fires, so a framed load neither claims the pending
+ * authorization nor renders a decision to harvest a click from. The header
+ * `add_header X-Frame-Options ...`/`Content-Security-Policy: frame-ancestors
+ * 'none'` for nginx's own `location /` block (`deploy/nginx/mcp.conf`,
+ * `deploy/nginx/README.md`) is documented as a manual, defence-in-depth step
+ * for the operator — this in-app check is the defence that actually ships,
+ * since it needs no root on the droplet.
  */
 
 import { useEffect, useState } from 'react'
@@ -62,8 +82,18 @@ function clientLabel(clientName: string | undefined): string {
   return clientName ? clientName : 'An application with no registered name'
 }
 
+/** Rework round 1, must-fix 2 — `window.top` throws (a `SecurityError`) rather than reads as a different origin's `window` when the framing page is itself cross-origin, so a plain `!==` is not safe here. A cross-origin ancestor is exactly the case this exists to catch, so the `catch` also reads as framed — never the reverse: a check that fails open (assumes not-framed on any error) is not a check. */
+function isFramed(): boolean {
+  try {
+    return window.top !== window.self
+  } catch {
+    return true
+  }
+}
+
 type State =
   | { kind: 'loading' }
+  | { kind: 'framed' }
   | { kind: 'signed-out'; clientName?: string }
   | { kind: 'consent'; clientName?: string; redirectHost: string }
   | { kind: 'unavailable' }
@@ -83,7 +113,18 @@ export function ConnectAssistant({
   // `account`/`requestId` change — the same "the server is what actually
   // knows" discipline `pages/Connect.tsx`'s own status effect follows,
   // rather than this page guessing its own state from a locally-held flag.
+  //
+  // Rework round 1, must-fix 2 — checked *before* the fetch, not only before
+  // the render: a framed load must neither claim the pending authorization
+  // (`GET /oauth/mcp/request`'s own signed-in side effect,
+  // `routes/mcp-oauth-consent.ts`) nor learn anything about it, so this
+  // effect does nothing at all once framed, rather than fetching and merely
+  // discarding the answer.
   useEffect(() => {
+    if (isFramed()) {
+      setState({ kind: 'framed' })
+      return
+    }
     let cancelled = false
     setState({ kind: 'loading' })
     getConnectAssistantRequest(requestId).then(
@@ -127,9 +168,40 @@ export function ConnectAssistant({
       window.location.assign(redirectTo)
     } catch (caught) {
       setDeciding(false)
+      // Rework round 1, must-fix 4 — a 404 here means the request itself is
+      // gone (expired or consumed between load and this click), not a
+      // transient failure Allow/Deny could ever retry into succeeding:
+      // transition to the same `unavailable` screen a load-time 404 already
+      // renders, rather than showing a generic error beside two buttons
+      // that can only 404 again.
+      if (caught instanceof ApiError && caught.status === 404) {
+        setState({ kind: 'unavailable' })
+        return
+      }
       if (caught instanceof ApiError) setDecideError(caught)
       else throw caught
     }
+  }
+
+  if (state.kind === 'framed') {
+    return (
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+        <SignInHeader />
+        <div
+          className="flex flex-col gap-3"
+          data-testid="connect-assistant-framed"
+        >
+          <h2 className="text-page-title font-semibold text-neutral-900">
+            Open this page directly to connect an assistant
+          </h2>
+          <p className="text-sm text-neutral-700">
+            For your safety, this page will not show a connection request while
+            it is embedded inside another page. Open the link directly, in its
+            own tab or window.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   if (state.kind === 'loading') {

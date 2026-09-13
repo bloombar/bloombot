@@ -66,7 +66,7 @@ export interface ServerDependencies {
   /** Checked against every non-GET request's `Origin`/`Referer` (API-3). `CONFIG.PUBLIC_APP_URL` in production. */
   publicAppUrl: string
   emailSender: EmailSender
-  buildSignInLink: (token: string) => string
+  buildSignInLink: (token: string, destination?: string) => string
   googleVerifier: GoogleIdTokenVerifier
   /** Defaults to `createPlatformRegistry()` — every action this slice ports. Overridable so a test can dispatch against a registry of its own, e.g. a recording action, without registering it alongside the platform's real ones. */
   registry?: ActionRegistry

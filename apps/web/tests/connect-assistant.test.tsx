@@ -8,7 +8,7 @@
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../src/api/client.js'
 import type { AccountSummary } from '../src/api/types.js'
@@ -38,8 +38,20 @@ const ACCOUNT: AccountSummary = {
   connectedOrganizations: [],
 }
 
+// `vi.restoreAllMocks()` only restores spies created with `vi.spyOn` — these
+// two are plain `vi.fn()`s, so their call history survives it, and
+// `getConnectAssistantRequest.not.toHaveBeenCalled()` (the framed test,
+// below) would otherwise be asserting against every earlier test's calls
+// too. `mockReset` clears both the call history and whatever
+// `mockResolvedValue`/`mockRejectedValue` a previous test left behind.
+beforeEach(() => {
+  getConnectAssistantRequest.mockReset()
+  decideConnectAssistantRequest.mockReset()
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('ConnectAssistant — signed out', () => {
@@ -159,5 +171,64 @@ describe('ConnectAssistant — the request is unavailable', () => {
     expect(
       await screen.findByTestId('connect-assistant-unavailable')
     ).toHaveTextContent(/no longer available/i)
+  })
+
+  // Rework round 1, must-fix 4 — fails without the fix: `handleDecide`
+  // used to leave a 404 in `decideError`, rendered beside Allow/Deny
+  // buttons that can only 404 again. Reachable whenever the request expires
+  // (or is consumed by another tab) between load and this click.
+  it('a 404 from POST /oauth/mcp/decide moves to the unavailable state, not a generic error beside the buttons', async () => {
+    getConnectAssistantRequest.mockResolvedValue({
+      signedIn: true,
+      clientName: 'Some Assistant',
+      redirectHost: 'client.example',
+    })
+    decideConnectAssistantRequest.mockRejectedValue(
+      new ApiError(404, { error: 'connection_request_unavailable' })
+    )
+
+    render(
+      <ConnectAssistant
+        requestId="req-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+      />
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow' }))
+
+    expect(
+      await screen.findByTestId('connect-assistant-unavailable')
+    ).toHaveTextContent(/no longer available/i)
+  })
+})
+
+// Rework round 1, must-fix 2 — the clickjacking defence lost when this
+// screen moved off `apps/api`'s own server-rendered route (framing headers
+// on a JSON response protect nothing): this component must refuse to
+// render consent controls, and must not even fetch the pending
+// authorization, whenever it detects it is framed.
+describe('ConnectAssistant — framed', () => {
+  it('refuses to render consent controls, and never fetches, when embedded in another page', async () => {
+    vi.stubGlobal('top', {})
+
+    render(
+      <ConnectAssistant
+        requestId="req-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByTestId('connect-assistant-framed')
+    ).toHaveTextContent(/open this page directly/i)
+    expect(
+      screen.queryByRole('button', { name: 'Allow' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Deny' })
+    ).not.toBeInTheDocument()
+    expect(getConnectAssistantRequest).not.toHaveBeenCalled()
   })
 })

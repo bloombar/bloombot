@@ -4,19 +4,60 @@
  */
 
 import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { GoogleIdentityServices } from '../src/api/google-identity.js'
 import { SignIn } from '../src/pages/SignIn.js'
 
-const { requestSignInLink } = vi.hoisted(() => ({
+const { requestSignInLink, signInWithGoogle } = vi.hoisted(() => ({
   requestSignInLink: vi.fn(),
+  signInWithGoogle: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/api/client.js')>(
     '../src/api/client.js'
   )
-  return { ...actual, requestSignInLink }
+  return { ...actual, requestSignInLink, signInWithGoogle }
+})
+
+// Rework round 1 — the credential callback's own `accepted` guard is tested
+// against a *fake* Google Identity Services, never the real
+// `accounts.google.com` script (QA-2's own "never reached in a test"):
+// `initialize` here captures the callback `pages/SignIn.tsx` registers, so a
+// test can fire it directly, the same way a keyboard user reaching GIS's own
+// rendered button and pressing Enter would.
+const { loadGoogleIdentityServices } = vi.hoisted(() => ({
+  loadGoogleIdentityServices: vi.fn(),
+}))
+vi.mock('../src/api/google-identity.js', () => ({ loadGoogleIdentityServices }))
+
+function fakeGoogle(): {
+  google: GoogleIdentityServices
+  getCallback: () => ((response: { credential: string }) => void) | undefined
+} {
+  let callback: ((response: { credential: string }) => void) | undefined
+  const google: GoogleIdentityServices = {
+    accounts: {
+      id: {
+        initialize: vi.fn((config) => {
+          callback = config.callback
+        }),
+        renderButton: vi.fn(),
+        prompt: vi.fn(),
+      },
+    },
+  }
+  return { google, getCallback: () => callback }
+}
+
+// Every test besides the one that actually exercises the credential
+// callback (below) leaves `loadGoogleIdentityServices` unresolved — the
+// same "the script is never actually loaded in a test" (QA-2) every other
+// test in this file already relies on for a `googleClientId`-configured
+// render to show a slot with nothing drawn into it.
+beforeEach(() => {
+  loadGoogleIdentityServices.mockReturnValue(new Promise(() => {}))
 })
 
 afterEach(() => {
@@ -130,25 +171,44 @@ describe('SignIn (WEB-2)', () => {
     expect(slot).toHaveAttribute('aria-disabled', 'false')
   })
 
-  // MCP-11 — the header every sign-in surface now shows (`components/SignInHeader.tsx`),
-  // rendered by every caller alongside `SignIn`, never by `SignIn` itself
-  // (`ConnectAssistant.tsx`'s own module comment has the fuller "logo/name/
-  // description at the top, SignIn underneath" split). This pins that the
-  // header renders on a signed-out sign-in surface built the same way
-  // `pages/JoinLink.tsx` and `App.tsx`'s own generic fallback build one.
-  it('renders the shared header (logo, name, description) alongside SignIn', async () => {
-    const { SignInHeader } = await import('../src/components/SignInHeader.js')
-    render(
-      <div>
-        <SignInHeader />
-        <SignIn onSignedIn={vi.fn()} />
-      </div>
-    )
+  // Rework round 1, must-fix 1 — `pointer-events-none`/`aria-disabled` alone
+  // only look like a gate: a keyboard user can still tab to GIS's own
+  // rendered `div[role="button"]` and press Enter, reaching this callback
+  // regardless of what the slot's own attributes say. Fails without the
+  // fix: the credential callback used to call `signInWithGoogle`
+  // unconditionally, so this assertion caught nothing until the callback
+  // gained its own `accepted` check.
+  it('refuses the Google credential callback when the documents are not yet accepted', async () => {
+    const { google, getCallback } = fakeGoogle()
+    loadGoogleIdentityServices.mockResolvedValue(google)
 
-    expect(
-      screen.getByRole('heading', { level: 1, name: 'Bloombot' })
-    ).toBeInTheDocument()
-    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+    render(<SignIn googleClientId="test-client-id" onSignedIn={vi.fn()} />)
+
+    await vi.waitFor(() => expect(getCallback()).toBeDefined())
+
+    // The checkbox is deliberately left unticked — simulating the callback
+    // firing anyway, the same as a keyboard user who reached the button
+    // despite `inert`, or any other path that lands in this callback.
+    getCallback()!({ credential: 'fake-id-token' })
+
+    expect(signInWithGoogle).not.toHaveBeenCalled()
+  })
+
+  it('accepts the Google credential callback once the documents are accepted', async () => {
+    const { google, getCallback } = fakeGoogle()
+    loadGoogleIdentityServices.mockResolvedValue(google)
+    signInWithGoogle.mockResolvedValue({ accountId: 'account-1' })
+
+    render(<SignIn googleClientId="test-client-id" onSignedIn={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('accept-legal'))
+
+    await vi.waitFor(() => expect(getCallback()).toBeDefined())
+
+    getCallback()!({ credential: 'fake-id-token' })
+
+    await vi.waitFor(() =>
+      expect(signInWithGoogle).toHaveBeenCalledWith('fake-id-token')
+    )
   })
 
   // MCP-11 — `headline` overrides the card's own default title;

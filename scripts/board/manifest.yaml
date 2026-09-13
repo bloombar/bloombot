@@ -613,6 +613,42 @@
   status: Done
   review: false
   note: baseline (not claimed by a roadmap phase)
+- id: MCP-11
+  title: Connecting an assistant uses the same sign-in as everything else
+  full: "The sign-in a person meets when they connect an assistant is the panel's
+    own sign-in, not a second one. It shows the app's logo, name and one-line
+    description at the top, offers the same two ways in — Google, and an emailed
+    link — behind the same agreement to the published documents, and differs
+    only in the sentence explaining why it is being asked for: this visitor
+    arrived from an assistant asking to connect, and the page says so. The
+    agreement checkbox gates both ways in, and the Google control is shown while
+    it is ungated rather than replaced by an explanation of its absence: a
+    disabled Google button that the checkbox enables reads as a precondition,
+    where a missing button reads as a…"
+  section: §36 Course Administration Through an Assistant
+  family: MCP
+  phase: 0
+  status: Backlog
+  review: false
+  note: baseline (not claimed by a roadmap phase)
+- id: MCP-12
+  title: A connection survives the time an email takes to arrive
+  full: "Connecting an assistant sends a sign-in link by email, and email is not
+    instant. A connection request must therefore stay live long enough for a
+    message to be queued, delivered, noticed and opened — not merely long enough
+    for someone already sitting at the browser to click through. A request that
+    expired while its own email was still in flight is the platform's fault, not
+    the person's, and it must not happen for any ordinary delivery delay. When a
+    request genuinely has expired, the page saying so is a page of this app like
+    any other — the same logo, name and layout as every other screen, readable
+    on a phone — and it offers a way forward rather than only an apology: the
+    person is told to…"
+  section: §36 Course Administration Through an Assistant
+  family: MCP
+  phase: 0
+  status: Backlog
+  review: false
+  note: baseline (not claimed by a roadmap phase)
 - id: OPS-1
   title: Python environment
   full: The project targets Python 3.12 and pins its dependencies with pipenv
@@ -836,6 +872,20 @@
   family: SRV
   phase: 0
   status: Done
+  review: false
+  note: baseline (not claimed by a roadmap phase)
+- id: WEB-48
+  title: The panel is readable on a phone without pinching
+  full: Every page this platform serves declares a mobile viewport and lays out at
+    a phone's width. Nothing a person taps zooms the page in on its own — a form
+    field is never small enough for a mobile browser to decide it must magnify
+    the page to make it usable — and nothing scrolls sideways. Pages the panel
+    does not render itself, including any page served directly by the API, are
+    held to the same standard rather than exempted for being small.
+  section: §36 Course Administration Through an Assistant
+  family: WEB
+  phase: 0
+  status: Backlog
   review: false
   note: baseline (not claimed by a roadmap phase)
 - id: BOT-11

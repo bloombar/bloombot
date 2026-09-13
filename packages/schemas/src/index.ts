@@ -30,6 +30,14 @@ export {
 } from './web-source-domain.js'
 
 export {
+  joinLinkExpirySchema,
+  resolveJoinLinkExpiry,
+  JOIN_LINK_EXPIRY_OPTIONS,
+  type JoinLinkExpiryOption,
+  type JoinLinkExpiryValue,
+} from './join-link-expiry.js'
+
+export {
   courseExportFileSchema,
   exportedCourseSchema,
   notCarriedSchema,

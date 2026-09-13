@@ -64,6 +64,7 @@ import type {
   TranscriptReadResult,
   TranscriptStudent,
 } from './types.js'
+import type { JoinLinkExpiryValue } from '@bloombot/schemas'
 
 /**
  * Thrown for any non-2xx response. Carries the response's own `status` and
@@ -671,18 +672,26 @@ export function scaffoldCourseDiscord(
  * screen in this app already reaches through.
  */
 
-/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `courseJoinLinks.create`'s own optional `expiresAt` (omitted or `null` both mean "no expiry"). */
+/**
+ * ENRL-17 — `expiresIn` names one of `@bloombot/schemas`'
+ * `JOIN_LINK_EXPIRY_OPTIONS`, resolved against the clock on the server, at
+ * the moment `courseJoinLinks.create`'s own `execute` actually runs
+ * (`packages/actions/src/actions/course-join-links.ts`), never computed by
+ * this app. `exactOptionalPropertyTypes` — only sent when the caller
+ * actually supplied one, so omitting it means exactly what omitting
+ * `courseJoinLinks.create`'s own field means: no expiry.
+ */
 export function createCourseJoinLink(
   organizationId: string,
   courseId: string,
-  expiresAt?: number | null
+  expiresIn?: JoinLinkExpiryValue
 ): Promise<CreatedCourseJoinLink> {
   return dispatchAction<CreatedCourseJoinLink>(
     organizationId,
     'courseJoinLinks.create',
     {
       courseId,
-      ...(expiresAt !== undefined ? { expiresAt } : {}),
+      ...(expiresIn !== undefined ? { expiresIn } : {}),
     }
   )
 }
@@ -938,7 +947,7 @@ export function revokeMembership(
  * owner-only here, unlike `memberships.list` above).
  */
 
-/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `createCourseJoinLink`'s own optional `expiresAt`. */
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one; omitted means "no expiry," matching `membershipInvitations.create`'s own optional `expiresAt`. */
 export function createMembershipInvitation(
   organizationId: string,
   email: string,

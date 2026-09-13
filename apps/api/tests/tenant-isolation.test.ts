@@ -192,6 +192,8 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         'POST /organizations/:organizationId/actions/projects.list',
         'POST /organizations/:organizationId/actions/projects.duplicate',
         'POST /organizations/:organizationId/actions/courses.save',
+        // ACT-7 — added by this slice.
+        'POST /organizations/:organizationId/actions/courses.updateSettings',
         'POST /organizations/:organizationId/actions/courses.enable',
         'POST /organizations/:organizationId/actions/courses.disable',
         'POST /organizations/:organizationId/actions/courses.list',

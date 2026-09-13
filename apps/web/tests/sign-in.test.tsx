@@ -112,4 +112,67 @@ describe('SignIn (WEB-2)', () => {
 
     expect(screen.getByTestId('google-button-slot')).toBeInTheDocument()
   })
+
+  // MCP-11 — the slot is always present once Google is configured; what
+  // changes with the checkbox is only whether it is disabled. Fails
+  // without the fix: before this slice, the slot did not exist at all
+  // until the documents were accepted (`home.test.tsx`'s own
+  // "accepting the documents" describe block has the identical pair of
+  // assertions, colocated with the checkbox's own coverage).
+  it('the Google slot is present but aria-disabled before the checkbox is ticked, and live after', () => {
+    render(<SignIn googleClientId="test-client-id" onSignedIn={vi.fn()} />)
+
+    const slot = screen.getByTestId('google-button-slot')
+    expect(slot).toHaveAttribute('aria-disabled', 'true')
+
+    fireEvent.click(screen.getByTestId('accept-legal'))
+
+    expect(slot).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  // MCP-11 — the header every sign-in surface now shows (`components/SignInHeader.tsx`),
+  // rendered by every caller alongside `SignIn`, never by `SignIn` itself
+  // (`ConnectAssistant.tsx`'s own module comment has the fuller "logo/name/
+  // description at the top, SignIn underneath" split). This pins that the
+  // header renders on a signed-out sign-in surface built the same way
+  // `pages/JoinLink.tsx` and `App.tsx`'s own generic fallback build one.
+  it('renders the shared header (logo, name, description) alongside SignIn', async () => {
+    const { SignInHeader } = await import('../src/components/SignInHeader.js')
+    render(
+      <div>
+        <SignInHeader />
+        <SignIn onSignedIn={vi.fn()} />
+      </div>
+    )
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+  })
+
+  // MCP-11 — `headline` overrides the card's own default title;
+  // `pages/ConnectAssistant.tsx` is the caller that needs this, to name the
+  // client asking to connect rather than showing the generic title.
+  it('overrides the default headline when one is supplied', () => {
+    render(
+      <SignIn
+        onSignedIn={vi.fn()}
+        headline="Sign in to Bloombot to connect"
+        description="Some Assistant wants to connect to your Bloombot account."
+      />
+    )
+
+    expect(
+      screen.getByRole('heading', { name: 'Sign in to Bloombot to connect' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Some Assistant wants to connect to your Bloombot account.'
+      )
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Sign in to Bloombot' })
+    ).not.toBeInTheDocument()
+  })
 })

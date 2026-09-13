@@ -28,6 +28,8 @@ import type {
   ChatAnswerResult,
   ChatCourse,
   ChatMessageEntry,
+  ConnectAssistantDecision,
+  ConnectAssistantRequest,
   Course,
   CourseAttachmentSummary,
   CourseEnrolment,
@@ -314,6 +316,33 @@ export function confirmMcpPersonLink(
     `/organizations/${organizationId}/person-link/mcp/confirm`,
     { method: 'POST', body: { token } }
   )
+}
+
+/**
+ * MCP-11: what `pages/ConnectAssistant.tsx` reads for `requestId` on mount
+ * — signed out, only the client's own name (never a placeholder); signed
+ * in, this also claims the pending authorization for this account.
+ * `ApiError` 404 `connection_request_unavailable` for an id that is
+ * unknown, expired, or bound to a different account — one indistinguishable
+ * outcome (`routes/mcp-oauth-consent.ts`'s own module comment on why).
+ */
+export function getConnectAssistantRequest(
+  requestId: string
+): Promise<ConnectAssistantRequest> {
+  return request<ConnectAssistantRequest>(
+    `/oauth/mcp/request?request=${encodeURIComponent(requestId)}`
+  )
+}
+
+/** MCP-11: allow or deny the pending authorization named by `requestId` — answers the URL the browser must go to next, rather than redirecting itself, since this is a `fetch` call, not a browser navigation. `ApiError` 401 `not_signed_in` with no session; 404 `connection_request_unavailable` on any refusal (the same single code `getConnectAssistantRequest` uses). */
+export function decideConnectAssistantRequest(
+  requestId: string,
+  decision: 'allow' | 'deny'
+): Promise<ConnectAssistantDecision> {
+  return request<ConnectAssistantDecision>('/oauth/mcp/decide', {
+    method: 'POST',
+    body: { request: requestId, decision },
+  })
 }
 
 /**

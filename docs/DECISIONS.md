@@ -11933,3 +11933,56 @@ membership anywhere" text `server.ts` shows is reserved for a genuinely empty *a
 never inferred from an organization's own empty course list. See that file's own module comment for the
 full reasoning; noted here because the fix landed in the same round this entry's own central claim was
 being re-confirmed, and the two are easy to conflate as one change when they are not.
+
+## D-111 — `apps/api`, `apps/mcp`, `apps/web`, `packages/auth`: MCP-11/MCP-12 — the consent screen moves onto the panel, and the pending authorization's own TTL goes 10 min → 60 min
+
+**MCP-12 — root cause: two expiries measured from *before* the email was even queued, for a flow that
+is nothing but an emailed round trip.** A person connected an assistant, the sign-in email arrived a few
+minutes late (an ordinary mail-queue delay, not an attack), and by the time they clicked it the pending
+authorization was already gone. `mcp-oauth.ts#DEFAULT_PENDING_AUTHORIZATION_TTL_MS`'s own former doc
+comment said it was "generous enough that a person can be sent to sign in, sign in, and consent, with no
+delivery delay to accommodate" — a premise this flow never actually satisfies, since the very first thing a
+signed-out visitor does is wait for an email. **Fix: ten minutes → one hour.** The row this constant bounds
+is a browser redirect carrying nothing spendable on its own (`schema.ts#mcpOauthPendingAuthorizations`'s
+own doc comment), bound to the first signed-in account that touches it (`claimPendingAuthorization`) and
+granting nothing until an explicit `Allow` — so a longer window costs little, and it now comfortably outlives
+the sign-in link's own 15-minute token (`tokens.ts#DEFAULT_TOKEN_TTL_MS`, deliberately left unchanged — AUTH-1's
+"expire within minutes" is a separate, correct choice), which can itself be re-requested once or twice inside
+the new window if delivery is slow. The authorization-code (5 min), access-token (1 h) and refresh-token
+(30 d) TTLs are untouched — none of them sit in the path an email has to survive.
+
+**MCP-11 — closes the follow-up D-103 already recorded, and this document's own claim there ("plain
+server-rendered HTML ... forced by this slice's own concurrency constraints ... whoever next touches the
+panel's own connect/consent surface should fold this into it") is now done, not merely restated.**
+`apps/api/src/routes/mcp-oauth-consent.ts` is a JSON router now — `GET /oauth/mcp/request`,
+`POST /oauth/mcp/decide` — and the actual screen is `apps/web/src/pages/ConnectAssistant.tsx`, a real page of
+the panel embedding the panel's own `SignIn`. Every disclosure the security review's must-fix 2 requires
+(client name or the honest "no registered name," the redirect host, the account-wide scope of the grant) is
+unchanged in substance; only the surface it renders on moved. Session establishment moves back onto the
+panel's existing `POST /auth/redeem` (`originCheck`-covered already), which is what makes the round two/three
+security fixes recorded in D-103 — no `GET` ever establishes a session — hold for free here: there is no
+`GET`/`POST /redeem` pair left in this file to reintroduce that class of bug.
+
+**Choice: the connection request id rides in the path (`/connect-assistant/:requestId`), not a query
+string.** `apps/web/src/routing/route.ts` has no query-parameter precedent for any address in its scheme —
+`parseRoute`/`buildPath` are exact inverses over pathnames alone, proven by `tests/routing.test.ts`'s round
+trip — so a query parameter here would have been the first, and `buildPath` cannot reconstruct a query string
+`parseRoute` never reads in the first place. `apps/mcp/src/oauth-provider.ts#authorize` builds this address by
+appending the id as a path segment rather than the `URLSearchParams` shape it used to use, and
+`apps/mcp/tests/oauth-http.test.ts`'s own redirect assertion moved with it.
+
+**Sign-in parity, the substance of MCP-11's other half.** `pages/Home.tsx` used to be the only signed-out
+surface that showed the app's logo, name and one-line description before asking someone to sign in; every
+other one (`App.tsx`'s own generic fallback, `JoinLink.tsx`, `Invitation.tsx`, and `Connect.tsx`'s own
+separately hand-written, smaller `BrandHeader`) rendered a bare `SignIn` with nothing above it. Extracted into
+`components/SignInHeader.tsx`, rendered by every one of those callers (including the new
+`ConnectAssistant.tsx`) exactly once, with `Home`'s own rendered output unchanged (`tests/home.test.tsx` and
+Google's own OAuth homepage requirement both pin it). `SignIn` itself gained `headline`/`description` props,
+used only by `ConnectAssistant.tsx` to name the connecting client in the sign-in prompt — safe by
+construction as a React interpolation, one more reason this screen was worth moving off hand-escaped HTML
+strings. Separately, the Google button's own gate was drifting from `SignIn.tsx`'s own module comment
+("the gate is a disabled control plus `aria-disabled`, not a silent no-op"): it had regressed to hiding the
+button slot outright behind a stand-in paragraph. Fixed to match what was already documented — the slot
+renders always once a client id is configured, wrapped in `aria-disabled`/`pointer-events-none`/dimmed
+styling while the documents are unaccepted, with the explanatory sentence kept beside it rather than in its
+place.

@@ -107,13 +107,13 @@ async function main(): Promise<void> {
   // on every request, the same `apps/bot`/`apps/worker` own pattern
   // (`gatewayConnected`/`workerHealthStatus`) for the same reason.
   let shuttingDown = false
-  // MCP-7 — `${PUBLIC_APP_URL}/oauth/mcp/authorize` (`apps/api`'s own
-  // consent route, mounted there rather than here — that route's own
-  // module comment on why the human-facing half of this flow lives in
-  // `apps/api`, not `apps/mcp`).
+  // MCP-11 — `${PUBLIC_APP_URL}/connect-assistant`, a real page of the
+  // panel served by nginx's own SPA fallback (`oauth-provider.ts`'s own
+  // `consentUrl` doc comment has the fuller reasoning for why this moved
+  // off `apps/api`'s own former server-rendered `/oauth/mcp/authorize`).
   const oauthProvider = buildOauthProvider({
     db,
-    consentUrl: `${CONFIG.PUBLIC_APP_URL}/oauth/mcp/authorize`,
+    consentUrl: `${CONFIG.PUBLIC_APP_URL}/connect-assistant`,
     resource: new URL('/mcp', issuerUrl).toString(),
   })
   if (!openaiApiKey) {

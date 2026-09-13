@@ -150,15 +150,19 @@ describe('the authorization-code flow with PKCE', () => {
       state: 'xyz',
     })
 
-    // `oauth-provider.ts#authorize` redirects to the consent URL — this is
-    // "sent to sign in" from an unauthenticated caller's own point of view
+    // `oauth-provider.ts#authorize` redirects to the consent URL, with the
+    // pending authorization's own id appended as a path segment (MCP-11:
+    // `apps/web/src/routing/route.ts` has no query-parameter precedent, so
+    // this app's own consent address carries its id the same way every
+    // other address in that scheme does) — this is "sent to sign in" from
+    // an unauthenticated caller's own point of view
     // (`apps/api`'s consent route answers with a sign-in prompt when no
     // session cookie is present; that route's own test file covers that
     // directly). This file only proves the redirect happens and carries the
     // request id through.
     expect(authorizeResponse.status).toBe(302)
     expect(authorizeResponse.headers['location']).toContain(
-      '/oauth/mcp/authorize?request='
+      '/oauth/mcp/authorize/'
     )
 
     // Simulate the consent step (`apps/api/src/routes/mcp-oauth-consent.ts`,

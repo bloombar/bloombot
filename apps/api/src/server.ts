@@ -209,17 +209,10 @@ export function buildApp(deps: ServerDependencies): Express {
     '/organizations/:organizationId/transcript-exports',
     buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
   )
-  // MCP-7 — a plain HTML `<form>` POST, not a JSON body: this needs
-  // `express.urlencoded`, which nothing else this app mounts does.
-  app.use('/oauth/mcp', express.urlencoded({ extended: false }))
-  app.use(
-    '/oauth/mcp',
-    buildMcpOauthConsentRouter({
-      db: deps.db,
-      publicAppUrl: deps.publicAppUrl,
-      emailSender: deps.emailSender,
-    })
-  )
+  // MCP-11 — a JSON router now (`routes/mcp-oauth-consent.ts`'s own module
+  // comment on why): the general-purpose `express.json()` mounted above
+  // already covers it, so this mount needs nothing of its own.
+  app.use('/oauth/mcp', buildMcpOauthConsentRouter({ db: deps.db }))
   app.use(
     '/organizations/:organizationId/person-link',
     buildPersonLinkRouter({

@@ -137,24 +137,34 @@ describe('accepting the documents before an account exists', () => {
     ).toHaveAttribute('href', '/terms')
   })
 
+  // MCP-11 — the slot is now always in the DOM once Google is configured;
+  // `sign-in.test.tsx` has the fuller "present but aria-disabled, then
+  // live" assertions this pins the same two properties for, colocated here
+  // since these tests already lived alongside the checkbox's own coverage.
   it('gates the Google button too, not only the email form', () => {
     // The Google path never touches the form, so `required` does not cover it
     // — without an explicit gate it would create an account for someone who
     // agreed to nothing. Google owns and draws that button, so it cannot be
-    // handed a `disabled` prop: the gate is that the slot it draws into is
-    // not in the DOM at all until the documents are accepted.
+    // handed a `disabled` prop: the gate is `aria-disabled` plus
+    // `pointer-events-none` on the slot itself, not the slot's absence.
     render(<SignIn onSignedIn={vi.fn()} googleClientId="client-id.test" />)
 
-    expect(screen.queryByTestId('google-button-slot')).not.toBeInTheDocument()
+    expect(screen.getByTestId('google-button-slot')).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    )
     expect(screen.getByTestId('google-gated')).toBeInTheDocument()
   })
 
-  it('offers Google its slot once the documents are accepted', () => {
+  it('offers Google a live slot once the documents are accepted', () => {
     render(<SignIn onSignedIn={vi.fn()} googleClientId="client-id.test" />)
 
     fireEvent.click(screen.getByTestId('accept-legal'))
 
-    expect(screen.getByTestId('google-button-slot')).toBeInTheDocument()
+    expect(screen.getByTestId('google-button-slot')).toHaveAttribute(
+      'aria-disabled',
+      'false'
+    )
     expect(screen.queryByTestId('google-gated')).not.toBeInTheDocument()
   })
 })

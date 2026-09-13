@@ -5,10 +5,10 @@
  * file's own twin for `chat-tools.ts`'s two tools.
  */
 
-import { memberships } from '@bloombot/db'
+import { memberships, projects } from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { listAdministeredCourses } from '../src/admin-tools.js'
+import { listAdministeredOrganizations } from '../src/admin-tools.js'
 import {
   connectAccountTo,
   seedCourse,
@@ -44,22 +44,109 @@ describe('courses.listAdministered (MCP-9)', () => {
       { title: 'Second Org Course' }
     )
 
-    const administered = listAdministeredCourses(caller.accountId, testDb.db)
+    const administered = listAdministeredOrganizations(
+      caller.accountId,
+      testDb.db
+    )
 
-    expect(administered.map((entry) => entry.courseId).sort()).toEqual(
-      [firstCourseId, secondCourseId].sort()
+    expect(administered.map((org) => org.organizationId).sort()).toEqual(
+      [caller.organizationId, secondOrganizationId].sort()
     )
     // The organization and project are named too — every other tool on the
     // surface needs the organizationId to act at all (MCP-3), and this is
     // the one place it is discoverable.
-    const first = administered.find((entry) => entry.courseId === firstCourseId)
-    expect(first).toMatchObject({
-      organizationId: caller.organizationId,
-      courseTitle: 'First Org Course',
-    })
+    const first = administered.find(
+      (org) => org.organizationId === caller.organizationId
+    )
     expect(first?.organizationName).toBeTruthy()
-    expect(first?.projectId).toBeTruthy()
-    expect(first?.projectName).toBeTruthy()
+    expect(first?.courses).toEqual([
+      expect.objectContaining({
+        courseId: firstCourseId,
+        courseTitle: 'First Org Course',
+      }),
+    ])
+    expect(first?.courses[0]?.projectId).toBeTruthy()
+    expect(first?.courses[0]?.projectName).toBeTruthy()
+
+    const second = administered.find(
+      (org) => org.organizationId === secondOrganizationId
+    )
+    expect(second?.courses.map((c) => c.courseId)).toEqual([secondCourseId])
+  })
+
+  it('lists an organization it administers even when that organization has no courses yet — must-fix 1', () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    // No course seeded at all in this organization — the fresh,
+    // just-created-organization case this fix exists for: `projects.create`
+    // and `courses.save` both need this organizationId, and this tool is
+    // the only place to learn it.
+    const administered = listAdministeredOrganizations(
+      caller.accountId,
+      testDb.db
+    )
+
+    expect(administered).toEqual([
+      {
+        organizationId: caller.organizationId,
+        organizationName: expect.any(String),
+        courses: [],
+      },
+    ])
+  })
+
+  it("excludes a course whose project is archived, matching projects.listProjects's own default", () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInAccount(testDb.db)
+    const { projectId } = seedCourse(testDb.db, caller.organizationId, {
+      title: 'Archived Course',
+    })
+    const changed = projects.archiveProject(
+      caller.organizationId,
+      projectId,
+      testDb.db
+    )
+    if (changed === 0) throw new Error('setup failed: could not archive')
+
+    const administered = listAdministeredOrganizations(
+      caller.accountId,
+      testDb.db
+    )
+
+    // The organization itself is still listed (must-fix 1's own guarantee)
+    // — only its one, now-archived-away course is gone, not the whole
+    // organization.
+    expect(administered).toEqual([
+      {
+        organizationId: caller.organizationId,
+        organizationName: expect.any(String),
+        courses: [],
+      },
+    ])
+  })
+
+  it("an assistant-role membership counts as administering — D-110's own central claim, pinned directly", () => {
+    testDb = createTestDatabase()
+    // `assistant` — the narrowest of the three `MembershipRole`s, and the
+    // one D-110 explicitly says is not filtered out: `call-tool.ts`'s own
+    // membership gate already lets an `assistant` dispatch `courses.save`
+    // through this same server, so a filter here would read stricter than
+    // the writes it points at.
+    const caller = seedSignedInAccount(testDb.db, { role: 'assistant' })
+    const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+      title: 'Assistant-Administered Course',
+    })
+
+    const administered = listAdministeredOrganizations(
+      caller.accountId,
+      testDb.db
+    )
+
+    expect(
+      administered
+        .find((org) => org.organizationId === caller.organizationId)
+        ?.courses.map((c) => c.courseId)
+    ).toEqual([courseId])
   })
 
   it('does not see a course through an enrolment alone — being enrolled is not authority to administer', () => {
@@ -82,11 +169,21 @@ describe('courses.listAdministered (MCP-9)', () => {
       discordPersonId
     )
 
-    const administered = listAdministeredCourses(student.accountId, testDb.db)
+    const administered = listAdministeredOrganizations(
+      student.accountId,
+      testDb.db
+    )
 
-    expect(administered).toEqual([])
-    // Not merely "this one course is absent" — this account reaches the
-    // organization through no membership at all, so nothing from it appears.
+    // `student` has its own, unrelated personal organization from
+    // `seedSignedInAccount` (a real account needs a membership to exist at
+    // all), so this is not "the whole list is empty" — it is that
+    // `owner`'s own organization specifically never appears, because this
+    // account reaches it through no membership at all (unlike the
+    // zero-courses case above, where the account genuinely administers the
+    // organization it appears under).
+    expect(
+      administered.some((org) => org.organizationId === owner.organizationId)
+    ).toBe(false)
     expect(courseId).toBeTruthy()
   })
 
@@ -105,7 +202,10 @@ describe('courses.listAdministered (MCP-9)', () => {
     )
     if (!revoked) throw new Error('setup failed: could not revoke membership')
 
-    const administered = listAdministeredCourses(caller.accountId, testDb.db)
+    const administered = listAdministeredOrganizations(
+      caller.accountId,
+      testDb.db
+    )
 
     expect(administered).toEqual([])
   })
@@ -113,7 +213,7 @@ describe('courses.listAdministered (MCP-9)', () => {
   it('never throws or leaks for an id that names no account at all', () => {
     testDb = createTestDatabase()
     expect(
-      listAdministeredCourses('a-fully-unknown-account-id', testDb.db)
+      listAdministeredOrganizations('a-fully-unknown-account-id', testDb.db)
     ).toEqual([])
   })
 })

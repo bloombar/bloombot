@@ -109,7 +109,7 @@ import {
   isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js'
 
-import { listAdministeredCourses } from './admin-tools.js'
+import { listAdministeredOrganizations } from './admin-tools.js'
 import { authenticateBearerToken, parseBearerToken } from './authenticate.js'
 import {
   callTool,
@@ -756,8 +756,26 @@ function registerChatTools(
   )
 }
 
-/** Both `chat.listCourses` (MCP-8) and `courses.listAdministered` (MCP-9) give a plain, non-error result for an account that reaches nothing through them — this one is for the latter, worded around membership rather than a connected identity so it does not tell an assistant to reach for `bloombot_connectAssistant`, which grants no *administrative* authority at all. */
-const NO_ADMINISTERED_COURSES_TEXT =
+/**
+ * Both `chat.listCourses` (MCP-8) and `courses.listAdministered` (MCP-9)
+ * give a plain, non-error result for an account that reaches nothing
+ * through them — this one is for the latter, worded around membership
+ * rather than a connected identity so it does not tell an assistant to
+ * reach for `bloombot_connectAssistant`, which grants no *administrative*
+ * authority at all.
+ *
+ * Shown only when `listAdministeredOrganizations` returns an empty array —
+ * genuinely no active membership anywhere, not merely no courses yet.
+ * TEN-1 gives every account a personal-organization membership, so this text
+ * is essentially never shown for a real account; `admin-tools.ts`'s own
+ * module comment on why an organization with zero courses still appears as
+ * its own entry (`courses: []`) is what makes that distinction meaningful
+ * here rather than inferred, wrongly, from an empty course list (a rework
+ * finding: the first version of this check keyed off "no courses" instead,
+ * which told a brand-new organization's own owner they held no membership
+ * anywhere, while being its owner).
+ */
+const NO_ADMINISTERED_ORGANIZATIONS_TEXT =
   'This account does not hold an administrative membership in any organization, so there is nothing here to list. ' +
   'Ask an owner of the organization you expect to administer to add this account as a member.'
 
@@ -790,10 +808,18 @@ function registerAdminTools(
     },
     async (): Promise<CallToolResult> => {
       try {
-        const administered = listAdministeredCourses(accountId, deps.db)
+        const administered = listAdministeredOrganizations(accountId, deps.db)
+        // Empty here means genuinely no active membership anywhere — every
+        // organization this account administers appears as its own entry
+        // regardless of how many courses it holds (`admin-tools.ts`'s own
+        // module comment), so this is not "no courses yet", which is a
+        // perfectly normal, non-empty result (an organization with
+        // `courses: []`).
         if (administered.length === 0) {
           return {
-            content: [{ type: 'text', text: NO_ADMINISTERED_COURSES_TEXT }],
+            content: [
+              { type: 'text', text: NO_ADMINISTERED_ORGANIZATIONS_TEXT },
+            ],
           }
         }
         return {

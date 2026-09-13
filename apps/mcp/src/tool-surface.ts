@@ -290,6 +290,20 @@ function describeRemoveCourseChannelTarget(entity: unknown): string {
  * own contract (this file's own module comment: "the same record `execute`
  * itself will act on, read once") does not give it, so it says only what
  * the entity itself already knows rather than guessing.
+ *
+ * **This is not the under-informative gap it looks like.** A `null`
+ * `discordServerId` only ever falls back silently when the organization has
+ * exactly one active Discord server binding to fall back to —
+ * `resolveCourseDiscordServer` returns `ambiguous` (and `execute` never
+ * runs at all) the moment a `null` course would have to choose between two
+ * or more active bindings, which is the identical case `apps/web`'s own
+ * course editor only offers a server *selector* for in the first place
+ * (one binding needs no choice; several does). So the server name is
+ * omitted from this confirmation only when there is exactly one candidate
+ * (nothing to disambiguate) or none at all (nothing to name) — never the
+ * case where naming it would actually have told a human something they
+ * could not already infer, or that this action itself could not already
+ * resolve unambiguously by the time it runs.
  */
 function describeScaffoldTarget(entity: unknown): string {
   const course = entity as { title?: unknown; discordServerId?: unknown } | null
@@ -545,7 +559,9 @@ export const MCP_ADMIN_TOOL_SURFACE: readonly ChatToolSurfaceEntry[] = [
   {
     name: 'courses.listAdministered',
     description:
-      'Every course this account administers — the organization, the project and the course for each, across every organization it can reach. ' +
+      'Every organization this account administers, with every course in each — the organization, the project and the course for each. ' +
+      'An organization is listed even when it has no courses yet (a brand-new organization, say), so this is also how to find an organizationId ' +
+      'before the first projects.create or courses.save call. ' +
       'Every other tool on this server acts within one organizationId named in the call; this is how you learn what those ids are. ' +
       'An account with no administrative membership anywhere gets an empty list back, not an error.',
     inputSchema: {},

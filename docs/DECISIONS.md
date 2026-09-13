@@ -11912,3 +11912,24 @@ role-scoped notion of "administers" (an `assistant` who may edit content but not
 inherits `call-tool.ts`'s all-roles-equal reading by design, not by oversight, and the two must be changed
 together or a caller ends up listed for a course it can no longer actually act on, the identical drift this
 file's own reasoning about `apps/web`'s course-configuration gating was written to avoid.
+
+**Rework round 1 — confirmed independently, and pinned by a test.** A reviewer re-derived this same
+conclusion from `apps/api/src/routes/actions.ts` (gates on membership existing, never reads `.role`), every
+course-configuration action in `packages/actions`, and the panel's own role gates (limited to Team and
+cost) — nothing this slice changed. What the first round of this slice actually shipped without: a test that
+fails if a future edit adds `if (membership.role === 'assistant') continue` to
+`admin-tools.ts#listAdministeredOrganizations`. A reviewer added that mutation directly and watched all 123
+`apps/mcp` tests stay green — the existing "no membership anywhere" test used an `assistant`-role account,
+but only after revoking its one membership, so it pinned the opposite of this decision. `admin-tools.test.ts`
+now has a test seeding an *active* `assistant` membership with a real course and asserting it appears, which
+fails against that exact mutation.
+
+**Rework round 1 — the listing also had to stop being one row per course.** A separate, related defect
+surfaced in the same round: emitting one row per *course* meant an organization with none yet — most acutely,
+one an owner had just created — never appeared at all, so its `organizationId` (which `projects.create` and
+`courses.save` both need, and which this tool exists to make discoverable) stayed unreachable. `admin-tools.ts`
+now groups by organization first, with `courses: []` for one holding none, and the "no administrative
+membership anywhere" text `server.ts` shows is reserved for a genuinely empty *array of organizations* —
+never inferred from an organization's own empty course list. See that file's own module comment for the
+full reasoning; noted here because the fix landed in the same round this entry's own central claim was
+being re-confirmed, and the two are easy to conflate as one change when they are not.

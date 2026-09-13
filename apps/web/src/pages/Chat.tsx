@@ -474,7 +474,7 @@ export function Chat({
             aria-label="Course"
             value={selectedCourseId}
             onChange={(event) => onSelectCourse(event.target.value)}
-            className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm text-neutral-900 focus:border-brand-500"
+            className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
           >
             {courses.map((course) => (
               <option key={course.id} value={course.id}>
@@ -610,7 +610,7 @@ export function Chat({
           rows={2}
           placeholder="Ask a question…"
           disabled={sending}
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-900 focus:border-brand-500"
+          className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
         />
         <Button
           type="submit"

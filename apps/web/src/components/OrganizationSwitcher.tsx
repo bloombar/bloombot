@@ -153,7 +153,7 @@ export function OrganizationSwitcher({
       data-testid="organization-switcher"
       value={activeOrganizationId}
       onChange={(event) => onChange(event.target.value)}
-      className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-sm font-medium text-neutral-900 focus:border-brand-500"
+      className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-base sm:text-sm font-medium text-neutral-900 focus:border-brand-500"
     >
       {options.map((option) => (
         <option key={option.organizationId} value={option.organizationId}>

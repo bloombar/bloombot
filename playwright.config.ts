@@ -62,6 +62,30 @@ export default defineConfig({
   use: {
     baseURL: E2E_PUBLIC_APP_URL,
   },
+  // WEB-48: every existing spec keeps running exactly as it always has,
+  // at Playwright's own 1280x720 default (no `viewport` override here) —
+  // `testIgnore` on the desktop project is what keeps `mobile-viewport
+  // .spec.ts` from also running (and failing on desktop assertions it
+  // never makes) under this project, and `testMatch` on the mobile
+  // project is what keeps every *other* spec from running twice, once
+  // per project, doubling this suite's own wall clock for no reason.
+  projects: [
+    {
+      name: 'desktop',
+      testIgnore: '**/mobile-viewport.spec.ts',
+    },
+    {
+      name: 'mobile',
+      testMatch: '**/mobile-viewport.spec.ts',
+      use: {
+        // A common small phone size (the same figure the brief's own
+        // verification section names) — "no horizontal scrolling of the
+        // page body at 375px wide" is the standard this project's spec
+        // holds every screen it visits to.
+        viewport: { width: 375, height: 667 },
+      },
+    },
+  ],
   webServer: [
     {
       command: 'npx tsx e2e/support/start-api.ts',

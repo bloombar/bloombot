@@ -365,7 +365,7 @@ export function Team({ organizationId, isOwner, viewerAccountId }: TeamProps) {
                       event.target.value as OrganizationMembership['role']
                     )
                   }
-                  className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
+                  className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
                 >
                   {GRANTABLE_ROLES.map((option) => (
                     <option key={option} value={option}>

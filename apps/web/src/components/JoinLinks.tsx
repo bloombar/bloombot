@@ -490,7 +490,7 @@ export function JoinLinks({ organizationId, courseId }: JoinLinksProps) {
               onChange={(event) =>
                 setExpiryOption(event.target.value as JoinLinkExpiryValue)
               }
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
             >
               {JOIN_LINK_EXPIRY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

@@ -1597,7 +1597,12 @@ export function CourseEditor({
           <div
             role="tablist"
             aria-label="Course settings"
-            className="flex gap-1 border-b border-neutral-200"
+            // WEB-48: the row itself scrolls on a narrow phone rather than
+            // the page body — five tabs at `text-sm` come close to 375px's
+            // own width once padding and gaps are counted, and `overflow-x-
+            // auto` here (rather than nothing) keeps that overflow local to
+            // the tab bar instead of widening the whole page.
+            className="flex gap-1 overflow-x-auto border-b border-neutral-200"
             onKeyDown={handleTabListKeyDown}
           >
             {COURSE_EDITOR_TABS.map((courseTab) => (

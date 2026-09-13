@@ -346,7 +346,7 @@ export function MembershipInvitations({
               onChange={(event) =>
                 setRole(event.target.value as MembershipInvitation['role'])
               }
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
             >
               {INVITABLE_ROLES.map((option) => (
                 <option key={option} value={option}>
@@ -361,7 +361,7 @@ export function MembershipInvitations({
             <select
               value={expiryOption}
               onChange={(event) => setExpiryOption(event.target.value)}
-              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm text-neutral-900 focus:border-brand-500"
+              className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-base sm:text-sm text-neutral-900 focus:border-brand-500"
             >
               {EXPIRY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

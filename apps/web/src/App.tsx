@@ -16,6 +16,9 @@
  *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
  *    every other route below, since a Discord invitation cannot know which
  *    it will be.
+ *  - `route.kind === 'connect-assistant'` — MCP-11's own assistant
+ *    connection address (`pages/ConnectAssistant.tsx`), reachable signed in
+ *    or signed out for the identical reason `'connect'` is above.
  *  - `route.kind === 'join-link'` — ENRL-8's own course join link
  *    (`pages/JoinLink.tsx`); reachable signed in or signed out, for the
  *    identical reason `'connect'` is above — a course join link is shared
@@ -64,9 +67,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
+import { SignInHeader } from './components/SignInHeader.js'
 import { LoadingStatus, Skeleton } from './components/Skeleton.js'
 import { Admin } from './pages/Admin.js'
 import { Connect } from './pages/Connect.js'
+import { ConnectAssistant } from './pages/ConnectAssistant.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
@@ -446,6 +451,22 @@ export function App() {
     )
   }
 
+  // MCP-11 — the assistant connection address `apps/mcp`'s own OAuth
+  // provider redirects the browser to. Reachable whether or not this
+  // browser already has a session, the identical reason `'connect'` is
+  // above: `ConnectAssistant.tsx` renders its own sign-in surface when
+  // `account` is `null`, naming the connecting client in its own headline
+  // rather than being short-circuited into the generic bare `SignIn` below.
+  if (route.kind === 'connect-assistant') {
+    return (
+      <ConnectAssistant
+        requestId={route.requestId}
+        account={session.kind === 'signed-in' ? session.account : null}
+        onSignedIn={refreshSession}
+      />
+    )
+  }
+
   // ENRL-8 — a course join link, reachable whether or not this browser
   // already has a session: `JoinLink.tsx` itself renders `SignIn` when
   // `account` is `null`, the same split `Connect.tsx` already draws above.
@@ -616,13 +637,20 @@ export function App() {
     return <Home onSignedIn={refreshSession} />
   }
 
+  // MCP-11 — the header every sign-in surface shows, exactly once; `Home`
+  // (above) renders its own via `SignInHeader`, and this is every other
+  // signed-out deep link's own copy of the same wrapper `Connect.tsx`/
+  // `JoinLink.tsx`/`Invitation.tsx` already use.
   return (
-    <SignIn
-      onSignedIn={refreshSession}
-      {...(signedOutDestination !== undefined &&
-      isSameOriginPath(signedOutDestination)
-        ? { destination: signedOutDestination }
-        : {})}
-    />
+    <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+      <SignInHeader />
+      <SignIn
+        onSignedIn={refreshSession}
+        {...(signedOutDestination !== undefined &&
+        isSameOriginPath(signedOutDestination)
+          ? { destination: signedOutDestination }
+          : {})}
+      />
+    </div>
   )
 }

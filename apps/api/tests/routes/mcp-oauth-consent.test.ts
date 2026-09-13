@@ -1,33 +1,28 @@
 /**
- * `routes/mcp-oauth-consent.ts` (MCP-7's own human-facing half). Every test
- * here writes the pending authorization directly through `@bloombot/auth`'s
- * `beginAuthorization` — the same "written through the real repos, never
- * through the surface under test" convention `person-link.test.ts`'s own
- * module comment already holds this test directory to — since
- * `apps/mcp`'s own `authorize()` is `apps/mcp/tests/oauth-http.test.ts`'s
- * job to prove, not this file's.
+ * `routes/mcp-oauth-consent.ts` (MCP-7's own human-facing half, MCP-11's
+ * JSON rewrite of it). Every test here writes the pending authorization
+ * directly through `@bloombot/auth`'s `beginAuthorization` — the same
+ * "written through the real repos, never through the surface under test"
+ * convention `person-link.test.ts`'s own module comment already holds this
+ * test directory to — since `apps/mcp`'s own `authorize()` is
+ * `apps/mcp/tests/oauth-http.test.ts`'s job to prove, not this file's.
  *
  * The "security review, must-fix 2" describe blocks below are this file's
  * own regression tests for the account-takeover a review round found: the
  * consent screen naming neither the client nor the destination, and a
  * `request` id usable by any signed-in browser that saw it, not only the
- * first one.
+ * first one. MCP-11 changed the surface (JSON, not server-rendered HTML)
+ * but not the rule, so every one of these still holds the identical shape.
  */
 
 import { randomUUID } from 'node:crypto'
 
-import {
-  beginAuthorization,
-  peekPendingAuthorization,
-  RecordingEmailSender,
-  registerOauthClient,
-} from '@bloombot/auth'
+import { beginAuthorization, registerOauthClient } from '@bloombot/auth'
 import { afterEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
 
 import { buildTestApp, TEST_PUBLIC_APP_URL } from '../helpers/build-test-app.js'
 import { seedSignedInCaller } from '../helpers/seed.js'
-import { SESSION_COOKIE_NAME } from '../../src/middleware/session.js'
 import { createTestDatabase, type TestDatabase } from '../helpers/test-db.js'
 
 let testDb: TestDatabase
@@ -61,105 +56,91 @@ function beginPending(
   )
 }
 
-/** Pulls the value of `bloombot_session` out of a `set-cookie` header array, or `undefined` — the same helper `auth-flow.test.ts` already uses. */
-function sessionCookieValue(setCookieHeaders: string[]): string | undefined {
-  const line = setCookieHeaders.find((header) =>
-    header.startsWith(`${SESSION_COOKIE_NAME}=`)
-  )
-  return line?.split(';')[0]?.split('=')[1]
-}
+describe('GET /oauth/mcp/request', () => {
+  it('tells a signed-out caller the client name, without claiming anything', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+    const begun = beginPending(testDb.db, { clientName: 'Some Assistant' })
 
-describe('GET /oauth/mcp/authorize', () => {
-  it('tells a signed-out caller to sign in, without creating anything', async () => {
+    const response = await request(app)
+      .get('/oauth/mcp/request')
+      .query({ request: begun.id })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      signedIn: false,
+      clientName: 'Some Assistant',
+    })
+  })
+
+  it('omits clientName entirely for a client that registered none — never a placeholder', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
     const begun = beginPending(testDb.db)
 
     const response = await request(app)
-      .get('/oauth/mcp/authorize')
+      .get('/oauth/mcp/request')
       .query({ request: begun.id })
 
     expect(response.status).toBe(200)
-    expect(response.text).toMatch(/sign in/i)
-    // Still there — a preview never spends it (LINK-6's own "a visit is not
-    // consent", the same discipline this route's own module comment holds
-    // itself to).
-    expect(peekPendingAuthorization(begun.id, testDb.db)).toBeDefined()
+    expect(response.body).toEqual({ signedIn: false })
   })
 
-  it('shows a plain consent screen naming what is being granted, to a signed-in caller', async () => {
+  it('claims and answers redirectHost for a signed-in caller', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+    const caller = seedSignedInCaller(testDb.db)
+    const begun = beginPending(testDb.db, {
+      clientName: 'Totally Legit Assistant',
+      redirectUri: 'https://attacker.example/steal-the-grant',
+    })
+
+    const response = await request(app)
+      .get('/oauth/mcp/request')
+      .query({ request: begun.id })
+      .set('Cookie', caller.cookieHeader)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      signedIn: true,
+      clientName: 'Totally Legit Assistant',
+      redirectHost: 'attacker.example',
+    })
+  })
+
+  it('answers a single 404 error code for an expired or unknown request id — signed out', async () => {
+    testDb = createTestDatabase()
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get('/oauth/mcp/request')
+      .query({ request: randomUUID() })
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'connection_request_unavailable' })
+  })
+
+  it('a signed-out visit does not claim — a later signed-in visit still can', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
     const caller = seedSignedInCaller(testDb.db)
     const begun = beginPending(testDb.db)
 
-    const response = await request(app)
-      .get('/oauth/mcp/authorize')
+    await request(app).get('/oauth/mcp/request').query({ request: begun.id })
+
+    const signedInView = await request(app)
+      .get('/oauth/mcp/request')
       .query({ request: begun.id })
       .set('Cookie', caller.cookieHeader)
-
-    expect(response.status).toBe(200)
-    expect(response.text).toMatch(/act as your Bloombot account/i)
-  })
-
-  it('answers plainly for an expired or unknown request id', async () => {
-    testDb = createTestDatabase()
-    const app = await buildTestApp(testDb.db)
-
-    const response = await request(app)
-      .get('/oauth/mcp/authorize')
-      .query({ request: randomUUID() })
-
-    expect(response.status).toBe(404)
-    expect(response.text).toMatch(/expired|already used/i)
-  })
-
-  // Security review, must-fix 2 — the disclosure half of the fix: the
-  // earlier screen showed the generic placeholder "An MCP assistant"
-  // regardless of who was actually asking, or where the grant would go.
-  describe('naming the client and the destination — the takeover fix', () => {
-    it('renders the registered client name and the redirect URI host', async () => {
-      testDb = createTestDatabase()
-      const app = await buildTestApp(testDb.db)
-      const caller = seedSignedInCaller(testDb.db)
-      const begun = beginPending(testDb.db, {
-        clientName: 'Totally Legit Assistant',
-        redirectUri: 'https://attacker.example/steal-the-grant',
-      })
-
-      const response = await request(app)
-        .get('/oauth/mcp/authorize')
-        .query({ request: begun.id })
-        .set('Cookie', caller.cookieHeader)
-
-      expect(response.status).toBe(200)
-      expect(response.text).toContain('Totally Legit Assistant')
-      expect(response.text).toContain('attacker.example')
-      // Never the generic placeholder the security review's own report
-      // showed a real victim being handed with nothing else to go on.
-      expect(response.text).not.toMatch(/An MCP assistant/i)
-    })
-
-    it('is honest about a client with no registered name — never a reassuring placeholder', async () => {
-      testDb = createTestDatabase()
-      const app = await buildTestApp(testDb.db)
-      const caller = seedSignedInCaller(testDb.db)
-      const begun = beginPending(testDb.db)
-
-      const response = await request(app)
-        .get('/oauth/mcp/authorize')
-        .query({ request: begun.id })
-        .set('Cookie', caller.cookieHeader)
-
-      expect(response.text).toMatch(/no registered name/i)
-      expect(response.text).not.toMatch(/An MCP assistant/i)
-    })
+    expect(signedInView.status).toBe(200)
+    expect((signedInView.body as { signedIn: boolean }).signedIn).toBe(true)
   })
 
   // Security review, must-fix 2 — the binding half of the fix
   // (`schema.ts#mcpOauthPendingAuthorizations`'s own doc comment): the same
   // `request` id, forwarded to a second signed-in account, must not read
-  // as available to them.
+  // as available to them — the same 404 an unknown id gets, not a
+  // different, more informative refusal.
   describe('binding a pending authorization to the first signed-in account', () => {
     it('claims for the first account and refuses a second, different one, identically to an unknown id', async () => {
       testDb = createTestDatabase()
@@ -169,47 +150,47 @@ describe('GET /oauth/mcp/authorize', () => {
       const begun = beginPending(testDb.db)
 
       const firstView = await request(app)
-        .get('/oauth/mcp/authorize')
+        .get('/oauth/mcp/request')
         .query({ request: begun.id })
         .set('Cookie', firstCaller.cookieHeader)
       expect(firstView.status).toBe(200)
-      expect(firstView.text).toMatch(/act as your Bloombot account/i)
+      expect((firstView.body as { signedIn: boolean }).signedIn).toBe(true)
 
       const secondView = await request(app)
-        .get('/oauth/mcp/authorize')
+        .get('/oauth/mcp/request')
         .query({ request: begun.id })
         .set('Cookie', secondCaller.cookieHeader)
       expect(secondView.status).toBe(404)
-      expect(secondView.text).toMatch(/expired|already used|different/i)
+      expect(secondView.body).toEqual({
+        error: 'connection_request_unavailable',
+      })
 
       // The first account can still complete it — this is not a permanent
       // lock, only a refusal of anyone else.
       const decided = await request(app)
-        .post('/oauth/mcp/authorize/decide')
-        .type('form')
+        .post('/oauth/mcp/decide')
         .set('Cookie', firstCaller.cookieHeader)
         .set('Origin', TEST_PUBLIC_APP_URL)
         .send({ request: begun.id, decision: 'allow' })
-      expect(decided.status).toBe(302)
+      expect(decided.status).toBe(200)
     })
 
-    it("refuses a second account's own attempt to decide, even without ever loading the GET screen first", async () => {
+    it("refuses a second account's own attempt to decide, even without ever loading /request first", async () => {
       testDb = createTestDatabase()
       const app = await buildTestApp(testDb.db)
       const firstCaller = seedSignedInCaller(testDb.db)
       const secondCaller = seedSignedInCaller(testDb.db)
       const begun = beginPending(testDb.db)
 
-      // First account claims it via the GET screen.
+      // First account claims it via `GET /request`.
       await request(app)
-        .get('/oauth/mcp/authorize')
+        .get('/oauth/mcp/request')
         .query({ request: begun.id })
         .set('Cookie', firstCaller.cookieHeader)
 
       // A different account cannot decide it — allow or deny.
       const response = await request(app)
-        .post('/oauth/mcp/authorize/decide')
-        .type('form')
+        .post('/oauth/mcp/decide')
         .set('Cookie', secondCaller.cookieHeader)
         .set('Origin', TEST_PUBLIC_APP_URL)
         .send({ request: begun.id, decision: 'allow' })
@@ -227,7 +208,7 @@ describe('GET /oauth/mcp/authorize', () => {
     const begun = beginPending(testDb.db)
 
     const ok = await request(app)
-      .get('/oauth/mcp/authorize')
+      .get('/oauth/mcp/request')
       .query({ request: begun.id })
     expect(ok.headers['x-frame-options']).toBe('DENY')
     expect(ok.headers['content-security-policy']).toContain(
@@ -235,25 +216,25 @@ describe('GET /oauth/mcp/authorize', () => {
     )
 
     const notFound = await request(app)
-      .get('/oauth/mcp/authorize')
+      .get('/oauth/mcp/request')
       .query({ request: randomUUID() })
     expect(notFound.headers['x-frame-options']).toBe('DENY')
   })
 })
 
-describe('POST /oauth/mcp/authorize/decide', () => {
+describe('POST /oauth/mcp/decide', () => {
   it('refuses without a signed-in session', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
     const begun = beginPending(testDb.db)
 
     const response = await request(app)
-      .post('/oauth/mcp/authorize/decide')
-      .type('form')
+      .post('/oauth/mcp/decide')
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ request: begun.id, decision: 'allow' })
 
     expect(response.status).toBe(401)
+    expect(response.body).toEqual({ error: 'not_signed_in' })
   })
 
   it("binds the code to the signed-in caller's own account, never a request field", async () => {
@@ -264,8 +245,7 @@ describe('POST /oauth/mcp/authorize/decide', () => {
     const begun = beginPending(testDb.db, { state: 'carry-me' })
 
     const response = await request(app)
-      .post('/oauth/mcp/authorize/decide')
-      .type('form')
+      .post('/oauth/mcp/decide')
       .set('Cookie', caller.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
       // A malicious or merely confused client field naming a *different*
@@ -275,8 +255,10 @@ describe('POST /oauth/mcp/authorize/decide', () => {
       // consenting caller's own real code, not one for `otherAccountId`.
       .send({ request: begun.id, decision: 'allow', accountId: otherAccountId })
 
-    expect(response.status).toBe(302)
-    const redirect = new URL(response.headers['location'] as string)
+    expect(response.status).toBe(200)
+    const redirect = new URL(
+      (response.body as { redirectTo: string }).redirectTo
+    )
     expect(redirect.origin + redirect.pathname).toBe(
       'https://client.example/callback'
     )
@@ -284,39 +266,44 @@ describe('POST /oauth/mcp/authorize/decide', () => {
     expect(redirect.searchParams.get('state')).toBe('carry-me')
   })
 
-  it('a decline redirects to the client with access_denied, and consumes the pending authorization', async () => {
+  it('a decline answers a redirectTo carrying access_denied, and consumes the pending authorization', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
     const caller = seedSignedInCaller(testDb.db)
     const begun = beginPending(testDb.db)
 
     const response = await request(app)
-      .post('/oauth/mcp/authorize/decide')
-      .type('form')
+      .post('/oauth/mcp/decide')
       .set('Cookie', caller.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ request: begun.id, decision: 'deny' })
 
-    expect(response.status).toBe(302)
-    const redirect = new URL(response.headers['location'] as string)
+    expect(response.status).toBe(200)
+    const redirect = new URL(
+      (response.body as { redirectTo: string }).redirectTo
+    )
     expect(redirect.searchParams.get('error')).toBe('access_denied')
-    expect(peekPendingAuthorization(begun.id, testDb.db)).toBeUndefined()
+
+    const secondAttempt = await request(app)
+      .get('/oauth/mcp/request')
+      .query({ request: begun.id })
+      .set('Cookie', caller.cookieHeader)
+    expect(secondAttempt.status).toBe(404)
   })
 
-  it('an already-used or expired request id answers plainly rather than failing obscurely', async () => {
+  it('an already-used or expired request id answers the single 404 error code rather than failing obscurely', async () => {
     testDb = createTestDatabase()
     const app = await buildTestApp(testDb.db)
     const caller = seedSignedInCaller(testDb.db)
 
     const response = await request(app)
-      .post('/oauth/mcp/authorize/decide')
-      .type('form')
+      .post('/oauth/mcp/decide')
       .set('Cookie', caller.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ request: randomUUID(), decision: 'allow' })
 
     expect(response.status).toBe(404)
-    expect(response.text).toMatch(/expired|already used/i)
+    expect(response.body).toEqual({ error: 'connection_request_unavailable' })
   })
 
   // Cheap fix from the security review — CSRF on this action is already
@@ -330,179 +317,11 @@ describe('POST /oauth/mcp/authorize/decide', () => {
     const begun = beginPending(testDb.db)
 
     const response = await request(app)
-      .post('/oauth/mcp/authorize/decide')
-      .type('form')
+      .post('/oauth/mcp/decide')
       .set('Cookie', caller.cookieHeader)
       .set('Origin', 'https://attacker.example')
       .send({ request: begun.id, decision: 'allow' })
 
     expect(response.status).toBe(403)
-  })
-})
-
-// Security review, must-fix 2 — "sign in in another tab and reload" was
-// itself the defect making a `request` id transferable between people: a
-// signed-out visitor now round-trips through a real sign-in instead
-// (`/sign-in`, `/redeem`, `routes/mcp-oauth-consent.ts`'s own module
-// comment on why this lives here rather than in the panel).
-describe('the sign-in round trip for a signed-out visitor', () => {
-  /** Requests a link for `email` carrying `requestId` as its own destination, and returns the token the recording mail port captured. */
-  async function requestLinkAndGetToken(
-    app: Awaited<ReturnType<typeof buildTestApp>>,
-    emailSender: RecordingEmailSender,
-    email: string,
-    requestId: string
-  ): Promise<string> {
-    const signInRequest = await request(app)
-      .post('/oauth/mcp/sign-in')
-      .type('form')
-      .set('Origin', TEST_PUBLIC_APP_URL)
-      .send({ email, request: requestId })
-    expect(signInRequest.status).toBe(200)
-    expect(signInRequest.text).toMatch(/check your email/i)
-    const emailedLink = emailSender.sent.at(-1)!.body
-    const token = emailedLink.split('token=')[1]?.trim()
-    expect(token).toBeTruthy()
-    return token!
-  }
-
-  it('emails a link whose GET page never sets a cookie — it only renders an interstitial naming a POST', async () => {
-    testDb = createTestDatabase()
-    const emailSender = new RecordingEmailSender()
-    const app = await buildTestApp(testDb.db, { emailSender })
-    const begun = beginPending(testDb.db)
-    const token = await requestLinkAndGetToken(
-      app,
-      emailSender,
-      'student@example.edu',
-      begun.id
-    )
-
-    const getResponse = await request(app)
-      .get('/oauth/mcp/redeem')
-      .query({ token })
-
-    expect(getResponse.status).toBe(200)
-    expect(getResponse.headers['set-cookie']).toBeUndefined()
-    expect(getResponse.text).toContain('action="/oauth/mcp/redeem"')
-    expect(getResponse.text).toContain('method="POST"')
-    expect(getResponse.text).toContain(token)
-    // Security review, fourth round — nothing pinned the framing headers
-    // on this specific response before: reordering this route's own
-    // registration ahead of the router-level `X-Frame-Options`/CSP
-    // middleware (`buildMcpOauthConsentRouter`'s own `router.use` at the
-    // top of that function) ships the interstitial with no framing
-    // protection at all and left the suite green — an `<iframe
-    // src=".../redeem?token=T">` on an attacker page would then auto-submit
-    // the inline script's own POST, carrying `Origin: <app>`, which
-    // `originCheck` admits (this is the round-2 no-navigation shape,
-    // reborn, on a page that was never meant to be framed regardless of
-    // `SameSite`). Not exploitable today — the headers are set, and
-    // `SameSite=Lax` independently blocks the cookie write in a framed,
-    // cross-site POST — but a mutation that silently drops this response's
-    // own framing protection must fail a test, not merely rely on a
-    // different route's assertion to have covered it.
-    expect(getResponse.headers['x-frame-options']).toBe('DENY')
-    expect(getResponse.headers['content-security-policy']).toContain(
-      "frame-ancestors 'none'"
-    )
-  })
-
-  // Security review, third round — the actual account-takeover this closes:
-  // `GET /oauth/mcp/redeem` used to redeem the token and set the session
-  // cookie directly, from a plain `GET` — the first endpoint in `apps/api`
-  // to establish a session that way, and `originCheck` deliberately exempts
-  // `GET` (that middleware's own module comment). A cross-site request with
-  // no navigation at all — the shape `<img src="…/redeem?token=…">` on a
-  // page an already-signed-in person merely visits produces — must not
-  // establish a session, regardless of `Origin` or `Sec-Fetch-Dest`; this
-  // `GET` no longer touches the database or the cookie jar at all, which is
-  // what this assertion is actually pinning.
-  it('a cross-site, non-document GET does not establish a session', async () => {
-    testDb = createTestDatabase()
-    const emailSender = new RecordingEmailSender()
-    const app = await buildTestApp(testDb.db, { emailSender })
-    const begun = beginPending(testDb.db)
-    const token = await requestLinkAndGetToken(
-      app,
-      emailSender,
-      'victim@example.edu',
-      begun.id
-    )
-
-    const response = await request(app)
-      .get('/oauth/mcp/redeem')
-      .query({ token })
-      .set('Origin', 'https://evil.example')
-      .set('Sec-Fetch-Site', 'cross-site')
-      .set('Sec-Fetch-Dest', 'image')
-
-    expect(response.status).toBe(200)
-    expect(response.headers['set-cookie']).toBeUndefined()
-  })
-
-  it('POST /redeem sets the session cookie and redirects back to the same consent screen', async () => {
-    testDb = createTestDatabase()
-    const emailSender = new RecordingEmailSender()
-    const app = await buildTestApp(testDb.db, { emailSender })
-    const begun = beginPending(testDb.db, {
-      clientName: 'Totally Legit Assistant',
-    })
-    const token = await requestLinkAndGetToken(
-      app,
-      emailSender,
-      'student@example.edu',
-      begun.id
-    )
-
-    const redeemed = await request(app)
-      .post('/oauth/mcp/redeem')
-      .type('form')
-      .set('Origin', TEST_PUBLIC_APP_URL)
-      .send({ token })
-    expect(redeemed.status).toBe(302)
-    const destination = redeemed.headers['location'] as string
-    expect(destination).toBe(`/oauth/mcp/authorize?request=${begun.id}`)
-    const setCookie = redeemed.headers['set-cookie'] as unknown as string[]
-    expect(setCookie).toBeDefined()
-    const sessionToken = sessionCookieValue(setCookie)!
-    const cookieHeader = `${SESSION_COOKIE_NAME}=${sessionToken}`
-
-    // Following the redirect, now signed in, lands on the real consent
-    // screen — not the sign-in form again.
-    const landedOn = await request(app)
-      .get(destination)
-      .set('Cookie', cookieHeader)
-    expect(landedOn.status).toBe(200)
-    expect(landedOn.text).toMatch(/act as your Bloombot account/i)
-    expect(landedOn.text).toContain('Totally Legit Assistant')
-  })
-
-  it('POST /redeem refuses a cross-origin caller — the originCheck this GET-only shape used to bypass', async () => {
-    testDb = createTestDatabase()
-    const app = await buildTestApp(testDb.db)
-
-    const response = await request(app)
-      .post('/oauth/mcp/redeem')
-      .type('form')
-      .set('Origin', 'https://evil.example')
-      .send({ token: 'irrelevant' })
-
-    expect(response.status).toBe(403)
-    expect(response.headers['set-cookie']).toBeUndefined()
-  })
-
-  it('an invalid or expired sign-in token answers plainly', async () => {
-    testDb = createTestDatabase()
-    const app = await buildTestApp(testDb.db)
-
-    const response = await request(app)
-      .post('/oauth/mcp/redeem')
-      .type('form')
-      .set('Origin', TEST_PUBLIC_APP_URL)
-      .send({ token: 'not-a-real-token' })
-
-    expect(response.status).toBe(401)
-    expect(response.text).toMatch(/invalid|expired/i)
   })
 })

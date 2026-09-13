@@ -72,9 +72,12 @@ curl -s https://<host>/.well-known/oauth-protected-resource/mcp | head -c 400
 # method — NOT `text/html`, which means the SPA answered instead.
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' https://<host>/mcp
 
-# The consent screen. Expect HTML from apps/api (an "expired or unknown"
-# message for a made-up id), not the SPA shell.
-curl -s 'https://<host>/oauth/mcp/authorize?request=made-up' | head -c 200
+# The connection-request API (MCP-11: JSON now, not a rendered page — the
+# page itself is apps/web's own /connect-assistant/:requestId, served by the
+# SPA fallback). Expect a JSON 404 `connection_request_unavailable` for a
+# made-up id, not the SPA shell's index.html.
+curl -s -o /dev/null -w '%{http_code}\n' 'https://<host>/oauth/mcp/request?request=made-up'
+curl -s 'https://<host>/oauth/mcp/request?request=made-up' | head -c 200
 
 # Unchanged by this config — confirm nothing regressed:
 curl -s https://<host>/health            # {"ready":true,...} from apps/api
@@ -87,3 +90,24 @@ shadowed).
 
 Once those pass, add the connector in ChatGPT or Claude using
 `VITE_MCP_PUBLIC_URL`'s value. The client discovers the rest itself.
+
+## Clickjacking headers for `/connect-assistant` — optional, defense in depth
+
+MCP-11's connect-assistant page (`apps/web`'s own `/connect-assistant/:requestId`,
+where the Allow/Deny buttons the security review's must-fix 2 protects actually
+live) refuses to render those controls at all once it detects it is framed
+(`window.top !== window.self`, `ConnectAssistant.tsx`). **That in-app check is
+the defence that ships** — it needs no root on the droplet, and a deployment
+that never applies anything in this file is still protected by it.
+
+`mcp.conf`'s own last section has the two-line, transport-level version of
+the same protection, for a browser old enough to ignore the app's own check —
+paste it inside your site's own `location / { ... }` block if you want the
+belt as well as the suspenders. It is optional precisely because the in-app
+check does not depend on it.
+
+Verify it if applied:
+
+```bash
+curl -sI https://<host>/connect-assistant/made-up | grep -i 'x-frame-options\|content-security-policy'
+```

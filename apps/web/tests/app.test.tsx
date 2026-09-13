@@ -1197,4 +1197,18 @@ describe('App — a deep link followed while signed out keeps its address', () =
       )
     })
   })
+
+  // MCP-11 — this generic fallback used to render a bare `SignIn` with no
+  // header at all; it now shows the same logo/name/description every
+  // sign-in surface shows, exactly once (never zero, never two).
+  it('shows the shared header exactly once', async () => {
+    window.history.replaceState(null, '', '/o/org-1/projects/project-1')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+  })
 })

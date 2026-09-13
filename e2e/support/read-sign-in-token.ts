@@ -42,7 +42,11 @@ export async function readSignInToken(to: string): Promise<string> {
     .find((entry) => entry.to === to)
   if (!message) throw new Error(`no mail was sent to ${to}`)
 
-  const token = message.body.split('/sign-in/')[1]?.trim()
+  // MCP-12 — the link may carry `?destination=...` after the token
+  // (`buildSignInLink`, `apps/api/src/index.ts`), so the token itself is
+  // only the part before any `?`. Splitting on `/sign-in/` alone used to be
+  // enough because the token was the whole remainder of the link.
+  const token = message.body.split('/sign-in/')[1]?.trim().split('?')[0]
   if (!token) {
     throw new Error(`sign-in link not found in mail body: ${message.body}`)
   }

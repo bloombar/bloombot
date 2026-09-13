@@ -64,6 +64,26 @@ describe('JoinLink — signed out', () => {
     expect(redeemCourseJoinLink).not.toHaveBeenCalled()
   })
 
+  // MCP-11 — this page used to render a bare `SignIn` with no header at
+  // all; it now shows the same logo/name/description every sign-in surface
+  // shows, exactly once. `getByRole`/`getByTestId` (not `getAllBy...`)
+  // already fail on more than one match, which is what "exactly once" pins.
+  it('renders the shared header exactly once', () => {
+    render(
+      <JoinLink
+        secret="secret-abc"
+        account={null}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+  })
+
   // AUTH-6: fails without the fix — before `destination` existed, this
   // page's own return trip was a `sessionStorage` marker
   // (`PENDING_JOIN_LINK_KEY`), which only ever survived a sign-in

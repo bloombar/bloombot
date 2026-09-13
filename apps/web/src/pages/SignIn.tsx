@@ -9,8 +9,31 @@
  * separate sign-up screen in this panel — signing in for the first time is how
  * an account comes into being — so this is the only place agreement can be
  * asked for, and it has to gate the Google button as much as the email form.
- * The gate is a disabled control plus `aria-disabled`, not a silent no-op:
- * a button that looks live and does nothing is worse than one that says why.
+ *
+ * **The gate is a real gate, not a visual one — rework round 1 found the
+ * first cut of this only looked like one.** Google Identity Services' own
+ * `renderButton` has no disabled state of its own, so the button is always
+ * drawn once its script has loaded; before the checkbox is ticked, the slot
+ * it draws into carries the HTML `inert` attribute (below), which is what
+ * actually removes it from both the tab order and the accessibility tree —
+ * `pointer-events-none`/dimmed opacity is the *visible* half of the same
+ * gate, but blocks a pointer only, and `aria-disabled` alone is advisory:
+ * a keyboard user could still tab to GIS's own `div[role="button"]` and
+ * press Enter, and the credential callback below has its own `accepted`
+ * check besides, since a person can reach that callback by any path.
+ * The explanatory sentence is kept *beside* the slot rather than shown
+ * *instead of* it, so a person who has not yet ticked the box still sees
+ * that Google sign-in exists at all — the earlier, fully-hidden shape hid
+ * that from them entirely.
+ *
+ * MCP-11: `headline` overrides the default title, and `description` renders
+ * beneath it — `pages/ConnectAssistant.tsx`'s own caller uses this to name
+ * the client asking to connect, safely: this is React, interpolating a
+ * client-registered name here is not the hand-escaped string concatenation
+ * the old server-rendered consent screen needed (`routes/mcp-oauth-consent.ts`'s
+ * own former module comment on why that mattered), which is one of the
+ * reasons that screen was worth moving onto this component in the first
+ * place.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -37,12 +60,16 @@ export interface SignInProps {
   googleClientId?: string | undefined
   /** Called once `/auth/google` returns a session — the parent re-checks `/auth/me` (`App.tsx`) rather than this component guessing what to show next. */
   onSignedIn: () => void
-  /** AUTH-6 — the same-origin path a redeemed sign-in link should return to, whichever browsing context redeems it: passed straight through to `requestSignInLink` (`api/client.ts`), which carries it on the issued token itself. `pages/JoinLink.tsx`, `pages/Connect.tsx` and `pages/Invitation.tsx` are this component's only three callers with anywhere in particular to return to (their own `/join/:secret`/`/connect/:organizationId`/`/invitations/:secret`); every other caller omits it. Not read by the Google path (`handleGoogle`, below) — that sign-in never leaves this tab, so it has nothing to carry a destination for. */
+  /** AUTH-6 — the same-origin path a redeemed sign-in link should return to, whichever browsing context redeems it: passed straight through to `requestSignInLink` (`api/client.ts`), which carries it on the issued token itself. `pages/JoinLink.tsx`, `pages/Connect.tsx`, `pages/Invitation.tsx` and `pages/ConnectAssistant.tsx` are this component's only callers with anywhere in particular to return to; every other caller omits it. Not read by the Google path (`handleGoogle`, below) — that sign-in never leaves this tab, so it has nothing to carry a destination for. */
   destination?: string
+  /** MCP-11 — overrides the card's own title, default "Sign in to Bloombot". `pages/ConnectAssistant.tsx` is the only caller that sets this today. */
+  headline?: string
+  /** MCP-11 — an explanatory sentence rendered beneath `headline`, naming *why* this sign-in is happening (e.g. which assistant wants to connect). Omitted by every caller besides `pages/ConnectAssistant.tsx`. */
+  description?: string
 }
 
 export function SignIn(props: SignInProps) {
-  const { onSignedIn, destination } = props
+  const { onSignedIn, destination, headline, description } = props
   // `in` rather than a default parameter, which cannot express what
   // `googleClientId`'s own doc comment promises: a default fires for an
   // explicit `undefined` just as it does for an omitted prop, so
@@ -90,12 +117,19 @@ export function SignIn(props: SignInProps) {
   // it draws *is* the control — there is nothing left for an onClick to do.
   // The script is still fetched only when a client id is configured, so a
   // deployment without Google sign-in never reaches accounts.google.com (QA-2).
+  //
+  // MCP-11, rework round 1 — the slot is always in the DOM once a client id
+  // is configured (this file's own module comment on why), but `accepted`
+  // is back in this effect's own dependency array rather than left out of
+  // it: the credential `callback` below closes over whatever `accepted` was
+  // at the moment this effect last ran, so leaving it out of the deps would
+  // let a person tick the box *after* this effect first ran and still reach
+  // a callback holding a stale, captured `false` — the exact gap a reviewer
+  // found. Re-running `initialize`/`renderButton` on every toggle is the
+  // cost of keeping that closure honest; Google's own script is already
+  // loaded by then, so this is a redraw, not a refetch.
   useEffect(() => {
-    // Gated on `accepted` as well as configuration: Google renders and owns
-    // that button, so it cannot be handed a `disabled` prop the way this
-    // app's own controls can, and dimming it with CSS would be a gate only
-    // until someone opened devtools. Not drawing it at all is a real one.
-    if (!googleClientId || !accepted) return
+    if (!googleClientId) return
     const parent = googleButtonRef.current
     if (!parent) return
 
@@ -109,6 +143,12 @@ export function SignIn(props: SignInProps) {
         google.accounts.id.initialize({
           client_id: googleClientId,
           callback: (response) => {
+            // The real gate, not merely the visual one (this file's own
+            // module comment) — `inert` on the slot already keeps a
+            // keyboard user from reaching this callback at all while
+            // unaccepted, but this checks the fact the gate exists to
+            // protect, not only the one path presumed to reach it.
+            if (!accepted) return
             signInWithGoogle(response.credential).then(
               onSignedIn,
               (caught: unknown) => {
@@ -118,6 +158,15 @@ export function SignIn(props: SignInProps) {
             )
           },
         })
+        // This effect re-runs whenever the checkbox is toggled (the
+        // dependency-array comment above on why it has to), and GIS is not
+        // documented either way on whether `renderButton` replaces what is
+        // already in its parent or appends beside it. Emptying the slot
+        // first makes that question moot rather than leaving a stacked
+        // second button to a browser behaviour nothing here can test —
+        // jsdom never loads the real script and the e2e suite deliberately
+        // never reaches accounts.google.com (QA-2).
+        googleButtonRef.current.replaceChildren()
         google.accounts.id.renderButton(googleButtonRef.current, {
           type: 'standard',
           theme: 'outline',
@@ -155,9 +204,14 @@ export function SignIn(props: SignInProps) {
 
   return (
     <div className="mx-auto flex w-full max-w-sm flex-col gap-5 rounded-lg border border-neutral-200 bg-white p-8">
-      <h1 className="text-page-title font-semibold text-neutral-900">
-        Sign in to Bloombot
-      </h1>
+      <div>
+        <h1 className="text-page-title font-semibold text-neutral-900">
+          {headline ?? 'Sign in to Bloombot'}
+        </h1>
+        {description && (
+          <p className="mt-1 text-sm text-neutral-700">{description}</p>
+        )}
+      </div>
 
       {/* Agreement comes first, above both ways in, because it gates both of
           them. Asking after the buttons would leave the Google button sitting
@@ -197,24 +251,40 @@ export function SignIn(props: SignInProps) {
           button chrome, which is what Google's own sign-in branding guidelines
           ask of anything initiating an authorization. */}
       {googleClientId ? (
-        accepted ? (
-          // Google draws its own button in here once the script has loaded.
-          // Empty in the DOM until then, which is why it carries a testid
-          // rather than a role: there is nothing to query by role until
-          // Google has rendered into it.
+        <div className="flex flex-col items-center gap-2">
+          {/* Google draws its own button in here once the script has
+              loaded — always, whether or not the documents are accepted
+              yet (this file's own module comment on why `renderButton` has
+              no disabled state of its own to hand it). `inert` while
+              unaccepted is the real gate: it drops the slot from the tab
+              order and the accessibility tree, not only from pointer
+              events, so a keyboard user cannot reach GIS's own
+              `div[role="button"]` and press Enter on it either.
+              `pointer-events-none`/dimmed opacity is the *visible* half of
+              the same gate; `aria-disabled` is kept alongside for a reader
+              that exposes it despite `inert` — a testid rather than a
+              role, since there is nothing to query by role until Google
+              has rendered into it. */}
           <div
             ref={googleButtonRef}
             data-testid="google-button-slot"
-            className="flex justify-center"
+            aria-disabled={!accepted}
+            inert={!accepted}
+            className={
+              accepted
+                ? 'flex justify-center'
+                : 'pointer-events-none flex justify-center opacity-50'
+            }
           />
-        ) : (
-          <p
-            data-testid="google-gated"
-            className="rounded-md border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-center text-sm text-neutral-500"
-          >
-            Agree to the documents above to sign in with Google.
-          </p>
-        )
+          {!accepted && (
+            <p
+              data-testid="google-gated"
+              className="text-center text-sm text-neutral-500"
+            >
+              Agree to the documents above to sign in with Google.
+            </p>
+          )}
+        </div>
       ) : (
         <p className="text-sm text-neutral-500">
           Google sign-in is not configured for this deployment.

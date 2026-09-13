@@ -112,7 +112,7 @@ function mapOauthError(error: unknown): never {
 
 export interface McpOauthProviderDependencies {
   db: Database
-  /** Where `authorize()` sends the browser to consent — `${CONFIG.PUBLIC_APP_URL}/oauth/mcp/authorize` in production (`apps/api/src/routes/mcp-oauth-consent.ts`, that route's own module comment on why this lives in `apps/api` and not here). */
+  /** Where `authorize()` sends the browser to consent — `${CONFIG.PUBLIC_APP_URL}/connect-assistant` in production (MCP-11): a real page of the panel (`apps/web/src/pages/ConnectAssistant.tsx`), served by nginx's own SPA fallback, which reads and decides the pending authorization through `apps/api/src/routes/mcp-oauth-consent.ts`'s own JSON endpoints — that route's own module comment on why the human-facing half of this flow lives in `apps/api`, not here. The pending authorization's own id is appended below as a path segment, not a query parameter: `apps/web/src/routing/route.ts` has no query-parameter precedent for any address in its scheme. */
   consentUrl: string
   /** MCP-7's own resource identifier — this server's own `/mcp` endpoint, publicly reachable. `undefined` skips the RFC 8707 resource check entirely (a deployment that has not set `PUBLIC_MCP_URL` yet, `env.ts`'s own doc comment on why that variable is optional). */
   resource?: string
@@ -144,9 +144,11 @@ export function buildOauthProvider(
         },
         deps.db
       )
-      const url = new URL(deps.consentUrl)
-      url.searchParams.set('request', begun.id)
-      res.redirect(302, url.toString())
+      // MCP-11 — the id rides in the path, not a query string (this file's
+      // own `consentUrl` doc comment on why): strip any trailing slash the
+      // configured base might carry, so this never produces a doubled one.
+      const base = deps.consentUrl.replace(/\/$/, '')
+      res.redirect(302, `${base}/${encodeURIComponent(begun.id)}`)
     },
 
     async challengeForAuthorizationCode(

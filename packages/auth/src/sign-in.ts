@@ -311,8 +311,8 @@ export interface RequestSignInLinkDeps {
   db: Database
   /** The mail port (`email.ts`) this is sent through — a real transport in production, `RecordingEmailSender` in a test. */
   emailSender: EmailSender
-  /** Turns an issued token into the actual URL the emailed link points at — this package has no notion of the web app's own base URL or route. */
-  buildLink: (token: string) => string
+  /** Turns an issued token into the actual URL the emailed link points at — this package has no notion of the web app's own base URL or route. `destination`, when supplied, is a hint only — the same value the token itself already carries (`issueSignInToken`, above), not a second source of truth. MCP-12's own recovery page (`apps/web/src/pages/RedeemLink.tsx`) reads it back off this URL's own query string so an *expired* link's failure page can still offer to request a new one that returns to the same place, since the token's own stored destination is unrecoverable once the token itself cannot be looked up by anything but its own (expired) value. */
+  buildLink: (token: string, destination?: string) => string
 }
 
 /**
@@ -392,7 +392,7 @@ export async function requestSignInLink(
     await deps.emailSender.send(
       email,
       'Sign in to Bloombot',
-      `Use this link to sign in to Bloombot: ${deps.buildLink(token)}`
+      `Use this link to sign in to Bloombot: ${deps.buildLink(token, destination)}`
     )
   } catch (error) {
     // AUTH-5's must-fix 1: until this slice, the only senders in this

@@ -143,6 +143,14 @@ export type Route =
   | { kind: 'sign-in'; token: string }
   | { kind: 'discord-callback' }
   | { kind: 'connect'; organizationId: string }
+  // MCP-11 — `${CONFIG.PUBLIC_APP_URL}/connect-assistant/:requestId`, the
+  // address `apps/mcp/src/oauth-provider.ts#authorize` redirects the browser
+  // to; `requestId` names the pending authorization
+  // `apps/web/src/pages/ConnectAssistant.tsx` reads and decides. A path
+  // segment rather than a query parameter — this module's own module
+  // comment on why nothing else here carries one, and `parseRoute`/
+  // `buildPath` are exact inverses only for what a pathname alone encodes.
+  | { kind: 'connect-assistant'; requestId: string }
   | { kind: 'join-link'; secret: string }
   | { kind: 'invitation'; secret: string }
   // The two published legal documents. Deliberately outside `ShellRoute` and
@@ -219,6 +227,9 @@ export function parseRoute(pathname: string): Route {
   }
   if (first === 'connect' && segments.length === 2 && second) {
     return { kind: 'connect', organizationId: second }
+  }
+  if (first === 'connect-assistant' && segments.length === 2 && second) {
+    return { kind: 'connect-assistant', requestId: second }
   }
   if (first === 'join' && segments.length === 2 && second) {
     return { kind: 'join-link', secret: second }
@@ -385,6 +396,8 @@ export function buildPath(route: Route): string {
       return `/sign-in/${route.token}`
     case 'connect':
       return `/connect/${route.organizationId}`
+    case 'connect-assistant':
+      return `/connect-assistant/${route.requestId}`
     case 'join-link':
       return `/join/${route.secret}`
     case 'invitation':

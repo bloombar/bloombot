@@ -69,6 +69,25 @@ describe('Invitation — signed out', () => {
     expect(redeemMembershipInvitation).not.toHaveBeenCalled()
   })
 
+  // MCP-11 — this page used to render a bare `SignIn` with no header at
+  // all; it now shows the same logo/name/description every sign-in surface
+  // shows, exactly once.
+  it('renders the shared header exactly once', () => {
+    render(
+      <Invitation
+        secret="secret-abc"
+        account={null}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Bloombot' })
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
+  })
+
   // AUTH-6, rework — fails without the fix: before `destination` was passed
   // through here, this page's own return trip was a `sessionStorage` marker
   // (`PENDING_INVITATION_KEY`), which only ever survived a sign-in

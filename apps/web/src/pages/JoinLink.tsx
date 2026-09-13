@@ -37,6 +37,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, redeemCourseJoinLink } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { SignInHeader } from '../components/SignInHeader.js'
 import { SignIn } from './SignIn.js'
 
 export interface JoinLinkProps {
@@ -82,7 +83,13 @@ export function JoinLink({
   }, [account, secret])
 
   if (!account) {
-    return <SignIn onSignedIn={onSignedIn} destination={`/join/${secret}`} />
+    // MCP-11 — the header every sign-in surface shows, exactly once.
+    return (
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+        <SignInHeader />
+        <SignIn onSignedIn={onSignedIn} destination={`/join/${secret}`} />
+      </div>
+    )
   }
 
   if (state.kind === 'error') {

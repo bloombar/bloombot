@@ -11,13 +11,14 @@ import { randomUUID } from 'node:crypto'
 
 import { accounts, mcpOauth, organizations, schema } from '@bloombot/db'
 import type { Database } from '@bloombot/db'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   beginAuthorization,
   claimPendingAuthorization,
   consentToPendingAuthorization,
   declinePendingAuthorization,
+  DEFAULT_PENDING_AUTHORIZATION_TTL_MS,
   exchangeAuthorizationCode,
   exchangeRefreshToken,
   getOauthClient,
@@ -184,6 +185,70 @@ describe('beginAuthorization / consentToPendingAuthorization', () => {
     expect(
       consentToPendingAuthorization(begun.id, firstAccountId, testDb.db)
     ).toBeDefined()
+  })
+})
+
+// MCP-12 — the regression test for the bug report: a person connects an
+// assistant, the sign-in email is delivered a few minutes late, and by the
+// time they click it the pending authorization is already gone. Under the
+// old ten-minute TTL this whole flow — sent to sign in, sign in, come back
+// and claim — simply cannot survive any delivery delay at all; this fails
+// at 30 minutes under that TTL and is the test that would have caught it.
+describe('beginAuthorization — the pending authorization outlives an emailed round trip (MCP-12)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a pending authorization issued 30 minutes ago is still claimable', () => {
+    testDb = createTestDatabase()
+    vi.useFakeTimers()
+    const client = registerOauthClient(
+      { redirectUris: ['https://client.example/callback'] },
+      testDb.db
+    )
+    const accountId = seedAccount(testDb.db)
+    const begun = beginAuthorization(
+      {
+        clientId: client.id,
+        redirectUri: 'https://client.example/callback',
+        codeChallenge: 'challenge-value',
+      },
+      testDb.db
+    )
+
+    vi.advanceTimersByTime(30 * 60 * 1000)
+
+    expect(
+      claimPendingAuthorization(begun.id, accountId, testDb.db)
+    ).toBeDefined()
+  })
+
+  it('a pending authorization issued 61 minutes ago is no longer claimable', () => {
+    testDb = createTestDatabase()
+    vi.useFakeTimers()
+    const client = registerOauthClient(
+      { redirectUris: ['https://client.example/callback'] },
+      testDb.db
+    )
+    const accountId = seedAccount(testDb.db)
+    const begun = beginAuthorization(
+      {
+        clientId: client.id,
+        redirectUri: 'https://client.example/callback',
+        codeChallenge: 'challenge-value',
+      },
+      testDb.db
+    )
+
+    vi.advanceTimersByTime(61 * 60 * 1000)
+
+    expect(
+      claimPendingAuthorization(begun.id, accountId, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('the default TTL itself is one hour — pins the constant this test relies on', () => {
+    expect(DEFAULT_PENDING_AUTHORIZATION_TTL_MS).toBe(60 * 60 * 1000)
   })
 })
 

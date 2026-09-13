@@ -60,6 +60,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
 import { Logo } from '../components/Logo.js'
+import { SignInHeader } from '../components/SignInHeader.js'
 import { LoadingStatus, SkeletonLine } from '../components/Skeleton.js'
 import { describePersonLinkOutcome } from '../person-link-outcome.js'
 import { SignIn } from './SignIn.js'
@@ -242,9 +243,13 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
     // AUTH-6 — `destination` is what carries this page's own address
     // through the sign-in round trip now; see this file's own module
     // comment for why that replaced a `sessionStorage` marker set here.
+    // MCP-11 — `BrandHeader` (below) was this page's own smaller, hand-
+    // written copy of the same header every sign-in surface now shows via
+    // `SignInHeader`; the signed-in view further down still uses `BrandHeader`
+    // for its own layout, unrelated to signing in.
     return (
       <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-        <BrandHeader />
+        <SignInHeader />
         <SignIn
           onSignedIn={onSignedIn}
           destination={`/connect/${organizationId}`}

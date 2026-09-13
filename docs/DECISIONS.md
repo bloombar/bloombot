@@ -11933,3 +11933,152 @@ membership anywhere" text `server.ts` shows is reserved for a genuinely empty *a
 never inferred from an organization's own empty course list. See that file's own module comment for the
 full reasoning; noted here because the fix landed in the same round this entry's own central claim was
 being re-confirmed, and the two are easy to conflate as one change when they are not.
+
+## D-111 — `apps/api`, `apps/mcp`, `apps/web`, `packages/auth`: MCP-11/MCP-12 — the consent screen moves onto the panel, and the pending authorization's own TTL goes 10 min → 60 min
+
+**MCP-12 — root cause: two expiries measured from *before* the email was even queued, for a flow that
+is nothing but an emailed round trip.** A person connected an assistant, the sign-in email arrived a few
+minutes late (an ordinary mail-queue delay, not an attack), and by the time they clicked it the pending
+authorization was already gone. `mcp-oauth.ts#DEFAULT_PENDING_AUTHORIZATION_TTL_MS`'s own former doc
+comment said it was "generous enough that a person can be sent to sign in, sign in, and consent, with no
+delivery delay to accommodate" — a premise this flow never actually satisfies, since the very first thing a
+signed-out visitor does is wait for an email. **Fix: ten minutes → one hour.** The row this constant bounds
+is a browser redirect carrying nothing spendable on its own (`schema.ts#mcpOauthPendingAuthorizations`'s
+own doc comment), bound to the first signed-in account that touches it (`claimPendingAuthorization`) and
+granting nothing until an explicit `Allow` — so a longer window costs little, and it now comfortably outlives
+the sign-in link's own 15-minute token (`tokens.ts#DEFAULT_TOKEN_TTL_MS`, deliberately left unchanged — AUTH-1's
+"expire within minutes" is a separate, correct choice), which can itself be re-requested once or twice inside
+the new window if delivery is slow. The authorization-code (5 min), access-token (1 h) and refresh-token
+(30 d) TTLs are untouched — none of them sit in the path an email has to survive.
+
+**MCP-11 — closes the follow-up D-103 already recorded, and this document's own claim there ("plain
+server-rendered HTML ... forced by this slice's own concurrency constraints ... whoever next touches the
+panel's own connect/consent surface should fold this into it") is now done, not merely restated.**
+`apps/api/src/routes/mcp-oauth-consent.ts` is a JSON router now — `GET /oauth/mcp/request`,
+`POST /oauth/mcp/decide` — and the actual screen is `apps/web/src/pages/ConnectAssistant.tsx`, a real page of
+the panel embedding the panel's own `SignIn`. Every disclosure the security review's must-fix 2 requires
+(client name or the honest "no registered name," the redirect host, the account-wide scope of the grant) is
+unchanged in substance; only the surface it renders on moved. Session establishment moves back onto the
+panel's existing `POST /auth/redeem` (`originCheck`-covered already), which is what makes the round two/three
+security fixes recorded in D-103 — no `GET` ever establishes a session — hold for free here: there is no
+`GET`/`POST /redeem` pair left in this file to reintroduce that class of bug.
+
+**Choice: the connection request id rides in the path (`/connect-assistant/:requestId`), not a query
+string.** `apps/web/src/routing/route.ts` has no query-parameter precedent for any address in its scheme —
+`parseRoute`/`buildPath` are exact inverses over pathnames alone, proven by `tests/routing.test.ts`'s round
+trip — so a query parameter here would have been the first, and `buildPath` cannot reconstruct a query string
+`parseRoute` never reads in the first place. `apps/mcp/src/oauth-provider.ts#authorize` builds this address by
+appending the id as a path segment rather than the `URLSearchParams` shape it used to use, and
+`apps/mcp/tests/oauth-http.test.ts`'s own redirect assertion moved with it.
+
+**Sign-in parity, the substance of MCP-11's other half.** `pages/Home.tsx` used to be the only signed-out
+surface that showed the app's logo, name and one-line description before asking someone to sign in; every
+other one (`App.tsx`'s own generic fallback, `JoinLink.tsx`, `Invitation.tsx`, and `Connect.tsx`'s own
+separately hand-written, smaller `BrandHeader`) rendered a bare `SignIn` with nothing above it. Extracted into
+`components/SignInHeader.tsx`, rendered by every one of those callers (including the new
+`ConnectAssistant.tsx`) exactly once, with `Home`'s own rendered output unchanged (`tests/home.test.tsx` and
+Google's own OAuth homepage requirement both pin it). `SignIn` itself gained `headline`/`description` props,
+used only by `ConnectAssistant.tsx` to name the connecting client in the sign-in prompt — safe by
+construction as a React interpolation, one more reason this screen was worth moving off hand-escaped HTML
+strings. **The Google button's own gate is a deliberate trade of a hard gate (fully hidden until accepted)
+for a legible one (shown, disabled, with the reason stated beside it) — not a regression being corrected.**
+The two shapes were both real, at different times, for different reasons: fully hiding the slot until
+accepted is unambiguous but tells a person nothing exists to be gated at all; showing it, visibly disabled,
+is what MCP-11's own SPEC text and this file's "a button that looks live and does nothing is worse than one
+that says why" both ask for, and is only defensible with a *second* mechanism closing the gap a merely
+visual disable leaves open — see the next paragraph. Getting only the legible half of that trade shipped
+first (`SignIn.tsx`'s slot rendered unconditionally, gated by `pointer-events-none`/`aria-disabled` alone)
+was the actual defect a review round found, not the choice to show the slot at all.
+
+**Rework round 1, must-fix 1 — the gate has to be real, not merely visual, which is the second mechanism
+the previous paragraph refers to.** `pointer-events-none` blocks a pointer only, and `aria-disabled` is
+advisory — neither stops a keyboard user tabbing to Google Identity Services' own rendered
+`div[role="button"][tabindex="0"]` and pressing Enter, which reaches the credential callback regardless of
+either attribute. Closed three ways together: `inert` on the slot while unaccepted (the one attribute that
+actually removes an element from the tab order and the accessibility tree, not merely its visual affordance);
+a check inside the credential callback itself refusing when `accepted` is false, so a person reaching that
+callback by any path still cannot complete a sign-in they never agreed to; and `accepted` restored to the
+`renderButton` effect's own dependency array, which an earlier pass had dropped — dropping it left the
+callback's closure holding whatever `accepted` was at mount, so a guard added *inside* that closure without
+also fixing the dependency array would have captured a stale `false` regardless of what the checkbox later
+became. `tests/sign-in.test.tsx` fires a fake Identity Services credential callback directly (never reaching
+`accounts.google.com`, QA-2) and asserts `signInWithGoogle` is never called while unaccepted — the assertion
+that would have caught the original gap, which only ever checked the slot's own attributes.
+
+**Rework round 1, must-fix 2 — clickjacking, the security review's own fourth defence, lost in the move off
+`apps/api`'s server-rendered route.** `X-Frame-Options`/CSP `frame-ancestors` on the JSON router
+(`routes/mcp-oauth-consent.ts`) protect an XHR response, which nothing renders — the actual clickable Allow
+button now lives on `ConnectAssistant.tsx`, served by nginx's SPA fallback, with no framing header of its
+own, and `SameSite=Lax` still carries a signed-in cookie into a same-site iframe: a frame on any same-site
+origin could claim the pending row, render consent, and harvest one decoy click as a full account-wide
+grant. **The defence that ships is in the app**: `ConnectAssistant.tsx` checks `window.top !== window.self`
+(a `SecurityError` from a cross-origin ancestor reads as framed too — fail closed, never open) before its
+data effect even runs, and renders only a plain refusal when framed, so a framed load neither claims the
+pending authorization nor ever shows a decision to harvest. This needs no root on the droplet, unlike an
+nginx change. `deploy/nginx/mcp.conf`/`deploy/nginx/README.md` document the transport-level version of the
+same header pair as an **optional, manual, defence-in-depth** step for the operator to paste into their own
+site's `location / { ... }` block — explicitly not the defence a deployment depends on, since the in-app
+check already holds without it. While in those two files: the `/oauth/` block's own comment and the
+README's smoke test both still described the retired server-rendered `/oauth/mcp/authorize` HTML page;
+both now describe and curl the JSON endpoints this router actually answers.
+
+**Rework round 1, must-fix 3 — MCP-12's own second half was unimplemented: an expired-and-unbranded error
+box, with no way back, for a link that failed for exactly the reason MCP-12 exists to make survivable.**
+`RedeemLink.tsx`'s failure state now carries `SignInHeader` and the panel's own layout, and re-embeds
+`SignIn` so a new link can be requested without leaving the page — the SPEC's own two literal requirements.
+Going further, so the retry actually returns somewhere useful: `buildSignInLink` (`apps/api/src/index.ts`)
+now appends the request's own `destination` to the emailed link as a `?destination=` query parameter, purely
+as a *recovery hint* — never a second source of truth for a successful redemption, which still returns the
+server's own stored `destination` (`consumeSignInToken`). The hint exists because the authoritative copy
+dies with the token: once a token has expired, nothing before this fix let `RedeemLink.tsx` recover what it
+would have carried, and a person who arrived from an assistant with no destination in hand had no way back
+except starting over from scratch. `RedeemLink.tsx` re-validates the hint with the identical
+`isSameOriginPath` check `App.tsx`'s own duplicated copy already uses (`docs/DECISIONS.md` D-34's "small,
+deliberately duplicated pure function" precedent, now a third copy) before ever handing it to `SignIn` — a
+malformed or off-origin hint is dropped silently, the same "untrusted input" treatment `routes/auth.ts`
+already gives every other caller-supplied `destination`. `e2e/support/read-sign-in-token.ts`'s own token
+extraction now strips the query string too, since the token is only the part of the link before it.
+
+**Rework round 1, must-fix 4 — a `POST /oauth/mcp/decide` 404 (the request expired or was consumed between
+load and the click) used to render a generic error beside Allow/Deny buttons that could only 404 again.**
+`ConnectAssistant.tsx` now transitions to its own `unavailable` state for exactly that response, the same
+screen a load-time 404 already renders — reachable whenever the underlying pending authorization disappears
+in the gap between this page reading it and a person deciding.
+
+**Rework round 1, must-fix 5 — `apps/mcp/tests/oauth-http.test.ts`'s own redirect assertion could not have
+failed even if the pending-authorization id were dropped from the redirect entirely** (`.toContain('/oauth/mcp/authorize/')`
+matches that literal substring regardless of what follows it). Now asserts the exact `Location`, and
+round-trips it through `apps/web/src/routing/route.ts#parseRoute` — a deliberate, one-off cross-app import
+(`apps/mcp` otherwise has nothing to do with `apps/web`) chosen because "shaped like the right path" and "an
+address `apps/web`'s own router actually recognises" are different claims, and this is the one seam where a
+typo in either app would otherwise ship silently.
+
+**Rework round 2 — a transport failure is not a spent link, and the emailed URL is built in one place.**
+`RedeemLink.tsx`'s recovery page (must-fix 3, above) originally rendered for *any* failed redemption,
+including `api/client.ts`'s own `ApiError(0, { error: 'network_error' })` — a `fetch` that never got a
+response at all. Telling someone their link expired when the network merely blinked pushes them into
+requesting a replacement they do not need, and `requestSignInLink`'s own anti-flood guard
+(`packages/auth/src/sign-in.ts`) then declines it silently while their real token is still live, so the
+second email never arrives and they are left waiting on one that was never sent. The recovery page is now
+gated on the only two statuses `POST /auth/redeem` can actually refuse with — 400 `invalid_request` and 401
+`invalid_token` — and everything else keeps the plain `ErrorMessage` it had before, which already says "try
+again" rather than "start over". An expired or already-used token is not *active*, so `hasActiveSignInToken`
+is false for it and a genuine second email does get sent from the recovery page; the guard only bites while
+a live token is outstanding, which is exactly the case the page must not send someone into.
+
+`buildSignInLink` also moved out of `index.ts`'s process wiring into `apps/api/src/sign-in-link.ts`. It was
+an inline lambda in `main()`, so nothing could test it: `packages/auth` proved `buildLink` *receives* a
+destination using its own test-local builder, `RedeemLink` proved it *reads* one back off
+`window.location.search`, and no test joined the two — a `&` where a `?` belonged, or a missing
+`encodeURIComponent`, would have shipped green through every check. `apps/api/tests/helpers/build-test-app.ts`
+and `e2e/support/start-api.ts` now call the same function the deployment calls rather than each spelling
+the URL out for itself.
+
+A reviewer noted a smaller change was available for the destination hint: `routes/auth.ts` already has
+`parsed.data.destination` in scope, so `buildLink: (token) => deps.buildSignInLink(token, destination)`
+would have produced the identical emailed URL without widening `RequestSignInLinkDeps.buildLink` in
+`packages/auth` at all. That is true, and it would have kept the slice inside its original scope. The
+widened port is kept because it makes the hint explicit at the boundary where the decision is actually
+made — a `buildLink` that silently closes over a destination its own signature does not mention is the
+kind of thing the next reader has to go find — but the narrower option is recorded here as the one that
+should be preferred if this ever has to be undone.

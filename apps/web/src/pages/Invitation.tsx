@@ -49,6 +49,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, redeemMembershipInvitation } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { SignInHeader } from '../components/SignInHeader.js'
 import { SignIn } from './SignIn.js'
 
 export interface InvitationProps {
@@ -86,8 +87,15 @@ export function Invitation({
   }, [account, secret])
 
   if (!account) {
+    // MCP-11 — the header every sign-in surface shows, exactly once.
     return (
-      <SignIn onSignedIn={onSignedIn} destination={`/invitations/${secret}`} />
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+        <SignInHeader />
+        <SignIn
+          onSignedIn={onSignedIn}
+          destination={`/invitations/${secret}`}
+        />
+      </div>
     )
   }
 

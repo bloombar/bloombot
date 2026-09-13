@@ -623,6 +623,37 @@ describe('requestSignInLink (AUTH-1)', () => {
     expect(redeemSignInLink(token!, testDb.db)).toBeDefined()
   })
 
+  // MCP-12 — `buildLink` now receives the destination too, not only the
+  // token: `apps/web/src/pages/RedeemLink.tsx`'s own failure state reads it
+  // back off the emailed link's own URL once the token itself can no longer
+  // be looked up (that page's own module comment has the fuller reasoning).
+  // Fails without the fix: before `buildLink`'s own second parameter
+  // existed, a caller had no way to embed a destination hint in the link's
+  // own URL, only in the token's own hidden, unrecoverable-on-failure
+  // storage.
+  it('passes the destination through to buildLink, not only the token', async () => {
+    testDb = createTestDatabase()
+    const emailSender = new RecordingEmailSender()
+    const buildLink = vi.fn(
+      (token: string, destination?: string) =>
+        `https://app.bloombot.example/sign-in/${token}${destination ? `?destination=${encodeURIComponent(destination)}` : ''}`
+    )
+
+    await requestSignInLink(
+      'destined-buildlink@example.edu',
+      { db: testDb.db, emailSender, buildLink },
+      '/connect-assistant/req-1'
+    )
+
+    expect(buildLink).toHaveBeenCalledWith(
+      expect.any(String),
+      '/connect-assistant/req-1'
+    )
+    expect(emailSender.sent[0]?.body).toContain(
+      'destination=%2Fconnect-assistant%2Freq-1'
+    )
+  })
+
   // "Also worth doing" of the API-1..6 rework: `/auth/request-link`
   // (`apps/api`) is unauthenticated and unthrottled, so without this a
   // single address is an unbounded mail-send and row-insert. The response

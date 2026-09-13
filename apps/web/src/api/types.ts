@@ -64,6 +64,24 @@ export interface SignedInResponse {
   destination?: string
 }
 
+/**
+ * `GET /oauth/mcp/request` (MCP-11) — signed out, only the client name a
+ * pending authorization was registered with (`clientName` omitted, never a
+ * placeholder, when it registered none — `routes/mcp-oauth-consent.ts`'s
+ * own module comment on why). Signed in, this claims the pending
+ * authorization for this account and additionally names the redirect URI's
+ * own **host** — never the full URI, which could carry a path or query a
+ * person has no reason to read before deciding whether to trust it.
+ */
+export type ConnectAssistantRequest =
+  | { signedIn: false; clientName?: string }
+  | { signedIn: true; clientName?: string; redirectHost: string }
+
+/** `POST /oauth/mcp/decide` (MCP-11) — the URL the browser must go to next: the client's own `redirect_uri` carrying either `code`+`state` (allow) or `error=access_denied` (deny). Never a redirect itself — the caller is `fetch`, not a browser following a `Location` header. */
+export interface ConnectAssistantDecision {
+  redirectTo: string
+}
+
 /** `POST /organizations/:organizationId/discord-servers/install/begin`. */
 export interface InstallBeginResponse {
   authorizationUrl: string

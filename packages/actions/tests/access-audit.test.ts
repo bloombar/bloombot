@@ -49,6 +49,10 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // actor permitted to write projects would be permitted to rewrite courses
   // through this action (see `docs/DECISIONS.md` D-18).
   'courses.save': { resource: 'project', access: 'write' },
+  // ACT-7: resolves the course itself, unlike `courses.save` — this action
+  // never resolves a project at all, since it can never move a course to a
+  // different one.
+  'courses.updateSettings': { resource: 'course', access: 'write' },
   'courses.enable': { resource: 'course', access: 'write' },
   'courses.disable': { resource: 'course', access: 'write' },
   // PROJ-5: resolves the project a course list is scoped to, read.

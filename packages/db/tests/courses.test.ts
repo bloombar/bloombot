@@ -2055,4 +2055,122 @@ describe('courses repo', () => {
       expect(updated?.vectorStoreId).toBe('vs_hand_typed')
     })
   })
+
+  describe('updateCourseSettings (ACT-7)', () => {
+    /** A full `CourseSettingsUpdate`, taken from `course`'s own current values and overridable per test. */
+    function settingsInput(
+      course: coursesRepo.Course,
+      overrides: Partial<coursesRepo.CourseSettingsUpdate> = {}
+    ): coursesRepo.CourseSettingsUpdate {
+      return {
+        title: course.title,
+        enabled: course.enabled,
+        adminsRole: course.adminsRole,
+        studentsRole: course.studentsRole,
+        model: course.model,
+        vectorStoreId: course.vectorStoreId,
+        maxRequestsPerDay: course.maxRequestsPerDay,
+        conversationScope: course.conversationScope,
+        selfEnrolFromDiscord: course.selfEnrolFromDiscord,
+        answerUnenrolled: course.answerUnenrolled,
+        discordServerId: course.discordServerId,
+        ...overrides,
+      }
+    }
+
+    // The central test of ACT-7: a settings change must never touch a
+    // course's categories or channels — this must fail if
+    // `updateCourseSettings` were implemented by delegating to
+    // `updateCourse`'s replace path, which gives every category and channel
+    // a brand-new id even when its contents end up identical.
+    it('changes a setting without touching the course categories or channels at all', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            categories: [
+              {
+                name: 'GLOBAL',
+                channels: [{ name: 'chat', adminsOnly: false }],
+              },
+            ],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.updateCourseSettings(
+        orgA,
+        created.id,
+        settingsInput(created, { title: 'Web Design II' }),
+        testDb.db
+      )
+
+      const updated = expectOk(result)
+      expect(updated.title).toBe('Web Design II')
+      // Byte-for-byte: same category and channel rows, same ids, same
+      // ordering — not merely the same names and count a replace-and-reinsert
+      // would also produce.
+      expect(updated.categories).toEqual(created.categories)
+    })
+
+    it('returns undefined when the course does not exist or belongs to another organization (TEN-2)', () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, projectA } = seedTwoOrganizations(testDb)
+      const created = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      const result = courses.updateCourseSettings(
+        orgB,
+        created.id,
+        settingsInput(created),
+        testDb.db
+      )
+
+      expect(result).toBeUndefined()
+    })
+
+    it('reuses the PROJ-3 cross-course collision check', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            title: 'Data Science',
+            adminsRole: 'admins-ds-fa26',
+            studentsRole: 'students-ds-fa26',
+            categories: [{ name: 'DS GLOBAL', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+      const webDesign = expectOk(
+        courses.createCourse(orgA, courseInput(projectA.id), testDb.db)
+      )
+
+      const result = courses.updateCourseSettings(
+        orgA,
+        webDesign.id,
+        // Colliding with Data Science's own admins role.
+        settingsInput(webDesign, { studentsRole: 'admins-ds-fa26' }),
+        testDb.db
+      )
+
+      expect(result?.ok).toBe(false)
+      if (result?.ok !== false) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'studentsRole',
+        name: 'admins-ds-fa26',
+        conflictingCourseTitle: 'Data Science',
+      })
+      // Refused before any write — the stored role is still what it was.
+      expect(
+        courses.getCourse(orgA, webDesign.id, testDb.db)?.studentsRole
+      ).toBe('students-wd-fa26')
+    })
+  })
 })

@@ -11784,3 +11784,41 @@ depended on it.
 `packages/db/tests/migrate.test.ts` gained a test seeded through `0029` — the real migration files and
 journal entries, not invented ones — with one pre-`surface` row, asserting `0030` applies without throwing,
 backfills it to `'unknown'`, and that the row still sums into the organization's own total.
+
+## D-108 — ACT-7/ENRL-17: a new `updateCourseSettings` repo function, not a reuse of `updateCourse`, and where the shared expiry table lives
+
+**ACT-7 needed a repo-level function the brief's own file list did not name.** `courses.updateSettings`'s
+requirement — a course's settings change without its categories or channels being touched *at all* — is
+impossible to satisfy by calling `updateCourse` (`repos/courses.ts`) with the course's own current
+categories re-supplied: `updateCourse` always runs `deleteCourseCategories`/`insertCourseCategories`, which
+gives every category and channel row a new id, a new `createdAt`, and a new position in insertion order even
+when its *contents* end up identical — exactly what this requirement's own central test (a byte-for-byte
+comparison) exists to catch. `packages/db/src/repos/courses.ts` gained `updateCourseSettings` and a
+`CourseSettingsUpdate` interface, sibling to `updateCourse` rather than a parameter added to it — the two
+have different write shapes (one replaces categories, one never touches them) and different collision-check
+inputs (`updateCourse` checks against `input.categories`; `updateCourseSettings` checks against the course's
+*existing* categories, read back through a new `loadCourseCategories` helper factored out of `getCourse` for
+exactly this reuse). `docs/DECISIONS.md`'s own "coverage is enforced on `packages/db/repos`" (see the top of
+this file) is why this is not out of scope for an actions-layer brief: the requirement cannot be met from
+`packages/actions` alone.
+
+**The action's `keepOrClear` and its Discord-server-binding check are now module scope in
+`actions/courses.ts`**, not duplicated for `courses.updateSettings` — both were previously local to
+`courses.save`'s own `execute`/policy. `courses.updateSettings` needs the identical "omitted keeps stored,
+explicit `null` clears" rule for every nullable field it accepts, and the identical TEN-9/TEN-5
+"`discordServerId`, if supplied non-null, must actively belong to the caller's own organization" refusal
+`courses.save`'s policy already ran inline — factoring both out is what the brief's own "reuse that check"
+asked for, and it is exactly the kind of small duplication that drifts the moment one copy is edited and the
+other is not (the same reasoning `docs/DECISIONS.md` gives elsewhere for factoring out repeated checks).
+
+**ENRL-17's shared expiry table lives in `packages/schemas`, not `packages/actions` or `apps/web`.** Two
+consumers need the identical value/label/duration table — `courseJoinLinks.create`'s own `expiresIn` input
+and `JoinLinks.tsx`'s picker — and `packages/schemas` is already this repository's home for a small,
+dependency-free (zod alone) definition more than one package or app needs (`web-source-domain.ts`'s own
+module comment gives the identical reasoning for WEB-31). `apps/web` is already permitted to import
+`@bloombot/schemas` and nothing else from the workspace (PLAT-2) — the one constraint that would have ruled
+this out if the table lived anywhere else. `resolveJoinLinkExpiry` (the function that actually adds a
+duration to a clock reading) takes `now` as an explicit argument rather than reading `Date.now()` itself, so
+`courseJoinLinks.create`'s own `execute` — the one caller whose timing matters — controls exactly when that
+resolution happens: at the moment a link is actually created, on the server, never earlier and never on the
+client the way `JoinLinks.tsx` used to compute it by hand.

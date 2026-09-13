@@ -28,6 +28,7 @@ import {
   getCourseAction,
   listCoursesAction,
   saveCourseAction,
+  updateSettingsCourseAction,
 } from './courses.js'
 import { exportCourseAction, importCourseAction } from './course-portability.js'
 import {
@@ -98,6 +99,7 @@ export {
   getCourseAction,
   listCoursesAction,
   saveCourseAction,
+  updateSettingsCourseAction,
 } from './courses.js'
 export {
   courseExportFilename,
@@ -233,6 +235,7 @@ export function createPlatformRegistry(options?: {
   registry.register(listProjectsAction)
   registry.register(duplicateProjectAction)
   registry.register(saveCourseAction)
+  registry.register(updateSettingsCourseAction)
   registry.register(enableCourseAction)
   registry.register(disableCourseAction)
   registry.register(listCoursesAction)

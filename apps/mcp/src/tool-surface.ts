@@ -37,9 +37,13 @@
  *     useful — an instructor's assistant can still rename a course or
  *     toggle it on/off — while requiring a human to actually see what is
  *     about to be replaced before it happens (`describeTarget`, below).
- *     `docs/DECISIONS.md` D-36 has the full record, including why a
- *     partial-update input shape (the real fix) is future work, not this
- *     slice's.
+ *     `docs/DECISIONS.md` D-36 has the full record. ACT-7 is the fix that
+ *     record called future work: `courses.updateSettings` changes any of a
+ *     course's settings without touching its categories or channels at all,
+ *     so it carries no `describeTarget` and is not marked destructive here —
+ *     an assistant changing a setting should reach for it instead of
+ *     `courses.save`, which stays destructive and reserved for the panel's
+ *     whole-form save (categories and channels included).
  *
  * Nothing else registered today qualifies: `discordServers.remove` "marks
  * the binding inactive without deleting anything" (its own description),
@@ -225,6 +229,10 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
     destructive: true,
     describeTarget: describeCourseSaveTarget,
   },
+  // ACT-7 — an ordinary write: never touches categories or channels, so
+  // there is nothing here for `describeTarget` to warn about (this file's
+  // own module comment above).
+  { actionName: 'courses.updateSettings' },
   { actionName: 'courses.enable' },
   { actionName: 'courses.disable' },
   { actionName: 'courseInstructions.save' },

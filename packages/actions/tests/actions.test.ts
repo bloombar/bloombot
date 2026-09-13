@@ -16,6 +16,7 @@ import {
   renameProjectAction,
   saveCourseAction,
   unarchiveProjectAction,
+  updateSettingsCourseAction,
 } from '../src/actions/index.js'
 import { dispatch } from '../src/dispatch.js'
 import {
@@ -788,6 +789,183 @@ describe('courses.save', () => {
     const attempt = dispatch(
       saveCourseAction,
       courseSaveInput(projectId, { discordServerId: serverId }),
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionRefusedError)
+  })
+})
+
+describe('courses.updateSettings (ACT-7)', () => {
+  // The central test of this requirement: a settings-only change must never
+  // replace a course's categories or channels — this must fail if
+  // `updateSettingsCourseAction` were implemented by delegating to
+  // `courses.save`'s own `execute` (or `updateCourse`'s replace path)
+  // instead of `courses.updateCourseSettings`.
+  it('changes a setting, leaving categories and channels byte-for-byte untouched', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId, {
+        categories: [
+          {
+            name: 'Web Design - GLOBAL',
+            channels: [{ name: 'chat', adminsOnly: false }],
+          },
+        ],
+      }),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const updated = await dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, title: 'Web Design II' },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.title).toBe('Web Design II')
+    expect(updated.categories).toEqual(created.course.categories)
+  })
+
+  it('omitting a field keeps its stored value', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId, {
+        model: 'gpt-5',
+        vectorStoreId: 'vs-1',
+        maxRequestsPerDay: 50,
+      }),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const updated = await dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, title: 'Web Design II' },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.title).toBe('Web Design II')
+    expect(updated.model).toBe('gpt-5')
+    expect(updated.vectorStoreId).toBe('vs-1')
+    expect(updated.maxRequestsPerDay).toBe(50)
+  })
+
+  it('an explicit null clears a previously set nullable field', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId, { model: 'gpt-5', maxRequestsPerDay: 50 }),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const updated = await dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, model: null, maxRequestsPerDay: null },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.model).toBeNull()
+    expect(updated.maxRequestsPerDay).toBeNull()
+  })
+
+  // `projectId`, `categories`, `instructions` and `promptId` are not on this
+  // action's schema at all — `z.strictObject` refuses any of them outright,
+  // the same "not silently stripped" reasoning `saveInputSchema`'s own
+  // comment gives.
+  it.each(['projectId', 'categories', 'instructions', 'promptId'])(
+    'refuses an explicit %s field outright, not silently stripping it',
+    async (field) => {
+      testDb = createTestDatabase()
+      const { organizationId, projectId } = seedOrganizationWithProject(
+        testDb.db
+      )
+      const created = courses.createCourse(
+        organizationId,
+        courseSaveInput(projectId),
+        testDb.db
+      )
+      if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+      const attempt = dispatch(
+        updateSettingsCourseAction,
+        { id: created.course.id, [field]: 'anything' },
+        { organizationId, db: testDb.db }
+      )
+
+      await expect(attempt).rejects.toThrow(ActionInputError)
+    }
+  )
+
+  it('refuses an id belonging to another organization (ACT-2)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+    const otherOrgId = crypto.randomUUID()
+
+    const attempt = dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, title: 'Hijacked' },
+      { organizationId: otherOrgId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionRefusedError)
+  })
+
+  // TEN-9 — reuses `courses.save`'s own policy check.
+  it("accepts a discordServerId that is actively bound to the caller's own organization", async () => {
+    testDb = createTestDatabase()
+    const { organizationId, serverId } = seedOrganizationWithBoundServer(
+      testDb.db
+    )
+    const project = projects.createProject(
+      organizationId,
+      { name: 'Fall 2026' },
+      testDb.db
+    )
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(project.id),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const updated = await dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, discordServerId: serverId },
+      { organizationId, db: testDb.db }
+    )
+
+    expect(updated.discordServerId).toBe(serverId)
+  })
+
+  // TEN-5 — a server id belonging to a different organization is refused as
+  // not-found, the same way `courses.save`'s own policy refuses one.
+  it('refuses a discordServerId that belongs to a different organization, as not-found', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+    const other = seedOrganizationWithBoundServer(testDb.db, 'Other Org')
+
+    const attempt = dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, discordServerId: other.serverId },
       { organizationId, db: testDb.db }
     )
 

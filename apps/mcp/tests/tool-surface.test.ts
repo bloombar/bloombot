@@ -80,6 +80,8 @@ const EXPECTED_DESTRUCTIVE: Record<string, boolean> = {
   // Replaces every category and channel on every call — see this file's
   // own module comment and `tool-surface.ts`'s.
   'courses.save': true,
+  // ACT-7 — never touches categories or channels, unlike `courses.save`.
+  'courses.updateSettings': false,
   'courses.enable': false,
   'courses.disable': false,
   'courseInstructions.save': false,

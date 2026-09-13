@@ -4098,7 +4098,7 @@
   section: §36 Course Administration Through an Assistant
   family: MCP
   phase: 30
-  status: In progress
+  status: In review
   review: false
 - id: MCP-10
   title: An assistant can create a course's Discord structure
@@ -4113,7 +4113,7 @@
   section: §36 Course Administration Through an Assistant
   family: MCP
   phase: 30
-  status: In progress
+  status: In review
   review: false
 - id: SRV-12
   title: A course's Discord structure is edited one piece at a time

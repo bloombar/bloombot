@@ -103,6 +103,9 @@ const EXPECTED_DESTRUCTIVE: Record<string, boolean> = {
   'courseChannels.updateChannel': false,
   // Removes a single channel, with no restore path.
   'courseChannels.removeChannel': true,
+  // MCP-10 — deletes and discards nothing (SRV-7/SRV-8), but its effects are
+  // visible to every member of a live Discord server the moment it runs.
+  'discordServers.scaffold': true,
 }
 
 describe('MCP-2 — the tool surface is chosen, not derived', () => {

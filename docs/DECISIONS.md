@@ -11887,3 +11887,49 @@ than the whole-list save they complement, letting a caller reach through `course
 `courseChannels.addCategory` would refuse — worse than leaving both equally permissive. Normalizing category
 names the way roles already are is a defect in its own right, but it belongs to a slice that touches
 `courses.save`'s own check too, not this one.
+
+## D-110 — MCP-9: every `MembershipRole` counts as "administers", not a subset
+
+**The brief asked which roles count as "administers a course" for `courses.listAdministered`'s own
+authority check, and to match whatever `apps/api` and the panel already gate course configuration on rather
+than invent a new notion.** They gate on nothing narrower than "does an active membership exist at all":
+`call-tool.ts`'s own membership gate (`memberships.getMembership`) never reads `.role` before letting any
+tool on `MCP_TOOL_SURFACE` through — an `assistant` can already dispatch `courses.save` or
+`courseChannels.removeCategory` through this same MCP server today, exactly as an `owner` or `instructor`
+can — and nothing in `packages/actions`' own policies (`resource: 'course', access: 'write'`, no role check
+anywhere in `courses.ts`/`course-channels.ts`) distinguishes a role either. `apps/web/src/api/types.ts`'s own
+`MembershipSummary` doc comment states the platform's actual position on this directly: any of the three
+roles carries "the administrative authority a membership role names," in contrast with a merely-connected
+person (`ConnectedOrganizationSummary`), who holds none. Narrowing `courses.listAdministered` to `owner`/
+`instructor` only, excluding `assistant`, would have made this one read stricter than every write it exists
+to point an assistant at — a tool telling an `assistant`-role caller "you administer nothing" while
+`courseChannels.addChannel` dispatched through the very same connection succeeds would be a worse defect
+than the one MCP-9 exists to fix (an assistant with no way to discover an organization id at all).
+
+**Consequence, made explicit for whoever revisits this**: if a future slice ever does introduce a
+role-scoped notion of "administers" (an `assistant` who may edit content but not delete a course, say),
+`courses.listAdministered`'s own filter is the one place that decision has to be threaded through — today it
+inherits `call-tool.ts`'s all-roles-equal reading by design, not by oversight, and the two must be changed
+together or a caller ends up listed for a course it can no longer actually act on, the identical drift this
+file's own reasoning about `apps/web`'s course-configuration gating was written to avoid.
+
+**Rework round 1 — confirmed independently, and pinned by a test.** A reviewer re-derived this same
+conclusion from `apps/api/src/routes/actions.ts` (gates on membership existing, never reads `.role`), every
+course-configuration action in `packages/actions`, and the panel's own role gates (limited to Team and
+cost) — nothing this slice changed. What the first round of this slice actually shipped without: a test that
+fails if a future edit adds `if (membership.role === 'assistant') continue` to
+`admin-tools.ts#listAdministeredOrganizations`. A reviewer added that mutation directly and watched all 123
+`apps/mcp` tests stay green — the existing "no membership anywhere" test used an `assistant`-role account,
+but only after revoking its one membership, so it pinned the opposite of this decision. `admin-tools.test.ts`
+now has a test seeding an *active* `assistant` membership with a real course and asserting it appears, which
+fails against that exact mutation.
+
+**Rework round 1 — the listing also had to stop being one row per course.** A separate, related defect
+surfaced in the same round: emitting one row per *course* meant an organization with none yet — most acutely,
+one an owner had just created — never appeared at all, so its `organizationId` (which `projects.create` and
+`courses.save` both need, and which this tool exists to make discoverable) stayed unreachable. `admin-tools.ts`
+now groups by organization first, with `courses: []` for one holding none, and the "no administrative
+membership anywhere" text `server.ts` shows is reserved for a genuinely empty *array of organizations* —
+never inferred from an organization's own empty course list. See that file's own module comment for the
+full reasoning; noted here because the fix landed in the same round this entry's own central claim was
+being re-confirmed, and the two are easy to conflate as one change when they are not.

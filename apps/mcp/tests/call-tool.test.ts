@@ -5,12 +5,16 @@
  * and plain function calls.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { createPlatformRegistry } from '@bloombot/actions'
 import {
   courseAttachments,
   courseInstructionRevisions,
   courses,
+  discordServers,
   jobs,
+  projects,
 } from '@bloombot/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -722,6 +726,102 @@ describe('MCP-4 — a destructive tool asks first', () => {
         // Both the channel's own name and its category's — a mutation that
         // dropped either (down to "a channel") is caught here.
         expect.stringMatching(/general.*Week 1/)
+      )
+    })
+  })
+
+  // MCP-10, following the identical discipline the SRV-12 tests above
+  // already established for this file: `describeScaffoldTarget` was added
+  // with no coverage of its own would repeat the exact gap a reviewer
+  // caught in the previous slice — replacing it with `return 'a category'`
+  // left every test green. These assert on the literal string handed to
+  // `requestConfirmation`, not merely that a `describeTarget` exists.
+  describe('discordServers.scaffold — MCP-10: a confirmation must name the actual course, and the server when the course names one', () => {
+    it('names the course when the course has no discordServerId set', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+        title: 'Intro to Testing',
+      })
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'discordServers.scaffold',
+          { organizationId: caller.organizationId, courseId },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'discordServers.scaffold' }),
+        caller.organizationId,
+        expect.stringContaining('Intro to Testing')
+      )
+    })
+
+    it('also names the Discord server when the course has one bound', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const serverId = `guild-${randomUUID()}`
+      const claimed = discordServers.claimDiscordServerBinding(
+        caller.organizationId,
+        { serverId, installedByAccountId: caller.accountId },
+        testDb.db
+      )
+      if (!claimed) throw new Error('setup failed: could not claim server')
+
+      const project = projects.createProject(
+        caller.organizationId,
+        { name: 'Test Term' },
+        testDb.db
+      )
+      // Built directly through `createCourse` (rather than `seedCourse`,
+      // which has no way to ask for a bound server) with `discordServerId`
+      // set explicitly — the entity `describeScaffoldTarget` reads it from.
+      const created = courses.createCourse(
+        caller.organizationId,
+        {
+          projectId: project.id,
+          title: 'Intro to Testing',
+          enabled: true,
+          adminsRole: `admins-${randomUUID()}`,
+          studentsRole: `students-${randomUUID()}`,
+          discordServerId: serverId,
+          categories: [],
+        },
+        testDb.db
+      )
+      if (!created.ok) throw new Error('setup failed: unexpected conflict')
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'discordServers.scaffold',
+          {
+            organizationId: caller.organizationId,
+            courseId: created.course.id,
+          },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'discordServers.scaffold' }),
+        caller.organizationId,
+        // Both the course's own title and the actual server id — a
+        // mutation that dropped either (down to "a course") is caught here.
+        expect.stringMatching(new RegExp(`Intro to Testing.*${serverId}`))
       )
     })
   })

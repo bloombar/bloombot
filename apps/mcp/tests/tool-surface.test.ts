@@ -92,6 +92,17 @@ const EXPECTED_DESTRUCTIVE: Record<string, boolean> = {
   // Deletes a knowledge-file from the model provider and this platform's
   // own record of it, with no restore path.
   'courseAttachments.detach': true,
+  // SRV-12 — ordinary writes, each naming the one category or channel it
+  // acts on.
+  'courseChannels.addCategory': false,
+  'courseChannels.renameCategory': false,
+  // Removes a category and every channel declared inside it, with no
+  // restore path.
+  'courseChannels.removeCategory': true,
+  'courseChannels.addChannel': false,
+  'courseChannels.updateChannel': false,
+  // Removes a single channel, with no restore path.
+  'courseChannels.removeChannel': true,
 }
 
 describe('MCP-2 — the tool surface is chosen, not derived', () => {

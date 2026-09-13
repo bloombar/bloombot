@@ -15,7 +15,7 @@
  * (MCP-4) and requires `describeTarget` — `buildToolDefinitions` throws at
  * build time if a destructive entry omits one (this file's own module
  * comment further down has why: a confirmation that only names the tool,
- * not the record, is not a real confirmation). Two entries qualify today:
+ * not the record, is not a real confirmation). Four entries qualify today:
  *
  *   - `courseAttachments.detach` removes a knowledge-file both from the
  *     model provider and from this platform's own record of it, and there
@@ -44,6 +44,18 @@
  *     an assistant changing a setting should reach for it instead of
  *     `courses.save`, which stays destructive and reserved for the panel's
  *     whole-form save (categories and channels included).
+ *   - `courseChannels.removeCategory` (SRV-12) removes a category **and
+ *     every channel declared inside it**, with no restore path — the SPEC
+ *     requirement this action exists to satisfy is explicit that a caller
+ *     who meant to remove one channel must not discover it removed six, so
+ *     its `describeTarget` (`describeRemoveCourseCategoryTarget`, below)
+ *     names the category *and* the channel count before it runs.
+ *   - `courseChannels.removeChannel` (SRV-12) removes a single channel, no
+ *     restore path — a narrower version of the same "delete, no restore"
+ *     shape `courseAttachments.detach` already carries. `describeTarget`
+ *     (`describeRemoveCourseChannelTarget`, below) names the channel and its
+ *     category, since a course may declare the same channel name in more
+ *     than one category.
  *
  * Nothing else registered today qualifies: `discordServers.remove` "marks
  * the binding inactive without deleting anything" (its own description),
@@ -203,6 +215,53 @@ function describeCourseSaveTarget(entity: unknown, input: unknown): string {
     : 'a new course'
 }
 
+/**
+ * SRV-12: `courseChannels.removeCategory`'s own entity (`ResolvedCourseCategory`,
+ * `packages/db/src/repos/courses.ts`) — names the category *and* how many
+ * channels will go with it, since that count is the whole point of the SPEC
+ * requirement this tool exists to satisfy: a caller that meant to remove one
+ * channel must not discover it removed six.
+ */
+function describeRemoveCourseCategoryTarget(entity: unknown): string {
+  const category = (
+    entity as { category?: { name?: unknown; channels?: unknown[] } } | null
+  )?.category
+  const name = typeof category?.name === 'string' ? category.name : undefined
+  const channelCount = Array.isArray(category?.channels)
+    ? category.channels.length
+    : undefined
+  if (name === undefined) return 'a category'
+  if (channelCount === undefined) return `the category "${name}"`
+  return channelCount === 1
+    ? `the category "${name}" and the 1 channel declared inside it`
+    : `the category "${name}" and the ${channelCount} channels declared inside it`
+}
+
+/**
+ * SRV-12: `courseChannels.removeChannel`'s own entity (`ResolvedCourseChannel`,
+ * `packages/db/src/repos/courses.ts`) — names the channel *and* its
+ * category, so a confirmation cannot read as "a channel" when a course may
+ * declare dozens sharing the same name across different categories.
+ */
+function describeRemoveCourseChannelTarget(entity: unknown): string {
+  const resolved = entity as {
+    channel?: { name?: unknown }
+    category?: { name?: unknown }
+  } | null
+  const channelName =
+    typeof resolved?.channel?.name === 'string'
+      ? resolved.channel.name
+      : undefined
+  const categoryName =
+    typeof resolved?.category?.name === 'string'
+      ? resolved.category.name
+      : undefined
+  if (channelName === undefined) return 'a channel'
+  return categoryName === undefined
+    ? `the channel "${channelName}"`
+    : `the channel "${channelName}" in category "${categoryName}"`
+}
+
 export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   // Reads — every one of these declares `access: 'read'` in its own policy
   // descriptor (`packages/actions/tests/access-audit.test.ts` pins that),
@@ -235,6 +294,27 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'courses.updateSettings' },
   { actionName: 'courses.enable' },
   { actionName: 'courses.disable' },
+  // SRV-12 — a course's declared categories and channels, edited one piece
+  // at a time. `addCategory`/`renameCategory`/`addChannel`/`updateChannel`
+  // are ordinary writes: each names the one category or channel it acts on,
+  // so there is nothing here for `describeTarget` to warn about, the same
+  // reasoning `courses.updateSettings` above already carries.
+  // `removeCategory` and `removeChannel` are destructive (this file's own
+  // module comment) and get their own `describeTarget`, below.
+  { actionName: 'courseChannels.addCategory' },
+  { actionName: 'courseChannels.renameCategory' },
+  {
+    actionName: 'courseChannels.removeCategory',
+    destructive: true,
+    describeTarget: describeRemoveCourseCategoryTarget,
+  },
+  { actionName: 'courseChannels.addChannel' },
+  { actionName: 'courseChannels.updateChannel' },
+  {
+    actionName: 'courseChannels.removeChannel',
+    destructive: true,
+    describeTarget: describeRemoveCourseChannelTarget,
+  },
   { actionName: 'courseInstructions.save' },
   { actionName: 'courseInstructions.restore' },
   { actionName: 'courseJoinLinks.create' },

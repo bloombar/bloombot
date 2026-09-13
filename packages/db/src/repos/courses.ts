@@ -1295,6 +1295,483 @@ export function updateCourseSettings(
   })
 }
 
+// SRV-12 — a course's categories and channels, edited one at a time rather
+// than through `updateCourse`'s whole-list replace. Every function below
+// only ever touches the one category or channel it names, leaving every
+// sibling category, channel and every other course field exactly as it was.
+//
+// Nothing here touches Discord itself: these functions edit the declaration
+// only, the same rows `updateCourse` already writes. SRV-6's scaffold
+// remains the one thing that creates, renames or deletes anything in a live
+// server, and SRV-8's "scaffolding never deletes" is unchanged — a channel
+// removed here is simply absent the next time a scaffold reads this course's
+// declaration, never removed from the server it already reached.
+//
+// PROJ-3 only ever constrains *category* names (and the two role names,
+// untouched by anything in this section) — `findSelfConflict` and
+// `findCourseNameConflict`, above, never compare a channel's own name
+// against anything, and neither does any database constraint
+// (`schema.ts`'s own `course_channels` table has none). So `addCourseChannel`
+// and `updateCourseChannel`, below, run no conflict check at all — there is
+// no invariant `courses.save` enforces over channel names for a narrower
+// write to preserve. `addCourseCategory` and `renameCourseCategory` are the
+// two writes here that can introduce a category-name collision, so they are
+// the two that run it.
+
+/** `getCourseCategory`'s own shape: a category, scoped to `organizationId`, alongside the course it belongs to (also scoped, TEN-2) — what every category-level policy below resolves. */
+export interface ResolvedCourseCategory {
+  category: CourseCategoryWithChannels
+  course: Course
+}
+
+/**
+ * Resolve a category by id, scoped to `organizationId` at both hops — the
+ * category itself and the course it declares to belong to. A category
+ * belonging to another organization, or naming a course that does not
+ * (TEN-2's usual guarantee, checked explicitly rather than assumed), resolves
+ * to `undefined` the same way a missing id does, so `@bloombot/actions`'
+ * policies below refuse both identically (ACT-3).
+ */
+export function getCourseCategory(
+  organizationId: string,
+  categoryId: string,
+  db: Executor
+): ResolvedCourseCategory | undefined {
+  const categoryRow = db
+    .select()
+    .from(courseCategories)
+    .where(
+      and(
+        eq(courseCategories.id, categoryId),
+        eq(courseCategories.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!categoryRow) return undefined
+
+  const course = db
+    .select()
+    .from(courses)
+    .where(
+      and(
+        eq(courses.id, categoryRow.courseId),
+        eq(courses.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!course) return undefined
+
+  const channels = db
+    .select()
+    .from(courseChannels)
+    .where(
+      and(
+        eq(courseChannels.categoryId, categoryId),
+        eq(courseChannels.organizationId, organizationId)
+      )
+    )
+    .orderBy(courseChannels.ordering)
+    .all()
+
+  return { category: { ...categoryRow, channels }, course }
+}
+
+/** `getCourseChannel`'s own shape: a channel, scoped to `organizationId` at every hop up to the course it belongs to — what every channel-level policy below resolves. */
+export interface ResolvedCourseChannel {
+  channel: CourseChannel
+  category: CourseCategory
+  course: Course
+}
+
+/**
+ * Resolve a channel by id, scoped to `organizationId` at every hop: the
+ * channel itself, the category it declares to belong to, and that category's
+ * own course — three lookups, each of which must resolve within this
+ * organization, since a channel names only its immediate category, not the
+ * course two hops up. A channel belonging to another organization, or naming
+ * a category (or a course) that does not, resolves to `undefined` the same
+ * "not found" way at any of the three hops, never a distinct error a caller
+ * could use to tell which hop actually failed.
+ */
+export function getCourseChannel(
+  organizationId: string,
+  channelId: string,
+  db: Executor
+): ResolvedCourseChannel | undefined {
+  const channel = db
+    .select()
+    .from(courseChannels)
+    .where(
+      and(
+        eq(courseChannels.id, channelId),
+        eq(courseChannels.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!channel) return undefined
+
+  const category = db
+    .select()
+    .from(courseCategories)
+    .where(
+      and(
+        eq(courseCategories.id, channel.categoryId),
+        eq(courseCategories.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!category) return undefined
+
+  const course = db
+    .select()
+    .from(courses)
+    .where(
+      and(
+        eq(courses.id, category.courseId),
+        eq(courses.organizationId, organizationId)
+      )
+    )
+    .get()
+  if (!course) return undefined
+
+  return { channel, category, course }
+}
+
+/**
+ * The PROJ-3/TEN-9 checks `updateCourse`/`updateCourseSettings` already run
+ * before writing, run here against a *hypothetical* category-name list — the
+ * course's own current categories with one name added or renamed — so
+ * `addCourseCategory`/`renameCourseCategory` (below) refuse exactly the
+ * state a `courses.save` carrying that same category list would have
+ * refused, without requiring a caller to resubmit the rest of the course to
+ * find out. `checkRoles` is always `false` in both checks this runs — an
+ * addition or a rename never touches either role name, so there is nothing
+ * for the role half of either check to have changed.
+ */
+function checkCategoryNameAgainstCourse(
+  organizationId: string,
+  course: Course,
+  candidateCategoryNames: { name: string }[],
+  db: Executor
+): CourseNameConflict | undefined {
+  const nameCheckInput: NameCheckInput = {
+    adminsRole: course.adminsRole,
+    studentsRole: course.studentsRole,
+    categories: candidateCategoryNames,
+  }
+
+  const selfConflict = findSelfConflict(nameCheckInput, { checkRoles: false })
+  if (selfConflict) return selfConflict
+
+  // The cross-course half only ever applies to a course that actually
+  // routes — an enabled course in a non-archived project — the same gate
+  // `createCourse`/`updateCourse` apply (`courses.enabled`'s own comment,
+  // `schema.ts`).
+  const project = db
+    .select({ archivedAt: projects.archivedAt })
+    .from(projects)
+    .where(eq(projects.id, course.projectId))
+    .get()
+  if (!course.enabled || !project || project.archivedAt !== null) {
+    return undefined
+  }
+
+  const serverResolution = resolveCourseDiscordServer(
+    organizationId,
+    course.discordServerId,
+    db
+  )
+  if (!serverResolution.ok) {
+    return serverResolutionConflict(serverResolution.reason, course.title)
+  }
+
+  return findCourseNameConflict(
+    organizationId,
+    nameCheckInput,
+    serverResolution.binding?.serverId,
+    db,
+    { excludeCourseId: course.id, checkRoles: false }
+  )
+}
+
+/** What `addCourseCategory` and `renameCourseCategory` report — the same `{ ok: false, conflict }` channel every other PROJ-3 check in this file uses. */
+export type CourseCategoryResult =
+  | { ok: true; category: CourseCategoryWithChannels }
+  | { ok: false; conflict: CourseNameConflict }
+
+/**
+ * SRV-12: append a new category to `courseId`, after its existing
+ * categories (`ordering` = current max + 1, or `0` for the first). Refused
+ * (PROJ-3) exactly the way `updateCourse` refuses a category name that
+ * collides with another one already declared inside this course, or with
+ * another enabled course routing in the same Discord server
+ * (`checkCategoryNameAgainstCourse`, above).
+ *
+ * `undefined` when `courseId` does not exist or does not belong to
+ * `organizationId` (TEN-2), matching every other course lookup in this file.
+ */
+export function addCourseCategory(
+  organizationId: string,
+  courseId: string,
+  name: string,
+  db: Database
+): CourseCategoryResult | undefined {
+  const course = db
+    .select()
+    .from(courses)
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .get()
+  if (!course) return undefined
+
+  return writeTransaction(db, (tx) => {
+    const existingCategories = loadCourseCategories(
+      organizationId,
+      courseId,
+      tx
+    )
+    const conflict = checkCategoryNameAgainstCourse(
+      organizationId,
+      course,
+      [
+        ...existingCategories.map((category) => ({ name: category.name })),
+        { name },
+      ],
+      tx
+    )
+    if (conflict) return { ok: false, conflict }
+
+    const ordering =
+      existingCategories.length === 0
+        ? 0
+        : Math.max(...existingCategories.map((category) => category.ordering)) +
+          1
+    const categoryRow: CourseCategory = {
+      id: crypto.randomUUID(),
+      organizationId,
+      courseId,
+      name,
+      ordering,
+      createdAt: Date.now(),
+    }
+    tx.insert(courseCategories).values(categoryRow).run()
+
+    return { ok: true, category: { ...categoryRow, channels: [] } }
+  })
+}
+
+/**
+ * SRV-12: rename an existing category, leaving its channels and every
+ * sibling category untouched. Refused (PROJ-3) the same way
+ * `addCourseCategory` is — `name` is checked against every *other* category
+ * this course already declares (this category's own current name is
+ * excluded from the candidate list, the same `excludeCourseId` reasoning
+ * `updateCourse` applies to itself, one level down).
+ *
+ * `undefined` when `categoryId` does not exist or does not belong to
+ * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ */
+export function renameCourseCategory(
+  organizationId: string,
+  categoryId: string,
+  name: string,
+  db: Database
+): CourseCategoryResult | undefined {
+  const resolved = getCourseCategory(organizationId, categoryId, db)
+  if (!resolved) return undefined
+  const { course } = resolved
+
+  return writeTransaction(db, (tx) => {
+    const existingCategories = loadCourseCategories(
+      organizationId,
+      course.id,
+      tx
+    )
+    const candidateNames = existingCategories
+      .filter((category) => category.id !== categoryId)
+      .map((category) => ({ name: category.name }))
+    candidateNames.push({ name })
+
+    const conflict = checkCategoryNameAgainstCourse(
+      organizationId,
+      course,
+      candidateNames,
+      tx
+    )
+    if (conflict) return { ok: false, conflict }
+
+    const updated = tx
+      .update(courseCategories)
+      .set({ name })
+      .where(
+        and(
+          eq(courseCategories.id, categoryId),
+          eq(courseCategories.organizationId, organizationId)
+        )
+      )
+      .returning()
+      .get()
+    if (!updated) {
+      // Same TEN-2 race `updateCourse`'s own `execute` guards against —
+      // `getCourseCategory` already proved this row existed, moments
+      // earlier, in this same organization.
+      throw new Error(
+        'renameCourseCategory: category vanished mid-transaction — should be unreachable'
+      )
+    }
+
+    return {
+      ok: true,
+      category: { ...updated, channels: resolved.category.channels },
+    }
+  })
+}
+
+/** What `removeCourseCategory` reports: how many channels were removed alongside the category — SPEC-required (SRV-12), so a caller that meant to remove one channel is told when it removed six instead. */
+export interface RemoveCourseCategoryResult {
+  removedChannelCount: number
+}
+
+/**
+ * SRV-12: remove a category and every channel declared inside it. Nothing
+ * here reaches Discord — SRV-8's "scaffolding never deletes" means the
+ * channels this category named stay in the live server until an
+ * administrator removes them there directly; the next scaffold simply stops
+ * reporting them as declared.
+ *
+ * `undefined` when `categoryId` does not exist or does not belong to
+ * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ */
+export function removeCourseCategory(
+  organizationId: string,
+  categoryId: string,
+  db: Database
+): RemoveCourseCategoryResult | undefined {
+  const resolved = getCourseCategory(organizationId, categoryId, db)
+  if (!resolved) return undefined
+
+  return writeTransaction(db, (tx) => {
+    // Channels first, same as `deleteCourseCategories` above: nothing here
+    // relies on `ON DELETE CASCADE`, so the child rows have to go before
+    // their parent explicitly.
+    tx.delete(courseChannels)
+      .where(eq(courseChannels.categoryId, categoryId))
+      .run()
+    tx.delete(courseCategories)
+      .where(
+        and(
+          eq(courseCategories.id, categoryId),
+          eq(courseCategories.organizationId, organizationId)
+        )
+      )
+      .run()
+    return { removedChannelCount: resolved.category.channels.length }
+  })
+}
+
+/**
+ * SRV-12: append a new channel to `categoryId`, after its existing channels
+ * (`ordering` = current max + 1, or `0` for the first). No PROJ-3 check —
+ * this file's own module comment above on why channel names carry no
+ * uniqueness invariant to preserve.
+ *
+ * `undefined` when `categoryId` does not exist or does not belong to
+ * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ */
+export function addCourseChannel(
+  organizationId: string,
+  categoryId: string,
+  channel: NewCourseChannel,
+  db: Database
+): CourseChannel | undefined {
+  const resolved = getCourseCategory(organizationId, categoryId, db)
+  if (!resolved) return undefined
+
+  const ordering =
+    resolved.category.channels.length === 0
+      ? 0
+      : Math.max(
+          ...resolved.category.channels.map((existing) => existing.ordering)
+        ) + 1
+  const channelRow: CourseChannel = {
+    id: crypto.randomUUID(),
+    organizationId,
+    categoryId,
+    name: channel.name,
+    adminsOnly: channel.adminsOnly,
+    ordering,
+    createdAt: Date.now(),
+  }
+  db.insert(courseChannels).values(channelRow).run()
+  return channelRow
+}
+
+/** What `updateCourseChannel` may change — an omitted key keeps whatever is already stored, the same `courses.updateSettings` rule (ACT-7); neither field is nullable, so there is no "clear" state for either to carry. */
+export interface CourseChannelUpdate {
+  name?: string
+  adminsOnly?: boolean
+}
+
+/**
+ * SRV-12: change a channel's name and/or its admins-only flag, leaving
+ * everything else about it (and every other category or channel in the
+ * course) untouched. No PROJ-3 check — this file's own module comment above.
+ *
+ * `undefined` when `channelId` does not exist or does not belong to
+ * `organizationId` (TEN-2) — `getCourseChannel`'s own guarantee.
+ */
+export function updateCourseChannel(
+  organizationId: string,
+  channelId: string,
+  update: CourseChannelUpdate,
+  db: Database
+): CourseChannel | undefined {
+  const resolved = getCourseChannel(organizationId, channelId, db)
+  if (!resolved) return undefined
+
+  return db
+    .update(courseChannels)
+    .set({
+      name: update.name ?? resolved.channel.name,
+      adminsOnly: update.adminsOnly ?? resolved.channel.adminsOnly,
+    })
+    .where(
+      and(
+        eq(courseChannels.id, channelId),
+        eq(courseChannels.organizationId, organizationId)
+      )
+    )
+    .returning()
+    .get()
+}
+
+/**
+ * SRV-12: remove a single channel, leaving its category and every sibling
+ * channel untouched. Nothing here reaches Discord — this file's own module
+ * comment above.
+ *
+ * `false` when `channelId` does not exist or does not belong to
+ * `organizationId` (TEN-2), the same "rows changed, not a distinct not-found
+ * error" shape `disableCourse` (below) already uses.
+ */
+export function removeCourseChannel(
+  organizationId: string,
+  channelId: string,
+  db: Database
+): boolean {
+  const result = db
+    .delete(courseChannels)
+    .where(
+      and(
+        eq(courseChannels.id, channelId),
+        eq(courseChannels.organizationId, organizationId)
+      )
+    )
+    .run()
+  return result.changes > 0
+}
+
 /** What `enableCourse` reports: `undefined` for TEN-2/TEN-5, matching `updateCourse`. */
 export type EnableCourseResult =
   { ok: true; changed: boolean } | { ok: false; conflict: CourseNameConflict }

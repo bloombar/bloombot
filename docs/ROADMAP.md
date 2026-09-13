@@ -394,3 +394,17 @@ the resulting tools — plus the scaffold — on the assistant's surface. Every 
 surface entries themselves is surface-agnostic action work the panel and the HTTP API get too.
 
 **In scope:** ACT-7, SRV-12, ENRL-17, MCP-9, MCP-10
+
+## Phase 31 — One sign-in, and a connection that survives its own email
+
+Connecting an assistant currently drops a person out of the panel and into a second, unstyled
+sign-in that the API renders itself: no logo, no Google, no mobile viewport, and a separate copy of
+the agreement gate to keep in step with the real one. It also cannot survive its own email — the
+pending connection request expires in ten minutes, measured from before the sign-in message was even
+queued, so an ordinary delivery delay is enough to make the emailed link land on "invalid or
+expired". This phase folds that surface into the panel's own sign-in, so there is one sign-in to
+maintain, gives the connection request a lifetime that accommodates real mail, and holds every page
+this platform serves — the panel's and the API's alike — to a viewport and a field size that no
+mobile browser feels the need to zoom.
+
+**In scope:** MCP-11, MCP-12, WEB-48

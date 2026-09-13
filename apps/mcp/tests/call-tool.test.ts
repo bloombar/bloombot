@@ -9,6 +9,7 @@ import { createPlatformRegistry } from '@bloombot/actions'
 import {
   courseAttachments,
   courseInstructionRevisions,
+  courses,
   jobs,
 } from '@bloombot/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -541,6 +542,186 @@ describe('MCP-4 — a destructive tool asks first', () => {
         expect.objectContaining({ name: 'courses.save' }),
         caller.organizationId,
         expect.stringContaining('Intro to Testing')
+      )
+    })
+  })
+
+  // SRV-12, rework round 1, must-fix 5: `describeTarget` for
+  // `courseChannels.removeCategory`/`.removeChannel` was entirely untested —
+  // Injecting `if (entity) return 'a category'`/`'a channel'` at the top of
+  // either function left every existing test green, because
+  // `tool-surface.test.ts` only ever asserts that a `describeTarget` exists
+  // and that `destructive` is `true`, never what the confirmation actually
+  // says. These tests dispatch through `callTool`, the same live path
+  // `courseAttachments.detach`'s own "names the specific record" test above
+  // uses, and assert on the literal string handed to `requestConfirmation` —
+  // the thing a human confirming actually reads.
+  describe('courseChannels.removeCategory/.removeChannel — a caller who meant to remove one channel must not discover it removed six', () => {
+    it('names the category and how many channels will go with it (plural)', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+        categories: [
+          {
+            name: 'Week 1',
+            channels: [
+              { name: 'general', adminsOnly: false },
+              { name: 'announcements', adminsOnly: true },
+            ],
+          },
+        ],
+      })
+      const course = courses.getCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+      const categoryId = course?.categories[0]?.id
+      if (!categoryId) throw new Error('setup failed')
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'courseChannels.removeCategory',
+          { organizationId: caller.organizationId, categoryId },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'courseChannels.removeCategory' }),
+        caller.organizationId,
+        // Both the category's own name and the actual channel count — a
+        // mutation that dropped either (or hard-coded a count) is caught
+        // here, not merely "a describeTarget exists".
+        expect.stringMatching(/Week 1.*2 channels/)
+      )
+    })
+
+    it('uses the singular for exactly one channel, not "1 channels"', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+        categories: [
+          {
+            name: 'Week 2',
+            channels: [{ name: 'general', adminsOnly: false }],
+          },
+        ],
+      })
+      const course = courses.getCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+      const categoryId = course?.categories[0]?.id
+      if (!categoryId) throw new Error('setup failed')
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'courseChannels.removeCategory',
+          { organizationId: caller.organizationId, categoryId },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'courseChannels.removeCategory' }),
+        caller.organizationId,
+        // Names "Week 2" and says "1 channel" — never "1 channels" (the
+        // plural `describeRemoveCourseCategoryTarget` uses for every count
+        // but exactly one).
+        expect.stringMatching(
+          /^(?=.*Week 2)(?=.*1 channel)(?!.*1 channels).*$/s
+        )
+      )
+    })
+
+    it('reports 0 channels plainly for an empty category — never a stale or invented count', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+        categories: [{ name: 'Empty Week', channels: [] }],
+      })
+      const course = courses.getCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+      const categoryId = course?.categories[0]?.id
+      if (!categoryId) throw new Error('setup failed')
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'courseChannels.removeCategory',
+          { organizationId: caller.organizationId, categoryId },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'courseChannels.removeCategory' }),
+        caller.organizationId,
+        expect.stringMatching(/Empty Week.*0 channels/)
+      )
+    })
+
+    it('names the channel and its category, not merely "a channel"', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId } = seedCourse(testDb.db, caller.organizationId, {
+        categories: [
+          {
+            name: 'Week 1',
+            channels: [{ name: 'general', adminsOnly: false }],
+          },
+        ],
+      })
+      const course = courses.getCourse(
+        caller.organizationId,
+        courseId,
+        testDb.db
+      )
+      const channelId = course?.categories[0]?.channels[0]?.id
+      if (!channelId) throw new Error('setup failed')
+      const requestConfirmation = vi.fn(() => Promise.resolve(false))
+
+      await expect(
+        callTool(
+          'courseChannels.removeChannel',
+          { organizationId: caller.organizationId, channelId },
+          {
+            toolDefinitions: toolDefinitions(),
+            db: testDb.db,
+            accountId: caller.accountId,
+            requestConfirmation,
+          }
+        )
+      ).rejects.toThrow(ConfirmationRequiredError)
+
+      expect(requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'courseChannels.removeChannel' }),
+        caller.organizationId,
+        // Both the channel's own name and its category's — a mutation that
+        // dropped either (down to "a channel") is caught here.
+        expect.stringMatching(/general.*Week 1/)
       )
     })
   })

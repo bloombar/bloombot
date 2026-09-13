@@ -2173,4 +2173,426 @@ describe('courses repo', () => {
       ).toBe('students-wd-fa26')
     })
   })
+
+  describe('SRV-12 — categories and channels edited one piece at a time', () => {
+    /** A course with two categories, each with a channel — enough siblings for every "leaves everything else untouched" assertion below to actually mean something. */
+    function seedCourseWithTwoCategories(testDatabase: TestDatabase) {
+      const { orgA, projectA } = seedTwoOrganizations(testDatabase)
+      const created = expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            enabled: false, // no PROJ-3 candidate set to worry about by default
+            categories: [
+              {
+                name: 'GLOBAL',
+                channels: [{ name: 'announcements', adminsOnly: true }],
+              },
+              {
+                name: 'WEEK 1',
+                channels: [{ name: 'help', adminsOnly: false }],
+              },
+            ],
+          }),
+          testDatabase.db
+        )
+      )
+      return { orgA, course: created }
+    }
+
+    describe('addCourseCategory', () => {
+      it('appends after the existing categories, ordering = max + 1, leaving them untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+
+        const result = courses.addCourseCategory(
+          orgA,
+          course.id,
+          'WEEK 2',
+          testDb.db
+        )
+        if (!result?.ok) throw new Error('expected ok')
+        expect(result.category).toMatchObject({ name: 'WEEK 2', ordering: 2 })
+        expect(result.category.channels).toEqual([])
+
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(fetched?.categories.map((c) => c.name)).toEqual([
+          'GLOBAL',
+          'WEEK 1',
+          'WEEK 2',
+        ])
+        // The original two categories (and their channels) are the exact
+        // same rows — same ids — not replaced and reinserted.
+        expect(fetched?.categories[0]).toEqual(course.categories[0])
+        expect(fetched?.categories[1]).toEqual(course.categories[1])
+      })
+
+      it('refuses a duplicate category name within the same course (PROJ-3 self-conflict)', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+
+        const result = courses.addCourseCategory(
+          orgA,
+          course.id,
+          'GLOBAL',
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(false)
+        if (result?.ok !== false) throw new Error('expected a conflict')
+        expect(result.conflict.field).toBe('category')
+        // Refused before any write.
+        expect(
+          courses.getCourse(orgA, course.id, testDb.db)?.categories
+        ).toHaveLength(2)
+      })
+
+      it('refuses a category name colliding with another enabled course routing in the same server (PROJ-3 cross-course)', () => {
+        testDb = createTestDatabase()
+        const { orgA, projectA } = seedTwoOrganizations(testDb)
+        expectOk(
+          courses.createCourse(
+            orgA,
+            courseInput(projectA.id, {
+              title: 'Data Science',
+              adminsRole: 'admins-ds-fa26',
+              studentsRole: 'students-ds-fa26',
+              categories: [{ name: 'DS GLOBAL', channels: [] }],
+            }),
+            testDb.db
+          )
+        )
+        const webDesign = expectOk(
+          courses.createCourse(
+            orgA,
+            courseInput(projectA.id, { enabled: true, categories: [] }),
+            testDb.db
+          )
+        )
+
+        const result = courses.addCourseCategory(
+          orgA,
+          webDesign.id,
+          'DS GLOBAL',
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(false)
+        if (result?.ok !== false) throw new Error('expected a conflict')
+        expect(result.conflict).toMatchObject({
+          field: 'category',
+          name: 'DS GLOBAL',
+          conflictingCourseTitle: 'Data Science',
+        })
+      })
+
+      it('returns undefined for a foreign-organization courseId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB, course } = (() => {
+          const seeded = seedTwoOrganizations(testDb)
+          const created = expectOk(
+            courses.createCourse(
+              seeded.orgA,
+              courseInput(seeded.projectA.id),
+              testDb.db
+            )
+          )
+          return { orgB: seeded.orgB, course: created }
+        })()
+
+        expect(
+          courses.addCourseCategory(orgB, course.id, 'X', testDb.db)
+        ).toBeUndefined()
+      })
+    })
+
+    describe('renameCourseCategory', () => {
+      it('renames the one category, leaving its channels and every sibling category untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+        const sibling = course.categories[1]!
+
+        const result = courses.renameCourseCategory(
+          orgA,
+          target.id,
+          'GLOBAL RENAMED',
+          testDb.db
+        )
+        if (!result?.ok) throw new Error('expected ok')
+        expect(result.category.name).toBe('GLOBAL RENAMED')
+        expect(result.category.channels).toEqual(target.channels)
+
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(fetched?.categories.find((c) => c.id === sibling.id)).toEqual(
+          sibling
+        )
+      })
+
+      it('does not refuse renaming a category to its own current name', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+
+        const result = courses.renameCourseCategory(
+          orgA,
+          target.id,
+          target.name,
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(true)
+      })
+
+      it('refuses a rename that collides with a sibling category name (PROJ-3 self-conflict)', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+        const sibling = course.categories[1]!
+
+        const result = courses.renameCourseCategory(
+          orgA,
+          target.id,
+          sibling.name,
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(false)
+        if (result?.ok !== false) throw new Error('expected a conflict')
+        expect(result.conflict.field).toBe('category')
+        // Refused before any write — the original name is still there.
+        expect(
+          courses.getCourse(orgA, course.id, testDb.db)?.categories[0]?.name
+        ).toBe(target.name)
+      })
+
+      it('returns undefined for a foreign-organization categoryId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB } = seedTwoOrganizations(testDb)
+        const { course } = seedCourseWithTwoCategories(testDb)
+
+        expect(
+          courses.renameCourseCategory(
+            orgB,
+            course.categories[0]!.id,
+            'X',
+            testDb.db
+          )
+        ).toBeUndefined()
+      })
+    })
+
+    describe('removeCourseCategory', () => {
+      it('removes the category and every channel declared inside it, reporting how many channels went with it', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[1]! // 'WEEK 1', one channel
+        const sibling = course.categories[0]!
+
+        const result = courses.removeCourseCategory(orgA, target.id, testDb.db)
+
+        expect(result).toEqual({ removedChannelCount: 1 })
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(fetched?.categories.map((c) => c.id)).toEqual([sibling.id])
+      })
+
+      it('leaves every other category and channel of the course untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+        const sibling = course.categories[1]!
+
+        courses.removeCourseCategory(orgA, target.id, testDb.db)
+
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(fetched?.categories).toEqual([sibling])
+      })
+
+      it('returns undefined for a foreign-organization categoryId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB } = seedTwoOrganizations(testDb)
+        const { course } = seedCourseWithTwoCategories(testDb)
+
+        expect(
+          courses.removeCourseCategory(
+            orgB,
+            course.categories[0]!.id,
+            testDb.db
+          )
+        ).toBeUndefined()
+      })
+
+      it('reports 0, not 1, for a category with no channels — rework round 1, must-fix 4: pins the delete\'s own row count rather than a placeholder that treats "none" as "one"', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const empty = courses.addCourseCategory(
+          orgA,
+          course.id,
+          'EMPTY',
+          testDb.db
+        )
+        if (!empty?.ok) throw new Error('setup failed')
+
+        const result = courses.removeCourseCategory(
+          orgA,
+          empty.category.id,
+          testDb.db
+        )
+
+        expect(result).toEqual({ removedChannelCount: 0 })
+      })
+    })
+
+    describe('addCourseChannel', () => {
+      it('appends within the category, ordering = max + 1, leaving other channels and categories untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+        const sibling = course.categories[1]!
+
+        const channel = courses.addCourseChannel(
+          orgA,
+          target.id,
+          { name: 'questions', adminsOnly: false },
+          testDb.db
+        )
+
+        expect(channel).toMatchObject({
+          name: 'questions',
+          adminsOnly: false,
+          ordering: 1,
+        })
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(
+          fetched?.categories.find((c) => c.id === target.id)?.channels
+        ).toEqual([target.channels[0], channel])
+        expect(fetched?.categories.find((c) => c.id === sibling.id)).toEqual(
+          sibling
+        )
+      })
+
+      it('returns undefined for a foreign-organization categoryId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB } = seedTwoOrganizations(testDb)
+        const { course } = seedCourseWithTwoCategories(testDb)
+
+        expect(
+          courses.addCourseChannel(
+            orgB,
+            course.categories[0]!.id,
+            { name: 'x', adminsOnly: false },
+            testDb.db
+          )
+        ).toBeUndefined()
+      })
+    })
+
+    describe('updateCourseChannel', () => {
+      it('changing only adminsOnly leaves the name alone', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const channel = course.categories[0]!.channels[0]!
+        expect(channel.adminsOnly).toBe(true)
+
+        const updated = courses.updateCourseChannel(
+          orgA,
+          channel.id,
+          { adminsOnly: false },
+          testDb.db
+        )
+
+        expect(updated).toMatchObject({
+          name: channel.name,
+          adminsOnly: false,
+        })
+      })
+
+      it('changing only name leaves adminsOnly alone', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const channel = course.categories[0]!.channels[0]!
+
+        const updated = courses.updateCourseChannel(
+          orgA,
+          channel.id,
+          { name: 'renamed' },
+          testDb.db
+        )
+
+        expect(updated).toMatchObject({
+          name: 'renamed',
+          adminsOnly: channel.adminsOnly,
+        })
+      })
+
+      it('leaves every other channel and category untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const channel = course.categories[0]!.channels[0]!
+        const sibling = course.categories[1]!
+
+        courses.updateCourseChannel(
+          orgA,
+          channel.id,
+          { name: 'renamed' },
+          testDb.db
+        )
+
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(fetched?.categories.find((c) => c.id === sibling.id)).toEqual(
+          sibling
+        )
+      })
+
+      it('returns undefined for a foreign-organization channelId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB } = seedTwoOrganizations(testDb)
+        const { course } = seedCourseWithTwoCategories(testDb)
+
+        expect(
+          courses.updateCourseChannel(
+            orgB,
+            course.categories[0]!.channels[0]!.id,
+            { name: 'x' },
+            testDb.db
+          )
+        ).toBeUndefined()
+      })
+    })
+
+    describe('removeCourseChannel', () => {
+      it('removes only the one channel, leaving its category and every sibling channel/category untouched', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!.channels[0]!
+        const sibling = course.categories[1]!
+
+        const removed = courses.removeCourseChannel(orgA, target.id, testDb.db)
+
+        expect(removed).toBe(true)
+        const fetched = courses.getCourse(orgA, course.id, testDb.db)
+        expect(
+          fetched?.categories.find((c) => c.id === course.categories[0]!.id)
+            ?.channels
+        ).toEqual([])
+        expect(fetched?.categories.find((c) => c.id === sibling.id)).toEqual(
+          sibling
+        )
+      })
+
+      it('returns false for a foreign-organization channelId (TEN-2)', () => {
+        testDb = createTestDatabase()
+        const { orgB } = seedTwoOrganizations(testDb)
+        const { course } = seedCourseWithTwoCategories(testDb)
+
+        expect(
+          courses.removeCourseChannel(
+            orgB,
+            course.categories[0]!.channels[0]!.id,
+            testDb.db
+          )
+        ).toBe(false)
+      })
+    })
+  })
 })

@@ -11855,9 +11855,35 @@ a category or channel belonging to another organization resolves to `undefined` 
 fails, and every one of the six actions refuses it with the same undifferentiated `ActionRefusedError`
 (ACT-3) — never a distinct signal for "wrong organization" versus "no such course."
 
-**`removeCourseCategory`'s channel count is read before the delete, from the same `getCourseCategory` call
-that already resolved the policy** rather than re-queried after — `resolved.category.channels.length`, not
-a second `SELECT` inside the transaction. The category is locked into this by the time `execute` runs
-regardless (nothing else can look up a category by an id nobody else has), so reading the count once, off
-the entity the policy already resolved, is simpler than re-deriving it and cannot drift from what the
-transaction actually deletes.
+**Rework round 1 correction to this entry's own original wording**: the paragraph above used to claim
+`removeCourseCategory`'s channel count came "from the same `getCourseCategory` call that already resolved
+the policy" — that was never actually true (the repo function ran its own, second `getCourseCategory` call
+against `db`, discarding whatever the action's policy had already resolved), and reading the count from
+either call, *before* `writeTransaction` opened, was must-fix 4's own finding: `BEGIN IMMEDIATE` takes the
+write lock at the first statement *inside* the transaction, so a count taken earlier can under-report if a
+channel is added in the window between that read and the lock. `removeCourseCategory` now resolves the
+category (and reads `removedChannelCount` off the deleting statement's own `.run().changes`) entirely
+inside `writeTransaction`, against `tx` — so nothing before the lock is trusted, and the count is the same
+statement that actually performed the delete, not a snapshot of anything read earlier. `renameCourseCategory`
+took the identical fix for the `channels` it returns, for the same reason. `addCourseChannel` is now wrapped
+in `writeTransaction` too (must-fix 2) — not because its own read needed to be fresher, but because two
+concurrent calls against the same category, previously unserialized, could assign the same `ordering` to two
+channels, or race an insert into `removeCourseCategory`'s own delete and surface a raw foreign-key error
+(a 500) instead of a clean refusal. `updateCourseChannel` (must-fix 3) no longer reads the stored row at
+all before writing — `.set(...)` is built from only the keys the caller actually sent, so a concurrent
+name-only update and a concurrent `adminsOnly`-only update can no longer clobber each other with a stale
+read of the field neither one touched.
+
+**Known residual, left alone on purpose**: category names are compared byte-exact in `findSelfConflict`'s
+duplicate check (a `Set<string>` of literal names), but `apps/worker`'s scaffold matches a declared category
+against a live Discord category by `normalizeName` (trim + lowercase, `discord-scaffold.ts`) — so
+`addCourseCategory('global')` alongside an existing `GLOBAL` is accepted by this check and both declarations
+collapse onto the same Discord category the next time a scaffold runs, the same aliasing class SRV-10/SRV-11
+already closed for the two role names (`normalizeRoleName`, `packages/db/src/repos/courses.ts`). This is
+pre-existing in `courses.save`/`updateCourse` — `findSelfConflict`'s category loop never normalized before
+this slice either — and `addCourseCategory`/`renameCourseCategory` only ever reuse that same check
+(`checkCategoryNameAgainstCourse`), so fixing it here alone would make these two narrower actions *stricter*
+than the whole-list save they complement, letting a caller reach through `courses.save` a state
+`courseChannels.addCategory` would refuse — worse than leaving both equally permissive. Normalizing category
+names the way roles already are is a defect in its own right, but it belongs to a slice that touches
+`courses.save`'s own check too, not this one.

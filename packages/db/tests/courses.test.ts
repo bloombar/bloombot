@@ -2421,6 +2421,26 @@ describe('courses repo', () => {
           )
         ).toBeUndefined()
       })
+
+      it('reports 0, not 1, for a category with no channels — rework round 1, must-fix 4: pins the delete\'s own row count rather than a placeholder that treats "none" as "one"', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const empty = courses.addCourseCategory(
+          orgA,
+          course.id,
+          'EMPTY',
+          testDb.db
+        )
+        if (!empty?.ok) throw new Error('setup failed')
+
+        const result = courses.removeCourseCategory(
+          orgA,
+          empty.category.id,
+          testDb.db
+        )
+
+        expect(result).toEqual({ removedChannelCount: 0 })
+      })
     })
 
     describe('addCourseChannel', () => {

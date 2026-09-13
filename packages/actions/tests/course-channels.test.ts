@@ -249,7 +249,7 @@ describe('courseChannels.updateChannel', () => {
     })
   })
 
-  it('refuses an explicit null for name or adminsOnly — neither field is nullable', async () => {
+  it('refuses an explicit null for name — the field is not nullable', async () => {
     testDb = createTestDatabase()
     const { organizationId, categoryA } = seedCourseWithTwoCategories(testDb.db)
     const channel = categoryA.channels[0]!
@@ -258,6 +258,25 @@ describe('courseChannels.updateChannel', () => {
       dispatch(
         updateCourseChannelAction,
         { channelId: channel.id, name: null },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toBeInstanceOf(ActionInputError)
+  })
+
+  // Cheap-fix 6 (rework round 1): the sibling field, pinned separately —
+  // the original version of this test only ever dispatched `name: null`, so
+  // a schema regression that stopped refusing an explicit `adminsOnly: null`
+  // specifically (while still refusing `name: null`) would have passed
+  // every test in this file.
+  it('refuses an explicit null for adminsOnly — the field is not nullable', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, categoryA } = seedCourseWithTwoCategories(testDb.db)
+    const channel = categoryA.channels[0]!
+
+    await expect(
+      dispatch(
+        updateCourseChannelAction,
+        { channelId: channel.id, adminsOnly: null },
         { organizationId, db: testDb.db }
       )
     ).rejects.toBeInstanceOf(ActionInputError)

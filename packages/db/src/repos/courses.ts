@@ -1447,6 +1447,16 @@ export function getCourseChannel(
  * find out. `checkRoles` is always `false` in both checks this runs — an
  * addition or a rename never touches either role name, so there is nothing
  * for the role half of either check to have changed.
+ *
+ * Rework round 1, must-fix 1: the project row is read through
+ * `loadOwnedProject` (below), not a raw, unscoped `select` — a raw select
+ * used to read `course.projectId` with no `organizationId` predicate at
+ * all, and treated a missing row as "not archived" (a falsy `project`
+ * makes `project?.archivedAt === null` false, silently *skipping* the
+ * PROJ-3/TEN-9 block below rather than refusing), exactly the cheap-fix 4
+ * defect `updateCourseSettings`'s own doc comment already records fixing
+ * last slice — reintroduced here as new code until this rework caught it
+ * again.
  */
 function checkCategoryNameAgainstCourse(
   organizationId: string,
@@ -1466,13 +1476,12 @@ function checkCategoryNameAgainstCourse(
   // The cross-course half only ever applies to a course that actually
   // routes — an enabled course in a non-archived project — the same gate
   // `createCourse`/`updateCourse` apply (`courses.enabled`'s own comment,
-  // `schema.ts`).
-  const project = db
-    .select({ archivedAt: projects.archivedAt })
-    .from(projects)
-    .where(eq(projects.id, course.projectId))
-    .get()
-  if (!course.enabled || !project || project.archivedAt !== null) {
+  // `schema.ts`). `loadOwnedProject` refuses outright (rather than silently
+  // skipping this block) when the project row cannot be read at all — this
+  // function's own doc comment above, on why a raw select is wrong here.
+  const projectResult = loadOwnedProject(organizationId, course.projectId, db)
+  if (!projectResult.ok) return projectResult.conflict
+  if (!course.enabled || projectResult.project.archivedAt !== null) {
     return undefined
   }
 
@@ -1571,6 +1580,17 @@ export function addCourseCategory(
  *
  * `undefined` when `categoryId` does not exist or does not belong to
  * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ *
+ * Rework round 1, must-fix 4: the initial resolve (category, course and its
+ * current channels) now happens *inside* `writeTransaction`, against `tx`,
+ * not before it against `db` — `writeTransaction` opens with `BEGIN
+ * IMMEDIATE` (`client.ts`'s own doc comment), which takes the write lock at
+ * the very first statement, so a resolve run against `tx` cannot be
+ * invalidated by a concurrent write between it and this function's own
+ * write, the way a resolve against `db` (before the transaction even opened)
+ * could. The returned `channels` is exactly what this same resolve read,
+ * moments earlier, inside the same lock — never a snapshot taken before the
+ * lock was acquired.
  */
 export function renameCourseCategory(
   organizationId: string,
@@ -1578,11 +1598,11 @@ export function renameCourseCategory(
   name: string,
   db: Database
 ): CourseCategoryResult | undefined {
-  const resolved = getCourseCategory(organizationId, categoryId, db)
-  if (!resolved) return undefined
-  const { course } = resolved
-
   return writeTransaction(db, (tx) => {
+    const resolved = getCourseCategory(organizationId, categoryId, tx)
+    if (!resolved) return undefined
+    const { course } = resolved
+
     const existingCategories = loadCourseCategories(
       organizationId,
       course.id,
@@ -1615,7 +1635,7 @@ export function renameCourseCategory(
     if (!updated) {
       // Same TEN-2 race `updateCourse`'s own `execute` guards against —
       // `getCourseCategory` already proved this row existed, moments
-      // earlier, in this same organization.
+      // earlier, in this same organization, inside this same transaction.
       throw new Error(
         'renameCourseCategory: category vanished mid-transaction — should be unreachable'
       )
@@ -1642,20 +1662,31 @@ export interface RemoveCourseCategoryResult {
  *
  * `undefined` when `categoryId` does not exist or does not belong to
  * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ *
+ * Rework round 1, must-fix 4: `removedChannelCount` is the deleting
+ * statement's own `.run().changes`, read *inside* the transaction that
+ * performs the delete, not a channel count resolved before
+ * `writeTransaction` even opened (`BEGIN IMMEDIATE` takes the write lock at
+ * the first statement — a count taken earlier could under-report if a
+ * channel were added in the window between that read and the lock). A
+ * category with no channels reports `0`, not `1` — the delete's own
+ * `changes` is exact either way, never a placeholder that treats "no
+ * channels" as if it were "one channel."
  */
 export function removeCourseCategory(
   organizationId: string,
   categoryId: string,
   db: Database
 ): RemoveCourseCategoryResult | undefined {
-  const resolved = getCourseCategory(organizationId, categoryId, db)
-  if (!resolved) return undefined
-
   return writeTransaction(db, (tx) => {
+    const resolved = getCourseCategory(organizationId, categoryId, tx)
+    if (!resolved) return undefined
+
     // Channels first, same as `deleteCourseCategories` above: nothing here
     // relies on `ON DELETE CASCADE`, so the child rows have to go before
     // their parent explicitly.
-    tx.delete(courseChannels)
+    const deletedChannels = tx
+      .delete(courseChannels)
       .where(eq(courseChannels.categoryId, categoryId))
       .run()
     tx.delete(courseCategories)
@@ -1666,7 +1697,7 @@ export function removeCourseCategory(
         )
       )
       .run()
-    return { removedChannelCount: resolved.category.channels.length }
+    return { removedChannelCount: deletedChannels.changes }
   })
 }
 
@@ -1678,6 +1709,17 @@ export function removeCourseCategory(
  *
  * `undefined` when `categoryId` does not exist or does not belong to
  * `organizationId` (TEN-2) — `getCourseCategory`'s own guarantee.
+ *
+ * Rework round 1, must-fix 2: wrapped in `writeTransaction`, unlike the
+ * first version of this function, which read `getCourseCategory` and then
+ * inserted with no transaction around either — `apps/api` and `apps/mcp`
+ * are separate processes sharing one SQLite file, so two concurrent calls
+ * against the same category could read the same "existing channels" list
+ * and insert two channels with identical `ordering`, and the same window
+ * let an insert here race `removeCourseCategory`'s own delete into a raw
+ * foreign-key error (a 500) instead of a clean refusal. `BEGIN IMMEDIATE`
+ * (`writeTransaction`, `client.ts`) serializes the two against each other
+ * the same way it already serializes every other write in this file.
  */
 export function addCourseChannel(
   organizationId: string,
@@ -1685,26 +1727,28 @@ export function addCourseChannel(
   channel: NewCourseChannel,
   db: Database
 ): CourseChannel | undefined {
-  const resolved = getCourseCategory(organizationId, categoryId, db)
-  if (!resolved) return undefined
+  return writeTransaction(db, (tx) => {
+    const resolved = getCourseCategory(organizationId, categoryId, tx)
+    if (!resolved) return undefined
 
-  const ordering =
-    resolved.category.channels.length === 0
-      ? 0
-      : Math.max(
-          ...resolved.category.channels.map((existing) => existing.ordering)
-        ) + 1
-  const channelRow: CourseChannel = {
-    id: crypto.randomUUID(),
-    organizationId,
-    categoryId,
-    name: channel.name,
-    adminsOnly: channel.adminsOnly,
-    ordering,
-    createdAt: Date.now(),
-  }
-  db.insert(courseChannels).values(channelRow).run()
-  return channelRow
+    const ordering =
+      resolved.category.channels.length === 0
+        ? 0
+        : Math.max(
+            ...resolved.category.channels.map((existing) => existing.ordering)
+          ) + 1
+    const channelRow: CourseChannel = {
+      id: crypto.randomUUID(),
+      organizationId,
+      categoryId,
+      name: channel.name,
+      adminsOnly: channel.adminsOnly,
+      ordering,
+      createdAt: Date.now(),
+    }
+    tx.insert(courseChannels).values(channelRow).run()
+    return channelRow
+  })
 }
 
 /** What `updateCourseChannel` may change — an omitted key keeps whatever is already stored, the same `courses.updateSettings` rule (ACT-7); neither field is nullable, so there is no "clear" state for either to carry. */
@@ -1719,7 +1763,20 @@ export interface CourseChannelUpdate {
  * course) untouched. No PROJ-3 check — this file's own module comment above.
  *
  * `undefined` when `channelId` does not exist or does not belong to
- * `organizationId` (TEN-2) — `getCourseChannel`'s own guarantee.
+ * `organizationId` (TEN-2) — the `.where` below already scopes both, so a
+ * foreign or missing `channelId` updates (or reads) nothing and this
+ * returns `undefined` the same way `.get()` does for any other miss.
+ *
+ * Rework round 1, must-fix 3: `.set(...)` is built from only the keys
+ * `update` actually carries, and the write goes straight through with no
+ * prior read of the stored row — the first version of this function read
+ * the current row, then wrote *both* columns back (the omitted one from
+ * that read), which is exactly the race "an omitted key keeps whatever is
+ * already stored" promises not to have: a concurrent name-only update and
+ * adminsOnly-only update, interleaved, could each overwrite the other's
+ * change with its own stale read of the field it never touched. A caller
+ * that omits both keys — nothing to change — reads the row back instead of
+ * issuing an empty `UPDATE ... SET`, which is invalid SQL.
  */
 export function updateCourseChannel(
   organizationId: string,
@@ -1727,15 +1784,29 @@ export function updateCourseChannel(
   update: CourseChannelUpdate,
   db: Database
 ): CourseChannel | undefined {
-  const resolved = getCourseChannel(organizationId, channelId, db)
-  if (!resolved) return undefined
+  const patch: Partial<Pick<CourseChannel, 'name' | 'adminsOnly'>> = {
+    ...(update.name !== undefined ? { name: update.name } : {}),
+    ...(update.adminsOnly !== undefined
+      ? { adminsOnly: update.adminsOnly }
+      : {}),
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return db
+      .select()
+      .from(courseChannels)
+      .where(
+        and(
+          eq(courseChannels.id, channelId),
+          eq(courseChannels.organizationId, organizationId)
+        )
+      )
+      .get()
+  }
 
   return db
     .update(courseChannels)
-    .set({
-      name: update.name ?? resolved.channel.name,
-      adminsOnly: update.adminsOnly ?? resolved.channel.adminsOnly,
-    })
+    .set(patch)
     .where(
       and(
         eq(courseChannels.id, channelId),

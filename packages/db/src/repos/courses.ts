@@ -1158,10 +1158,13 @@ export interface CourseSettingsUpdate {
  *
  * `undefined` when `courseId` does not exist or does not belong to
  * `organizationId` (TEN-2), matching `updateCourse`. There is no `projectId`
- * to validate ownership of (TEN-5 does not apply — this never moves a
- * course), so unlike `updateCourse` there is no `loadOwnedProject` call; the
- * course's own `projectId` is read straight off the row already proven to
- * belong to this organization.
+ * for a caller to supply (TEN-5's own foreign-`projectId` refusal does not
+ * apply — this never moves a course to another project), but it still calls
+ * `loadOwnedProject` with the course's own, already-stored `projectId`
+ * (rework round 1, cheap-fix 4) rather than reading the `projects` row
+ * directly: a project row that failed to resolve used to be silently read as
+ * "not archived," skipping the PROJ-3/TEN-9 block below instead of refusing
+ * the way `updateCourse` does for the equivalent case.
  */
 export function updateCourseSettings(
   organizationId: string,
@@ -1180,13 +1183,20 @@ export function updateCourseSettings(
 
   // The project this course already belongs to — read, never written, since
   // `CourseSettingsUpdate` has no `projectId` for a caller to move it with.
-  // Only its `archivedAt` matters here, the same "does not route" gate
-  // `updateCourse` checks before running the PROJ-3/TEN-9 checks below.
-  const project = db
-    .select({ archivedAt: projects.archivedAt })
-    .from(projects)
-    .where(eq(projects.id, existing.projectId))
-    .get()
+  // Rework round 1, cheap-fix 4: `loadOwnedProject`, the same call
+  // `updateCourse` makes (above), not a raw, unscoped select — that used to
+  // read `existing.projectId` with no `organizationId` predicate at all, and
+  // treated a missing row as "not archived" (`project?.archivedAt === null`
+  // is `false` when `project` is `undefined`, silently *skipping* the
+  // PROJ-3/TEN-9 block below rather than refusing), where `updateCourse`
+  // refuses outright. Unreachable through the schema's own foreign key
+  // today — `courses.project_id` cannot name a project this course's own
+  // `organizationId` does not own, the same guarantee `loadOwnedProject`'s
+  // own doc comment already establishes for every other caller — but this
+  // makes that guarantee load-bearing here too, rather than merely
+  // narrower than its sibling.
+  const projectResult = loadOwnedProject(organizationId, existing.projectId, db)
+  if (!projectResult.ok) return projectResult
 
   // This course's own categories, unaffected by this save — the candidate
   // set `findSelfConflict`/`findCourseNameConflict` check `input` against,
@@ -1214,7 +1224,7 @@ export function updateCourseSettings(
   if (selfConflict) return { ok: false, conflict: selfConflict }
 
   return writeTransaction(db, (tx) => {
-    if (input.enabled && project?.archivedAt === null) {
+    if (input.enabled && projectResult.project.archivedAt === null) {
       const serverResolution = resolveCourseDiscordServer(
         organizationId,
         input.discordServerId ?? null,

@@ -947,7 +947,7 @@ export function revokeMembership(
  * owner-only here, unlike `memberships.list` above).
  */
 
-/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one, matching `createCourseJoinLink`'s own optional `expiresAt`. */
+/** `exactOptionalPropertyTypes` — only sent when the caller actually supplied one; omitted means "no expiry," matching `membershipInvitations.create`'s own optional `expiresAt`. */
 export function createMembershipInvitation(
   organizationId: string,
   email: string,

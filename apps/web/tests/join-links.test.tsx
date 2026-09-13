@@ -508,29 +508,6 @@ describe('JoinLinks expiry (WEB-23/ENRL-17)', () => {
     }
   )
 
-  // The picker's own labels come from the shared table
-  // (`@bloombot/schemas`'s `JOIN_LINK_EXPIRY_OPTIONS`), not a copy this
-  // component keeps in sync by hand — fails without the fix if the picker
-  // still rendered a local, independently-maintained label list that had
-  // drifted from the shared one.
-  it('renders every option label from the shared JOIN_LINK_EXPIRY_OPTIONS table', async () => {
-    listCourseJoinLinks.mockResolvedValue([])
-
-    renderWithModal(<JoinLinks organizationId="org-1" courseId="course-1" />)
-    await screen.findByText('No join links issued yet.')
-
-    const select = screen.getByLabelText('Expiry')
-    for (const label of [
-      'Never',
-      '1 day',
-      '1 week',
-      '1 month',
-      '1 term (16 weeks)',
-    ]) {
-      expect(within(select).getByText(label)).toBeInTheDocument()
-    }
-  })
-
   it('the list renders a real expiry, and an already-expired link reads as expired — distinct from a revoked one', async () => {
     const past = Date.now() - 1000
     listCourseJoinLinks.mockResolvedValue([

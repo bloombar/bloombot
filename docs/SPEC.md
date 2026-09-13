@@ -3008,3 +3008,38 @@ acts on a live Discord server rather than on this platform's own records, the co
 destructive tool must raise (MCP-4) is raised for it too, naming the course and the server it is
 about to build in — a scaffold creates nothing twice (SRV-7) and deletes nothing (SRV-8), but it is
 still the one tool here whose effects are visible to every member of a server the moment it runs.
+
+#### MCP-11 Connecting an assistant uses the same sign-in as everything else
+
+The sign-in a person meets when they connect an assistant is the panel's own sign-in, not a second
+one. It shows the app's logo, name and one-line description at the top, offers the same two ways in
+— Google, and an emailed link — behind the same agreement to the published documents, and differs
+only in the sentence explaining why it is being asked for: this visitor arrived from an assistant
+asking to connect, and the page says so.
+
+The agreement checkbox gates both ways in, and the Google control is *shown* while it is ungated
+rather than replaced by an explanation of its absence: a disabled Google button that the checkbox
+enables reads as a precondition, where a missing button reads as a fault. Every other sign-in
+surface in the panel — the home page, a join link, an invitation, a signed-out deep link — shows the
+same header and the same controls, so there is one sign-in to maintain and one for a person to learn.
+
+#### MCP-12 A connection survives the time an email takes to arrive
+
+Connecting an assistant sends a sign-in link by email, and email is not instant. A connection
+request must therefore stay live long enough for a message to be queued, delivered, noticed and
+opened — not merely long enough for someone already sitting at the browser to click through. A
+request that expired while its own email was still in flight is the platform's fault, not the
+person's, and it must not happen for any ordinary delivery delay.
+
+When a request genuinely has expired, the page saying so is a page of this app like any other — the
+same logo, name and layout as every other screen, readable on a phone — and it offers a way forward
+rather than only an apology: the person is told to start the connection again from their assistant,
+and a sign-in link that expired on its own can be asked for again without leaving the page.
+
+#### WEB-48 The panel is readable on a phone without pinching
+
+Every page this platform serves declares a mobile viewport and lays out at a phone's width. Nothing
+a person taps zooms the page in on its own — a form field is never small enough for a mobile browser
+to decide it must magnify the page to make it usable — and nothing scrolls sideways. Pages the panel
+does not render itself, including any page served directly by the API, are held to the same standard
+rather than exempted for being small.

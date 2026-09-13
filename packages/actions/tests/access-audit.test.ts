@@ -64,6 +64,19 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // carries.
   'courses.export': { resource: 'course', access: 'read' },
   'courses.import': { resource: 'project', access: 'write' },
+  // SRV-12: every one of these six resolves the owning course, org-scoped —
+  // `addCategory` resolves it directly, the other five resolve *up* to it
+  // through a category or a channel (`packages/db/src/repos/courses.ts`'s
+  // own `getCourseCategory`/`getCourseChannel`) — but the descriptor still
+  // names the resource a write against any of them actually reaches: the
+  // course's own declared structure, the same resource `courses.save`'s own
+  // row above protects.
+  'courseChannels.addCategory': { resource: 'course', access: 'write' },
+  'courseChannels.renameCategory': { resource: 'course', access: 'write' },
+  'courseChannels.removeCategory': { resource: 'course', access: 'write' },
+  'courseChannels.addChannel': { resource: 'course', access: 'write' },
+  'courseChannels.updateChannel': { resource: 'course', access: 'write' },
+  'courseChannels.removeChannel': { resource: 'course', access: 'write' },
   // TEN-6: marks a binding inactive; deletes nothing. Installing is not an
   // action at all (`actions/discord-servers.ts`'s own module comment) — it
   // needs the caller's account id, which nothing in this package's dispatch

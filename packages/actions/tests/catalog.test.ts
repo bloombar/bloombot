@@ -107,6 +107,13 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courses.export',
         'courses.get',
         'courses.import',
+        // SRV-12 — added by this slice.
+        'courseChannels.addCategory',
+        'courseChannels.renameCategory',
+        'courseChannels.removeCategory',
+        'courseChannels.addChannel',
+        'courseChannels.updateChannel',
+        'courseChannels.removeChannel',
         'discordServers.remove',
         'discordServers.list',
         'discordServers.scaffold',

@@ -11822,3 +11822,68 @@ duration to a clock reading) takes `now` as an explicit argument rather than rea
 `courseJoinLinks.create`'s own `execute` — the one caller whose timing matters — controls exactly when that
 resolution happens: at the moment a link is actually created, on the server, never earlier and never on the
 client the way `JoinLinks.tsx` used to compute it by hand.
+
+## D-109 — SRV-12: only category names carry a PROJ-3 invariant to preserve; channel names carry none
+
+**The brief asked what invariant a full `courses.save` upholds over its category/channel list that these
+six narrower writes must uphold too.** Reading `findSelfConflict` and `findCourseNameConflict`
+(`packages/db/src/repos/courses.ts`) end to end: both ever compare *category* names — for a duplicate
+within one course, or a collision with another enabled course routing in the same Discord server — and
+the two role names against each other and against other courses'. Neither function, and no `CHECK`
+constraint on `course_channels` (`schema.ts` has none), ever compares a *channel's* own name against
+anything. So `addCourseCategory`/`renameCourseCategory` (the two writes that can introduce a category-name
+collision) run the identical check `updateCourse` already runs, scoped to a *hypothetical* category list —
+the course's own current categories with one name added or renamed — while `addCourseChannel` and
+`updateCourseChannel` run no conflict check at all: there is no invariant over channel names for a narrower
+write to preserve, and inventing one here would enforce something `courses.save` itself does not.
+
+**`checkCategoryNameAgainstCourse` (`packages/db/src/repos/courses.ts`) is a new, shared helper**, not two
+copies of `updateCourse`'s own inline block — `addCourseCategory` and `renameCourseCategory` need the
+identical PROJ-3/TEN-9 sequence (self-conflict, then, only for a routing course, server resolution and the
+cross-course check), differing only in which candidate category-name list they build first. `checkRoles` is
+always `false` in both checks it runs: neither action ever touches a role name, so there is nothing for the
+role half of either check to have changed — the same gate `updateCourse`'s own `rolesChanged` already
+applies, just permanently true here rather than computed.
+
+**Resolution is always upward, and always through the two new repo functions `getCourseCategory`/
+`getCourseChannel`**, never by trusting an id's own foreign key. A `categoryId` is checked against
+`organizationId` directly, then its `courseId` is checked again; a `channelId` is checked, then its
+`categoryId`, then that category's own `courseId` — three separate scoped lookups for a channel, not one
+join trusted to carry the scoping through. Every policy in `course-channels.ts` resolves through one of
+these two functions (or `courses.getCourse` for `addCategory`, which only ever needs the course itself), so
+a category or channel belonging to another organization resolves to `undefined` at whichever hop first
+fails, and every one of the six actions refuses it with the same undifferentiated `ActionRefusedError`
+(ACT-3) — never a distinct signal for "wrong organization" versus "no such course."
+
+**Rework round 1 correction to this entry's own original wording**: the paragraph above used to claim
+`removeCourseCategory`'s channel count came "from the same `getCourseCategory` call that already resolved
+the policy" — that was never actually true (the repo function ran its own, second `getCourseCategory` call
+against `db`, discarding whatever the action's policy had already resolved), and reading the count from
+either call, *before* `writeTransaction` opened, was must-fix 4's own finding: `BEGIN IMMEDIATE` takes the
+write lock at the first statement *inside* the transaction, so a count taken earlier can under-report if a
+channel is added in the window between that read and the lock. `removeCourseCategory` now resolves the
+category (and reads `removedChannelCount` off the deleting statement's own `.run().changes`) entirely
+inside `writeTransaction`, against `tx` — so nothing before the lock is trusted, and the count is the same
+statement that actually performed the delete, not a snapshot of anything read earlier. `renameCourseCategory`
+took the identical fix for the `channels` it returns, for the same reason. `addCourseChannel` is now wrapped
+in `writeTransaction` too (must-fix 2) — not because its own read needed to be fresher, but because two
+concurrent calls against the same category, previously unserialized, could assign the same `ordering` to two
+channels, or race an insert into `removeCourseCategory`'s own delete and surface a raw foreign-key error
+(a 500) instead of a clean refusal. `updateCourseChannel` (must-fix 3) no longer reads the stored row at
+all before writing — `.set(...)` is built from only the keys the caller actually sent, so a concurrent
+name-only update and a concurrent `adminsOnly`-only update can no longer clobber each other with a stale
+read of the field neither one touched.
+
+**Known residual, left alone on purpose**: category names are compared byte-exact in `findSelfConflict`'s
+duplicate check (a `Set<string>` of literal names), but `apps/worker`'s scaffold matches a declared category
+against a live Discord category by `normalizeName` (trim + lowercase, `discord-scaffold.ts`) — so
+`addCourseCategory('global')` alongside an existing `GLOBAL` is accepted by this check and both declarations
+collapse onto the same Discord category the next time a scaffold runs, the same aliasing class SRV-10/SRV-11
+already closed for the two role names (`normalizeRoleName`, `packages/db/src/repos/courses.ts`). This is
+pre-existing in `courses.save`/`updateCourse` — `findSelfConflict`'s category loop never normalized before
+this slice either — and `addCourseCategory`/`renameCourseCategory` only ever reuse that same check
+(`checkCategoryNameAgainstCourse`), so fixing it here alone would make these two narrower actions *stricter*
+than the whole-list save they complement, letting a caller reach through `courses.save` a state
+`courseChannels.addCategory` would refuse — worse than leaving both equally permissive. Normalizing category
+names the way roles already are is a defect in its own right, but it belongs to a slice that touches
+`courses.save`'s own check too, not this one.

@@ -201,6 +201,13 @@ describe('TEN-5 — every organization-scoped route, against a foreign session, 
         // PORT-1/PORT-4 — added by this slice.
         'POST /organizations/:organizationId/actions/courses.export',
         'POST /organizations/:organizationId/actions/courses.import',
+        // SRV-12 — added by this slice.
+        'POST /organizations/:organizationId/actions/courseChannels.addCategory',
+        'POST /organizations/:organizationId/actions/courseChannels.renameCategory',
+        'POST /organizations/:organizationId/actions/courseChannels.removeCategory',
+        'POST /organizations/:organizationId/actions/courseChannels.addChannel',
+        'POST /organizations/:organizationId/actions/courseChannels.updateChannel',
+        'POST /organizations/:organizationId/actions/courseChannels.removeChannel',
         'POST /organizations/:organizationId/actions/discordServers.remove',
         'POST /organizations/:organizationId/actions/discordServers.list',
         'POST /organizations/:organizationId/actions/discordServers.scaffold',

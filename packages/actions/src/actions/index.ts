@@ -32,6 +32,14 @@ import {
 } from './courses.js'
 import { exportCourseAction, importCourseAction } from './course-portability.js'
 import {
+  addCourseCategoryAction,
+  addCourseChannelAction,
+  removeCourseCategoryAction,
+  removeCourseChannelAction,
+  renameCourseCategoryAction,
+  updateCourseChannelAction,
+} from './course-channels.js'
+import {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
   listCourseAttachmentsAction,
@@ -108,6 +116,14 @@ export {
   type ExportCourseOutput,
   type ImportCourseOutput,
 } from './course-portability.js'
+export {
+  addCourseCategoryAction,
+  addCourseChannelAction,
+  removeCourseCategoryAction,
+  removeCourseChannelAction,
+  renameCourseCategoryAction,
+  updateCourseChannelAction,
+} from './course-channels.js'
 export {
   createAttachCourseAttachmentAction,
   detachCourseAttachmentAction,
@@ -242,6 +258,12 @@ export function createPlatformRegistry(options?: {
   registry.register(getCourseAction)
   registry.register(exportCourseAction)
   registry.register(importCourseAction)
+  registry.register(addCourseCategoryAction)
+  registry.register(renameCourseCategoryAction)
+  registry.register(removeCourseCategoryAction)
+  registry.register(addCourseChannelAction)
+  registry.register(updateCourseChannelAction)
+  registry.register(removeCourseChannelAction)
   registry.register(removeDiscordServerAction)
   registry.register(listDiscordServersAction)
   registry.register(scaffoldDiscordServerAction)

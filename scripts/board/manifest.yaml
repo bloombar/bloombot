@@ -2173,7 +2173,7 @@
   section: §23 Knowledge Files & Instructions
   family: FILE
   phase: 10
-  status: Backlog
+  status: Done
   review: false
 - id: MDL-8
   title: Instructions are how a course is configured; a stored prompt id is only
@@ -2910,7 +2910,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-17
   title: The orphan-file prune runs on the droplet from CI, dry run by default
@@ -2926,7 +2926,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: Done
   review: false
 - id: OPS-18
   title: The deploy backs up the database before migrating it
@@ -2961,7 +2961,7 @@
   section: §27 Production Hardening & Cutover
   family: OPS
   phase: 15
-  status: Backlog
+  status: Done
   review: false
 - id: ENRL-7
   title: Anyone a course is taught through is enrolled by asking it

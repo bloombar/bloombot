@@ -66,7 +66,7 @@ export interface ServerDependencies {
   /** Checked against every non-GET request's `Origin`/`Referer` (API-3). `CONFIG.PUBLIC_APP_URL` in production. */
   publicAppUrl: string
   emailSender: EmailSender
-  buildSignInLink: (token: string) => string
+  buildSignInLink: (token: string, destination?: string) => string
   googleVerifier: GoogleIdTokenVerifier
   /** Defaults to `createPlatformRegistry()` — every action this slice ports. Overridable so a test can dispatch against a registry of its own, e.g. a recording action, without registering it alongside the platform's real ones. */
   registry?: ActionRegistry
@@ -209,17 +209,10 @@ export function buildApp(deps: ServerDependencies): Express {
     '/organizations/:organizationId/transcript-exports',
     buildTranscriptExportsRouter({ db: deps.db, attachmentStorage })
   )
-  // MCP-7 — a plain HTML `<form>` POST, not a JSON body: this needs
-  // `express.urlencoded`, which nothing else this app mounts does.
-  app.use('/oauth/mcp', express.urlencoded({ extended: false }))
-  app.use(
-    '/oauth/mcp',
-    buildMcpOauthConsentRouter({
-      db: deps.db,
-      publicAppUrl: deps.publicAppUrl,
-      emailSender: deps.emailSender,
-    })
-  )
+  // MCP-11 — a JSON router now (`routes/mcp-oauth-consent.ts`'s own module
+  // comment on why): the general-purpose `express.json()` mounted above
+  // already covers it, so this mount needs nothing of its own.
+  app.use('/oauth/mcp', buildMcpOauthConsentRouter({ db: deps.db }))
   app.use(
     '/organizations/:organizationId/person-link',
     buildPersonLinkRouter({

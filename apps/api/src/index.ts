@@ -36,6 +36,7 @@ import { createOpenAiModelClient } from '@bloombot/openai'
 
 import { buildEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
+import { buildSignInLink } from './sign-in-link.js'
 
 const PROCESS_NAME = 'api'
 
@@ -258,7 +259,10 @@ async function main(): Promise<void> {
       smtp,
       logger
     ),
-    buildSignInLink: (token) => `${publicAppUrl}/sign-in/${token}`,
+    // MCP-12 — `sign-in-link.ts` owns the URL's own shape, so the function
+    // this deployment runs is the one the tests exercise.
+    buildSignInLink: (token, destination) =>
+      buildSignInLink(publicAppUrl, token, destination),
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.
     googleVerifier: createGoogleIdTokenVerifier(),

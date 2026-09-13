@@ -72,7 +72,7 @@ async function buildTestApp(
     toolDefinitions: buildToolDefinitions(createPlatformRegistry()),
     oauthProvider: buildOauthProvider({
       db: overrides.db,
-      consentUrl: 'http://127.0.0.1:1/oauth/mcp/authorize',
+      consentUrl: 'http://127.0.0.1:1/connect-assistant',
       resource: 'http://127.0.0.1:1/mcp',
     }),
     issuerUrl: new URL('http://127.0.0.1:1'),

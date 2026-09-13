@@ -23,6 +23,7 @@ import type { Express } from 'express'
 import { afterEach } from 'vitest'
 
 import { buildApp, type ServerDependencies } from '../../src/server.js'
+import { buildSignInLink } from '../../src/sign-in-link.js'
 import { createFakeDiscordRestClient } from './fake-discord-rest-client.js'
 import { createFakeLogger } from './fake-logger.js'
 import { FakeModelClient } from './fake-model-client.js'
@@ -124,7 +125,11 @@ export function buildTestApp(
     logger: createFakeLogger(),
     publicAppUrl: TEST_PUBLIC_APP_URL,
     emailSender: new RecordingEmailSender(),
-    buildSignInLink: (token) => `${TEST_PUBLIC_APP_URL}/sign-in/${token}`,
+    // The production builder, not a lookalike (MCP-12, review note): while
+    // every caller spelled the URL out for itself, a typo in the real one
+    // — a missing `?`, a missing `encodeURIComponent` — shipped green.
+    buildSignInLink: (token, destination) =>
+      buildSignInLink(TEST_PUBLIC_APP_URL, token, destination),
     googleVerifier: createFakeGoogleVerifier(),
     // TEN-4 — a fake `DiscordRestClient` by default (no network); a test
     // that needs a particular guild list or exchange result overrides this

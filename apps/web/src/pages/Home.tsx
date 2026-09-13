@@ -21,7 +21,7 @@
  * `tests/home.test.tsx` for the ones pinned so they cannot quietly soften.
  */
 
-import { Logo } from '../components/Logo.js'
+import { SignInHeader } from '../components/SignInHeader.js'
 import { SiteFooter } from '../components/SiteFooter.js'
 import { SignIn } from './SignIn.js'
 
@@ -81,17 +81,7 @@ export function Home({ onSignedIn, googleClientId }: HomeProps) {
   return (
     <div className="min-h-screen bg-neutral-50" data-testid="home-page">
       <main className="mx-auto max-w-3xl px-4 py-12">
-        <header className="flex flex-col items-center text-center">
-          <Logo className="size-16" title="Bloombot" />
-          <h1 className="mt-4 text-2xl font-semibold text-neutral-900">
-            Bloombot
-          </h1>
-          <p className="mt-2 max-w-xl text-base text-neutral-700">
-            A teaching assistant that answers students’ course questions on
-            Discord and on the web, using the material their instructor
-            supplies.
-          </p>
-        </header>
+        <SignInHeader />
 
         {/* Sign-in sits directly under the header, above the explanation: a
             visitor who already knows what this is should not have to scroll

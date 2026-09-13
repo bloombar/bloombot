@@ -32,13 +32,21 @@ import {
 
 import { generateSecret, hashSecret } from './secrets.js'
 
-// Generous enough that a person can be sent to sign in, sign in, and
-// consent, with no delivery delay to accommodate (the same reasoning
-// `person-link.ts`'s own `DEFAULT_PERSON_LINK_TTL_MS` doc comment gives for
-// its identical ten minutes) — but this is a *browser redirect* carrying
-// nothing spendable on its own (`schema.ts`'s own module comment), not a
-// bearer secret, so there is less at stake in it running a little long.
-export const DEFAULT_PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000
+// MCP-12: this row is a browser redirect carrying nothing spendable on its
+// own (`schema.ts`'s own module comment) — it is bound to the first
+// signed-in account that touches it (`claimPendingAuthorization`, below) and
+// grants nothing until an explicit `Allow`, so a longer window here costs
+// little. It has to survive an *emailed* sign-in link, not a same-tab click:
+// a person connects an assistant, waits for the email, and only then signs
+// in — and that link's own 15-minute token (`tokens.ts#DEFAULT_TOKEN_TTL_MS`)
+// can itself be re-requested once or twice inside this window if delivery is
+// slow. Ten minutes, this constant's original value, was measured from
+// *before* the email was even queued and assumed "no delivery delay to
+// accommodate" — a premise this flow never actually satisfies, and a real
+// person hit it: connected, the email arrived a few minutes late, and the
+// pending row was already gone by the time they clicked it. `docs/DECISIONS.md`
+// has this change's own record.
+export const DEFAULT_PENDING_AUTHORIZATION_TTL_MS = 60 * 60 * 1000
 
 // RFC 6749 §4.1.2 calls out ten minutes as a generous outer bound for an
 // authorization code; this platform's own person-link tokens use the same

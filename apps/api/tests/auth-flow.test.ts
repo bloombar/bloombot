@@ -53,7 +53,11 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
     expect(emailSender.sent).toHaveLength(1)
 
     const emailedLink = emailSender.sent[0]!.body
-    const token = emailedLink.split('/sign-in/')[1]?.trim()
+    // MCP-12 — the token is only the part of the link before any query:
+    // `buildSignInLink` (`src/sign-in-link.ts`) appends `?destination=` when
+    // the request carried one, and these helpers now use that same builder
+    // rather than a lookalike, so the query has to be stripped here.
+    const token = emailedLink.split('/sign-in/')[1]?.trim().split('?')[0]
     expect(token).toBeTruthy()
 
     // 2. Redeem it — receive a session cookie.
@@ -136,7 +140,7 @@ describe('sign-in, "who am I", sign-out — end to end over HTTP', () => {
         .set('Origin', TEST_PUBLIC_APP_URL)
         .send({ email: 'returning@example.edu' })
       const link = emailSender.sent[emailSender.sent.length - 1]!.body
-      const token = link.split('/sign-in/')[1]!.trim()
+      const token = link.split('/sign-in/')[1]!.trim().split('?')[0]!
       const redeemed = await request(app)
         .post('/auth/redeem')
         .set('Origin', TEST_PUBLIC_APP_URL)
@@ -499,7 +503,7 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
     expect(requested.status).toBe(204)
 
     const emailedLink = emailSender.sent[0]!.body
-    const token = emailedLink.split('/sign-in/')[1]?.trim()
+    const token = emailedLink.split('/sign-in/')[1]?.trim().split('?')[0]
 
     const redeemed = await request(app)
       .post('/auth/redeem')
@@ -524,7 +528,7 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
       .set('Origin', TEST_PUBLIC_APP_URL)
       .send({ email: 'undestined@example.edu' })
     const emailedLink = emailSender.sent[0]!.body
-    const token = emailedLink.split('/sign-in/')[1]?.trim()
+    const token = emailedLink.split('/sign-in/')[1]?.trim().split('?')[0]
 
     const redeemed = await request(app)
       .post('/auth/redeem')
@@ -572,7 +576,7 @@ describe('POST /auth/request-link and POST /auth/redeem — destination (AUTH-6)
     // The one link actually mailed now redeems to the second request's own
     // destination, not nowhere.
     const emailedLink = emailSender.sent[0]!.body
-    const token = emailedLink.split('/sign-in/')[1]?.trim()
+    const token = emailedLink.split('/sign-in/')[1]?.trim().split('?')[0]
     const redeemed = await request(app)
       .post('/auth/redeem')
       .set('Origin', TEST_PUBLIC_APP_URL)

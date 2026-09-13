@@ -109,6 +109,7 @@ import {
   isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js'
 
+import { listAdministeredCourses } from './admin-tools.js'
 import { authenticateBearerToken, parseBearerToken } from './authenticate.js'
 import {
   callTool,
@@ -124,6 +125,7 @@ import {
 } from './chat-tools.js'
 import { checkHealth } from './health.js'
 import {
+  MCP_ADMIN_TOOL_SURFACE,
   MCP_CHAT_TOOL_SURFACE,
   type McpToolDefinition,
 } from './tool-surface.js'
@@ -754,6 +756,68 @@ function registerChatTools(
   )
 }
 
+/** Both `chat.listCourses` (MCP-8) and `courses.listAdministered` (MCP-9) give a plain, non-error result for an account that reaches nothing through them — this one is for the latter, worded around membership rather than a connected identity so it does not tell an assistant to reach for `bloombot_connectAssistant`, which grants no *administrative* authority at all. */
+const NO_ADMINISTERED_COURSES_TEXT =
+  'This account does not hold an administrative membership in any organization, so there is nothing here to list. ' +
+  'Ask an owner of the organization you expect to administer to add this account as a member.'
+
+/**
+ * MCP-9: `courses.listAdministered`, registered directly rather than
+ * through `registerTools`' own `call-tool.ts` dispatch pipeline —
+ * `admin-tools.ts`'s own module comment has the full reasoning (the same
+ * cross-organization shape mismatch `registerChatTools`, just above,
+ * already has for `chat.listCourses`). Read-only and never destructive, so
+ * neither `requestConfirmation` nor `extra` is needed here either.
+ */
+function registerAdminTools(
+  mcpServer: McpServer,
+  deps: ServerDependencies,
+  accountId: string
+): void {
+  const [entry] = MCP_ADMIN_TOOL_SURFACE
+  if (!entry) {
+    throw new Error(
+      'apps/mcp: MCP_ADMIN_TOOL_SURFACE is missing its one expected entry.'
+    )
+  }
+
+  mcpServer.registerTool(
+    entry.name,
+    {
+      description: entry.description,
+      inputSchema: entry.inputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (): Promise<CallToolResult> => {
+      try {
+        const administered = listAdministeredCourses(accountId, deps.db)
+        if (administered.length === 0) {
+          return {
+            content: [{ type: 'text', text: NO_ADMINISTERED_COURSES_TEXT }],
+          }
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(administered) }],
+        }
+      } catch (error) {
+        // A thrown, unrecognised error must never reach a client as-is — the
+        // same discipline `registerChatTools`' own `chat.listCourses`
+        // handler already holds itself to, just above.
+        deps.logger.error(
+          { err: error, accountId },
+          'apps/mcp: courses.listAdministered failed'
+        )
+        return {
+          isError: true,
+          content: [
+            { type: 'text', text: 'This request could not be completed.' },
+          ],
+        }
+      }
+    }
+  )
+}
+
 function buildMcpServer(
   deps: ServerDependencies,
   accountId: string
@@ -764,6 +828,7 @@ function buildMcpServer(
   registerTools(mcpServer, deps, accountId)
   registerPersonLinkTool(mcpServer, deps, accountId)
   registerChatTools(mcpServer, deps, accountId)
+  registerAdminTools(mcpServer, deps, accountId)
   return mcpServer
 }
 

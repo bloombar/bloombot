@@ -35,8 +35,8 @@ export interface AuthRouterDependencies {
   db: Database
   /** The mail port a sign-in link is sent through — a real transport in production, `RecordingEmailSender` in a test (`@bloombot/auth`'s own `email.ts`). */
   emailSender: EmailSender
-  /** Turns an issued token into the URL the emailed link points at. `@bloombot/auth` has no notion of the web app's own route; this API does. */
-  buildSignInLink: (token: string) => string
+  /** Turns an issued token into the URL the emailed link points at. `@bloombot/auth` has no notion of the web app's own route; this API does. `destination` (MCP-12) is the same-origin path the link should return to, appended as a query hint — see `sign-in-link.ts`. */
+  buildSignInLink: (token: string, destination?: string) => string
   googleVerifier: GoogleIdTokenVerifier
 }
 

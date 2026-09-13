@@ -24,6 +24,7 @@ import { createDiscordRestClient } from '@bloombot/discord-rest'
 import { createLogger } from '@bloombot/logger'
 
 import { buildApp } from '../../apps/api/src/server.js'
+import { buildSignInLink } from '../../apps/api/src/sign-in-link.js'
 import { FakeModelClient } from './fake-model-client.js'
 import { FileEmailSender } from './file-email-sender.js'
 import {
@@ -55,7 +56,10 @@ const app = buildApp({
   logger,
   publicAppUrl: E2E_PUBLIC_APP_URL,
   emailSender: new FileEmailSender(E2E_MAIL_PATH),
-  buildSignInLink: (token) => `${E2E_PUBLIC_APP_URL}/sign-in/${token}`,
+  // The production builder, not a lookalike — so the e2e suite exercises
+  // the same URL shape the deployment emails (MCP-12, review note).
+  buildSignInLink: (token, destination) =>
+    buildSignInLink(E2E_PUBLIC_APP_URL, token, destination),
   // Never called in this slice's e2e spec (Google sign-in and the Discord
   // install flow are both out of scope for QA-7's own "sign in, land in an
   // organization, see what a signed-in instructor sees") — real, lazy

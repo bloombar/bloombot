@@ -158,6 +158,15 @@ export function SignIn(props: SignInProps) {
             )
           },
         })
+        // This effect re-runs whenever the checkbox is toggled (the
+        // dependency-array comment above on why it has to), and GIS is not
+        // documented either way on whether `renderButton` replaces what is
+        // already in its parent or appends beside it. Emptying the slot
+        // first makes that question moot rather than leaving a stacked
+        // second button to a browser behaviour nothing here can test —
+        // jsdom never loads the real script and the e2e suite deliberately
+        // never reaches accounts.google.com (QA-2).
+        googleButtonRef.current.replaceChildren()
         google.accounts.id.renderButton(googleButtonRef.current, {
           type: 'standard',
           theme: 'outline',

@@ -12052,3 +12052,33 @@ round-trips it through `apps/web/src/routing/route.ts#parseRoute` — a delibera
 (`apps/mcp` otherwise has nothing to do with `apps/web`) chosen because "shaped like the right path" and "an
 address `apps/web`'s own router actually recognises" are different claims, and this is the one seam where a
 typo in either app would otherwise ship silently.
+
+**Rework round 2 — a transport failure is not a spent link, and the emailed URL is built in one place.**
+`RedeemLink.tsx`'s recovery page (must-fix 3, above) originally rendered for *any* failed redemption,
+including `api/client.ts`'s own `ApiError(0, { error: 'network_error' })` — a `fetch` that never got a
+response at all. Telling someone their link expired when the network merely blinked pushes them into
+requesting a replacement they do not need, and `requestSignInLink`'s own anti-flood guard
+(`packages/auth/src/sign-in.ts`) then declines it silently while their real token is still live, so the
+second email never arrives and they are left waiting on one that was never sent. The recovery page is now
+gated on the only two statuses `POST /auth/redeem` can actually refuse with — 400 `invalid_request` and 401
+`invalid_token` — and everything else keeps the plain `ErrorMessage` it had before, which already says "try
+again" rather than "start over". An expired or already-used token is not *active*, so `hasActiveSignInToken`
+is false for it and a genuine second email does get sent from the recovery page; the guard only bites while
+a live token is outstanding, which is exactly the case the page must not send someone into.
+
+`buildSignInLink` also moved out of `index.ts`'s process wiring into `apps/api/src/sign-in-link.ts`. It was
+an inline lambda in `main()`, so nothing could test it: `packages/auth` proved `buildLink` *receives* a
+destination using its own test-local builder, `RedeemLink` proved it *reads* one back off
+`window.location.search`, and no test joined the two — a `&` where a `?` belonged, or a missing
+`encodeURIComponent`, would have shipped green through every check. `apps/api/tests/helpers/build-test-app.ts`
+and `e2e/support/start-api.ts` now call the same function the deployment calls rather than each spelling
+the URL out for itself.
+
+A reviewer noted a smaller change was available for the destination hint: `routes/auth.ts` already has
+`parsed.data.destination` in scope, so `buildLink: (token) => deps.buildSignInLink(token, destination)`
+would have produced the identical emailed URL without widening `RequestSignInLinkDeps.buildLink` in
+`packages/auth` at all. That is true, and it would have kept the slice inside its original scope. The
+widened port is kept because it makes the hint explicit at the boundary where the decision is actually
+made — a `buildLink` that silently closes over a destination its own signature does not mention is the
+kind of thing the next reader has to go find — but the narrower option is recorded here as the one that
+should be preferred if this ever has to be undone.

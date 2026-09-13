@@ -36,6 +36,7 @@ import { createOpenAiModelClient } from '@bloombot/openai'
 
 import { buildEmailSender } from './logging-email-sender.js'
 import { buildApp } from './server.js'
+import { buildSignInLink } from './sign-in-link.js'
 
 const PROCESS_NAME = 'api'
 
@@ -258,16 +259,10 @@ async function main(): Promise<void> {
       smtp,
       logger
     ),
-    // MCP-12 — `destination` rides along as a query parameter, not only on
-    // the token itself: `RedeemLink.tsx`'s own failure state reads it back
-    // off this URL to offer "request a new link that returns here" once the
-    // token it was issued for has already expired and the destination
-    // stored against *that* token is unrecoverable (`sign-in.ts`'s own
-    // `buildLink` doc comment has the fuller reasoning).
+    // MCP-12 — `sign-in-link.ts` owns the URL's own shape, so the function
+    // this deployment runs is the one the tests exercise.
     buildSignInLink: (token, destination) =>
-      destination === undefined
-        ? `${publicAppUrl}/sign-in/${token}`
-        : `${publicAppUrl}/sign-in/${token}?destination=${encodeURIComponent(destination)}`,
+      buildSignInLink(publicAppUrl, token, destination),
     // Lazy by construction (PLAT-5) — nothing here fetches Google's keys;
     // that happens on the first `/auth/google` call, if one ever arrives.
     googleVerifier: createGoogleIdTokenVerifier(),

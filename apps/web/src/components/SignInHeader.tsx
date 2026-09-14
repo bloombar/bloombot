@@ -22,8 +22,9 @@ export function SignInHeader() {
       <Logo className="size-16" title="Bloombot" />
       <h1 className="mt-4 text-2xl font-semibold text-neutral-900">Bloombot</h1>
       <p className="mt-2 max-w-xl text-base text-neutral-700">
-        A teaching assistant that answers students’ course questions on Discord
-        and on the web, using the material their instructor supplies.
+        A teaching assistant that answers students’ course questions on Discord,
+        on the web, and through ChatGPT, Claude and other assistants, using the
+        material their instructor supplies.
       </p>
     </header>
   )

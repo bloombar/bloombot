@@ -4194,7 +4194,7 @@
   section: §37 Landing After Connecting
   family: LINK
   phase: 32
-  status: In progress
+  status: In review
   review: false
 - id: WEB-49
   title: Every signed-in page carries the panel's own header
@@ -4211,5 +4211,5 @@
   section: §37 Landing After Connecting
   family: WEB
   phase: 32
-  status: In progress
+  status: In review
   review: false

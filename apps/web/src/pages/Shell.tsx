@@ -115,29 +115,21 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import {
-  ApiError,
-  dispatchAction,
-  listDiscordServers,
-  signOut,
-} from '../api/client.js'
+import { ApiError, dispatchAction, listDiscordServers } from '../api/client.js'
 import { isActiveDiscordBinding } from '../api/types.js'
 import type {
   AccountSummary,
   DiscordServerBindingSummary,
 } from '../api/types.js'
-import { AppShell, type AppShellHandle } from '../components/AppShell.js'
-import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { DiscordServerRow, InstallButton } from '../components/InstallButton.js'
-import { OrganizationSwitcher } from '../components/OrganizationSwitcher.js'
 import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
+import { SignedInChrome } from '../components/SignedInChrome.js'
 import { Team } from '../components/Team.js'
 import {
   NavigationGuardProvider,
   useNavigationGuard,
 } from '../hooks/navigation-guard.js'
-import { ProfileIcon, SignOutIcon } from '../icons.js'
 import {
   isProjectsRoute,
   routeForTab,
@@ -280,7 +272,6 @@ function ShellInner({
     undefined
   )
   const [error, setError] = useState<ApiError | undefined>(undefined)
-  const [signingOut, setSigningOut] = useState(false)
   // WEB-32/WEB-34 — derived from `route`, not this shell's own state
   // (`tabForRoute`'s own comment, `routing/route.ts`, has why every
   // `ProjectsRoute` variant collapses to `'projects'`). `App.tsx`'s own
@@ -455,58 +446,9 @@ function ShellInner({
     }
   }
 
-  const handleSignOut = async () => {
-    setSigningOut(true)
-    try {
-      await signOut()
-    } catch {
-      // A `catch` with nothing in it, not merely a `finally` — without one,
-      // a rejected `signOut()` (a network failure, `api/client.ts`'s own
-      // `network_error`) propagated past `finally` and out of this
-      // `async` function, and `<button onClick={() => void handleSignOut()}>`
-      // above discards the returned promise rather than awaiting it, so the
-      // rejection had nowhere to land but an unhandled rejection (finding 3
-      // of the WEB-1..6 rework). Nothing to show for it here either way:
-      // `onSignedOut` below already triggers `App.tsx`'s own `/auth/me`
-      // re-check, the source of truth for whether the session actually
-      // ended — if it did not, that re-check is what puts this account back
-      // in the shell, not anything this component decides.
-    } finally {
-      // AUTH-3: sign-out revokes the session server-side even if this
-      // request somehow fails to round-trip — the caller should not be
-      // stuck signed in on this screen either way, so `onSignedOut` runs
-      // regardless and `App.tsx`'s own `/auth/me` re-check is the source of
-      // truth for whether the session actually ended.
-      setSigningOut(false)
-      onSignedOut()
-    }
-  }
-
-  // WEB-16/WEB-29: a ref onto `AppShell`'s own drawer handle, so a nav
-  // item's own click can close the drawer itself once its guarded
-  // navigation actually proceeds, rather than `AppShell` closing it
-  // unconditionally the instant the item is clicked — `AppShellHandle`'s
-  // own doc comment (`components/AppShell.tsx`) has the full reasoning,
-  // and why the difference is what `e2e/keyboard.spec.ts`'s own focus-
-  // restoration assertion depends on.
-  const appShellRef = useRef<AppShellHandle>(null)
-  // Every drawer item's own `onClick` — navigate to that tab's own landing
-  // address, then close the drawer — wrapped in `guardedNavigate` (WEB-16)
-  // so a dirty form elsewhere in the tree gets its chance to confirm before
-  // either happens. `routeForTab` (`routing/route.ts`) is the inverse of
-  // `tabForRoute` above: every tab besides Projects is exactly one address,
-  // so this always lands on that tab's plain landing screen, not wherever a
-  // deep link inside it (a course, a project) last pointed.
-  const navigateToTab = (tab: ReturnType<typeof tabForRoute>) =>
-    guardedNavigate(() => {
-      navigate(routeForTab(tab, activeOrganizationId))
-      appShellRef.current?.closeDrawer()
-    })
-
   // WEB-28: `pages/Courses.tsx`'s own Chat button — navigates straight to
   // this course's own Chat address, routed through `guardedNavigate`
-  // (WEB-16) like every other navigation this shell starts, the same as
-  // `navigateToTab` above.
+  // (WEB-16) like every other navigation this shell starts.
   const openChatForCourse = (courseId: string) =>
     guardedNavigate(() => {
       navigate({ kind: 'chat', organizationId: activeOrganizationId, courseId })
@@ -514,15 +456,12 @@ function ShellInner({
 
   // WEB-32/WEB-34's own "switching organizations navigates to the same
   // screen kind under the new organization id, or to that organization's
-  // landing screen where the current screen has no counterpart" rule.
-  // `routeForTab(activeTab, ...)` already drops every id a `ProjectsRoute`/
-  // `'chat'` route might carry (a project, a course) — those never belong
-  // to more than one organization (TEN-2), so they have no counterpart to
-  // carry across regardless of which tab they are under. `'account'` has no
-  // organization-scoped counterpart at all — switching from there always
-  // lands on the target organization's own landing screen, the same
-  // membership-or-not choice `App.tsx`'s own `resolveHomeRoute` makes for a
-  // fresh sign-in.
+  // landing screen where the current screen has no counterpart" rule — kept
+  // here (rather than folded into `SignedInChrome`'s own identical
+  // `landingForOrganizationSwitch`) since `Account.tsx`'s own
+  // `onSwitchOrganization` (below) is the one caller left in this file, not
+  // the header's own organization switcher (`SignedInChrome`'s own module
+  // comment has why that one moved).
   const changeActiveOrganization = (organizationId: string) =>
     guardedNavigate(() => {
       if (activeTab === 'account') {
@@ -537,149 +476,23 @@ function ShellInner({
       navigate(routeForTab(activeTab, organizationId))
     })
 
-  // WEB-29: the "everyday" group — Projects, Chat, Transcripts — every
-  // signed-in account gets, member or connected-only alike; Chat is the
-  // only one of the three a connected-only account can actually reach
-  // (`effectiveTab`, above), so it is the only one offered when `isMember`
-  // is false, exactly as `navItems`' own ternary used to decide before this
-  // slice.
-  const chatNavItem = {
-    key: 'chat',
-    label: 'Chat',
-    onClick: () => navigateToTab('chat'),
-    active: effectiveTab === 'chat',
-  }
-  // WEB-47 — beside Chat, the same audience: `effectiveTab`'s own comment
-  // above has why a connected-but-not-a-member account can reach this tab
-  // too, not only a member.
-  const mcpNavItem = {
-    key: 'mcp',
-    label: 'MCP',
-    onClick: () => navigateToTab('mcp'),
-    active: effectiveTab === 'mcp',
-  }
-  const everydayGroup = {
-    key: 'everyday',
-    items: isMember
-      ? [
-          {
-            key: 'projects',
-            label: 'Projects',
-            onClick: () => navigateToTab('projects'),
-            active: effectiveTab === 'projects',
-          },
-          chatNavItem,
-          mcpNavItem,
-          {
-            key: 'transcripts',
-            label: 'Transcripts',
-            onClick: () => navigateToTab('transcripts'),
-            active: effectiveTab === 'transcripts',
-          },
-        ]
-      : [chatNavItem, mcpNavItem],
-  }
-  // WEB-29: the organization group — Discord, Team, Usage, Jobs — offered
-  // only to a member, and divided from the everyday group above by a
-  // visible separator (`AppShell.tsx`'s own `navGroups` rendering). LINK-10:
-  // withheld outright for a connected-but-not-a-member organization, not
-  // merely disabled or left to fail once clicked — a control every click
-  // through it would 404 against is worse offered than absent (this
-  // component's own module comment has the fuller reasoning, and what was
-  // deliberately erred toward).
-  const organizationGroup = {
-    key: 'organization',
-    label: 'Organization',
-    items: [
-      {
-        key: 'discord',
-        label: 'Discord',
-        onClick: () => navigateToTab('discord'),
-        active: effectiveTab === 'discord',
-      },
-      {
-        key: 'team',
-        label: 'Team',
-        onClick: () => navigateToTab('team'),
-        active: effectiveTab === 'team',
-      },
-      {
-        key: 'usage',
-        label: 'Usage',
-        onClick: () => navigateToTab('usage'),
-        active: effectiveTab === 'usage',
-      },
-      {
-        key: 'jobs',
-        label: 'Jobs',
-        onClick: () => navigateToTab('jobs'),
-        active: effectiveTab === 'jobs',
-      },
-    ],
-  }
-
+  // LINK-11/WEB-49 — the header, drawer and footer this shell shows are now
+  // built by `SignedInChrome`, the one implementation it shares with the
+  // standalone signed-in pages that used to stand outside it entirely
+  // (`components/SignedInChrome.tsx`'s own module comment has the full
+  // reasoning). `runAction={guardedNavigate}` threads this shell's own
+  // navigation guard through unchanged — every action `SignedInChrome`
+  // starts still runs through it, exactly as it did when this shell built
+  // `AppShell`'s props inline.
   return (
-    <AppShell
-      ref={appShellRef}
-      onHome={() =>
-        guardedNavigate(() =>
-          navigate(
-            routeForTab(isMember ? 'projects' : 'chat', activeOrganizationId)
-          )
-        )
-      }
-      navGroups={
-        isMember ? [everydayGroup, organizationGroup] : [everydayGroup]
-      }
-      // WEB-30: the acting organization's name sits at the header's leading
-      // edge, in the space the nav row vacated — every navigation it starts
-      // still goes through `guardedNavigate` (WEB-16), unchanged from before
-      // this slice. WEB-41 rework (must-fix 1) — that includes the new
-      // link itself: `navigate` is wrapped here, not passed through raw, so
-      // a dirty form elsewhere in the tree gets the same say before this
-      // click is honoured that it already gets before `changeActiveOrganization`
-      // (immediately below) and every other navigation this shell starts.
-      // Before this fix, the header's own link was the one path in this
-      // shell that bypassed the guard and silently discarded unsaved edits.
-      headerStart={
-        <OrganizationSwitcher
-          memberships={account.memberships}
-          connectedOrganizations={account.connectedOrganizations}
-          activeOrganizationId={activeOrganizationId}
-          onChange={(organizationId) =>
-            changeActiveOrganization(organizationId)
-          }
-          navigate={(route) => guardedNavigate(() => navigate(route))}
-        />
-      }
-      // WEB-30: the header's trailing edge holds the profile control alone
-      // — the organization switcher moved to `headerStart`, sign-out moved
-      // to the drawer's foot (`drawerFooter`, below).
-      headerEnd={
-        <Button
-          variant="ghost"
-          aria-label="Account settings"
-          icon={<ProfileIcon aria-hidden="true" className="size-5" />}
-          onClick={() => guardedNavigate(() => navigate({ kind: 'account' }))}
-        />
-      }
-      drawerFooter={
-        <Button
-          variant="secondary"
-          icon={<SignOutIcon aria-hidden="true" className="size-4" />}
-          // WEB-16 rework — every other navigation this shell starts goes
-          // through `guardedNavigate` (the drawer's own items, the home
-          // control, the organization switcher, the profile control);
-          // signing out is a navigation too, and leaves the shell just as
-          // completely, so a dirty course form two components down deserves
-          // the same chance to confirm before it is lost that clicking any
-          // other tab already gives it.
-          onClick={() => guardedNavigate(() => void handleSignOut())}
-          disabled={signingOut}
-        >
-          {signingOut ? 'Signing out…' : 'Sign out'}
-        </Button>
-      }
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={activeOrganizationId}
+      isMember={isMember}
+      activeTab={effectiveTab}
+      navigate={navigate}
+      runAction={guardedNavigate}
+      onSignedOut={onSignedOut}
     >
       {effectiveTab === 'discord' ? (
         <div className="flex flex-col gap-4">
@@ -907,6 +720,6 @@ function ShellInner({
           }
         />
       )}
-    </AppShell>
+    </SignedInChrome>
   )
 }

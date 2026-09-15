@@ -60,6 +60,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -79,6 +80,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -104,6 +106,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     fireEvent.change(screen.getByLabelText('Email'), {
@@ -140,6 +143,7 @@ describe('Invitation — signed in', () => {
           account={ACCOUNT}
           onSignedIn={vi.fn()}
           onRedeemed={onRedeemed}
+          navigate={vi.fn()}
         />
       </StrictMode>
     )
@@ -166,6 +170,7 @@ describe('Invitation — signed in', () => {
         account={ACCOUNT}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -173,5 +178,31 @@ describe('Invitation — signed in', () => {
       'That invitation is no longer valid. Ask for a new one.'
     )
     expect(redeemMembershipInvitation).toHaveBeenCalledTimes(1)
+  })
+
+  // LINK-11/WEB-49 — this brief "Joining…"/error render now sits inside the
+  // panel's own chrome, the same as every other signed-in page.
+  it('renders the panel own chrome — the hamburger and the profile control', async () => {
+    redeemMembershipInvitation.mockResolvedValue({
+      organizationId: 'org-1',
+      role: 'instructor',
+    })
+
+    render(
+      <Invitation
+        secret="secret-abc"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Account settings' })
+    ).toBeInTheDocument()
   })
 })

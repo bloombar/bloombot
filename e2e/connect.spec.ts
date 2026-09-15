@@ -111,6 +111,15 @@ test('the connect screen asks a signed-out visitor to sign in, then redeems an M
     new RegExp(`/connect/${institutionOrganizationId}$`)
   )
   await expect(page.getByText(email)).toBeVisible()
+  // LINK-11/WEB-49 — this screen now carries the panel's own chrome signed
+  // in, the same header every other signed-in screen shows, rather than its
+  // former standalone `BrandHeader`.
+  await expect(
+    page.getByRole('button', { name: 'Open navigation menu' })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Account settings' })
+  ).toBeVisible()
 
   // 4. Seed the one precondition an MCP connect actually needs (this
   //    spec's own module comment): the account already has a connected

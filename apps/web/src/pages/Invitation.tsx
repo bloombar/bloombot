@@ -42,14 +42,22 @@
  * renders, and an account that does not yet exist is created (or an
  * existing one signed into) exactly the way it always is, through that
  * screen's own ordinary sign-in flow — this page adds nothing to it.
+ *
+ * LINK-11: signed in, this page's own brief "Joining…"/error render sits
+ * inside `SignedInChrome`, the identical treatment `JoinLink.tsx`'s own
+ * module comment already describes for its own render, acting in the
+ * account's own default organization rather than this page's own `secret`.
  */
 
 import { useEffect, useRef, useState } from 'react'
 
+import { resolveDefaultOrganization } from '../account-default-organization.js'
 import { ApiError, redeemMembershipInvitation } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { SignedInChrome } from '../components/SignedInChrome.js'
 import { SignInHeader } from '../components/SignInHeader.js'
+import type { Route } from '../routing/route.js'
 import { SignIn } from './SignIn.js'
 
 export interface InvitationProps {
@@ -58,6 +66,7 @@ export interface InvitationProps {
   onSignedIn: () => void
   /** Called once redemption succeeds — the parent (`App.tsx`) re-checks `/auth/me` and navigates to the shell, the same "this page does not decide what comes next" split `JoinLink.tsx`'s own `onRedeemed` already draws. */
   onRedeemed: () => void
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 type State = { kind: 'pending' } | { kind: 'error'; error: ApiError }
@@ -67,6 +76,7 @@ export function Invitation({
   account,
   onSignedIn,
   onRedeemed,
+  navigate,
 }: InvitationProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
   const redeemedSecretRef = useRef<string | undefined>(undefined)
@@ -99,19 +109,31 @@ export function Invitation({
     )
   }
 
-  if (state.kind === 'error') {
-    return (
-      <div className="mx-auto mt-16 max-w-sm">
-        <ErrorMessage error={state.error} />
-      </div>
-    )
-  }
+  // LINK-11 — signed in, this brief render sits inside the panel's own
+  // chrome, acting in the account's default organization
+  // (`JoinLink.tsx`'s own identical treatment).
+  const defaultOrganization = resolveDefaultOrganization(account)
+
   return (
-    <p
-      role="status"
-      className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={defaultOrganization?.organizationId}
+      isMember={defaultOrganization?.isMember ?? false}
+      navigate={navigate}
+      onSignedOut={onSignedIn}
     >
-      Joining…
-    </p>
+      {state.kind === 'error' ? (
+        <div className="mx-auto mt-16 max-w-sm">
+          <ErrorMessage error={state.error} />
+        </div>
+      ) : (
+        <p
+          role="status"
+          className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+        >
+          Joining…
+        </p>
+      )}
+    </SignedInChrome>
   )
 }

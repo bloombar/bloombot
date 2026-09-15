@@ -62,7 +62,12 @@ describe('ConnectAssistant — signed out', () => {
     })
 
     render(
-      <ConnectAssistant requestId="req-1" account={null} onSignedIn={vi.fn()} />
+      <ConnectAssistant
+        requestId="req-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(
@@ -81,7 +86,12 @@ describe('ConnectAssistant — signed out', () => {
     getConnectAssistantRequest.mockResolvedValue({ signedIn: false })
 
     render(
-      <ConnectAssistant requestId="req-1" account={null} onSignedIn={vi.fn()} />
+      <ConnectAssistant
+        requestId="req-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(await screen.findByText(/no registered name/i)).toBeInTheDocument()
@@ -106,6 +116,7 @@ describe('ConnectAssistant — signed in', () => {
         requestId="req-1"
         account={ACCOUNT}
         onSignedIn={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -145,6 +156,7 @@ describe('ConnectAssistant — signed in', () => {
         requestId="req-1"
         account={ACCOUNT}
         onSignedIn={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -156,6 +168,33 @@ describe('ConnectAssistant — signed in', () => {
       )
     })
   })
+
+  // LINK-11/WEB-49 — this screen's consent state now sits inside the
+  // panel's own chrome, the same as every other signed-in page.
+  it('renders the panel own chrome — the hamburger and the profile control', async () => {
+    getConnectAssistantRequest.mockResolvedValue({
+      signedIn: true,
+      clientName: 'Totally Legit Assistant',
+      redirectHost: 'client.example',
+    })
+
+    render(
+      <ConnectAssistant
+        requestId="req-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Totally Legit Assistant')
+    expect(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Account settings' })
+    ).toBeInTheDocument()
+  })
 })
 
 describe('ConnectAssistant — the request is unavailable', () => {
@@ -165,7 +204,12 @@ describe('ConnectAssistant — the request is unavailable', () => {
     )
 
     render(
-      <ConnectAssistant requestId="req-1" account={null} onSignedIn={vi.fn()} />
+      <ConnectAssistant
+        requestId="req-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(
@@ -192,6 +236,7 @@ describe('ConnectAssistant — the request is unavailable', () => {
         requestId="req-1"
         account={ACCOUNT}
         onSignedIn={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -217,6 +262,7 @@ describe('ConnectAssistant — framed', () => {
         requestId="req-1"
         account={ACCOUNT}
         onSignedIn={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 

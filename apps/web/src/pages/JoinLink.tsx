@@ -30,14 +30,23 @@
  * (which organization, which course, whether this account was already
  * enrolled) up to `onRedeemed` (WEB-25), rather than discarding it the way
  * this page used to.
+ *
+ * LINK-11: signed in, this page's own brief "Joining…"/error render sits
+ * inside `SignedInChrome` — the same chrome `pages/Shell.tsx` shows — acting
+ * in the account's own default organization (`account-default-organization.ts`),
+ * never this page's own `secret`, which names no organization at all until
+ * redeemed.
  */
 
 import { useEffect, useRef, useState } from 'react'
 
+import { resolveDefaultOrganization } from '../account-default-organization.js'
 import { ApiError, redeemCourseJoinLink } from '../api/client.js'
 import type { AccountSummary } from '../api/types.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
+import { SignedInChrome } from '../components/SignedInChrome.js'
 import { SignInHeader } from '../components/SignInHeader.js'
+import type { Route } from '../routing/route.js'
 import { SignIn } from './SignIn.js'
 
 export interface JoinLinkProps {
@@ -50,6 +59,7 @@ export interface JoinLinkProps {
     courseId: string
     alreadyEnrolled: boolean
   }) => void
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 type State = { kind: 'pending' } | { kind: 'error'; error: ApiError }
@@ -59,6 +69,7 @@ export function JoinLink({
   account,
   onSignedIn,
   onRedeemed,
+  navigate,
 }: JoinLinkProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
   // See this file's own module comment on why this mirrors
@@ -92,19 +103,32 @@ export function JoinLink({
     )
   }
 
-  if (state.kind === 'error') {
-    return (
-      <div className="mx-auto mt-16 max-w-sm">
-        <ErrorMessage error={state.error} />
-      </div>
-    )
-  }
+  // LINK-11 — signed in, this brief render sits inside the panel's own
+  // chrome, acting in the account's default organization (this file's own
+  // module comment on why: this page's own `secret` names no organization
+  // until it is redeemed).
+  const defaultOrganization = resolveDefaultOrganization(account)
+
   return (
-    <p
-      role="status"
-      className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={defaultOrganization?.organizationId}
+      isMember={defaultOrganization?.isMember ?? false}
+      navigate={navigate}
+      onSignedOut={onSignedIn}
     >
-      Joining…
-    </p>
+      {state.kind === 'error' ? (
+        <div className="mx-auto mt-16 max-w-sm">
+          <ErrorMessage error={state.error} />
+        </div>
+      ) : (
+        <p
+          role="status"
+          className="mx-auto mt-16 max-w-sm text-sm text-neutral-500"
+        >
+          Joining…
+        </p>
+      )}
+    </SignedInChrome>
   )
 }

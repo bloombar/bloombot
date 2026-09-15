@@ -12133,3 +12133,49 @@ whose viewport tag is already correct. The requirement is satisfied by there bei
 than by fixing one — recorded here because "we checked and found none" is the kind of thing that is
 otherwise indistinguishable from "we forgot to look", and because the next thing to hand-write an HTML
 response in `apps/api` needs to know the standard applies to it.
+
+## D-113 — LINK-11/WEB-49: `SignedInChrome` as a component, not a hook; a standalone page's header acts in the account's own default organization, never the address it stands on
+
+**Shape chosen for the shared chrome: a component (`components/SignedInChrome.tsx`) that wraps `AppShell`
+and takes `children`, not a hook returning props for the caller to spread onto its own `<AppShell>`.** The
+brief left this open. A hook would have meant `pages/Shell.tsx` and every standalone page (`Connect.tsx`,
+`Connected.tsx`, `JoinLink.tsx`, `Invitation.tsx`, `ConnectAssistant.tsx`, and the signed-in `NotFound`
+`App.tsx` renders directly) each still writing out `<AppShell ref={...} onHome={...} navGroups={...}
+headerStart={...} headerEnd={...} drawerFooter={...}>{content}</AppShell>` themselves — six call sites
+that could still drift on which five props actually get passed through, and a `ref` each one would have to
+own even though only `pages/Shell.tsx` ever reads it (for the drawer-item close-after-guard behaviour
+`components/AppShell.tsx`'s own `AppShellHandle` doc comment describes). A component that owns the `ref`
+internally and takes `children` collapses six near-identical `<AppShell>` calls into six identical
+`<SignedInChrome>` calls, which is the actual point of "one shared unit" — not merely one function computing
+the props, but one place that renders the header at all.
+
+**The organization a standalone page's header acts in is the account's own *default* organization
+(`account-default-organization.ts`), never the organization the page's own address names.** This was the
+one rule the brief flagged as unsettled beyond "must never ask the switcher to display an organization it
+cannot reach." Considered and rejected: showing no organization at all for these pages regardless of
+whether the account has a real one elsewhere (defensible — `/connect/:id` and `/connected/:id` are not
+organization-scoped screens in `routing/route.ts`'s own sense) — rejected because it would degrade the
+header for the overwhelmingly common case (an existing member or connected person following a second
+Discord invitation, or a stray `/connect-assistant/:id` link, while already fully at home in their own
+organization) to punish the address's own unreachability, which is already handled correctly by simply not
+handing that id to the switcher. Reusing `App.tsx`'s own `resolveHomeRoute` fallback
+(`account.memberships[0] ?? account.connectedOrganizations[0]`) means the header these pages show is
+exactly the organization a fresh sign-in would land the same account on anyway — one rule, not a second one
+invented for six call sites that did not have a header before this slice.
+
+**An account with neither a membership nor a connected organization at all gets a header with the hamburger
+and the profile control, no organization switcher, and an empty drawer (`navGroups={[]}`)** — never an
+invented organization id. TEN-1 gives every account its own personal organization on first sign-in, so this
+should not happen in practice; `resolveDefaultOrganization`'s own `undefined` return, and
+`SignedInChrome`'s own handling of it, exist for the same "defended, not assumed" reason
+`App.tsx#resolveHomeRoute`'s identical case already does — not because a real account is expected to reach
+it.
+
+**`pages/Shell.tsx#changeActiveOrganization` was kept as its own, separate function, not folded into
+`SignedInChrome`'s internal `landingForOrganizationSwitch`,** even though the two compute the same landing
+route by the same rule. The only remaining caller of `changeActiveOrganization` is `Account.tsx`'s own
+`onSwitchOrganization` — the org-switching control the account settings screen renders inline in its own
+rows, independent of the header's `OrganizationSwitcher` that moved inside `SignedInChrome`. Two call sites
+computing the identical rule from two functions is a small duplication accepted deliberately, over reaching
+into `SignedInChrome`'s own module to export an internal helper for one caller that has nothing else to do
+with the header component at all.

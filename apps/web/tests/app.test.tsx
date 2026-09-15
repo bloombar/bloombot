@@ -417,6 +417,14 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
       discordUsername: 'a-student',
     })
     confirmDiscordPersonLink.mockResolvedValue({ connected: true })
+    // LINK-11 rework, must-fix 4 — `Connected.tsx` now verifies the
+    // connection through this same status read before ever showing the
+    // confirmation; this file's own `beforeEach` defaults it to
+    // `{ connected: false }`, which is right for every *other* test here
+    // but not this one.
+    getPersonLinkStatus.mockResolvedValue({
+      discord: { connected: true, username: 'a-student' },
+    })
     sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
     window.history.pushState(null, '', '/discord/callback?code=abc&state=xyz')
 

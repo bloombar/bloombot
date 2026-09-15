@@ -24,12 +24,27 @@
  *
  * Signed in, it redeems once, on mount — the same "opening the link is the
  * action" shape `RedeemLink.tsx` already uses for its own single-use
- * secret, including the same `redeemedSecretRef` guard against
- * `StrictMode`'s development-only double-invoke (that page's own module
- * comment has the full reasoning) — and hands the server's own answer
- * (which organization, which course, whether this account was already
- * enrolled) up to `onRedeemed` (WEB-25), rather than discarding it the way
- * this page used to.
+ * secret, including the same `redeemedForRef` guard against `StrictMode`'s
+ * development-only double-invoke (that page's own module comment has the
+ * full reasoning) — and hands the server's own answer (which organization,
+ * which course, whether this account was already enrolled) up to
+ * `onRedeemed` (WEB-25), rather than discarding it the way this page used
+ * to.
+ *
+ * LINK-11 rework, must-fix 1 — `redeemedForRef` (and `state`) reset
+ * whenever the *account* redeeming changes, not only the secret. This page
+ * now carries `SignedInChrome`'s own sign-out control, which this render
+ * did not offer before this slice — a visitor can sign out and back in as a
+ * different account without ever leaving this page. The guard used to key
+ * on `secret` alone, which is right for `StrictMode`'s double-invoke (the
+ * same account, the same render) but wrong for "signed out, then signed
+ * back in as someone else with the same link still open": the ref already
+ * matched the unchanged `secret`, so the effect skipped redeeming
+ * altogether and left the *previous* account's `state` (an error, or a
+ * permanent "Joining…") on screen forever, for an account that never even
+ * requested a redemption. Reproduced with a probe before this fix — account
+ * A, then `null`, then account B, same `secret` — called
+ * `redeemCourseJoinLink` once, not twice.
  *
  * LINK-11: signed in, this page's own brief "Joining…"/error render sits
  * inside `SignedInChrome` — the same chrome `pages/Shell.tsx` shows — acting
@@ -72,17 +87,33 @@ export function JoinLink({
   navigate,
 }: JoinLinkProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
-  // See this file's own module comment on why this mirrors
-  // `RedeemLink.tsx`'s identical `redeemedTokenRef` guard.
-  const redeemedSecretRef = useRef<string | undefined>(undefined)
+  // This file's own module comment (LINK-11 rework, must-fix 1) — keyed on
+  // *both* the secret and the account redeeming it, since `SignedInChrome`
+  // now makes "sign out, sign back in as someone else, same link still
+  // open" a reachable sequence this guard has to tell apart from
+  // `StrictMode`'s same-account double-invoke.
+  const redeemedForRef = useRef<
+    { secret: string; accountId: string } | undefined
+  >(undefined)
 
   useEffect(() => {
     // Signed out: `SignIn` (below) takes over — nothing is redeemed until
     // an account actually exists to bind it to.
     if (!account) return
 
-    if (redeemedSecretRef.current === secret) return
-    redeemedSecretRef.current = secret
+    if (
+      redeemedForRef.current?.secret === secret &&
+      redeemedForRef.current.accountId === account.id
+    ) {
+      return
+    }
+    redeemedForRef.current = { secret, accountId: account.id }
+    // A different account than whatever this page last redeemed for (or
+    // the first redemption attempt) starts from `'pending'` again — the
+    // fix's own point: without this, a previous account's `'error'` state
+    // survived onto the next account's render, since nothing here used to
+    // reset it.
+    setState({ kind: 'pending' })
 
     redeemCourseJoinLink(secret).then(onRedeemed, (caught: unknown) => {
       if (caught instanceof ApiError) setState({ kind: 'error', error: caught })

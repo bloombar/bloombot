@@ -43,6 +43,22 @@ const ACCOUNT: AccountSummary = {
   connectedOrganizations: [],
 }
 
+// LINK-11 rework, must-fix 1 — a second, distinct account, reachable only
+// by signing out of `ACCOUNT` and back in as this one — the probe below
+// needs two identities the redemption guard could plausibly confuse.
+const ACCOUNT_B: AccountSummary = {
+  id: 'account-2',
+  email: 'other@example.edu',
+  memberships: [
+    {
+      organizationId: 'other-org',
+      organizationName: 'Other',
+      role: 'owner',
+    },
+  ],
+  connectedOrganizations: [],
+}
+
 afterEach(() => {
   vi.resetAllMocks()
 })
@@ -207,5 +223,58 @@ describe('JoinLink — signed in', () => {
     expect(
       screen.getByRole('button', { name: 'Account settings' })
     ).toBeInTheDocument()
+  })
+
+  // LINK-11 rework, must-fix 1 — fails without the fix: `SignedInChrome`'s
+  // own sign-out control makes "sign out, sign back in as someone else,
+  // same join link still open" reachable here, and the redemption guard
+  // used to key on `secret` alone — unchanged across the whole sequence
+  // below — so it silently skipped redeeming for the second account
+  // entirely, leaving whatever `state` the first account's attempt last
+  // set (an error, or a permanent "Joining…") on screen for an account that
+  // never actually redeemed anything.
+  it('redeems again for a different account signing in after the first signs out, with the same link still open', async () => {
+    redeemCourseJoinLink.mockResolvedValue({
+      courseId: 'course-1',
+      organizationId: 'org-1',
+      alreadyEnrolled: false,
+    })
+
+    const { rerender } = render(
+      <JoinLink
+        secret="secret-abc"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    await waitFor(() => expect(redeemCourseJoinLink).toHaveBeenCalledTimes(1))
+
+    // Signed out — the same account's own sign-out control, reachable now
+    // that this page carries the panel's chrome.
+    rerender(
+      <JoinLink
+        secret="secret-abc"
+        account={null}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    // A second, different account signs in — the same join link is still
+    // open at the same address.
+    rerender(
+      <JoinLink
+        secret="secret-abc"
+        account={ACCOUNT_B}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    await waitFor(() => expect(redeemCourseJoinLink).toHaveBeenCalledTimes(2))
   })
 })

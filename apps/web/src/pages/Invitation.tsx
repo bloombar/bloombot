@@ -32,8 +32,15 @@
  *
  * Signed in, it redeems once, on mount — the same "opening the link is the
  * action" shape `JoinLink.tsx`/`RedeemLink.tsx` both already use, including
- * the same `redeemedSecretRef` guard against `StrictMode`'s development-only
+ * the same `redeemedForRef` guard against `StrictMode`'s development-only
  * double-invoke.
+ *
+ * LINK-11 rework, must-fix 2 — `redeemedForRef` (and `state`) reset
+ * whenever the *account* redeeming changes, not only the secret, the
+ * identical defect and fix `JoinLink.tsx`'s own module comment already
+ * describes: `SignedInChrome`'s sign-out control makes "sign out, sign back
+ * in as someone else, same invitation link still open" reachable here too,
+ * and the guard used to key on `secret` alone.
  *
  * ENRL-10's own text — "an invitation grants a role and nothing else: it is
  * not a sign-in, and redeeming one never creates an account or a session" —
@@ -79,7 +86,12 @@ export function Invitation({
   navigate,
 }: InvitationProps) {
   const [state, setState] = useState<State>({ kind: 'pending' })
-  const redeemedSecretRef = useRef<string | undefined>(undefined)
+  // This file's own module comment (LINK-11 rework, must-fix 2) — keyed on
+  // both the secret and the account redeeming it, `JoinLink.tsx`'s own
+  // identical guard.
+  const redeemedForRef = useRef<
+    { secret: string; accountId: string } | undefined
+  >(undefined)
 
   useEffect(() => {
     // Signed out: `SignIn` (below) takes over — nothing is redeemed until
@@ -87,8 +99,17 @@ export function Invitation({
     // `JoinLink.tsx`'s own identical effect draws).
     if (!account) return
 
-    if (redeemedSecretRef.current === secret) return
-    redeemedSecretRef.current = secret
+    if (
+      redeemedForRef.current?.secret === secret &&
+      redeemedForRef.current.accountId === account.id
+    ) {
+      return
+    }
+    redeemedForRef.current = { secret, accountId: account.id }
+    // A different account than whatever this page last redeemed for starts
+    // from `'pending'` again — without this, a previous account's own
+    // `'error'` state survived onto the next account's render.
+    setState({ kind: 'pending' })
 
     redeemMembershipInvitation(secret).then(onRedeemed, (caught: unknown) => {
       if (caught instanceof ApiError) setState({ kind: 'error', error: caught })

@@ -12179,3 +12179,29 @@ rows, independent of the header's `OrganizationSwitcher` that moved inside `Sign
 computing the identical rule from two functions is a small duplication accepted deliberately, over reaching
 into `SignedInChrome`'s own module to export an internal helper for one caller that has nothing else to do
 with the header component at all.
+
+**Rework round 1, must-fix 4 — `Connected.tsx` verifies the connection through `getPersonLinkStatus` before
+ever claiming "Discord connected," and an unverified or not-connected arrival redirects to
+`/connect/:organizationId`, not to a message of its own.** The review finding: this page asserted its own
+claim for whatever `organizationId` the URL named, on every arrival — not only the one
+`App.tsx#onConnected` navigation it is actually true for right after a confirm, but also the signed-out
+AUTH-6 sign-in round trip this page's own module comment already documents as reachable (a stale or
+hand-typed address, redeemed later, possibly by a different account than the one that began connecting).
+`Connect.tsx` already reads this exact status on every mount for the identical durability reason (LINK-7);
+`Connected.tsx` reusing that same read, rather than trusting the address alone, is the same "the server is
+what actually knows" discipline, not a new one.
+
+**Redirect, rather than a refusal message of this page's own, because there is nothing this page can
+usefully say that `Connect.tsx` does not already say better.** A refusal screen here would need its own
+copy for "not connected," its own copy for "the read failed," and its own way back to actually connecting
+Discord — three things `Connect.tsx` already renders correctly (its own status line, its own fail-open
+button on a refused read). Redirecting (`navigate({ kind: 'connect', organizationId }, { replace: true })`)
+sends the visitor to the one screen that can actually resolve either case, rather than duplicating its
+logic here for a screen that exists only to confirm, never to recover. `replace: true` — this is not
+somewhere "back" should return into, the same treatment `App.tsx`'s own one-time entry points already get.
+
+**What this does not fix**: an unreachable organization is not specifically detected or messaged
+differently from "not connected" or "read failed" — all three redirect identically. `Connect.tsx` itself
+already renders its own sign-in-required or not-a-member cases through `App.tsx`'s ordinary `isShellRoute`/
+`isReachableShellRoute` machinery once there, so this page does not need to duplicate that distinction
+either; it only needs to stop asserting a claim it has not verified.

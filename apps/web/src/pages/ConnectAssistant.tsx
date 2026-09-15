@@ -56,14 +56,28 @@
  * for the operator — this in-app check is the defence that actually ships,
  * since it needs no root on the droplet.
  *
- * LINK-11: signed in (`account` is not `null`) and not framed, this screen's
- * loading/unavailable/consent states render inside `SignedInChrome`, the
+ * LINK-11: `state.kind === 'consent'` renders inside `SignedInChrome`, the
  * same chrome `pages/Shell.tsx` shows, acting in the account's own default
- * organization — this page names no organization of its own at all. The
- * `'framed'` state is left exactly as it was: it renders regardless of
- * `account`, deliberately does not fetch anything (this file's own module
- * comment on why), and the security review's clickjacking defence is out of
- * this slice's scope.
+ * organization — this page names no organization of its own at all. Every
+ * other state renders the bare `SignInHeader` instead, `'framed'` unchanged
+ * from before this slice (it renders regardless of session state at all,
+ * deliberately does not fetch anything — this file's own module comment on
+ * why — and the security review's clickjacking defence is out of this
+ * slice's scope).
+ *
+ * LINK-11 rework, must-fix 3 — the chrome is keyed on `state.kind ===
+ * 'consent'`, never on the `account` prop alone. `'consent'` is the one
+ * state `GET /oauth/mcp/request` only ever answers `signedIn: true` into
+ * (this file's own module comment on the three states it drives) — the
+ * server's own truth, not this component's client-held `account`, which can
+ * disagree with it: a session that expires between `App.tsx`'s last
+ * `/auth/me` and this page's own fetch still holds a stale, truthy
+ * `account` prop while the server answers `signedIn: false`, landing on
+ * `'signed-out'`. Keying `withChrome` on `account` alone rendered the full
+ * signed-in chrome — sign-out control included — around the sign-in form in
+ * exactly that window; keying it on the rendered state instead means the
+ * chrome only ever appears with the screen the server actually confirmed is
+ * signed in.
  */
 
 import { useEffect, useState } from 'react'
@@ -197,18 +211,27 @@ export function ConnectAssistant({
     }
   }
 
-  // LINK-11 — `'framed'` is left exactly as it was (this file's own module
-  // comment on why); every other state below renders inside `SignedInChrome`
-  // once `account` exists, in place of the bare `SignInHeader` a signed-out
-  // render still uses. `'consent'` only ever happens signed in — the server
-  // could not otherwise have answered `signedIn: true` — so `account` is
-  // never `null` there in practice, but this still narrows rather than
-  // assuming it (this codebase's own "defended, not assumed" discipline).
-  const defaultOrganization = account
-    ? resolveDefaultOrganization(account)
-    : undefined
-  const withChrome = (content: React.ReactNode) =>
-    account ? (
+  // LINK-11 rework, must-fix 3 (this file's own module comment) — keyed on
+  // `state.kind === 'consent'`, the server's own signed-in answer, never on
+  // the client-held `account` prop alone: `account` can be stale (a session
+  // that expired between `App.tsx`'s last `/auth/me` and this page's own
+  // fetch) in a way `state` cannot, since `state` is set directly from what
+  // `GET /oauth/mcp/request` most recently answered. `account` is still
+  // narrowed here (defensively, not assumed — this codebase's own "defended,
+  // not assumed" discipline) since nothing about `state.kind` alone proves
+  // it to the type checker, even though `'consent'` cannot in practice be
+  // reached with a `null` `account`.
+  const withChrome = (content: React.ReactNode) => {
+    if (!account || state.kind !== 'consent') {
+      return (
+        <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+          <SignInHeader />
+          {content}
+        </div>
+      )
+    }
+    const defaultOrganization = resolveDefaultOrganization(account)
+    return (
       <SignedInChrome
         account={account}
         activeOrganizationId={defaultOrganization?.organizationId}
@@ -218,12 +241,8 @@ export function ConnectAssistant({
       >
         {content}
       </SignedInChrome>
-    ) : (
-      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-        <SignInHeader />
-        {content}
-      </div>
     )
+  }
 
   if (state.kind === 'framed') {
     return (

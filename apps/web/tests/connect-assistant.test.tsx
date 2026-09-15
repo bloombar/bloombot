@@ -96,6 +96,41 @@ describe('ConnectAssistant — signed out', () => {
 
     expect(await screen.findByText(/no registered name/i)).toBeInTheDocument()
   })
+
+  // LINK-11 rework, must-fix 3 — fails without the fix: the session
+  // expiring between `App.tsx`'s last `/auth/me` and this page's own fetch
+  // leaves `account` (the client-held prop) stale-truthy while the server
+  // answers `signedIn: false`. Keying the chrome on `account` alone
+  // rendered the signed-in chrome — sign-out control included — around
+  // this sign-in form; it must render exactly as it does for a genuinely
+  // signed-out visitor.
+  it('a stale-truthy account prop does not put the signed-in chrome around a server-confirmed signed-out state', async () => {
+    getConnectAssistantRequest.mockResolvedValue({
+      signedIn: false,
+      clientName: 'Some Assistant',
+    })
+
+    render(
+      <ConnectAssistant
+        requestId="req-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Sign in to Bloombot to connect',
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Open navigation menu' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Account settings' })
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('ConnectAssistant — signed in', () => {

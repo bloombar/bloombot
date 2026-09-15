@@ -58,6 +58,7 @@ export const MILESTONE_TITLE = {
   29: 'Phase 29 — What each surface actually costs',
   30: 'Phase 30 — Course administration from an assistant',
   31: 'Phase 31 — One sign-in, and a connection that survives its own email',
+  32: 'Phase 32 — Landing somewhere useful after connecting',
 }
 // Optional due dates (none set yet — add as the schedule firms up).
 export const MILESTONE_DUE = {}

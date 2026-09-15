@@ -39,6 +39,17 @@
  * since `App.tsx` reuses this same component instance across organizations
  * rather than remounting it (both review findings; see this file's own
  * effect for the fuller reasoning).
+ *
+ * LINK-11: signed in, this screen now renders inside `SignedInChrome` — the
+ * panel's own header, drawer and footer, the same chrome `pages/Shell.tsx`
+ * shows — in place of this page's own former, smaller `BrandHeader`, which
+ * the signed-out render above still uses via `SignInHeader`. The
+ * organization this page names is frequently one this account cannot reach
+ * yet (LINK-2's own point of the address), so the chrome acts in the
+ * account's own *default* organization instead
+ * (`account-default-organization.ts`'s own module comment on why that reuses
+ * `App.tsx`'s `resolveHomeRoute` rule rather than inventing a
+ * second one), never this page's own `organizationId`.
  */
 
 import { useEffect, useState } from 'react'
@@ -55,14 +66,16 @@ import type {
   PersonLinkPreview,
   PersonLinkStatusResponse,
 } from '../api/types.js'
+import { resolveDefaultOrganization } from '../account-default-organization.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { FormField } from '../components/FormField.js'
 import { textInputClasses } from '../components/fieldStyles.js'
-import { Logo } from '../components/Logo.js'
+import { SignedInChrome } from '../components/SignedInChrome.js'
 import { SignInHeader } from '../components/SignInHeader.js'
 import { LoadingStatus, SkeletonLine } from '../components/Skeleton.js'
 import { describePersonLinkOutcome } from '../person-link-outcome.js'
+import type { Route } from '../routing/route.js'
 import { SignIn } from './SignIn.js'
 
 /** Set immediately before `handleConnectDiscord` (below) redirects the browser to Discord's own consent screen, and read back by `pages/DiscordCallback.tsx` on the way back — the same round-trip-surviving device `components/InstallButton.tsx`'s `PENDING_INSTALL_ORG_KEY` already uses for the install flow's identical redirect. This is a same-tab round trip (`window.location.assign`, not an emailed link a mail client might open elsewhere), so `sessionStorage` is the right tool for it — unlike the *sign-in* round trip this page used to also use it for, which AUTH-6 retired in favor of a destination carried on the sign-in token itself (this file's own module comment). */
@@ -72,6 +85,7 @@ export interface ConnectProps {
   organizationId: string
   account: AccountSummary | null
   onSignedIn: () => void
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 function McpConnectForm({ organizationId }: { organizationId: string }) {
@@ -174,17 +188,12 @@ function McpConnectForm({ organizationId }: { organizationId: string }) {
   )
 }
 
-/** LINK-7: the logo and wordmark this page shows above everything else, signed in or out — `pages/Home.tsx`'s own header markup (around its line 85), reused rather than reinvented. */
-function BrandHeader() {
-  return (
-    <header className="flex flex-col items-center text-center">
-      <Logo className="size-16" title="Bloombot" />
-      <p className="mt-4 text-2xl font-semibold text-neutral-900">Bloombot</p>
-    </header>
-  )
-}
-
-export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
+export function Connect({
+  organizationId,
+  account,
+  onSignedIn,
+  navigate,
+}: ConnectProps) {
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [starting, setStarting] = useState(false)
   const [discordStatus, setDiscordStatus] = useState<
@@ -243,10 +252,11 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
     // AUTH-6 — `destination` is what carries this page's own address
     // through the sign-in round trip now; see this file's own module
     // comment for why that replaced a `sessionStorage` marker set here.
-    // MCP-11 — `BrandHeader` (below) was this page's own smaller, hand-
-    // written copy of the same header every sign-in surface now shows via
-    // `SignInHeader`; the signed-in view further down still uses `BrandHeader`
-    // for its own layout, unrelated to signing in.
+    // MCP-11 — this signed-out header is `SignInHeader`, the same one every
+    // sign-in surface shows; LINK-11 dropped this page's own smaller,
+    // hand-written `BrandHeader`, which used to carry the signed-in render
+    // below instead — that render now sits inside `SignedInChrome` (this
+    // file's own module comment), which has a header of its own.
     return (
       <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
         <SignInHeader />
@@ -276,62 +286,73 @@ export function Connect({ organizationId, account, onSignedIn }: ConnectProps) {
     }
   }
 
+  // LINK-11 — the organization this page names is frequently not one this
+  // account can reach yet (this file's own module comment); the chrome acts
+  // in the account's own default organization instead.
+  const defaultOrganization = resolveDefaultOrganization(account)
+
   return (
-    <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-      <BrandHeader />
-
-      <div className="flex flex-col gap-2">
-        <h1 className="text-page-title font-semibold text-neutral-900">
-          Connect your account
-        </h1>
-        <p className="text-sm text-neutral-700">
-          Signed in as {account.email}. Connecting proves the account and links
-          its conversation history — nothing happens until you say so.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold text-neutral-900">
-          Connect Discord
-        </h2>
-        {discordStatus === undefined ? (
-          // LINK-7 — a quiet loading state while `getPersonLinkStatus`
-          // resolves: never flash the button only to replace it with the
-          // connected line a moment later. WEB-45: a single text-line
-          // skeleton — this becomes one line either way (`Discord
-          // connected…` or the `Connect Discord` button), never a list.
-          <div className="flex flex-col gap-2">
-            <SkeletonLine className="h-4 w-40" />
-            <LoadingStatus />
-          </div>
-        ) : discordStatus.connected ? (
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={defaultOrganization?.organizationId}
+      isMember={defaultOrganization?.isMember ?? false}
+      navigate={navigate}
+      onSignedOut={onSignedIn}
+    >
+      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-page-title font-semibold text-neutral-900">
+            Connect your account
+          </h1>
           <p className="text-sm text-neutral-700">
-            Discord connected
-            {discordStatus.username ? ` as ${discordStatus.username}` : ''}.
+            Signed in as {account.email}. Connecting proves the account and
+            links its conversation history — nothing happens until you say so.
           </p>
-        ) : (
-          <Button
-            variant="primary"
-            onClick={() => void handleConnectDiscord()}
-            disabled={starting}
-          >
-            {starting ? 'Starting…' : 'Connect Discord'}
-          </Button>
-        )}
-        {error && <ErrorMessage error={error} />}
-        {statusError && <ErrorMessage error={statusError} />}
-      </div>
+        </div>
 
-      <div className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold text-neutral-900">
-          Connect an assistant
-        </h2>
-        <p className="text-sm text-neutral-700">
-          This connects ChatGPT, Claude and other AI assistants, so you can chat
-          with Bloombot from inside those apps.
-        </p>
-        <McpConnectForm organizationId={organizationId} />
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold text-neutral-900">
+            Connect Discord
+          </h2>
+          {discordStatus === undefined ? (
+            // LINK-7 — a quiet loading state while `getPersonLinkStatus`
+            // resolves: never flash the button only to replace it with the
+            // connected line a moment later. WEB-45: a single text-line
+            // skeleton — this becomes one line either way (`Discord
+            // connected…` or the `Connect Discord` button), never a list.
+            <div className="flex flex-col gap-2">
+              <SkeletonLine className="h-4 w-40" />
+              <LoadingStatus />
+            </div>
+          ) : discordStatus.connected ? (
+            <p className="text-sm text-neutral-700">
+              Discord connected
+              {discordStatus.username ? ` as ${discordStatus.username}` : ''}.
+            </p>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => void handleConnectDiscord()}
+              disabled={starting}
+            >
+              {starting ? 'Starting…' : 'Connect Discord'}
+            </Button>
+          )}
+          {error && <ErrorMessage error={error} />}
+          {statusError && <ErrorMessage error={statusError} />}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold text-neutral-900">
+            Connect an assistant
+          </h2>
+          <p className="text-sm text-neutral-700">
+            This connects ChatGPT, Claude and other AI assistants, so you can
+            chat with Bloombot from inside those apps.
+          </p>
+          <McpConnectForm organizationId={organizationId} />
+        </div>
       </div>
-    </div>
+    </SignedInChrome>
   )
 }

@@ -76,7 +76,12 @@ afterEach(() => {
 describe('Connect — signed out', () => {
   it('renders SignIn', () => {
     render(
-      <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(
@@ -92,7 +97,12 @@ describe('Connect — signed out', () => {
     requestSignInLink.mockResolvedValue(undefined)
 
     render(
-      <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'student@example.edu' },
@@ -116,7 +126,12 @@ describe('Connect — signed out', () => {
 describe('Connect — signed in — Discord (LINK-7)', () => {
   it('names the account signed in', () => {
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     expect(screen.getByText(/student@example.edu/)).toBeInTheDocument()
   })
@@ -133,7 +148,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     })
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     // LINK-7 — the button only appears once the status fetch (mocked "not
     // connected" by this file's own `beforeEach`) resolves; `findByRole`
@@ -164,7 +184,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     })
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(await screen.findByText('Discord connected.')).toBeInTheDocument()
@@ -177,7 +202,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     getPersonLinkStatus.mockResolvedValue({ discord: { connected: false } })
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(
@@ -189,7 +219,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
   // replaces it.
   it('does not render the removed "Sends you to Discord..." paragraph', async () => {
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     await screen.findByRole('button', { name: 'Connect Discord' })
@@ -213,7 +248,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     )
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(
@@ -234,7 +274,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     })
 
     const { rerender } = render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     await screen.findByText('Discord connected.')
 
@@ -248,7 +293,12 @@ describe('Connect — signed in — Discord (LINK-7)', () => {
     )
 
     rerender(
-      <Connect organizationId="org-2" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-2"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(screen.queryByText('Discord connected.')).not.toBeInTheDocument()
@@ -273,7 +323,12 @@ describe('Connect — signed in — an assistant (LINK-6/8)', () => {
     })
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     fireEvent.change(screen.getByLabelText('Assistant token'), {
       target: { value: 'a-token' },
@@ -303,7 +358,12 @@ describe('Connect — signed in — an assistant (LINK-6/8)', () => {
     )
 
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
     fireEvent.change(screen.getByLabelText('Assistant token'), {
       target: { value: 'a-bad-token' },
@@ -315,7 +375,12 @@ describe('Connect — signed in — an assistant (LINK-6/8)', () => {
 
   it('explains what connecting an assistant is for, naming ChatGPT and Claude', () => {
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(screen.getByText(/ChatGPT/)).toBeInTheDocument()
@@ -326,19 +391,74 @@ describe('Connect — signed in — an assistant (LINK-6/8)', () => {
 describe('Connect — branding', () => {
   it('renders the logo and the Bloombot wordmark signed out', () => {
     render(
-      <Connect organizationId="org-1" account={null} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
     expect(screen.getByText('Bloombot')).toBeInTheDocument()
   })
 
-  it('renders the logo and the Bloombot wordmark signed in', () => {
+  // LINK-11 — signed in, this page renders inside `SignedInChrome` now,
+  // whose own header carries the logo (as the home control) but no
+  // "Bloombot" wordmark text — this page's own former `BrandHeader`, which
+  // showed both, is gone.
+  it('renders the panel own chrome, with the logo, signed in', () => {
     render(
-      <Connect organizationId="org-1" account={ACCOUNT} onSignedIn={vi.fn()} />
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
     )
 
     expect(screen.getByTestId('bloombot-logo')).toBeInTheDocument()
-    expect(screen.getByText('Bloombot')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
+  })
+})
+
+describe('Connect — the panel own chrome (LINK-11, WEB-49)', () => {
+  // Fails without the change: before this slice, a signed-in visit to
+  // `/connect/:organizationId` rendered this page's own smaller
+  // `BrandHeader`, with no hamburger drawer and no profile control at all.
+  it('a signed-in visit renders the hamburger and the profile control', () => {
+    render(
+      <Connect
+        organizationId="org-1"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Account settings' })
+    ).toBeInTheDocument()
+  })
+
+  it('a signed-out visit renders neither', () => {
+    render(
+      <Connect
+        organizationId="org-1"
+        account={null}
+        onSignedIn={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.queryByRole('button', { name: 'Open navigation menu' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Account settings' })
+    ).not.toBeInTheDocument()
   })
 })

@@ -48,6 +48,21 @@ const ACCOUNT: AccountSummary = {
   connectedOrganizations: [],
 }
 
+// LINK-11 rework, must-fix 2 — a second, distinct account, reachable only
+// by signing out of `ACCOUNT` and back in as this one.
+const ACCOUNT_B: AccountSummary = {
+  id: 'account-2',
+  email: 'other@example.edu',
+  memberships: [
+    {
+      organizationId: 'other-org',
+      organizationName: 'Other',
+      role: 'owner',
+    },
+  ],
+  connectedOrganizations: [],
+}
+
 afterEach(() => {
   vi.resetAllMocks()
 })
@@ -60,6 +75,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -79,6 +95,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -104,6 +121,7 @@ describe('Invitation — signed out', () => {
         account={null}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
     fireEvent.change(screen.getByLabelText('Email'), {
@@ -140,6 +158,7 @@ describe('Invitation — signed in', () => {
           account={ACCOUNT}
           onSignedIn={vi.fn()}
           onRedeemed={onRedeemed}
+          navigate={vi.fn()}
         />
       </StrictMode>
     )
@@ -166,6 +185,7 @@ describe('Invitation — signed in', () => {
         account={ACCOUNT}
         onSignedIn={vi.fn()}
         onRedeemed={vi.fn()}
+        navigate={vi.fn()}
       />
     )
 
@@ -173,5 +193,78 @@ describe('Invitation — signed in', () => {
       'That invitation is no longer valid. Ask for a new one.'
     )
     expect(redeemMembershipInvitation).toHaveBeenCalledTimes(1)
+  })
+
+  // LINK-11/WEB-49 — this brief "Joining…"/error render now sits inside the
+  // panel's own chrome, the same as every other signed-in page.
+  it('renders the panel own chrome — the hamburger and the profile control', async () => {
+    redeemMembershipInvitation.mockResolvedValue({
+      organizationId: 'org-1',
+      role: 'instructor',
+    })
+
+    render(
+      <Invitation
+        secret="secret-abc"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Account settings' })
+    ).toBeInTheDocument()
+  })
+
+  // LINK-11 rework, must-fix 2 — fails without the fix: the identical
+  // defect `join-link.test.tsx`'s own probe reproduces for
+  // `pages/JoinLink.tsx`, in this page's own redemption effect.
+  it('redeems again for a different account signing in after the first signs out, with the same link still open', async () => {
+    redeemMembershipInvitation.mockResolvedValue({
+      organizationId: 'org-1',
+      role: 'instructor',
+    })
+
+    const { rerender } = render(
+      <Invitation
+        secret="secret-abc"
+        account={ACCOUNT}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledTimes(1)
+    )
+
+    rerender(
+      <Invitation
+        secret="secret-abc"
+        account={null}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    rerender(
+      <Invitation
+        secret="secret-abc"
+        account={ACCOUNT_B}
+        onSignedIn={vi.fn()}
+        onRedeemed={vi.fn()}
+        navigate={vi.fn()}
+      />
+    )
+
+    await waitFor(() =>
+      expect(redeemMembershipInvitation).toHaveBeenCalledTimes(2)
+    )
   })
 })

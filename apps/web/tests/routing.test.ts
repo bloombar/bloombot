@@ -30,6 +30,8 @@ const ROUTES: Route[] = [
   { kind: 'discord-callback' },
   { kind: 'sign-in', token: 'tok_abc123' },
   { kind: 'connect', organizationId: 'org-1' },
+  // LINK-11 — where a confirmed Discord connect lands.
+  { kind: 'connected', organizationId: 'org-1' },
   { kind: 'connect-assistant', requestId: 'request-abc' },
   { kind: 'join-link', secret: 'secret-abc' },
   { kind: 'invitation', secret: 'secret-def' },
@@ -188,6 +190,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/sign-in',
     '/sign-in/',
     '/connect',
+    '/connected',
     '/connect-assistant',
     '/join',
     '/invitations',

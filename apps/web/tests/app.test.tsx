@@ -377,14 +377,22 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
   })
 
   // Rework finding 8 — `DiscordCallback.tsx`'s own doc comment promises a
-  // confirmed connect returns the browser to this same organization's own
-  // connect screen. Before the fix, `onConnected` was `returnToShell`
+  // confirmed connect returns the browser somewhere useful rather than the
+  // ordinary shell. Before that fix, `onConnected` was `returnToShell`
   // itself, which reads a `sessionStorage` key `DiscordCallback.tsx`'s own
   // preview step had *already* deleted — so a freshly connected student
   // landed on the ordinary shell instead, silently: every existing test
   // stayed green because none of them checked where a confirmed connect
   // actually lands.
-  it('a confirmed Discord connect returns to this organization own connect screen, not the ordinary shell', async () => {
+  //
+  // LINK-11 — that landing has since moved again: from this organization's
+  // own connect *form* (which re-offered connecting Discord, already just
+  // done, and the "Connect an assistant" section beside it) to
+  // `/connected/:organizationId`, a confirmation naming what just happened
+  // with no form on it at all. Fails without the change: before this slice,
+  // a confirmed connect landed back on `/connect/:organizationId`, showing
+  // the "Assistant token" field this test now asserts is absent.
+  it('a confirmed Discord connect lands on the connected confirmation screen, not this organization own connect screen', async () => {
     fetchMe.mockResolvedValue({
       account: {
         id: 'account-1',
@@ -409,6 +417,14 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
       discordUsername: 'a-student',
     })
     confirmDiscordPersonLink.mockResolvedValue({ connected: true })
+    // LINK-11 rework, must-fix 4 — `Connected.tsx` now verifies the
+    // connection through this same status read before ever showing the
+    // confirmation; this file's own `beforeEach` defaults it to
+    // `{ connected: false }`, which is right for every *other* test here
+    // but not this one.
+    getPersonLinkStatus.mockResolvedValue({
+      discord: { connected: true, username: 'a-student' },
+    })
     sessionStorage.setItem(PENDING_CONNECT_ORG_KEY, 'org-1')
     window.history.pushState(null, '', '/discord/callback?code=abc&state=xyz')
 
@@ -419,8 +435,9 @@ describe('App — /connect/:organizationId (LINK-6/7)', () => {
     })
     fireEvent.click(confirmButton)
 
-    await screen.findByRole('heading', { name: 'Connect your account' })
-    expect(window.location.pathname).toBe('/connect/org-1')
+    await screen.findByRole('heading', { name: 'Discord connected' })
+    expect(window.location.pathname).toBe('/connected/org-1')
+    expect(screen.queryByLabelText('Assistant token')).not.toBeInTheDocument()
   })
 })
 
@@ -648,9 +665,15 @@ describe('App — WEB-44: a sign-in destination naming an organization this acco
     renderWithModal(<App />)
 
     expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
-    expect(
-      screen.queryByTestId('organization-switcher')
-    ).not.toBeInTheDocument()
+    // LINK-11 — `NotFound` now carries the panel's own chrome, the same as
+    // every other signed-in page, acting in the account's own reachable
+    // default organization ("Student") — never the unreachable one this
+    // address named ("stale-org"), which the switcher must never be asked
+    // to display (`components/SignedInChrome.tsx`'s own module comment).
+    expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+      'Student'
+    )
+    expect(screen.queryByText('stale-org')).not.toBeInTheDocument()
   })
 
   // Review finding 1 — a `refreshSession()` that does not resolve

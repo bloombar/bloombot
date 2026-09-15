@@ -55,10 +55,34 @@
  * `deploy/nginx/README.md`) is documented as a manual, defence-in-depth step
  * for the operator — this in-app check is the defence that actually ships,
  * since it needs no root on the droplet.
+ *
+ * LINK-11: `state.kind === 'consent'` renders inside `SignedInChrome`, the
+ * same chrome `pages/Shell.tsx` shows, acting in the account's own default
+ * organization — this page names no organization of its own at all. Every
+ * other state renders the bare `SignInHeader` instead, `'framed'` unchanged
+ * from before this slice (it renders regardless of session state at all,
+ * deliberately does not fetch anything — this file's own module comment on
+ * why — and the security review's clickjacking defence is out of this
+ * slice's scope).
+ *
+ * LINK-11 rework, must-fix 3 — the chrome is keyed on `state.kind ===
+ * 'consent'`, never on the `account` prop alone. `'consent'` is the one
+ * state `GET /oauth/mcp/request` only ever answers `signedIn: true` into
+ * (this file's own module comment on the three states it drives) — the
+ * server's own truth, not this component's client-held `account`, which can
+ * disagree with it: a session that expires between `App.tsx`'s last
+ * `/auth/me` and this page's own fetch still holds a stale, truthy
+ * `account` prop while the server answers `signedIn: false`, landing on
+ * `'signed-out'`. Keying `withChrome` on `account` alone rendered the full
+ * signed-in chrome — sign-out control included — around the sign-in form in
+ * exactly that window; keying it on the rendered state instead means the
+ * chrome only ever appears with the screen the server actually confirmed is
+ * signed in.
  */
 
 import { useEffect, useState } from 'react'
 
+import { resolveDefaultOrganization } from '../account-default-organization.js'
 import {
   ApiError,
   decideConnectAssistantRequest,
@@ -68,13 +92,16 @@ import type { AccountSummary } from '../api/types.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { LoadingStatus, Skeleton } from '../components/Skeleton.js'
+import { SignedInChrome } from '../components/SignedInChrome.js'
 import { SignInHeader } from '../components/SignInHeader.js'
+import type { Route } from '../routing/route.js'
 import { SignIn } from './SignIn.js'
 
 export interface ConnectAssistantProps {
   requestId: string
   account: AccountSummary | null
   onSignedIn: () => void
+  navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
 /** How a client that registered with no `client_name` is named — never a reassuring placeholder like "An assistant" (the security review's own finding, carried across from the retired server-rendered screen: that string read as legitimate regardless of who was actually asking). */
@@ -102,6 +129,7 @@ export function ConnectAssistant({
   requestId,
   account,
   onSignedIn,
+  navigate,
 }: ConnectAssistantProps) {
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [decideError, setDecideError] = useState<ApiError | undefined>(
@@ -183,6 +211,39 @@ export function ConnectAssistant({
     }
   }
 
+  // LINK-11 rework, must-fix 3 (this file's own module comment) — keyed on
+  // `state.kind === 'consent'`, the server's own signed-in answer, never on
+  // the client-held `account` prop alone: `account` can be stale (a session
+  // that expired between `App.tsx`'s last `/auth/me` and this page's own
+  // fetch) in a way `state` cannot, since `state` is set directly from what
+  // `GET /oauth/mcp/request` most recently answered. `account` is still
+  // narrowed here (defensively, not assumed — this codebase's own "defended,
+  // not assumed" discipline) since nothing about `state.kind` alone proves
+  // it to the type checker, even though `'consent'` cannot in practice be
+  // reached with a `null` `account`.
+  const withChrome = (content: React.ReactNode) => {
+    if (!account || state.kind !== 'consent') {
+      return (
+        <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
+          <SignInHeader />
+          {content}
+        </div>
+      )
+    }
+    const defaultOrganization = resolveDefaultOrganization(account)
+    return (
+      <SignedInChrome
+        account={account}
+        activeOrganizationId={defaultOrganization?.organizationId}
+        isMember={defaultOrganization?.isMember ?? false}
+        navigate={navigate}
+        onSignedOut={onSignedIn}
+      >
+        {content}
+      </SignedInChrome>
+    )
+  }
+
   if (state.kind === 'framed') {
     return (
       <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
@@ -205,38 +266,32 @@ export function ConnectAssistant({
   }
 
   if (state.kind === 'loading') {
-    return (
-      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-        <SignInHeader />
-        <div
-          className="flex flex-col gap-3"
-          data-testid="connect-assistant-loading"
-        >
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-4 w-24" />
-          <LoadingStatus />
-        </div>
+    return withChrome(
+      <div
+        className="flex flex-col gap-3"
+        data-testid="connect-assistant-loading"
+      >
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-4 w-24" />
+        <LoadingStatus />
       </div>
     )
   }
 
   if (state.kind === 'unavailable') {
-    return (
-      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-        <SignInHeader />
-        <div
-          className="flex flex-col gap-3"
-          data-testid="connect-assistant-unavailable"
-        >
-          <h2 className="text-page-title font-semibold text-neutral-900">
-            This connection request is no longer available
-          </h2>
-          <p className="text-sm text-neutral-700">
-            It may have expired, already been used, or belong to a different
-            signed-in account. Go back to your assistant and start connecting it
-            again.
-          </p>
-        </div>
+    return withChrome(
+      <div
+        className="flex flex-col gap-3"
+        data-testid="connect-assistant-unavailable"
+      >
+        <h2 className="text-page-title font-semibold text-neutral-900">
+          This connection request is no longer available
+        </h2>
+        <p className="text-sm text-neutral-700">
+          It may have expired, already been used, or belong to a different
+          signed-in account. Go back to your assistant and start connecting it
+          again.
+        </p>
       </div>
     )
   }
@@ -246,59 +301,53 @@ export function ConnectAssistant({
     // the emailed sign-in link, regardless of which browsing context
     // redeems it, the identical mechanism `pages/JoinLink.tsx`/
     // `pages/Connect.tsx` already use for their own returns.
-    return (
-      <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-        <SignInHeader />
-        <SignIn
-          onSignedIn={onSignedIn}
-          destination={`/connect-assistant/${requestId}`}
-          headline="Sign in to Bloombot to connect"
-          description={`${clientLabel(state.clientName)} wants to connect to your Bloombot account. Sign in below to continue — you will see exactly what is being requested before anything is granted.`}
-        />
-      </div>
+    return withChrome(
+      <SignIn
+        onSignedIn={onSignedIn}
+        destination={`/connect-assistant/${requestId}`}
+        headline="Sign in to Bloombot to connect"
+        description={`${clientLabel(state.clientName)} wants to connect to your Bloombot account. Sign in below to continue — you will see exactly what is being requested before anything is granted.`}
+      />
     )
   }
 
   // `state.kind === 'consent'` — signed in, the disclosure and decision
   // screen (security review, must-fix 2 — this file's own module comment).
-  return (
-    <div className="mx-auto mt-16 flex max-w-sm flex-col gap-8">
-      <SignInHeader />
-      <div
-        className="flex flex-col gap-4 rounded-lg border border-neutral-200 bg-white p-8"
-        data-testid="connect-assistant-consent"
-      >
-        <h1 className="text-page-title font-semibold text-neutral-900">
-          Connect this assistant to your Bloombot account
-        </h1>
-        <p className="text-sm text-neutral-700">
-          <strong>{clientLabel(state.clientName)}</strong> will act as your
-          Bloombot account — it will be able to do everything you can do through
-          the API, in every organization you already belong to. It gains no
-          course access beyond what your account already has.
-        </p>
-        <p className="text-sm text-neutral-700">
-          Approving this sends a connection code to:{' '}
-          <strong>{state.redirectHost}</strong>
-        </p>
-        <div className="flex gap-3">
-          <Button
-            variant="primary"
-            onClick={() => void handleDecide('allow')}
-            disabled={deciding}
-          >
-            {deciding ? 'Connecting…' : 'Allow'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void handleDecide('deny')}
-            disabled={deciding}
-          >
-            Deny
-          </Button>
-        </div>
-        {decideError && <ErrorMessage error={decideError} />}
+  return withChrome(
+    <div
+      className="flex flex-col gap-4 rounded-lg border border-neutral-200 bg-white p-8"
+      data-testid="connect-assistant-consent"
+    >
+      <h1 className="text-page-title font-semibold text-neutral-900">
+        Connect this assistant to your Bloombot account
+      </h1>
+      <p className="text-sm text-neutral-700">
+        <strong>{clientLabel(state.clientName)}</strong> will act as your
+        Bloombot account — it will be able to do everything you can do through
+        the API, in every organization you already belong to. It gains no course
+        access beyond what your account already has.
+      </p>
+      <p className="text-sm text-neutral-700">
+        Approving this sends a connection code to:{' '}
+        <strong>{state.redirectHost}</strong>
+      </p>
+      <div className="flex gap-3">
+        <Button
+          variant="primary"
+          onClick={() => void handleDecide('allow')}
+          disabled={deciding}
+        >
+          {deciding ? 'Connecting…' : 'Allow'}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => void handleDecide('deny')}
+          disabled={deciding}
+        >
+          Deny
+        </Button>
       </div>
+      {decideError && <ErrorMessage error={decideError} />}
     </div>
   )
 }

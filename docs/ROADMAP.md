@@ -408,3 +408,14 @@ this platform serves — the panel's and the API's alike — to a viewport and a
 mobile browser feels the need to zoom.
 
 **In scope:** MCP-11, MCP-12, WEB-48
+
+## Phase 32 — Landing somewhere useful after connecting
+
+A student who follows the bot's invitation out of Discord, signs in and confirms the connection is
+currently returned to the very form they started on — now asking them for an assistant token, which
+is not what they came for and not something they have. They are told nothing about whether the
+thing they actually wanted worked. This phase lands them on a plain confirmation instead, with the
+two onward routes that are worth offering, and gives every signed-in page outside the shell the
+panel's own header so nobody is left on a page with no way back into the rest of it.
+
+**In scope:** LINK-11, WEB-49

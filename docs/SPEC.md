@@ -3043,3 +3043,29 @@ a person taps zooms the page in on its own — a form field is never small enoug
 to decide it must magnify the page to make it usable — and nothing scrolls sideways. Pages the panel
 does not render itself, including any page served directly by the API, are held to the same standard
 rather than exempted for being small.
+
+### 37. Landing After Connecting
+
+#### LINK-11 A confirmed Discord connection lands on a confirmation, not the connect form
+
+A person who followed the bot's invitation from Discord and confirmed the connection is told plainly
+that their Discord account is connected and that they can go back and message the bot in Discord
+now. That page is not the connect form they arrived on: it does not ask them for an assistant token,
+and it does not re-offer the Discord connection they have just made. It offers the two places worth
+going next — the panel's own chat, and the page that explains connecting ChatGPT, Claude or another
+assistant — as links they can follow or ignore.
+
+The connect form itself is unchanged and stays reachable at its own address, since the MCP page links
+to it for anyone who cannot use a sign-in redirect and has to paste a token by hand.
+
+#### WEB-49 Every signed-in page carries the panel's own header
+
+Once a person is signed in, every page the panel renders carries the same header and footer the rest
+of the panel does — the hamburger that opens the navigation drawer on the leading edge, the profile
+control on the trailing edge — including the pages that stand outside the organization-scoped shell:
+connecting an account, the confirmation that follows it, redeeming a course join link, accepting a
+membership invitation, authorizing an assistant, and the not-found page. A signed-in person is never
+stranded on a page with no way to reach the rest of the panel.
+
+Pages a signed-out visitor sees are unaffected: there is no account to offer navigation for, and they
+keep the sign-in header they already show.

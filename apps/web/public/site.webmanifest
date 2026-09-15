@@ -1,7 +1,7 @@
 {
   "name": "Bloombot",
   "short_name": "Bloombot",
-  "description": "Answers students' course questions on Discord and on the web, from material their instructor supplies.",
+  "description": "Answers students' course questions on Discord, on the web, and through ChatGPT, Claude and other assistants, from material their instructor supplies.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8fafc",

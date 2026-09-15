@@ -60,6 +60,18 @@ describe('the signed-out home page (Google OAuth homepage requirements)', () => 
     expect(main).toHaveTextContent(/Discord/)
   })
 
+  // The service is reachable from an MCP client as well as from Discord and
+  // the browser, and the one-line description is the only place a visitor
+  // learns that before signing in. It named two of the three surfaces for as
+  // long as there were only two.
+  it('names the assistants the service answers through, not only Discord and the web', () => {
+    render(<Home onSignedIn={vi.fn()} />)
+
+    const main = screen.getByRole('main')
+    expect(main).toHaveTextContent(/ChatGPT/)
+    expect(main).toHaveTextContent(/Claude/)
+  })
+
   it('links the privacy policy from the homepage, at /privacy', () => {
     render(<Home onSignedIn={vi.fn()} />)
 

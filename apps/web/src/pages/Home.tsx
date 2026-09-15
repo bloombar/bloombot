@@ -29,7 +29,7 @@ import { SignIn } from './SignIn.js'
 const CAPABILITIES: readonly { title: string; body: string }[] = [
   {
     title: 'Answers course questions',
-    body: 'Students ask in their own Discord channel or in the web chat, and get an answer drawn from the material their instructor supplied — the syllabus, notes, readings and links attached to that course.',
+    body: 'Students ask in their own Discord channel, in the web chat, or from an assistant they already use — ChatGPT, Claude or another connector client — and get an answer drawn from the material their instructor supplied: the syllabus, notes, readings and links attached to that course.',
   },
   {
     title: 'One private channel per student',

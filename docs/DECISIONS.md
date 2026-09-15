@@ -12133,3 +12133,75 @@ whose viewport tag is already correct. The requirement is satisfied by there bei
 than by fixing one — recorded here because "we checked and found none" is the kind of thing that is
 otherwise indistinguishable from "we forgot to look", and because the next thing to hand-write an HTML
 response in `apps/api` needs to know the standard applies to it.
+
+## D-113 — LINK-11/WEB-49: `SignedInChrome` as a component, not a hook; a standalone page's header acts in the account's own default organization, never the address it stands on
+
+**Shape chosen for the shared chrome: a component (`components/SignedInChrome.tsx`) that wraps `AppShell`
+and takes `children`, not a hook returning props for the caller to spread onto its own `<AppShell>`.** The
+brief left this open. A hook would have meant `pages/Shell.tsx` and every standalone page (`Connect.tsx`,
+`Connected.tsx`, `JoinLink.tsx`, `Invitation.tsx`, `ConnectAssistant.tsx`, and the signed-in `NotFound`
+`App.tsx` renders directly) each still writing out `<AppShell ref={...} onHome={...} navGroups={...}
+headerStart={...} headerEnd={...} drawerFooter={...}>{content}</AppShell>` themselves — six call sites
+that could still drift on which five props actually get passed through, and a `ref` each one would have to
+own even though only `pages/Shell.tsx` ever reads it (for the drawer-item close-after-guard behaviour
+`components/AppShell.tsx`'s own `AppShellHandle` doc comment describes). A component that owns the `ref`
+internally and takes `children` collapses six near-identical `<AppShell>` calls into six identical
+`<SignedInChrome>` calls, which is the actual point of "one shared unit" — not merely one function computing
+the props, but one place that renders the header at all.
+
+**The organization a standalone page's header acts in is the account's own *default* organization
+(`account-default-organization.ts`), never the organization the page's own address names.** This was the
+one rule the brief flagged as unsettled beyond "must never ask the switcher to display an organization it
+cannot reach." Considered and rejected: showing no organization at all for these pages regardless of
+whether the account has a real one elsewhere (defensible — `/connect/:id` and `/connected/:id` are not
+organization-scoped screens in `routing/route.ts`'s own sense) — rejected because it would degrade the
+header for the overwhelmingly common case (an existing member or connected person following a second
+Discord invitation, or a stray `/connect-assistant/:id` link, while already fully at home in their own
+organization) to punish the address's own unreachability, which is already handled correctly by simply not
+handing that id to the switcher. Reusing `App.tsx`'s own `resolveHomeRoute` fallback
+(`account.memberships[0] ?? account.connectedOrganizations[0]`) means the header these pages show is
+exactly the organization a fresh sign-in would land the same account on anyway — one rule, not a second one
+invented for six call sites that did not have a header before this slice.
+
+**An account with neither a membership nor a connected organization at all gets a header with the hamburger
+and the profile control, no organization switcher, and an empty drawer (`navGroups={[]}`)** — never an
+invented organization id. TEN-1 gives every account its own personal organization on first sign-in, so this
+should not happen in practice; `resolveDefaultOrganization`'s own `undefined` return, and
+`SignedInChrome`'s own handling of it, exist for the same "defended, not assumed" reason
+`App.tsx#resolveHomeRoute`'s identical case already does — not because a real account is expected to reach
+it.
+
+**`pages/Shell.tsx#changeActiveOrganization` was kept as its own, separate function, not folded into
+`SignedInChrome`'s internal `landingForOrganizationSwitch`,** even though the two compute the same landing
+route by the same rule. The only remaining caller of `changeActiveOrganization` is `Account.tsx`'s own
+`onSwitchOrganization` — the org-switching control the account settings screen renders inline in its own
+rows, independent of the header's `OrganizationSwitcher` that moved inside `SignedInChrome`. Two call sites
+computing the identical rule from two functions is a small duplication accepted deliberately, over reaching
+into `SignedInChrome`'s own module to export an internal helper for one caller that has nothing else to do
+with the header component at all.
+
+**Rework round 1, must-fix 4 — `Connected.tsx` verifies the connection through `getPersonLinkStatus` before
+ever claiming "Discord connected," and an unverified or not-connected arrival redirects to
+`/connect/:organizationId`, not to a message of its own.** The review finding: this page asserted its own
+claim for whatever `organizationId` the URL named, on every arrival — not only the one
+`App.tsx#onConnected` navigation it is actually true for right after a confirm, but also the signed-out
+AUTH-6 sign-in round trip this page's own module comment already documents as reachable (a stale or
+hand-typed address, redeemed later, possibly by a different account than the one that began connecting).
+`Connect.tsx` already reads this exact status on every mount for the identical durability reason (LINK-7);
+`Connected.tsx` reusing that same read, rather than trusting the address alone, is the same "the server is
+what actually knows" discipline, not a new one.
+
+**Redirect, rather than a refusal message of this page's own, because there is nothing this page can
+usefully say that `Connect.tsx` does not already say better.** A refusal screen here would need its own
+copy for "not connected," its own copy for "the read failed," and its own way back to actually connecting
+Discord — three things `Connect.tsx` already renders correctly (its own status line, its own fail-open
+button on a refused read). Redirecting (`navigate({ kind: 'connect', organizationId }, { replace: true })`)
+sends the visitor to the one screen that can actually resolve either case, rather than duplicating its
+logic here for a screen that exists only to confirm, never to recover. `replace: true` — this is not
+somewhere "back" should return into, the same treatment `App.tsx`'s own one-time entry points already get.
+
+**What this does not fix**: an unreachable organization is not specifically detected or messaged
+differently from "not connected" or "read failed" — all three redirect identically. `Connect.tsx` itself
+already renders its own sign-in-required or not-a-member cases through `App.tsx`'s ordinary `isShellRoute`/
+`isReachableShellRoute` machinery once there, so this page does not need to duplicate that distinction
+either; it only needs to stop asserting a claim it has not verified.

@@ -16,6 +16,9 @@
  *    (`pages/Connect.tsx`); reachable signed in *or* signed out, unlike
  *    every other route below, since a Discord invitation cannot know which
  *    it will be.
+ *  - `route.kind === 'connected'` — LINK-11's own confirmation, where a
+ *    confirmed Discord connect lands (`pages/Connected.tsx`); reachable
+ *    signed in or signed out, the identical reason `'connect'` is above.
  *  - `route.kind === 'connect-assistant'` — MCP-11's own assistant
  *    connection address (`pages/ConnectAssistant.tsx`), reachable signed in
  *    or signed out for the identical reason `'connect'` is above.
@@ -64,14 +67,17 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
+import { resolveDefaultOrganization } from './account-default-organization.js'
 import { ApiError, fetchMe } from './api/client.js'
 import type { AccountSummary } from './api/types.js'
 import { Button } from './components/Button.js'
+import { SignedInChrome } from './components/SignedInChrome.js'
 import { SignInHeader } from './components/SignInHeader.js'
 import { LoadingStatus, Skeleton } from './components/Skeleton.js'
 import { Admin } from './pages/Admin.js'
 import { Connect } from './pages/Connect.js'
 import { ConnectAssistant } from './pages/ConnectAssistant.js'
+import { Connected } from './pages/Connected.js'
 import { DiscordCallback } from './pages/DiscordCallback.js'
 import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
@@ -198,12 +204,17 @@ function resolveHomeRoute(
     }
   }
 
+  // LINK-11 — the fallback below is now `resolveDefaultOrganization`
+  // (`account-default-organization.ts`), pulled out of this function so
+  // `components/SignedInChrome.tsx`'s own standalone-page header can reuse
+  // the identical rule rather than a second copy invented for it; this is
+  // the same "a membership, then a connected organization" fallback this
+  // function always computed inline.
+  const fallback = resolveDefaultOrganization(account)
   const organizationId =
     justInstalled && isMemberOf(justInstalled.organizationId)
       ? justInstalled.organizationId
-      : (account.memberships[0]?.organizationId ??
-        account.connectedOrganizations[0]?.organizationId ??
-        '')
+      : (fallback?.organizationId ?? '')
 
   // No membership and no connected organization at all — should not happen
   // (TEN-1 gives every account its own personal organization on first sign
@@ -216,6 +227,33 @@ function resolveHomeRoute(
   return isMemberOf(organizationId)
     ? { kind: 'projects', organizationId }
     : { kind: 'chat', organizationId }
+}
+
+/**
+ * LINK-11 — the signed-in `NotFound` render `App.tsx` itself owns (this
+ * file's own module comment: a not-found screen this account reached, never
+ * an empty shell) — wrapped in `SignedInChrome` like every other signed-in
+ * page, acting in the account's own default organization
+ * (`resolveDefaultOrganization`) since a not-found address names no
+ * organization this account can actually act in.
+ */
+function renderSignedInNotFound(
+  account: AccountSummary,
+  navigate: (route: Route, options?: { replace?: boolean }) => void,
+  onSignedOut: () => void
+) {
+  const defaultOrganization = resolveDefaultOrganization(account)
+  return (
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={defaultOrganization?.organizationId}
+      isMember={defaultOrganization?.isMember ?? false}
+      navigate={navigate}
+      onSignedOut={onSignedOut}
+    >
+      <NotFound onHome={() => navigate({ kind: 'home' }, { replace: true })} />
+    </SignedInChrome>
+  )
 }
 
 export function App() {
@@ -388,11 +426,20 @@ export function App() {
   // before confirm (and this callback) ever runs. That silently sent a
   // freshly connected student to the ordinary shell instead of back to
   // this same organization's own connect screen, exactly the outcome that
-  // page's own doc comment says must not happen — and every existing test
-  // stayed green, because none of them checked *where* a confirmed connect
-  // actually landed. Fixed by navigating on the argument this callback
-  // already receives, not a sessionStorage key that is gone by the time it
-  // fires.
+  // page's own doc comment used to say must not happen — and every existing
+  // test stayed green, because none of them checked *where* a confirmed
+  // connect actually landed. Fixed by navigating on the argument this
+  // callback already receives, not a sessionStorage key that is gone by the
+  // time it fires.
+  //
+  // LINK-11 — that landing has since moved again, from `'connect'` to
+  // `'connected'`: returning to this organization's own connect *form*
+  // re-offered connecting Discord (already just done) and the "Connect an
+  // assistant" section beside it, neither of which belongs on a screen that
+  // exists only to confirm what just happened. `pages/Connected.tsx` is the
+  // confirmation that replaces it — still reached by navigating on this
+  // callback's own argument, the fix above's reasoning unchanged, only the
+  // destination is different.
   if (route.kind === 'discord-callback') {
     return (
       <DiscordCallback
@@ -403,7 +450,7 @@ export function App() {
           returnToShell()
         }}
         onConnected={(organizationId) => {
-          navigate({ kind: 'connect', organizationId }, { replace: true })
+          navigate({ kind: 'connected', organizationId }, { replace: true })
           refreshSession()
         }}
         onDone={returnToShell}
@@ -447,6 +494,21 @@ export function App() {
         organizationId={route.organizationId}
         account={session.kind === 'signed-in' ? session.account : null}
         onSignedIn={refreshSession}
+        navigate={navigate}
+      />
+    )
+  }
+
+  // LINK-11 — where a confirmed Discord connect lands (`onConnected`,
+  // above); reachable whether or not this browser already has a session,
+  // the identical reason `'connect'` is above.
+  if (route.kind === 'connected') {
+    return (
+      <Connected
+        organizationId={route.organizationId}
+        account={session.kind === 'signed-in' ? session.account : null}
+        onSignedIn={refreshSession}
+        navigate={navigate}
       />
     )
   }
@@ -463,6 +525,7 @@ export function App() {
         requestId={route.requestId}
         account={session.kind === 'signed-in' ? session.account : null}
         onSignedIn={refreshSession}
+        navigate={navigate}
       />
     )
   }
@@ -505,6 +568,7 @@ export function App() {
             navigate({ kind: 'home' }, { replace: true })
           })
         }}
+        navigate={navigate}
       />
     )
   }
@@ -520,6 +584,7 @@ export function App() {
         account={session.kind === 'signed-in' ? session.account : null}
         onSignedIn={refreshSession}
         onRedeemed={returnToShell}
+        navigate={navigate}
       />
     )
   }
@@ -571,11 +636,7 @@ export function App() {
       // check's only job stays "was this address reachable", the same
       // `isReachableShellRoute` that effect already used.
       if (!isReachableShellRoute(route, session.account)) {
-        return (
-          <NotFound
-            onHome={() => navigate({ kind: 'home' }, { replace: true })}
-          />
-        )
+        return renderSignedInNotFound(session.account, navigate, refreshSession)
       }
       return (
         <Shell
@@ -598,9 +659,7 @@ export function App() {
     // while signed in with no matching branch left to take (defended, not
     // assumed — `pages/Chat.tsx`'s own `describeDeclineNotice` holds
     // itself to the same discipline).
-    return (
-      <NotFound onHome={() => navigate({ kind: 'home' }, { replace: true })} />
-    )
+    return renderSignedInNotFound(session.account, navigate, refreshSession)
   }
 
   // WEB-34/AUTH-6 — a signed-out visitor who followed a bookmark or a

@@ -143,6 +143,10 @@ export type Route =
   | { kind: 'sign-in'; token: string }
   | { kind: 'discord-callback' }
   | { kind: 'connect'; organizationId: string }
+  // LINK-11 — `/connected/:organizationId`, where `DiscordCallback` lands
+  // once a Discord connection is confirmed, in place of returning to the
+  // `'connect'` form (`App.tsx`'s own comment on `onConnected` has why).
+  | { kind: 'connected'; organizationId: string }
   // MCP-11 — `${CONFIG.PUBLIC_APP_URL}/connect-assistant/:requestId`, the
   // address `apps/mcp/src/oauth-provider.ts#authorize` redirects the browser
   // to; `requestId` names the pending authorization
@@ -227,6 +231,9 @@ export function parseRoute(pathname: string): Route {
   }
   if (first === 'connect' && segments.length === 2 && second) {
     return { kind: 'connect', organizationId: second }
+  }
+  if (first === 'connected' && segments.length === 2 && second) {
+    return { kind: 'connected', organizationId: second }
   }
   if (first === 'connect-assistant' && segments.length === 2 && second) {
     return { kind: 'connect-assistant', requestId: second }
@@ -396,6 +403,8 @@ export function buildPath(route: Route): string {
       return `/sign-in/${route.token}`
     case 'connect':
       return `/connect/${route.organizationId}`
+    case 'connected':
+      return `/connected/${route.organizationId}`
     case 'connect-assistant':
       return `/connect-assistant/${route.requestId}`
     case 'join-link':

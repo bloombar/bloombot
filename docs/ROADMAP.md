@@ -428,3 +428,13 @@ up front, confirmed by typing the name, and audited — offered from the row men
 every other action on them.
 
 **In scope:** PROJ-8, PROJ-9, WEB-50
+
+## Phase 34 — A category that routes however it is typed
+
+A course is found by the name of the Discord category a question is asked in, and that comparison is
+exact today, so a category renamed to different capitalisation or spacing quietly stops answering.
+This phase compares category names ignoring case and all whitespace — when routing, when refusing a
+colliding name, and when scaffolding — and has the course editor tell an instructor, at the field,
+that category names must be unique on the server.
+
+**In scope:** BOT-13, PROJ-10, WEB-51

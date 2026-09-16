@@ -4259,3 +4259,52 @@
   phase: 33
   status: In progress
   review: false
+- id: BOT-13
+  title: A category routes its course regardless of case and whitespace
+  full: "When a message is routed by its Discord category (BOT-2), the category's
+    name is compared with each course's configured category names ignoring
+    letter case and every whitespace character — leading, trailing and inside
+    the name. A course configured with Web Design therefore answers messages in
+    a category named web design, WEB DESIGN, Web Design or WebDesign. Nothing
+    else is loosened: punctuation, symbols and letters still have to match, and
+    two courses whose names compare equal this way are still reported as
+    ambiguous rather than one being chosen quietly (CORE-2)."
+  section: §39 Category Name Matching
+  family: BOT
+  phase: 34
+  status: Backlog
+  review: false
+- id: PROJ-10
+  title: Category names are unique under the same comparison routing uses
+  full: PROJ-3's refusal to save a category name that collides with another
+    enabled course in the same server, and its refusal of a course that lists
+    the same category twice, compare names exactly as BOT-13 routes them —
+    ignoring case and all whitespace. A save naming Web Design is refused when
+    another course in that server already uses webdesign, and the refusal names
+    the other course and project and shows both spellings, saying they count as
+    the same category. Every path that adds or renames a category — the course
+    editor, the category actions and the MCP tools — applies the same check.
+    Server scaffolding recognises an existing Discord category by the same
+    comparison.
+  section: §39 Category Name Matching
+  family: PROJ
+  phase: 34
+  status: Backlog
+  review: false
+- id: WEB-51
+  title: The course editor says a category name must be unique before and after saving
+  full: Where an instructor adds or renames a category in the course editor, the
+    field states under it that category names must be unique on the Discord
+    server, ignoring capitalisation and spaces. A name that repeats another
+    category in the same course is flagged inline as soon as the instructor
+    leaves the field, and saving is held back until it is fixed. A save the
+    server refuses because another course in the server already uses the name is
+    shown on the offending category field itself — marked invalid, with the
+    message naming the other course and project, announced to assistive
+    technology, and the field focused — rather than only as a generic error, and
+    the error clears once the name is edited.
+  section: §39 Category Name Matching
+  family: WEB
+  phase: 34
+  status: Backlog
+  review: false

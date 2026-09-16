@@ -4228,7 +4228,7 @@
   section: §38 Deleting Projects and Courses
   family: PROJ
   phase: 33
-  status: In progress
+  status: Done
   review: false
 - id: PROJ-9
   title: A project can be deleted, taking its courses with it
@@ -4240,7 +4240,7 @@
   section: §38 Deleting Projects and Courses
   family: PROJ
   phase: 33
-  status: In progress
+  status: Done
   review: false
 - id: WEB-50
   title: Delete is offered from a row's menu, and confirmed in a modal that says
@@ -4257,7 +4257,7 @@
   section: §38 Deleting Projects and Courses
   family: WEB
   phase: 33
-  status: In progress
+  status: Done
   review: false
 - id: BOT-13
   title: A category routes its course regardless of case and whitespace

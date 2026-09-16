@@ -37,6 +37,8 @@ export {
   type JoinLinkExpiryValue,
 } from './join-link-expiry.js'
 
+export { normalizeCategoryName } from './category-name.js'
+
 export {
   courseExportFileSchema,
   exportedCourseSchema,

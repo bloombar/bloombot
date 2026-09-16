@@ -229,7 +229,8 @@ describe('contentDeletions.removeBytes handler', () => {
     })
 
     expect(result.outcome).toBe('succeeded')
-    // Both provider deletes — the vector-store entry, then the file object.
+    // Both provider deletes for the attachment — the vector-store entry,
+    // then the file object — and, cheap-fix 2, the store itself.
     expect(
       openaiServer.requests.some(
         (r) =>
@@ -239,6 +240,11 @@ describe('contentDeletions.removeBytes handler', () => {
     expect(
       openaiServer.requests.some(
         (r) => r.method === 'DELETE' && r.path === '/files/file_1'
+      )
+    ).toBe(true)
+    expect(
+      openaiServer.requests.some(
+        (r) => r.method === 'DELETE' && r.path === '/vector_stores/vs_1'
       )
     ).toBe(true)
     expect(await storage.read(organizationId, 'attachment-1')).toBeUndefined()
@@ -262,6 +268,10 @@ describe('contentDeletions.removeBytes handler', () => {
       body: { error: { message: 'no longer there' } },
     })
     openaiServer.respondToFileDelete({
+      status: 404,
+      body: { error: { message: 'no longer there' } },
+    })
+    openaiServer.respondToVectorStoreDelete({
       status: 404,
       body: { error: { message: 'no longer there' } },
     })
@@ -308,5 +318,147 @@ describe('contentDeletions.removeBytes handler', () => {
 
     expect(result.outcome).toBe('succeeded')
     expect(await storage.read(organizationId, 'attachment-1')).toBeUndefined()
+  })
+
+  // Must-fix 1 (rework round 2): a non-404 provider failure must not be
+  // logged and shrugged off while the local bytes are removed anyway — that
+  // combination is exactly what orphans a file at the provider forever,
+  // since nothing local is left afterward to even name it for a later
+  // sweep. This attempt must fail (so `@bloombot/jobs`' own retry policy
+  // actually retries it), and this attachment's own bytes must survive it.
+  it('a non-404 provider failure fails the job attempt and keeps the attachment’s local bytes', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const organizationId = randomUUID()
+    organizations.createOrganization(
+      organizationId,
+      { name: 'Test Org', isPersonal: false },
+      testDb.db
+    )
+    await storage.write(organizationId, 'attachment-1', Buffer.from('x'))
+    openaiServer.respondToFileDelete({
+      status: 500,
+      body: { error: { message: 'upstream is having a bad day' } },
+    })
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+      createRemoveDeletedContentBytesHandler({
+        attachmentStorage: storage,
+        openaiHttpOptions,
+        logger: createFakeLogger(),
+      })
+    )
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+        payload: {
+          courses: [
+            {
+              courseId: 'course-1',
+              vectorStoreId: null,
+              attachments: [
+                { attachmentId: 'attachment-1', providerFileId: 'file_1' },
+              ],
+              exportIds: [],
+            },
+          ],
+        },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const firstAttempt = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      // No real backoff wait — this test proves the retry actually
+      // happens and what it does, not the schedule
+      // (`packages/jobs/tests/runner.test.ts` proves that).
+      retryPolicy: { baseDelayMs: 0, backoffFactor: 1 },
+    })
+
+    expect(firstAttempt.outcome).toBe('retried')
+    // Never removed — the provider still holds a copy this attempt could
+    // not undo.
+    expect(await storage.read(organizationId, 'attachment-1')).toBeDefined()
+
+    // A later attempt, once the provider actually cooperates (200, or 404
+    // for "already gone" — either means nothing is left to undo there),
+    // succeeds and removes the bytes this time.
+    const secondAttempt = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy: { baseDelayMs: 0, backoffFactor: 1 },
+    })
+
+    expect(secondAttempt.outcome).toBe('succeeded')
+    expect(await storage.read(organizationId, 'attachment-1')).toBeUndefined()
+  })
+
+  // Cheap-fix 2's own must-fix 1 rule, applied to the store itself: a
+  // failure deleting the vector store must fail the job the identical way
+  // a failure deleting an attachment's own file does.
+  it('a non-404 failure deleting the vector store itself fails the job attempt', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const organizationId = randomUUID()
+    organizations.createOrganization(
+      organizationId,
+      { name: 'Test Org', isPersonal: false },
+      testDb.db
+    )
+    openaiServer.respondToVectorStoreDelete({
+      status: 500,
+      body: { error: { message: 'upstream is having a bad day' } },
+    })
+
+    const handlers = new HandlerRegistry()
+    handlers.register(
+      REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+      createRemoveDeletedContentBytesHandler({
+        attachmentStorage: storage,
+        openaiHttpOptions,
+        logger: createFakeLogger(),
+      })
+    )
+    jobs.enqueueJob(
+      organizationId,
+      {
+        kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+        payload: {
+          courses: [
+            {
+              courseId: 'course-1',
+              vectorStoreId: 'vs_1',
+              attachments: [],
+              exportIds: [],
+            },
+          ],
+        },
+        maxAttempts: 3,
+      },
+      testDb.db
+    )
+
+    const result = await runNextJob({
+      db: testDb.db,
+      logger: createFakeLogger(),
+      handlers,
+      owner: 'worker-1',
+      leaseMs: 60_000,
+      handlerTimeoutMs: 60_000,
+      retryPolicy,
+    })
+
+    expect(result.outcome).toBe('retried')
   })
 })

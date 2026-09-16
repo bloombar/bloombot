@@ -133,6 +133,18 @@ export function ModalProvider({ children }: { children: ReactNode }) {
   )
   const [promptValue, setPromptValue] = useState('')
   const [promptError, setPromptError] = useState<string | undefined>(undefined)
+  // WEB-50 rework finding, round 2: with the confirm button now disabled
+  // until `validate` passes (below), `handleConfirm`'s own
+  // validate-on-submit branch — the only place `promptError` used to be
+  // set — can no longer run while the value is invalid, so its own error
+  // message was never shown at all: a disabled button with no visible
+  // reason. `promptTouched` is what lets this file show that reason as
+  // live helper text instead, without also showing it for a field nobody
+  // has typed in yet — an untouched, empty "type the name to confirm"
+  // field reading an error the instant the dialog opens would read as the
+  // dialog accusing the person of a mistake they have not had a chance to
+  // make.
+  const [promptTouched, setPromptTouched] = useState(false)
   // Mirrors `current`, synchronously — `show()` below needs to know
   // whether a request is already open at the moment it is called, and
   // reading state set by a previous render is not reliable for that; a
@@ -148,6 +160,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     currentRef.current = request
     setPromptValue(request.promptValue ?? '')
     setPromptError(undefined)
+    setPromptTouched(false)
     setCurrent(request)
     setRenderedRequest(request)
   }, [])
@@ -250,6 +263,19 @@ export function ModalProvider({ children }: { children: ReactNode }) {
       ? Boolean(renderedRequest.validate(promptValue))
       : false
 
+  // WEB-50 rework finding, round 2 (this file's own module comment on
+  // `promptTouched` has the full reasoning): the same `validate` call
+  // `confirmDisabled` above already runs, read again here rather than
+  // stored once, so the message on screen can never drift from the
+  // disabled state it explains — only shown once the field has actually
+  // been edited.
+  const liveValidationMessage =
+    promptTouched &&
+    renderedRequest?.kind === 'prompt' &&
+    renderedRequest.validate
+      ? renderedRequest.validate(promptValue)
+      : undefined
+
   const handleConfirm = () => {
     if (current?.kind === 'prompt') {
       const error = current.validate?.(promptValue)
@@ -311,10 +337,15 @@ export function ModalProvider({ children }: { children: ReactNode }) {
           {...(renderedRequest.promptPlaceholder !== undefined
             ? { promptPlaceholder: renderedRequest.promptPlaceholder }
             : {})}
-          {...(promptError !== undefined ? { promptError } : {})}
+          {...(liveValidationMessage !== undefined
+            ? { promptError: liveValidationMessage }
+            : promptError !== undefined
+              ? { promptError }
+              : {})}
           onPromptValueChange={(next) => {
             setPromptValue(next)
             setPromptError(undefined)
+            setPromptTouched(true)
           }}
           confirmDisabled={confirmDisabled}
           onConfirm={handleConfirm}

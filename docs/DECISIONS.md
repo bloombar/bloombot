@@ -12296,9 +12296,35 @@ by the action calling them (an earlier version of this file did that, and was mu
 attachment upload overlapping a course delete", closed by moving the read inside the transaction instead of
 narrowing the window). The job's own handler then makes the identical two provider calls
 `courseAttachments.detach` makes, in the identical order (vector-store entry, then the file object itself),
-treating a `404` from either as "already gone" the same way — the same idempotence that makes retrying this
-job after a partial batch failure safe. Transcript exports still never reach the provider: they are written
-only to `AttachmentStorage`, never uploaded anywhere (`repos/transcript-exports.ts`'s own module comment).
+treating a `404` from either as "already gone" the same way. Transcript exports still never reach the
+provider: they are written only to `AttachmentStorage`, never uploaded anywhere
+(`repos/transcript-exports.ts`'s own module comment).
+
+**Rework round 2, must-fix 1 corrected a real orphaning bug in that same job: a non-404 provider failure used
+to be logged and shrugged off, and the local bytes were removed anyway, so the job reported success and
+nothing ever retried** — the exact combination that leaves a file object sitting at the provider forever, with
+every local row that could have named it for a later sweep already gone. Fixed two ways together: (1) a
+provider delete that fails with anything other than 404 (`deleteIgnoringAlreadyGone`'s own contract) now skips
+that attachment's local byte removal entirely — the id survives locally specifically so a retry has something
+left to retry against; (2) the handler throws once, after every course in the payload has been processed, if
+any provider delete failed, so `@bloombot/jobs`' own retry policy (JOB-2) actually re-runs the job. Throwing
+*after* processing every course, not on the first failure, is deliberate: one course's own provider outage must
+not stop another course's independent cleanup from running in the same pass. The 404-tolerance
+(`deleteIgnoringAlreadyGone`) is what makes that retry safe rather than merely persistent — a delete that
+already landed on a previous attempt 404s harmlessly on the next one, instead of failing the same way forever.
+This is also what makes the "idempotence" claim the previous round of this same entry made actually true: that
+version threw nothing, so there was no retry for the 404-tolerance to *be* idempotent against — a bug this
+paragraph's own first sentence names outright rather than quietly fixing without comment.
+
+**Cheap-fix 2 (rework round 2): the vector store itself is also deleted, once per course, after its files.**
+`deleteVectorStore` (`packages/openai/src/files.ts`) is a new, small export — the identical shape
+`deleteFile`/`deleteVectorStoreFile` already are, `DELETE /vector_stores/{id}` — the API never grew a call for
+this earlier because nothing before PROJ-8 ever needed to delete a whole store; `courseAttachments.detach`
+(FILE-3) only ever removes one file from a store other attachments may still need. Attempted regardless of
+whether every file inside it was removed successfully — an independent resource, the same "each id cleaned up
+on its own merits" reasoning `removeBytes` already applies per attachment/export — and it is 404-tolerant and
+subject to the identical must-fix 1 retry rule as an attachment's own files: a failed store delete also fails
+the job attempt.
 
 **`content_deletions` needed its own line in `organizations.ts#deleteOrganizationData`** (must-fix 2, a
 regression this slice's first cut introduced and rework round 1 caught): it is a real foreign key to
@@ -12310,6 +12336,26 @@ a `content_deletions` row has nothing left to be an audit trail *for* once the t
 `content_deletions.deletedByAccountId` (a foreign key to `accounts.id`) posed no equivalent risk to check for
 the reverse direction — nothing in this codebase ever deletes an `accounts` row at all (accounts are only
 disabled, TEN-1/AUTH-4's own "never deleted" discipline), so there is no delete path this FK could ever block.
+
+**Cheap-fix 3 (rework round 2): `ModalProvider`'s prompt shows `validate`'s own message as live helper text,
+not only on a failed submit.** Round 1's own fix disabled the confirm button until `validate` passed — correct
+on its own terms, but it left a disabled button with no visible reason at all: `handleConfirm`'s
+validate-on-submit branch, the only place that ever set `promptError` before, can no longer run while the value
+is invalid, since the button a click would need to reach is disabled. `promptTouched` (`ModalProvider.tsx`) is
+the fix: `false` until the field is actually edited once, so an untouched, empty "type the name to confirm"
+field never opens already accusing the person of a mistake they have not had a chance to make, and `true` from
+the first edit on, at which point `validate(promptValue)`'s own message is read live, every render, the
+identical call `confirmDisabled` already makes — the two can never drift, because neither is computed from the
+other; both read the same function against the same value.
+
+Moving the error out of the `<label>` and into its own element, reached through `aria-describedby`
+(`Modal.tsx`), was not optional once the message could appear on essentially every keystroke rather than only
+after a submit attempt: a `<label>` whose own text content includes both the field's name *and* whatever error
+happens to be showing computes an accessible **name** that changes as the person types (screen reader and
+`getByLabelText('Course title')` both compute it the identical way) — before this, that only mattered for the
+brief window between a failed submit and the next edit; now, live, it would have meant the field's own name
+never staying still. `aria-describedby` is the standard split for exactly this: the name says what the field
+is, the description says what is currently wrong with it, and the two are independent.
 
 **`scripts/board/config.mjs`'s `PHASES` array stopped at 31, though `MILESTONE_TITLE` already had an entry for
 32** — a pre-existing gap from an earlier slice's own board commit, not something this slice's diff caused,

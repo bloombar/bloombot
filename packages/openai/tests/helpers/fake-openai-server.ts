@@ -10,7 +10,8 @@
  * Each endpoint's response is programmable per test via `respondToConversations`/
  * `respondToResponses`/`respondToFiles`/`respondToVectorStoreCreate`/
  * `respondToVectorStoreFileAttach`/`respondToVectorStoreFileAttachPoll`/
- * `respondToVectorStoreFileDelete`/`respondToFileDelete` — a queue of
+ * `respondToVectorStoreFileDelete`/`respondToFileDelete`/
+ * `respondToVectorStoreDelete` — a queue of
  * one-shot responders, falling back to a fixed default once the queue is
  * empty, so a test can script "500 then 200" (MDL-5), or FILE-8's own
  * "in_progress, then completed on a later poll", without the fake growing
@@ -137,6 +138,7 @@ export class FakeOpenAiServer {
   private vectorStoreFileAttachPollQueue: Responder[] = []
   private vectorStoreFileDeleteQueue: Responder[] = []
   private fileDeleteQueue: Responder[] = []
+  private vectorStoreDeleteQueue: Responder[] = []
 
   private constructor(server: Server) {
     this.server = server
@@ -214,6 +216,11 @@ export class FakeOpenAiServer {
     this.fileDeleteQueue.push(toResponder(response))
   }
 
+  /** Queue one response for the next `DELETE /vector_stores/:id` (PROJ-8's own `deleteVectorStore`, cheap-fix 2 — the store itself, not one file inside it). */
+  respondToVectorStoreDelete(response: FakeResponse | Responder): void {
+    this.vectorStoreDeleteQueue.push(toResponder(response))
+  }
+
   /** Every route this fake answers, most-specific first — `/vector_stores/:id/files` must be checked before the bare `/vector_stores` path would otherwise wrongly claim it. */
   private routes(): Route[] {
     return [
@@ -269,6 +276,17 @@ export class FakeOpenAiServer {
         method: 'DELETE',
         test: (m, p) => m === 'DELETE' && /^\/files\/[^/]+$/.test(p),
         queue: this.fileDeleteQueue,
+        default: DEFAULT_DELETE_RESPONSE,
+      },
+      {
+        // Checked after the `/vector_stores/:id/files/:fileId` DELETE
+        // above (this file's own module comment on ordering) — a bare
+        // `/vector_stores/:id` never matches that longer pattern anyway,
+        // but kept in the same "more specific first" order for anyone
+        // reading this list top to bottom.
+        method: 'DELETE',
+        test: (m, p) => m === 'DELETE' && /^\/vector_stores\/[^/]+$/.test(p),
+        queue: this.vectorStoreDeleteQueue,
         default: DEFAULT_DELETE_RESPONSE,
       },
     ]

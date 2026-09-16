@@ -12376,3 +12376,19 @@ invariant working as intended (spend survives the course it was charged to) read
 defect: the alternative — inventing a synthetic "(deleted course)" line to keep the two numbers reconciling on
 this one screen — would be new product surface no requirement asked for, for a screen (COST-4) whose own text
 is about *current* courses' usage.
+
+**WEB-51 — a same-course category-name duplicate flags the *later* entry (reading the list top-to-bottom),
+naming the first occurrence's own current spelling; not "every matching entry" and not "the earlier one."**
+Flagging every duplicate would put an error under a category an instructor has not touched yet, the moment
+a later row happens to collide with it — confusing on a list edited top to bottom. Flagging the earlier one
+instead would move the error underneath a field someone is not currently editing, right after they finished
+editing a *different* one. Reading it as "the one you just typed already exists" matches where attention
+already is.
+
+**The inline duplicate/refusal message renders in its own `role="alert"` paragraph under the category
+field (`pages/CourseEditor.tsx`, hand-rolled rather than `FormField`'s own error markup, since a category
+row is not a plain `FormField` — it also carries a persistent hint and a delete button), on top of, not
+instead of, the existing top-level `ErrorMessage` a server refusal already renders (WEB-9/WEB-16's own
+convention).** Two renderings of the same sentence is deliberate, not an oversight: an instructor scanning
+the page for what changed sees it on the row that concerns it; `ErrorMessage`'s own `role="alert"` is what a
+screen reader announces immediately regardless of which row currently has focus.

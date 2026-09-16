@@ -2694,3 +2694,396 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * WEB-51: a category name is unique on a Discord server ignoring
+ * capitalisation and every whitespace character — the same comparison
+ * `@bloombot/db`'s own `normalizeCategoryName` applies server-side
+ * (BOT-13/PROJ-10). This form tells an instructor that up front (a
+ * persistent hint), catches a same-course duplicate before a save is even
+ * attempted (blur, then re-validated on every edit), and — when the server
+ * still refuses one it could not have known about locally, a duplicate
+ * against a *different* course — locates the refusal back to the row it
+ * concerns rather than only the generic top-level `ErrorMessage`.
+ */
+describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
+  it('shows a persistent hint under a category name, linked by aria-describedby', () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+
+    const input = screen.getByLabelText('Category name')
+    expect(
+      screen.getByText(/must be unique.*ignoring capitalisation and spaces/i)
+    ).toBeInTheDocument()
+    const describedBy = input.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const hintId = describedBy!.split(' ')[0]!
+    expect(document.getElementById(hintId)).toHaveTextContent(
+      /must be unique.*ignoring capitalisation and spaces/i
+    )
+  })
+
+  it('flags a same-course duplicate on blur (ignoring case and whitespace), blocks the save, and clears once edited', async () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    const [firstInput, secondInput] = screen.getAllByLabelText('Category name')
+    fireEvent.change(firstInput!, { target: { value: 'Web Design' } })
+    fireEvent.change(secondInput!, { target: { value: ' web  DESIGN' } })
+    fireEvent.blur(secondInput!)
+
+    expect(secondInput).toHaveAttribute('aria-invalid', 'true')
+    const duplicateError = screen.getByText(
+      /Another category in this course is already named/
+    )
+    expect(duplicateError).toBeInTheDocument()
+    expect(secondInput!.getAttribute('aria-describedby')).toContain(
+      duplicateError.id
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    expect(saveCourse).not.toHaveBeenCalled()
+    // Held back on a save attempt, and focus goes to the first invalid row.
+    expect(document.activeElement).toBe(secondInput)
+
+    fireEvent.change(secondInput!, { target: { value: 'Design 2' } })
+    expect(secondInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.queryByText(/Another category in this course is already named/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('places a server-refused category conflict on the row it concerns, focuses it, and clears it on edit', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          field: 'category',
+          name: 'Web Design - GLOBAL',
+          conflictingProjectName: 'Fall 2026',
+          conflictingCourseTitle: 'Intro to CS',
+          message:
+            'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    const categoryInput = await screen.findByDisplayValue('Web Design - GLOBAL')
+    // `Save course` is disabled while the form is clean (`isDirty`) — an
+    // edit elsewhere is enough to make the button live, without touching
+    // the category name this test is asserting against.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(categoryInput).toHaveAttribute('aria-invalid', 'true')
+    )
+    // The same sentence renders twice — once in the top-level `ErrorMessage`
+    // (kept, per the brief, since some readers only ever look there) and
+    // once on the category row itself; the field-level one is the id
+    // `aria-describedby` actually points at.
+    const conflictError = screen
+      .getAllByText(
+        'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".'
+      )
+      .find((element) => element.id.startsWith('category-error-'))
+    expect(conflictError).toBeDefined()
+    expect(categoryInput.getAttribute('aria-describedby')).toContain(
+      conflictError!.id
+    )
+    expect(document.activeElement).toBe(categoryInput)
+
+    fireEvent.change(categoryInput, {
+      target: { value: 'Web Design - GLOBAL 2' },
+    })
+    expect(categoryInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.queryByText(
+        (_, element) =>
+          element?.id.startsWith('category-error-') === true &&
+          element.textContent === conflictError!.textContent
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  // Rework round 1, must-fix 1: a refusal naming a category focuses that
+  // row even when saved from a tab that has never visited Discord before —
+  // the Discord panel is not mounted yet at the moment `switchToTabForField`
+  // runs (this file's own module comment: a tab only mounts once visited),
+  // so an immediate `.focus()` call right there would find nothing.
+  it('focuses the duplicate category row after switching from General, even though Discord was never opened before this save (rework round 1, must-fix 1)', async () => {
+    getCourse.mockResolvedValue({
+      ...COURSE,
+      categories: [
+        {
+          id: 'cat-1',
+          name: 'Web Design - GLOBAL',
+          channels: [],
+        },
+        {
+          id: 'cat-2',
+          name: ' web  design - global ',
+          channels: [],
+        },
+      ],
+    })
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    // Still on General — the default tab, and the only one visited so far.
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    // The save is held back client-side (the same-course duplicate this
+    // form's own check finds without ever needing the Discord panel
+    // mounted), the tab switches there, and — once it actually mounts —
+    // the duplicate row is what ends up focused.
+    expect(saveCourse).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute(
+        'aria-label',
+        'Category name'
+      )
+    })
+    expect(document.activeElement).toHaveValue(' web  design - global ')
+  })
+
+  // Rework round 1, must-fix 1: the same deferred-focus requirement for a
+  // server-refused conflict, saved from General without Discord ever having
+  // been opened.
+  it('focuses the server-conflicted category row after switching from General, even though Discord was never opened before this save (rework round 1, must-fix 1)', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          field: 'category',
+          name: 'Web Design - GLOBAL',
+          conflictingProjectName: 'Fall 2026',
+          conflictingCourseTitle: 'Intro to CS',
+          message:
+            'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design')
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Discord' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    )
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute(
+        'aria-label',
+        'Category name'
+      )
+    })
+    expect(document.activeElement).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  // Rework round 1, must-fix 2: a category conflict from a *previous*
+  // refusal must not survive a second save refused for an unrelated
+  // reason — without `setCategoryConflict(undefined)` at the top of
+  // `handleSave`, the stale message and `aria-invalid` would still be
+  // sitting on the category row from the first refusal.
+  it('clears a stale category conflict once a later save is refused for a different reason', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: 'action_conflict',
+          conflict: {
+            field: 'category',
+            name: 'Web Design - GLOBAL',
+            conflictingProjectName: 'Fall 2026',
+            conflictingCourseTitle: 'Intro to CS',
+            message:
+              'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+          },
+        })
+      )
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: 'action_conflict',
+          conflict: {
+            field: 'adminsRole',
+            name: 'admins-wd-fa26',
+            message:
+              'Role name "admins-wd-fa26" is already used by course "Intro to CS" in project "Fall 2026".',
+          },
+        })
+      )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    const categoryInput = await screen.findByDisplayValue('Web Design - GLOBAL')
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(categoryInput).toHaveAttribute('aria-invalid', 'true')
+    )
+
+    // A second save, refused for an entirely different reason — row A's own
+    // stale message and `aria-invalid` must not still be there afterward.
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'Role name "admins-wd-fa26" is already used by course "Intro to CS" in project "Fall 2026".'
+        )
+      ).toBeInTheDocument()
+    )
+    expect(categoryInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.queryByText(
+        'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".'
+      )
+    ).not.toBeInTheDocument()
+  })
+
+  // Rework round 1, must-fix 5: a successful save clears "a save was
+  // attempted" too — left `true`, a category added *after* that save (never
+  // itself part of any refused attempt) would show a duplicate error the
+  // moment it merely matched another row, without ever having been blurred.
+  it('does not flag a newly added category as a duplicate-on-load after an unrelated successful save', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockResolvedValue(COURSE)
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    await screen.findByDisplayValue('Web Design - GLOBAL')
+
+    // First, an actual client-side duplicate, refused, so
+    // `categorySaveAttempted` is genuinely `true` beforehand.
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    const categoryInputs = screen.getAllByLabelText('Category name')
+    fireEvent.change(categoryInputs[1]!, {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    expect(saveCourse).not.toHaveBeenCalled()
+
+    // Fix the duplicate and save — a real, successful save.
+    fireEvent.change(categoryInputs[1]!, {
+      target: { value: 'Web Design - EXTRA' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    await waitFor(() => expect(saveCourse).toHaveBeenCalledTimes(1))
+
+    // `saveCourse` echoes back `COURSE` as-is (one category, "Web Design -
+    // GLOBAL") — a brand-new category added after that save, typed to
+    // duplicate it but never blurred, must not show an error yet: with
+    // `categorySaveAttempted` correctly reset, a duplicate only shows once
+    // touched (blurred) or a *new* save is attempted, neither of which has
+    // happened here. Left `true` from the refused attempt above (the bug
+    // this test catches), it would show immediately.
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    const afterSave = screen.getAllByLabelText('Category name')
+    fireEvent.change(afterSave.at(-1)!, {
+      target: { value: 'Web Design - GLOBAL' },
+    })
+    expect(afterSave.at(-1)).not.toHaveAttribute('aria-invalid', 'true')
+  })
+})

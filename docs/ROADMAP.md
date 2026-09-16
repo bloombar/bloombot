@@ -419,3 +419,12 @@ two onward routes that are worth offering, and gives every signed-in page outsid
 panel's own header so nobody is left on a page with no way back into the rest of it.
 
 **In scope:** LINK-11, WEB-49
+
+## Phase 33 — Deleting a project or a course
+
+Projects and courses can be archived, disabled and renamed, but never removed, so a mistaken or
+throwaway one stays in the list forever. This phase adds a real delete for both — permanent, counted
+up front, confirmed by typing the name, and audited — offered from the row menus that already hold
+every other action on them.
+
+**In scope:** PROJ-8, PROJ-9, WEB-50

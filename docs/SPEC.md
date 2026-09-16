@@ -3069,3 +3069,40 @@ stranded on a page with no way to reach the rest of the panel.
 
 Pages a signed-out visitor sees are unaffected: there is no account to offer navigation for, and they
 keep the sign-in header they already show.
+
+### 38. Deleting Projects and Courses
+
+#### PROJ-8 A course can be deleted, and deleting it names what goes with it
+
+Archiving (PROJ-2) and disabling are reversible and remove nothing; a course created by mistake, or a
+test course nobody needs, can still never be got rid of. Deleting a course is the separate,
+deliberate operation that does. It removes the course and everything that exists only because of
+it — its categories and channels, instructions and their revisions, knowledge files (the stored
+bytes as well as the rows), websites, join links, enrolments and self-enrolment intents, remembered
+roster channels, and its conversations and their messages, transcripts included — in one
+transaction, so a failure part-way deletes nothing.
+
+Before anything is removed, the same action layer reports what the delete would remove as counts a
+person recognises (conversations, messages, enrolments, knowledge files), the way ADMIN-5's tenant
+deletion does. Spending already incurred is not undone: cost ledger entries survive the course they
+were charged to, so deleting a course never lowers an organization's recorded spend against its cap.
+Nothing in Discord is touched — SRV-8's "scaffolding never deletes" still holds, and the modal says so.
+Each deletion is recorded with the course's name, who deleted it, when, and the counts removed.
+Deletion requires the same access as disabling a course.
+
+#### PROJ-9 A project can be deleted, taking its courses with it
+
+Deleting a project deletes every course in it exactly as PROJ-8 describes, then the project itself,
+in one transaction. The preview totals the same counts across its courses and names how many courses
+will go. An archived project can be deleted as readily as a live one. It is recorded the same way a
+course deletion is, and requires the same access as archiving the project.
+
+#### WEB-50 Delete is offered from a row's menu, and confirmed in a modal that says what is lost
+
+A project's row menu and a course's row menu (WEB-26) each offer **Delete**, styled as destructive and
+placed last. Choosing it fetches the preview and opens a modal that states plainly that the deletion
+is permanent and cannot be undone, lists what will be removed with its counts — for a project, the
+number of courses as well — says that Discord channels and roles are left untouched, and asks the
+person to type the project's or course's name before the destructive button is enabled. Cancelling
+or `Escape` deletes nothing. Once it succeeds the row disappears from the list; a failure is reported
+the way the API reported it (WEB-5) and the row stays.

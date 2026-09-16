@@ -9,14 +9,12 @@
  */
 
 import {
-  courseAttachments,
   courses,
   deletions,
   discordServers,
   jobs,
   projects,
   schema,
-  transcriptExports,
   type Database,
 } from '@bloombot/db'
 import { z } from 'zod'
@@ -31,55 +29,36 @@ import type { Action } from '../types.js'
  * convention `course-attachments.ts`'s own `DETACH_JOB_KIND` already
  * follows): an app depends on this package, never the reverse, so nothing
  * here can import from `apps/worker`. `deleteCourseAction`/`deleteProjectAction`
- * (below, and `projects.ts`) both enqueue it — the ids named in this job's
- * payload are read *before* the delete transaction runs, since the rows
- * naming them (`course_attachments`, `transcript_exports`) are gone by the
- * time this job's own handler reads its payload.
+ * (below, and `projects.ts`) both enqueue it, naming the `deletions.CourseByteRemoval`(s)
+ * `deletions.deleteCourse`/`deletions.deleteProject` themselves returned —
+ * gathered *inside* the delete's own transaction, not read separately by
+ * this file beforehand (`repos/deletions.ts#CourseByteRemoval`'s own doc
+ * comment has the race that closes).
  */
 export const REMOVE_DELETED_CONTENT_BYTES_JOB_KIND =
   'contentDeletions.removeBytes'
 const REMOVE_DELETED_CONTENT_BYTES_JOB_MAX_ATTEMPTS = 5
 
 /**
- * Every course attachment's and transcript export's own id a course owns —
- * what `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`'s payload needs, read before
- * `deletions.deleteCourse`/`deletions.deleteProject` removes the rows that
- * name them. Shared by `courses.ts#deleteCourseAction` and
- * `projects.ts#deleteProjectAction` (which calls this once per course).
- */
-export function collectCourseByteIds(
-  organizationId: string,
-  courseId: string,
-  db: Database
-): { attachmentIds: string[]; exportIds: string[] } {
-  return {
-    attachmentIds: courseAttachments
-      .listAttachmentsForCourse(organizationId, courseId, db)
-      .map((attachment) => attachment.id),
-    exportIds: transcriptExports
-      .listExportsForCourse(organizationId, courseId, db)
-      .map((exportRow) => exportRow.id),
-  }
-}
-
-/**
- * Enqueues `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`, naming every id
- * `collectCourseByteIds` gathered — a no-op (no job enqueued at all) when
- * there is nothing to remove, so a course or project with no attachments
- * and no exports never leaves a job with an empty payload sitting in the
- * queue.
+ * Enqueues `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`, naming every course's
+ * own `CourseByteRemoval` — a no-op (no job enqueued at all) when none of
+ * them has an attachment or an export to remove, so a course or project
+ * with neither never leaves a job with empty lists sitting in the queue.
  */
 export function enqueueRemoveDeletedContentBytes(
   organizationId: string,
-  ids: { attachmentIds: string[]; exportIds: string[] },
+  courseRemovals: deletions.CourseByteRemoval[],
   db: Database
 ): void {
-  if (ids.attachmentIds.length === 0 && ids.exportIds.length === 0) return
+  const hasWork = courseRemovals.some(
+    (removal) => removal.attachments.length > 0 || removal.exportIds.length > 0
+  )
+  if (!hasWork) return
   jobs.enqueueJob(
     organizationId,
     {
       kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
-      payload: ids,
+      payload: { courses: courseRemovals },
       maxAttempts: REMOVE_DELETED_CONTENT_BYTES_JOB_MAX_ATTEMPTS,
     },
     db
@@ -689,11 +668,6 @@ export const deleteCourseAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     const deletedByAccountId = requireAccountId(accountId)
-    // Gathered *before* the delete — the rows naming these ids are about to
-    // be removed, and the bytes on disk have no other index back to them
-    // once that happens (this file's own module comment on
-    // `collectCourseByteIds`).
-    const byteIds = collectCourseByteIds(organizationId, entity.id, db)
     const result = deletions.deleteCourse(
       organizationId,
       entity.id,
@@ -702,9 +676,13 @@ export const deleteCourseAction: Action<
     )
     // Same TEN-2 race guarded above, for the write half of this pair.
     if (!result) throw new ActionRefusedError()
-    // Only after the delete actually committed — bytes are removed once
-    // the rows naming them are confirmed gone, never before.
-    enqueueRemoveDeletedContentBytes(organizationId, byteIds, db)
-    return result
+    // Only after the delete actually committed — bytes and provider
+    // resources are removed once the rows naming them are confirmed gone,
+    // never before. `result.byteRemoval` was gathered *inside* that same
+    // transaction (`repos/deletions.ts#CourseByteRemoval`'s own doc
+    // comment), not read separately here — closing the race a pre-read
+    // would leave open against an attachment upload still in flight.
+    enqueueRemoveDeletedContentBytes(organizationId, [result.byteRemoval], db)
+    return result.preview
   },
 }

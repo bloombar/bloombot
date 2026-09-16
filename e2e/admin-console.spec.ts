@@ -263,17 +263,19 @@ test('a platform administrator deletes a tenant’s data, confirmed by typing it
   const dialog = page.getByRole('dialog')
   await expect(dialog).toContainText('1 course(s)')
 
-  // Typing the wrong name refuses — the confirmation is real, not a plain
-  // "are you sure" a stray click could pass (WEB-15).
+  // WEB-50 rework finding: the destructive button is disabled until the
+  // typed name matches exactly, not merely checked after a click — the
+  // real confirmation WEB-15 asks for, rather than a plain "are you sure"
+  // a stray click could pass.
+  const confirmButton = dialog.getByRole('button', { name: 'Delete' })
+  await expect(confirmButton).toBeDisabled()
   await dialog.getByLabel('Organization name').fill('the wrong name')
-  await dialog.getByRole('button', { name: 'Delete' }).click()
-  await expect(
-    dialog.getByText('Type the name exactly to confirm.')
-  ).toBeVisible()
+  await expect(confirmButton).toBeDisabled()
 
-  // The organization's own name, typed exactly, proceeds.
+  // The organization's own name, typed exactly, enables it and proceeds.
   await dialog.getByLabel('Organization name').fill(tenantName)
-  await dialog.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirmButton).toBeEnabled()
+  await confirmButton.click()
 
   await expect(row).not.toBeAttached()
 

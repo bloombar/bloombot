@@ -85,17 +85,20 @@ test('a course is deleted from its own row kebab, confirmed by typing its title 
   await expect(dialog).toContainText('conversation(s)')
   await expect(dialog).toContainText('knowledge file(s)')
 
-  // Typing the wrong title refuses — the confirmation is real, not a plain
-  // "are you sure" a stray click could pass (WEB-15).
+  // WEB-50 rework finding: the destructive button is disabled until the
+  // typed title matches exactly — nothing typed yet, then the wrong
+  // title, both leave it disabled and unclickable, the real confirmation
+  // WEB-15 asks for rather than a plain "are you sure" a stray click
+  // could pass.
+  const confirmButton = dialog.getByRole('button', { name: 'Delete' })
+  await expect(confirmButton).toBeDisabled()
   await dialog.getByLabel('Course title').fill('the wrong title')
-  await dialog.getByRole('button', { name: 'Delete' }).click()
-  await expect(
-    dialog.getByText('Type the title exactly to confirm.')
-  ).toBeVisible()
+  await expect(confirmButton).toBeDisabled()
 
-  // The course's own title, typed exactly, proceeds.
+  // The course's own title, typed exactly, enables it and proceeds.
   await dialog.getByLabel('Course title').fill(courseTitle)
-  await dialog.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirmButton).toBeEnabled()
+  await confirmButton.click()
 
   await expect(
     page.getByRole('button', { name: `Actions for "${courseTitle}"` })
@@ -193,14 +196,15 @@ test('a project — and its course — is deleted from its own row kebab, confir
   const dialog = page.getByRole('dialog')
   await expect(dialog).toContainText('1 course(s)')
 
+  // WEB-50 rework finding: disabled until the typed name matches exactly.
+  const confirmButton = dialog.getByRole('button', { name: 'Delete' })
+  await expect(confirmButton).toBeDisabled()
   await dialog.getByLabel('Project name').fill('the wrong name')
-  await dialog.getByRole('button', { name: 'Delete' }).click()
-  await expect(
-    dialog.getByText('Type the name exactly to confirm.')
-  ).toBeVisible()
+  await expect(confirmButton).toBeDisabled()
 
   await dialog.getByLabel('Project name').fill(projectName)
-  await dialog.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirmButton).toBeEnabled()
+  await confirmButton.click()
 
   await expect(
     page.getByRole('button', { name: projectName, exact: true })

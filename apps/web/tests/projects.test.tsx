@@ -255,7 +255,7 @@ describe('Projects (WEB-7)', () => {
   // rejected the same way everywhere) into the modal `prompt()` now handles
   // every project name: the dialog stays open, naming the problem, rather
   // than silently accepting it.
-  it('a whitespace-only name is refused by the "New project" modal, not silently accepted', async () => {
+  it('a whitespace-only name leaves the "New project" modal\'s Create button disabled, not silently accepted', async () => {
     listProjects.mockResolvedValue([])
 
     renderWithModal(
@@ -273,12 +273,22 @@ describe('Projects (WEB-7)', () => {
     fireEvent.change(within(dialog).getByLabelText('Project name'), {
       target: { value: '   ' },
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
 
+    // WEB-50 rework finding: the confirm button is disabled while the
+    // typed value does not validate, not merely checked after a click —
+    // a disabled button never fires `onConfirm` at all, so there is no
+    // inline error to click into being here.
     expect(
-      within(dialog).getByText('Enter a project name.')
-    ).toBeInTheDocument()
+      within(dialog).getByRole('button', { name: 'Create' })
+    ).toBeDisabled()
     expect(createProject).not.toHaveBeenCalled()
+
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Fall 2026' },
+    })
+    expect(
+      within(dialog).getByRole('button', { name: 'Create' })
+    ).not.toBeDisabled()
   })
 
   it('archives an active project from its kebab menu, behind a (non-destructive) confirmation — WEB-15: archiving stops every course in it routing, more consequence than disabling one', async () => {
@@ -1187,16 +1197,20 @@ describe('Projects — delete (PROJ-9/WEB-50)', () => {
     const dialog = await screen.findByRole('dialog')
 
     const field = within(dialog).getByLabelText('Project name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    // WEB-50 rework finding: disabled until the name typed matches
+    // exactly — not merely checked after a click.
+    expect(confirmButton).toBeDisabled()
     fireEvent.change(field, { target: { value: 'the wrong name' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
-    expect(
-      await screen.findByText('Type the name exactly to confirm.')
-    ).toBeInTheDocument()
+    expect(confirmButton).toBeDisabled()
     expect(deleteProject).not.toHaveBeenCalled()
 
     fireEvent.change(field, { target: { value: 'Fall 2026' } })
+    expect(confirmButton).not.toBeDisabled()
     deleteProject.mockResolvedValue(PREVIEW)
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(confirmButton)
 
     await waitFor(() =>
       expect(deleteProject).toHaveBeenCalledWith('org-1', 'project-1')

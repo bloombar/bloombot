@@ -597,16 +597,20 @@ describe('Courses — delete (PROJ-8/WEB-50)', () => {
     const dialog = await screen.findByRole('dialog')
 
     const field = within(dialog).getByLabelText('Course title')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    // WEB-50 rework finding: disabled until the title typed matches
+    // exactly — not merely checked after a click.
+    expect(confirmButton).toBeDisabled()
     fireEvent.change(field, { target: { value: 'the wrong title' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
-    expect(
-      await screen.findByText('Type the title exactly to confirm.')
-    ).toBeInTheDocument()
+    expect(confirmButton).toBeDisabled()
     expect(deleteCourse).not.toHaveBeenCalled()
 
     fireEvent.change(field, { target: { value: 'Web Design' } })
+    expect(confirmButton).not.toBeDisabled()
     deleteCourse.mockResolvedValue(PREVIEW)
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(confirmButton)
 
     await waitFor(() =>
       expect(deleteCourse).toHaveBeenCalledWith('org-1', 'course-1')

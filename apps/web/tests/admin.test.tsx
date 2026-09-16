@@ -312,23 +312,29 @@ describe('Admin — ADMIN-5’s confirmed, audited deletion', () => {
     expect(dialog).toHaveTextContent('2 course(s)')
     expect(dialog).toHaveTextContent('5 student record(s)')
 
-    // Typing the wrong name keeps the dialog open and never calls through.
+    // WEB-50 rework finding: the confirm button is disabled until the
+    // typed value actually validates, not merely checked after a click —
+    // starts disabled (nothing typed yet), stays disabled for a wrong
+    // name, and only enables for the exact one.
     const field = within(dialog).getByLabelText('Organization name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    expect(confirmButton).toBeDisabled()
+
     fireEvent.change(field, { target: { value: 'the wrong name' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
-    expect(
-      await screen.findByText('Type the name exactly to confirm.')
-    ).toBeInTheDocument()
+    expect(confirmButton).toBeDisabled()
     expect(deleteTenant).not.toHaveBeenCalled()
 
     // The exact name proceeds.
     fireEvent.change(field, { target: { value: 'A Real Tenant' } })
+    expect(confirmButton).not.toBeDisabled()
     deleteTenant.mockResolvedValue({ deleted: true })
     fetchAdminOrganizations.mockResolvedValue({
       organizations: [],
       platformHealth: PLATFORM_HEALTH,
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    fireEvent.click(confirmButton)
 
     await waitFor(() =>
       expect(deleteTenant).toHaveBeenCalledWith('org-1', 'A Real Tenant')

@@ -192,6 +192,7 @@ async function main(): Promise<void> {
     createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger,
     })
   )
   handlers.register(
@@ -199,6 +200,7 @@ async function main(): Promise<void> {
     createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger,
     })
   )
   // ADMIN-3 — this process's fifth handler, sharing the same
@@ -209,11 +211,17 @@ async function main(): Promise<void> {
     createTranscriptExportHandler({ attachmentStorage })
   )
   // PROJ-8/PROJ-9 — this process's sixth handler: removes a deleted
-  // course's or project's own attachment/export bytes, the same
-  // `attachmentStorage` every handler above shares.
+  // course's or project's own attachment/export bytes, and its
+  // attachments' own provider resources, sharing the same
+  // `attachmentStorage`/`openaiHttpOptions` FILE-1..3's own handlers above
+  // already use.
   handlers.register(
     REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
-    createRemoveDeletedContentBytesHandler({ attachmentStorage, logger })
+    createRemoveDeletedContentBytesHandler({
+      attachmentStorage,
+      openaiHttpOptions,
+      logger,
+    })
   )
 
   let shuttingDown = false

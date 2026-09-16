@@ -17,10 +17,7 @@ import {
 } from '@bloombot/db'
 import { z } from 'zod'
 
-import {
-  collectCourseByteIds,
-  enqueueRemoveDeletedContentBytes,
-} from './courses.js'
+import { enqueueRemoveDeletedContentBytes } from './courses.js'
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
@@ -544,30 +541,6 @@ export const deleteProjectAction: Action<
   },
   execute: ({ organizationId, entity, accountId, db }) => {
     const deletedByAccountId = requireAccountId(accountId)
-    // Gathered *before* the delete, once per course — the same reason
-    // `courses.ts#deleteCourseAction`'s own comment gives, applied across
-    // every course this project owns.
-    const courseRows = courses.listCourses(organizationId, db, {
-      projectId: entity.id,
-    })
-    const byteIds = courseRows.reduce(
-      (totals, course) => {
-        const courseByteIds = collectCourseByteIds(
-          organizationId,
-          course.id,
-          db
-        )
-        return {
-          attachmentIds: [
-            ...totals.attachmentIds,
-            ...courseByteIds.attachmentIds,
-          ],
-          exportIds: [...totals.exportIds, ...courseByteIds.exportIds],
-        }
-      },
-      { attachmentIds: [] as string[], exportIds: [] as string[] }
-    )
-
     const result = deletions.deleteProject(
       organizationId,
       entity.id,
@@ -576,8 +549,10 @@ export const deleteProjectAction: Action<
     )
     if (!result) throw new ActionRefusedError()
     // Only after the delete actually committed — same reason
-    // `courses.ts#deleteCourseAction` gives.
-    enqueueRemoveDeletedContentBytes(organizationId, byteIds, db)
-    return result
+    // `courses.ts#deleteCourseAction` gives. `result.byteRemovals` — one
+    // `CourseByteRemoval` per course this project owned — was gathered
+    // inside that same transaction, not read separately here.
+    enqueueRemoveDeletedContentBytes(organizationId, result.byteRemovals, db)
+    return result.preview
   },
 }

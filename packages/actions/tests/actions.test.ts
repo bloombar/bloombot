@@ -1205,8 +1205,13 @@ describe('courses.previewDelete / courses.delete (PROJ-8)', () => {
     )
     expect(cleanupJob).toBeDefined()
     expect(JSON.parse(cleanupJob?.payload ?? '{}')).toMatchObject({
-      attachmentIds: [attachment.id],
-      exportIds: [],
+      courses: [
+        {
+          courseId: created.course.id,
+          attachments: [{ attachmentId: attachment.id, providerFileId: null }],
+          exportIds: [],
+        },
+      ],
     })
   })
 

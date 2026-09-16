@@ -232,6 +232,24 @@ export function ModalProvider({ children }: { children: ReactNode }) {
       }).then((result) => (typeof result === 'string' ? result : undefined)),
   }
 
+  // WEB-50 rework finding: a prompt's own destructive button must be
+  // disabled until the typed value actually validates — not merely
+  // *checked* on click, which let a stray click (or an automated one) fire
+  // `onConfirm` before `handleConfirm` below ever ran `validate` at all.
+  // Derived from `renderedRequest`, not `current`: `renderedRequest` is
+  // what still supplies every other prop while a request is closing (this
+  // file's own module comment on why it exists), and this has to read the
+  // exact same `validate` function everything else on the dialog does, or
+  // the button and the error message it can still produce would disagree
+  // during that transition. `false` for anything that is not a `prompt`,
+  // or a `prompt` with no `validate` at all (a plain "name this" prompt
+  // with nothing to reject) — the same "nothing to disable it for" case
+  // `Modal.tsx`'s own default already assumes.
+  const confirmDisabled =
+    renderedRequest?.kind === 'prompt' && renderedRequest.validate
+      ? Boolean(renderedRequest.validate(promptValue))
+      : false
+
   const handleConfirm = () => {
     if (current?.kind === 'prompt') {
       const error = current.validate?.(promptValue)
@@ -298,6 +316,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
             setPromptValue(next)
             setPromptError(undefined)
           }}
+          confirmDisabled={confirmDisabled}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
         />

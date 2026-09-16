@@ -13,15 +13,18 @@
  * the same TEN-2 discipline every other file in this directory holds itself
  * to.
  *
- * This file does not touch `AttachmentStorage` — a course attachment's or a
- * transcript export's own bytes on disk are its caller's responsibility to
- * clean up, the same division `organizations.ts#deleteOrganizationData`'s
- * own doc comment already draws (and `apps/api/src/routes/admin.ts`'s own
- * `sweepStorage` already follows for a whole tenant): gather the ids this
- * course or project owns *before* calling `deleteCourse`/`deleteProject`
- * below (`courseAttachments.listAttachmentsForCourse`,
- * `transcriptExports.listExportsForCourse`), then remove the bytes only
- * after the delete has actually committed.
+ * This file does not touch `AttachmentStorage`, and does not reach the model
+ * provider — a course attachment's or a transcript export's own bytes on
+ * disk, and a provider-side vector-store file or file object, are its
+ * caller's responsibility to remove, the same division
+ * `organizations.ts#deleteOrganizationData`'s own doc comment already draws
+ * (and `apps/api/src/routes/admin.ts`'s own `sweepStorage` already follows
+ * for a whole tenant, for the local-bytes half of it). What this file *does*
+ * do, unlike that division might suggest: `deleteCourse`/`deleteProject`
+ * below both return a `CourseByteRemoval` (or one per course, for a project)
+ * gathered *inside* the same transaction the delete itself runs in — see
+ * that type's own doc comment for why a caller reading the same ids
+ * separately, before calling either function, is a race this rework closed.
  */
 
 import { and, eq, inArray, sql } from 'drizzle-orm'
@@ -50,6 +53,43 @@ import {
 } from '../schema.js'
 
 export type ContentDeletion = typeof contentDeletions.$inferSelect
+
+/**
+ * PROJ-8 rework finding: one attachment's own provider file id (FILE-1),
+ * gathered so a caller can reach the provider (a vector-store file, then
+ * the file object itself — the same two calls
+ * `courseAttachments.detach`'s own worker handler makes) after this course
+ * is already deleted, once neither the attachment's row nor the course's
+ * own `vectorStoreId` is still there to read. `providerFileId` is `null`
+ * for an attachment whose upload never reached the provider at all
+ * (`pending` or `failed` before it ever recorded one) — nothing to remove
+ * there either way.
+ */
+export interface AttachmentByteRemoval {
+  attachmentId: string
+  providerFileId: string | null
+}
+
+/**
+ * Everything a caller needs to remove one deleted course's own bytes — on
+ * disk (`AttachmentStorage`) and at the model provider — gathered *inside*
+ * the same transaction `emptyCourse` below runs, immediately before the
+ * rows naming any of it are deleted. Returned by `deleteCourse`/`deleteProject`
+ * rather than left for a caller to read separately beforehand: reading the
+ * ids outside this transaction (an earlier version of this file did) left a
+ * window open between that read and the delete itself — an attachment
+ * created, or finished uploading and recording its own `providerFileId`, in
+ * that gap would either be missed by the read, or removed locally without
+ * the provider call this shape exists to carry, and this file never learns
+ * about it because the delete has already run its own count.
+ */
+export interface CourseByteRemoval {
+  courseId: string
+  /** The course's own `vectorStoreId` (FILE-1/D-3) at the moment of deletion — `null` when it never had one (no attachment ever reached `ready`, or one was hand-typed and then cleared). Every attachment below that recorded a `providerFileId` was attached to *this* store, never a different one (`repos/courses.ts`'s own "only written once a file is actually grounding answers"). */
+  vectorStoreId: string | null
+  attachments: AttachmentByteRemoval[]
+  exportIds: string[]
+}
 
 /**
  * PROJ-8's own "names exactly what will be deleted before it happens" for a
@@ -168,14 +208,62 @@ export function previewCourseDeletion(
  * removing the project itself — the reason this file exists as `deletions.ts`
  * rather than living entirely in `repos/courses.ts`: a project delete needs
  * the exact same course-emptying logic, not a parallel copy of it.
+ *
+ * Also gathers `CourseByteRemoval` (its own doc comment has why this has to
+ * happen here, inside the transaction, rather than by a caller reading the
+ * same ids beforehand) — read before anything below deletes a row it names,
+ * the identical "count it, then remove it, in the same transaction" order
+ * `previewCourseDeletion` above already holds itself to for the preview.
  */
 function emptyCourse(
   organizationId: string,
   courseId: string,
   tx: Executor
-): CourseDeletionPreview | undefined {
+):
+  | { preview: CourseDeletionPreview; byteRemoval: CourseByteRemoval }
+  | undefined {
   const preview = previewCourseDeletion(organizationId, courseId, tx)
   if (!preview) return undefined
+
+  const course = tx
+    .select({ vectorStoreId: courses.vectorStoreId })
+    .from(courses)
+    .where(
+      and(eq(courses.id, courseId), eq(courses.organizationId, organizationId))
+    )
+    .get()
+  const attachmentRows = tx
+    .select({
+      id: courseAttachments.id,
+      providerFileId: courseAttachments.providerFileId,
+    })
+    .from(courseAttachments)
+    .where(
+      and(
+        eq(courseAttachments.organizationId, organizationId),
+        eq(courseAttachments.courseId, courseId)
+      )
+    )
+    .all()
+  const exportRows = tx
+    .select({ id: transcriptExports.id })
+    .from(transcriptExports)
+    .where(
+      and(
+        eq(transcriptExports.organizationId, organizationId),
+        eq(transcriptExports.courseId, courseId)
+      )
+    )
+    .all()
+  const byteRemoval: CourseByteRemoval = {
+    courseId,
+    vectorStoreId: course?.vectorStoreId ?? null,
+    attachments: attachmentRows.map((row) => ({
+      attachmentId: row.id,
+      providerFileId: row.providerFileId,
+    })),
+    exportIds: exportRows.map((row) => row.id),
+  }
 
   // Messages before conversations — `messages.conversationId` references
   // `conversations.id`.
@@ -326,7 +414,7 @@ function emptyCourse(
     )
     .run()
 
-  return preview
+  return { preview, byteRemoval }
 }
 
 /** What a caller supplies to record a course or project deletion — the same division `organizations.ts#NewTenantDeletion`'s own doc comment draws between what a repo function is handed and what it invents. */
@@ -371,6 +459,12 @@ function recordContentDeletion(
     .get()
 }
 
+/** What `deleteCourse` returns — PROJ-8's own preview, counting exactly what was removed, alongside `CourseByteRemoval` (its own doc comment has why this has to travel back from inside the same transaction rather than be gathered by the caller separately). */
+export interface DeleteCourseResult {
+  preview: CourseDeletionPreview
+  byteRemoval: CourseByteRemoval
+}
+
 /**
  * PROJ-8: permanently delete a course and everything that exists only
  * because of it, in one transaction (`emptyCourse` above does the actual
@@ -387,10 +481,11 @@ export function deleteCourse(
   courseId: string,
   audit: DeletionAuditFields,
   db: Database
-): CourseDeletionPreview | undefined {
+): DeleteCourseResult | undefined {
   return writeTransaction(db, (tx) => {
-    const preview = emptyCourse(organizationId, courseId, tx)
-    if (!preview) return undefined
+    const result = emptyCourse(organizationId, courseId, tx)
+    if (!result) return undefined
+    const { preview, byteRemoval } = result
 
     recordContentDeletion(
       organizationId,
@@ -402,7 +497,7 @@ export function deleteCourse(
       tx
     )
 
-    return preview
+    return { preview, byteRemoval }
   })
 }
 
@@ -496,12 +591,18 @@ export function previewProjectDeletion(
  * `organizationId` (TEN-2/TEN-5) — nothing is deleted, and nothing is
  * recorded.
  */
+/** What `deleteProject` returns — PROJ-9's own preview, totalled across every course, alongside one `CourseByteRemoval` per course it removed (`deletions.ts#CourseByteRemoval`'s own doc comment has why). */
+export interface DeleteProjectResult {
+  preview: ProjectDeletionPreview
+  byteRemovals: CourseByteRemoval[]
+}
+
 export function deleteProject(
   organizationId: string,
   projectId: string,
   audit: DeletionAuditFields,
   db: Database
-): ProjectDeletionPreview | undefined {
+): DeleteProjectResult | undefined {
   return writeTransaction(db, (tx) => {
     const project = tx
       .select({ id: projects.id, name: projects.name })
@@ -526,19 +627,21 @@ export function deleteProject(
       )
       .all()
 
-    const coursePreviews = courseRows.map((row) => {
-      const coursePreview = emptyCourse(organizationId, row.id, tx)
+    const emptied = courseRows.map((row) => {
+      const result = emptyCourse(organizationId, row.id, tx)
       // Unreachable: `courseRows` was just read inside this same
       // transaction, so every id it names still belongs to this
       // organization. Guarded rather than asserted, the same discipline
       // every other repo function in this package holds itself to.
-      if (!coursePreview) {
+      if (!result) {
         throw new Error(
           `deleteProject: course "${row.id}" disappeared mid-transaction`
         )
       }
-      return coursePreview
+      return result
     })
+    const coursePreviews = emptied.map((result) => result.preview)
+    const byteRemovals = emptied.map((result) => result.byteRemoval)
 
     tx.delete(projects)
       .where(
@@ -582,6 +685,6 @@ export function deleteProject(
       tx
     )
 
-    return summary
+    return { preview: summary, byteRemovals }
   })
 }

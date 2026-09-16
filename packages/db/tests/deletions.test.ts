@@ -21,6 +21,7 @@ import {
   selfEnrolment,
   transcriptAccess,
   transcriptExports,
+  usage,
 } from '@bloombot/db'
 
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
@@ -191,6 +192,20 @@ function seedFullCourse(testDatabase: TestDatabase) {
     testDatabase.db
   )
 
+  // CONV-3 rework finding: `usage_counters` has no `id` column of its own
+  // (a composite primary key, `schema.ts`) — the missing row this seed used
+  // to leave out was never caught by `.toMatchObject`'s own count
+  // assertions below, but would have silently stopped being emptied the
+  // moment a future edit deleted the `usage_counters` line from `emptyCourse`
+  // (`repos/deletions.ts`) entirely, since nothing here would ever fail.
+  usage.incrementUsage(
+    organizationId,
+    course.id,
+    student.id,
+    '2026-01-01',
+    testDatabase.db
+  )
+
   return {
     ...organization,
     project,
@@ -253,14 +268,21 @@ describe('deletions.deleteCourse (PROJ-8)', () => {
       { deletedByAccountId: instructor.id },
       testDb.db
     )
+    if (!result) throw new Error('deleteCourse unexpectedly refused')
 
-    expect(result).toMatchObject({
+    expect(result.preview).toMatchObject({
       courseId: course.id,
       conversations: 1,
       messages: 1,
       enrolments: 1,
       courseAttachments: 1,
     })
+    // The byte-removal manifest names exactly the attachment and export
+    // this course owned, gathered inside the same transaction
+    // (`repos/deletions.ts#CourseByteRemoval`'s own doc comment).
+    expect(result.byteRemoval.courseId).toBe(course.id)
+    expect(result.byteRemoval.attachments).toHaveLength(1)
+    expect(result.byteRemoval.exportIds).toHaveLength(1)
     expect(
       courses.getCourse(organizationId, course.id, testDb.db)
     ).toBeUndefined()
@@ -285,6 +307,16 @@ describe('deletions.deleteCourse (PROJ-8)', () => {
         course.id,
         testDb.db
       )
+    ).toHaveLength(0)
+    // CONV-3 — `usage_counters` has no `id`/`getUsageCount`-style lookup
+    // convenient for a single-row check once the course itself is gone;
+    // read raw, the same way the audit-row tests below read `contentDeletions`.
+    expect(
+      testDb.db
+        .select()
+        .from(schema.usageCounters)
+        .all()
+        .filter((row) => row.courseId === course.id)
     ).toHaveLength(0)
     // A fresh preview against the same id finds nothing left to count.
     expect(
@@ -497,8 +529,9 @@ describe('deletions.deleteProject (PROJ-9)', () => {
       { deletedByAccountId: instructor.id },
       testDb.db
     )
+    if (!result) throw new Error('deleteProject unexpectedly refused')
 
-    expect(result).toMatchObject({
+    expect(result.preview).toMatchObject({
       projectId: project.id,
       courses: 2,
       conversations: 1,
@@ -506,6 +539,11 @@ describe('deletions.deleteProject (PROJ-9)', () => {
       enrolments: 1,
       courseAttachments: 1,
     })
+    // One `CourseByteRemoval` per course this project owned.
+    expect(result.byteRemovals).toHaveLength(2)
+    expect(
+      result.byteRemovals.map((removal) => removal.courseId).sort()
+    ).toEqual([course.id, secondCourseResult.course.id].sort())
     expect(
       projects.getProject(organizationId, project.id, testDb.db)
     ).toBeUndefined()
@@ -532,7 +570,7 @@ describe('deletions.deleteProject (PROJ-9)', () => {
       testDb.db
     )
 
-    expect(result).toMatchObject({ projectId: project.id, courses: 1 })
+    expect(result?.preview).toMatchObject({ projectId: project.id, courses: 1 })
     expect(
       projects.getProject(organizationId, project.id, testDb.db)
     ).toBeUndefined()

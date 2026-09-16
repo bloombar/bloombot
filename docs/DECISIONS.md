@@ -12280,25 +12280,53 @@ course or a project delete is exactly the kind of organization-scoped, membershi
 action in this catalog already is, and inventing a second, REST-shaped path for these four when the other 50-
 odd actions in this catalog all go through one dispatcher would be the inconsistency, not the fix.
 
-**Knowledge-file/transcript-export bytes are removed by a new job, `contentDeletions.removeBytes`
-(`apps/worker/src/handlers/content-deletions.ts`), not by reusing `courseAttachments.detach`'s own job.** The
-detach handler reads the attachment's row (for its `providerFileId`) and the course's row (for its
-`vectorStoreId`) to reach the *provider* before removing the local bytes and the row — none of that is
-available once `deleteCourse`/`deleteProject` has already committed, since both rows are gone. The delete
-actions instead gather every attachment's and export's own id *before* the delete transaction runs
-(`courses.ts#collectCourseByteIds`), then enqueue the cleanup job with those ids directly in its payload —
-after the delete has committed, never before — and the job removes only the local bytes
-(`AttachmentStorage#remove`), the same scope PROJ-8's own text asks for ("knowledge files (the stored bytes as
-well as the rows)"). It does **not** reach the provider to delete the vector-store file or file object the way
-`courseAttachments.detach` does — PROJ-8's text does not ask for that, and by job-run time there is no local
-row left to read a `providerFileId`/`vectorStoreId` from even if it did. An orphaned provider-side file object
-is not a new problem this slice introduces: `scripts/prune-orphaned-attachments.mjs` already exists to find
-and remove exactly that class of leftover, independent of how a local row disappeared.
+**Knowledge-file/transcript-export bytes *and* their provider-side resources are removed by a new job,
+`contentDeletions.removeBytes` (`apps/worker/src/handlers/content-deletions.ts`), not by reusing
+`courseAttachments.detach`'s own job.** Rework round 1, must-fix 3 corrected an earlier version of this same
+entry, which claimed this job does not reach the provider at all — that was true of the first cut, and wrong:
+PROJ-8's own "removes ... its ... knowledge files" is not honestly satisfied while a deleted course's file
+still sits in the provider's own vector store and file storage, discoverable by anyone who can list them, long
+after every local row naming it is gone. The detach handler reaches the *provider* by reading the attachment's
+own `providerFileId` and the course's own `vectorStoreId` off their rows — neither is available once
+`deleteCourse`/`deleteProject` has already committed, since both rows are gone. The fix (also must-fix 3, and
+the same race cheap-fix 6 asks about) is `deletions.ts#CourseByteRemoval`: `deleteCourse`/`deleteProject`
+gather every attachment's own `providerFileId`, the course's own `vectorStoreId`, and every export's own id
+*inside* the same transaction that deletes the rows naming them — not read separately, before the transaction,
+by the action calling them (an earlier version of this file did that, and was must-fix 3's own "race: an
+attachment upload overlapping a course delete", closed by moving the read inside the transaction instead of
+narrowing the window). The job's own handler then makes the identical two provider calls
+`courseAttachments.detach` makes, in the identical order (vector-store entry, then the file object itself),
+treating a `404` from either as "already gone" the same way — the same idempotence that makes retrying this
+job after a partial batch failure safe. Transcript exports still never reach the provider: they are written
+only to `AttachmentStorage`, never uploaded anywhere (`repos/transcript-exports.ts`'s own module comment).
+
+**`content_deletions` needed its own line in `organizations.ts#deleteOrganizationData`** (must-fix 2, a
+regression this slice's first cut introduced and rework round 1 caught): it is a real foreign key to
+`organizations.id` (the paragraph above explains why, unlike `tenant_deletions`), so any organization that had
+ever had a course or a project deleted inside it left a row here — and deleting the organization without first
+deleting these rows threw `FOREIGN KEY constraint failed` on the `organizations` delete itself, every time.
+Deleted, not preserved: unlike `tenant_deletions`, which deliberately outlives the organization it describes,
+a `content_deletions` row has nothing left to be an audit trail *for* once the tenant it names is gone.
+`content_deletions.deletedByAccountId` (a foreign key to `accounts.id`) posed no equivalent risk to check for
+the reverse direction — nothing in this codebase ever deletes an `accounts` row at all (accounts are only
+disabled, TEN-1/AUTH-4's own "never deleted" discipline), so there is no delete path this FK could ever block.
 
 **`scripts/board/config.mjs`'s `PHASES` array stopped at 31, though `MILESTONE_TITLE` already had an entry for
 32** — a pre-existing gap from an earlier slice's own board commit, not something this slice's diff caused,
 caught only because `npm test` runs `scripts/board/derive.test.mjs`, which fails the moment a ROADMAP phase has
-no milestone to derive against. Extended to include 32 and 33 (this phase) directly, per `CLAUDE.md`'s own
-carve-out for "project tooling under `scripts/`" landing straight on the default branch without a PR — fixing
-it here rather than filing it separately was the smaller change, and leaving it broken would have made this
-slice's own `npm run board:derive` verification step impossible to satisfy.
+no milestone to derive against. This slice's first cut extended `PHASES` to include 32 and 33 directly, per
+`CLAUDE.md`'s own carve-out for "project tooling under `scripts/`" landing straight on the default branch
+without a PR; rebasing onto `origin/master` for rework round 1 found master had since fixed the identical gap
+itself (and added phase 34 alongside it) — that edit was dropped entirely in favour of master's own, rather
+than merged, so there is exactly one place phases 32-34 were ever added, not two that happened to agree.
+
+**NOTE, no code change**: a course's own per-course usage total (`costLedger.getOrganizationUsageSummary`'s
+own `courses` array) no longer sums to the organization's own grand total once a course in it has been deleted
+— `totalCostMicros`/`totalEstimatedCostMicros` are accumulated directly from every ledger row regardless of
+`courseId` (including the now-`null` ones a deleted course leaves behind, this file's own first paragraph), but
+the per-course breakdown only ever lists courses `courses.listCourses` still returns, so a deleted course's own
+spend is present in the organization's total and absent from every course's own line. This is PROJ-8's own
+invariant working as intended (spend survives the course it was charged to) read from a second angle, not a
+defect: the alternative — inventing a synthetic "(deleted course)" line to keep the two numbers reconciling on
+this one screen — would be new product surface no requirement asked for, for a screen (COST-4) whose own text
+is about *current* courses' usage.

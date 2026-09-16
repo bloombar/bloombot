@@ -13,7 +13,15 @@
  * operation — it exists for the states PROJ-3's check does not reach today
  * (a course in an archived project, `repos/courses.ts`'s own comment) rather
  * than as a case this function expects to see often.
+ *
+ * BOT-13: the category signal compares names normalized
+ * (`normalizeCategoryName`, `@bloombot/db`), the same comparison PROJ-3 uses
+ * to refuse a colliding category name at save time — a category matches
+ * however an instructor typed it in Discord, ignoring case and every
+ * whitespace character, not only a byte-identical string.
  */
+
+import { normalizeCategoryName } from '@bloombot/db'
 
 /** The shape a course needs to be routed by — just the fields the two signals below read. */
 export interface RoutableCourse {
@@ -57,10 +65,11 @@ export type RoutingResult =
 
 /**
  * Route one message. Category first (BOT-2): every course whose
- * `categoryNames` contains `arrival.categoryName` is a candidate, and one
- * candidate is a match, more than one is an ambiguity — reported for that
- * signal without ever falling through to roles, since the category *did*
- * produce an answer, just not a usable one. Zero candidates falls back to
+ * `categoryNames` has a name that normalizes equal (BOT-13) to
+ * `arrival.categoryName` is a candidate, and one candidate is a match, more
+ * than one is an ambiguity — reported for that signal without ever falling
+ * through to roles, since the category *did* produce an answer, just not a
+ * usable one. Zero candidates falls back to
  * roles (BOT-3/BOT-12): a course is a candidate if the author holds either
  * its `adminsRole` or its `studentsRole`, with the same one-vs-many
  * treatment. Zero candidates on both signals is `unmatched` (BOT-4).
@@ -78,8 +87,18 @@ export function routeMessage(
   const enabledCourses = courses.filter((course) => course.enabled)
 
   if (arrival.categoryName !== null) {
+    // BOT-13: normalized comparison, not `.includes` on the raw strings —
+    // two courses whose category names normalize equal (e.g. "Web Design"
+    // and "webdesign") must still report `ambiguous`, the same as if they
+    // had declared byte-identical names.
+    const normalizedArrivalCategory = normalizeCategoryName(
+      arrival.categoryName
+    )
     const categoryMatches = enabledCourses.filter((course) =>
-      course.categoryNames.includes(arrival.categoryName as string)
+      course.categoryNames.some(
+        (categoryName) =>
+          normalizeCategoryName(categoryName) === normalizedArrivalCategory
+      )
     )
     if (categoryMatches.length > 1) {
       return {

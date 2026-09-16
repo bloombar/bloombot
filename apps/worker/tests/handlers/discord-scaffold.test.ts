@@ -721,6 +721,61 @@ describe('discordServers.scaffold handler', () => {
     ])
   })
 
+  // BOT-13/PROJ-10: category matching now removes every whitespace
+  // character, not merely trims and collapses runs of it — the test above
+  // only ever differs by case and *leading/trailing* whitespace, which the
+  // handler's old trim-only `normalizeName` already matched, so it would not
+  // have failed without this slice's fix. This one does: the guild's own
+  // category has no space at all, matching the declared course category only
+  // once inner whitespace is removed entirely, not merely collapsed.
+  it('reuses an existing guild category whose name has no space at all, for a declared category with one (BOT-13/PROJ-10)', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      {
+        name: 'Web Design',
+        channels: [{ name: 'general', adminsOnly: false }],
+      },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      { id: 'cat-1', type: 4, name: 'webdesign', parent_id: null },
+      { id: 'chan-1', type: 0, name: 'general', parent_id: 'cat-1' },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as {
+      categories: {
+        name: string
+        status: string
+        channels: { name: string; status: string }[]
+      }[]
+    }
+
+    // No category was created — "webdesign" and "Web Design" normalize
+    // equal once all whitespace is removed, not merely trimmed.
+    expect(
+      discordServer.writeRequests().filter((r) => r.method === 'POST')
+    ).toHaveLength(0)
+    expect(report.categories).toEqual([
+      expect.objectContaining({
+        name: 'Web Design',
+        status: 'already_present',
+        channels: [
+          expect.objectContaining({
+            name: 'general',
+            status: 'already_present',
+          }),
+        ],
+      }),
+    ])
+  })
+
   // Finding 6 of the SRV-6..8 rework: D-30's central safety argument — a
   // retry re-lists the guild from scratch and adopts whatever a failed
   // partial attempt already created, rather than recreating it — had no
@@ -905,6 +960,40 @@ describe('discordServers.scaffold handler', () => {
         id: 'course-b-cat',
         type: 4,
         name: 'Course B Category',
+        parent_id: null,
+      },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { undeclaredCategories: string[] }
+
+    expect(report.undeclaredCategories).toEqual([])
+  })
+
+  // BOT-13/PROJ-10: `loadOrganizationDeclaredNames`' own diff base has to
+  // recognise a declared category under the same case/whitespace-insensitive
+  // comparison the rest of this handler now uses — a guild category
+  // differing only by inner whitespace or case from a course's own declared
+  // one is the *same* category, not a stray leftover to report.
+  it('does not report a declared category as undeclared when the guild spells it with different inner whitespace and case', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week One', channels: [] },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        // Same category once normalized (all whitespace removed, not
+        // merely trimmed) — "weekone" has no inner space at all.
+        name: 'weekone',
+        type: 4,
         parent_id: null,
       },
     ])

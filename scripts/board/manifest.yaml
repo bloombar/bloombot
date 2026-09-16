@@ -4272,7 +4272,7 @@
   section: §39 Category Name Matching
   family: BOT
   phase: 34
-  status: Backlog
+  status: In progress
   review: false
 - id: PROJ-10
   title: Category names are unique under the same comparison routing uses
@@ -4289,7 +4289,7 @@
   section: §39 Category Name Matching
   family: PROJ
   phase: 34
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-51
   title: The course editor says a category name must be unique before and after saving
@@ -4306,5 +4306,5 @@
   section: §39 Category Name Matching
   family: WEB
   phase: 34
-  status: Backlog
+  status: In progress
   review: false

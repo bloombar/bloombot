@@ -4213,3 +4213,49 @@
   phase: 32
   status: Done
   review: false
+- id: PROJ-8
+  title: A course can be deleted, and deleting it names what goes with it
+  full: Archiving (PROJ-2) and disabling are reversible and remove nothing; a
+    course created by mistake, or a test course nobody needs, can still never be
+    got rid of. Deleting a course is the separate, deliberate operation that
+    does. It removes the course and everything that exists only because of it —
+    its categories and channels, instructions and their revisions, knowledge
+    files (the stored bytes as well as the rows), websites, join links,
+    enrolments and self-enrolment intents, remembered roster channels, and its
+    conversations and their messages, transcripts included — in one transaction,
+    so a failure part-way deletes nothing. Before anything is removed, the same
+    action layer reports what the…
+  section: §38 Deleting Projects and Courses
+  family: PROJ
+  phase: 33
+  status: In progress
+  review: false
+- id: PROJ-9
+  title: A project can be deleted, taking its courses with it
+  full: Deleting a project deletes every course in it exactly as PROJ-8 describes,
+    then the project itself, in one transaction. The preview totals the same
+    counts across its courses and names how many courses will go. An archived
+    project can be deleted as readily as a live one. It is recorded the same way
+    a course deletion is, and requires the same access as archiving the project.
+  section: §38 Deleting Projects and Courses
+  family: PROJ
+  phase: 33
+  status: In progress
+  review: false
+- id: WEB-50
+  title: Delete is offered from a row's menu, and confirmed in a modal that says
+    what is lost
+  full: A project's row menu and a course's row menu (WEB-26) each offer Delete,
+    styled as destructive and placed last. Choosing it fetches the preview and
+    opens a modal that states plainly that the deletion is permanent and cannot
+    be undone, lists what will be removed with its counts — for a project, the
+    number of courses as well — says that Discord channels and roles are left
+    untouched, and asks the person to type the project's or course's name before
+    the destructive button is enabled. Cancelling or Escape deletes nothing.
+    Once it succeeds the row disappears from the list; a failure is reported the
+    way the API reported it (WEB-5) and the row stays.
+  section: §38 Deleting Projects and Courses
+  family: WEB
+  phase: 33
+  status: In progress
+  review: false

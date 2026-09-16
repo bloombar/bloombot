@@ -114,6 +114,8 @@ import {
   type KeyboardEvent,
 } from 'react'
 
+import { normalizeCategoryName } from '@bloombot/schemas'
+
 import {
   ApiError,
   getCourse,
@@ -152,7 +154,7 @@ import {
 } from '../components/Skeleton.js'
 import { useFormDirty } from '../hooks/useFormDirty.js'
 import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard.js'
-import { AddIcon, DeleteIcon, WarningIcon } from '../icons.js'
+import { AddIcon, DeleteIcon, ErrorIcon, WarningIcon } from '../icons.js'
 
 export interface CourseEditorProps {
   organizationId: string
@@ -245,6 +247,58 @@ function newKey(): string {
 
 function emptyCategory(): EditableCategory {
   return { key: newKey(), name: '', channels: [] }
+}
+
+// WEB-51 — shown under every category name field, always, regardless of
+// whether that field is currently in error: an instructor should know the
+// uniqueness rule up front, not discover it only after typing a name that
+// happens to collide.
+const CATEGORY_NAME_HINT =
+  'Category names must be unique on this Discord server, ignoring capitalisation and spaces.'
+
+/**
+ * WEB-51 — every category after the first with a given normalized name
+ * (`normalizeCategoryName`, `@bloombot/schemas` — the same case/whitespace
+ * comparison the server's own PROJ-3/BOT-13 check applies) is flagged as a
+ * duplicate of that first one; returns a map from the flagged category's own
+ * `key` to the first occurrence's *current* spelling, which is what the
+ * inline message below names. Flagging the later entry rather than every
+ * matching one (or the earlier one instead) is this slice's own judgement
+ * call — reading the list top-to-bottom, the first occurrence is the one
+ * that was "already there" (`docs/DECISIONS.md`).
+ *
+ * A blank name (before or after trimming) is never a duplicate of another
+ * blank one — two not-yet-named categories are not "the same name," they are
+ * both simply unfinished, and the existing "a category needs a name" save
+ * refusal (server-side, unrelated to this check) is what actually holds a
+ * blank one back.
+ */
+function findCategoryDuplicates(
+  categories: EditableCategory[]
+): Map<string, string> {
+  const firstKeyByNormalized = new Map<string, string>()
+  const duplicateOfName = new Map<string, string>()
+  for (const category of categories) {
+    const trimmed = category.name.trim()
+    if (trimmed === '') continue
+    const normalized = normalizeCategoryName(trimmed)
+    const firstKey = firstKeyByNormalized.get(normalized)
+    if (firstKey === undefined) {
+      firstKeyByNormalized.set(normalized, category.key)
+      continue
+    }
+    const first = categories.find((candidate) => candidate.key === firstKey)
+    duplicateOfName.set(category.key, first?.name.trim() ?? trimmed)
+  }
+  return duplicateOfName
+}
+
+/** WEB-51 — the inline message for a same-course duplicate, naming the category it collides with by its own (current) spelling. */
+function categoryDuplicateMessage(otherName: string): string {
+  return (
+    `Another category in this course is already named “${otherName}”. ` +
+    'Category names must be unique, ignoring capitalisation and spaces.'
+  )
 }
 
 /**
@@ -486,6 +540,28 @@ export function CourseEditor({
   // a load failure instead replaces the form entirely; see the render below.
   const [loadError, setLoadError] = useState<ApiError | undefined>(undefined)
   const [error, setError] = useState<ApiError | undefined>(undefined)
+  // WEB-51 — a category name field only shows a same-course duplicate error
+  // once it has actually been blurred (standard on-blur validation), or once
+  // a save attempt has been made and refused client-side — either way, once
+  // shown for a given category it stays re-validated on every further edit
+  // to that field, rather than hiding again until the next blur.
+  const [touchedCategoryKeys, setTouchedCategoryKeys] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [categorySaveAttempted, setCategorySaveAttempted] = useState(false)
+  // WEB-51 — a save refused for a `field: 'category'` conflict
+  // (PROJ-3/BOT-13, a duplicate against a *different* course this form could
+  // not have known about locally), located back to the row it names so it
+  // renders there too, not only in the generic `ErrorMessage` above. Cleared
+  // the moment that row's own name is edited (`updateCategory`, below) — an
+  // instructor trying something else has already moved past the refusal.
+  const [categoryConflict, setCategoryConflict] = useState<
+    { key: string; message: string } | undefined
+  >(undefined)
+  // WEB-51 — so a refusal (client-side duplicate or server conflict) can
+  // move focus to the row it concerns; a `Map` rather than one ref each,
+  // since the number of categories is dynamic (`addCategory`/`removeCategory`).
+  const categoryInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
   const [saving, setSaving] = useState(false)
   // Review must-fix 1: true for the whole of the tab prompt's own "Save
   // changes" — `saving` alone leaves the `Save course` button live while
@@ -628,6 +704,14 @@ export function CourseEditor({
       clearTimeout(savedTimeoutRef.current)
       savedTimeoutRef.current = undefined
     }
+    // WEB-51 — the same "a previous course's own state must not carry over"
+    // reasoning as `visitedTabs`/`justSaved`, above: a fresh course's
+    // category rows have not been touched, no save on it has been
+    // attempted, and any conflict named a category on the course this
+    // instance was editing a moment ago.
+    setTouchedCategoryKeys(new Set())
+    setCategorySaveAttempted(false)
+    setCategoryConflict(undefined)
     if (courseId === undefined) {
       const blank = blankForm()
       setForm(blank)
@@ -708,6 +792,26 @@ export function CourseEditor({
         })
       )
       switchToTabForField('maxRequestsPerDay')
+      return false
+    }
+    // WEB-51 — a same-course category duplicate refuses client-side, the
+    // same way `maxRequestsPerDay` does just above: the server would refuse
+    // it too (PROJ-3/BOT-13), but there is no reason to round-trip for a
+    // check this form can already do against its own `form.categories`.
+    // `categorySaveAttempted` makes every duplicate row show its error even
+    // if it was never individually blurred, and focus goes to the first one
+    // in list order — a refusal that does not say where is not a refusal an
+    // instructor can act on.
+    const categoryDuplicates = findCategoryDuplicates(form.categories)
+    if (categoryDuplicates.size > 0) {
+      setCategorySaveAttempted(true)
+      const firstDuplicate = form.categories.find((category) =>
+        categoryDuplicates.has(category.key)
+      )
+      if (firstDuplicate) {
+        switchToTabForField('categories')
+        categoryInputRefs.current.get(firstDuplicate.key)?.focus()
+      }
       return false
     }
     setSaving(true)
@@ -799,6 +903,44 @@ export function CourseEditor({
             typeof issue.path[0] === 'string' && issue.path[0] in FIELD_TABS
         )
         switchToTabForField(mappedIssue?.path[0])
+        // WEB-51 — a `field: 'category'` conflict (PROJ-3/BOT-13's own
+        // `CourseNameConflict` shape, `packages/db/src/repos/courses.ts`) is
+        // a duplicate against a *different* course, which this form's own
+        // same-course check above cannot catch — located back to the row it
+        // names by comparing normalized names (BOT-13's own case/whitespace-
+        // insensitive matching), so it renders inline there, is announced,
+        // and takes focus, on top of the generic `ErrorMessage` this `error`
+        // state already renders. Falls back to that generic rendering alone
+        // when the conflict names no field, or names `category` with a
+        // `name` that matches no row here — this form never sent a category
+        // the server did not just see, so that would be a bug elsewhere, not
+        // something to guess at here.
+        const conflict = caught.body.conflict as
+          | {
+              field?: string
+              name?: string
+              message?: string
+            }
+          | undefined
+        if (
+          conflict?.field === 'category' &&
+          conflict.name !== undefined &&
+          conflict.message !== undefined
+        ) {
+          const normalizedConflictName = normalizeCategoryName(conflict.name)
+          const matchedCategory = form.categories.find(
+            (category) =>
+              normalizeCategoryName(category.name) === normalizedConflictName
+          )
+          if (matchedCategory) {
+            setCategoryConflict({
+              key: matchedCategory.key,
+              message: conflict.message,
+            })
+            switchToTabForField('categories')
+            categoryInputRefs.current.get(matchedCategory.key)?.focus()
+          }
+        }
       } else throw caught
       return false
     } finally {
@@ -963,6 +1105,22 @@ export function CourseEditor({
         category.key === key ? { ...category, name } : category
       ),
     }))
+    // WEB-51: a server-refused category conflict is stale the moment its own
+    // row is edited — the instructor is trying something else now, and the
+    // client-side duplicate check (recomputed every render from `form`) is
+    // what takes over from here.
+    setCategoryConflict((current) =>
+      current?.key === key ? undefined : current
+    )
+  }
+  // WEB-51 — marks a category name field as "visited" the first time it
+  // loses focus, so `categoryDuplicates` (below) starts showing a duplicate
+  // error for it; a field never blurred yet, with a save never attempted
+  // either, stays quiet rather than judging an edit still in progress.
+  const handleCategoryNameBlur = (key: string) => {
+    setTouchedCategoryKeys((current) =>
+      current.has(key) ? current : new Set(current).add(key)
+    )
   }
   const addCategory = () => {
     setForm((current) => ({
@@ -1275,93 +1433,154 @@ export function CourseEditor({
     </div>
   )
 
+  // WEB-51 — recomputed every render from the live `form.categories`, the
+  // same "not memoized" treatment this file gives every other small derived
+  // value; a course rarely has more than a handful of categories, so this
+  // costs nothing worth guarding against.
+  const categoryDuplicates = findCategoryDuplicates(form.categories)
   const categoriesFieldset = (
     <fieldset className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4">
       <legend className="px-1 text-section-title font-semibold text-neutral-900">
         Categories
       </legend>
-      {form.categories.map((category) => (
-        <fieldset
-          key={category.key}
-          className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
-        >
-          <legend className="sr-only">Category</legend>
-          <div className="flex items-center gap-2">
-            <input
-              aria-label="Category name"
-              value={category.name}
-              onChange={(event) =>
-                updateCategory(category.key, event.target.value)
-              }
-              className={textInputClasses}
-            />
-            {/* WEB-40 — icon-only delete, matching CourseAttachments' own
+      {form.categories.map((category) => {
+        // WEB-51 — a server conflict on this row takes precedence over the
+        // client-side duplicate check: it is the more specific finding (it
+        // names *which* other course), and the two can never both apply to
+        // a save that actually reached the server — a same-course duplicate
+        // is always caught client-side first, before any request is sent.
+        const duplicateOfName = categoryDuplicates.get(category.key)
+        const showDuplicateError =
+          duplicateOfName !== undefined &&
+          (touchedCategoryKeys.has(category.key) || categorySaveAttempted)
+        const fieldErrorMessageText =
+          categoryConflict?.key === category.key
+            ? categoryConflict.message
+            : showDuplicateError
+              ? categoryDuplicateMessage(duplicateOfName)
+              : undefined
+        const hintId = `category-hint-${category.key}`
+        const errorId = `category-error-${category.key}`
+        const describedBy = [
+          hintId,
+          fieldErrorMessageText ? errorId : undefined,
+        ]
+          .filter(Boolean)
+          .join(' ')
+        return (
+          <fieldset
+            key={category.key}
+            className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3"
+          >
+            <legend className="sr-only">Category</legend>
+            <div className="flex items-start gap-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <input
+                  aria-label="Category name"
+                  aria-describedby={describedBy}
+                  aria-invalid={fieldErrorMessageText ? true : undefined}
+                  ref={(element) => {
+                    if (element)
+                      categoryInputRefs.current.set(category.key, element)
+                    else categoryInputRefs.current.delete(category.key)
+                  }}
+                  value={category.name}
+                  onChange={(event) =>
+                    updateCategory(category.key, event.target.value)
+                  }
+                  onBlur={() => handleCategoryNameBlur(category.key)}
+                  className={textInputClasses}
+                />
+                {/* WEB-51: shown unconditionally, alongside the error below when
+                  there is one — an instructor should know the uniqueness rule
+                  before typing a name that collides, not only after. */}
+                <p id={hintId} className="text-sm text-neutral-500">
+                  {CATEGORY_NAME_HINT}
+                </p>
+                {fieldErrorMessageText && (
+                  // `role="alert"` — an instructor blurring into a duplicate,
+                  // or a save refusal locating one here, both need this
+                  // announced, the same live-region treatment
+                  // `components/ErrorMessage.tsx`'s own top-level rendering
+                  // already gives a refusal (this is additive, on the row).
+                  <p
+                    id={errorId}
+                    role="alert"
+                    className="flex items-center gap-1 text-sm text-danger-700"
+                  >
+                    <ErrorIcon aria-hidden="true" className="size-4 shrink-0" />
+                    {fieldErrorMessageText}
+                  </p>
+                )}
+              </div>
+              {/* WEB-40 — icon-only delete, matching CourseAttachments' own
                 treatment of a detach button: the `aria-label` still names
                 the category, so the accessible name is unchanged even
                 though the visible "Remove category" text is gone. The
                 confirmation inside `removeCategory` is untouched. */}
-            <Button
-              variant="ghost"
-              aria-label={`Remove category ${category.name || ''}`.trim()}
-              icon={<DeleteIcon aria-hidden="true" className="size-4" />}
-              onClick={() => void removeCategory(category.key, category.name)}
-            />
-          </div>
-          {category.channels.map((channel) => (
-            <div
-              key={channel.key}
-              className="flex flex-wrap items-center gap-2 pl-4"
-            >
-              {/* WEB-40 — `min-w-0` lets this input shrink below its
+              <Button
+                variant="ghost"
+                aria-label={`Remove category ${category.name || ''}`.trim()}
+                icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+                onClick={() => void removeCategory(category.key, category.name)}
+              />
+            </div>
+            {category.channels.map((channel) => (
+              <div
+                key={channel.key}
+                className="flex flex-wrap items-center gap-2 pl-4"
+              >
+                {/* WEB-40 — `min-w-0` lets this input shrink below its
                   content width so `flex-1` can actually divide the row
                   with the checkbox and delete button instead of the
                   `w-full` in `textInputClasses` claiming the whole row
                   and pushing them onto a line of their own. `flex-wrap`
                   stays on the row above so a narrow viewport still wraps
                   rather than overflowing horizontally. */}
-              <input
-                aria-label="Channel name"
-                value={channel.name}
-                onChange={(event) =>
-                  updateChannel(category.key, channel.key, {
-                    name: event.target.value,
-                  })
-                }
-                className={`${textInputClasses} min-w-0 flex-1`}
-              />
-              <label className="flex items-center gap-2 text-sm text-neutral-700">
                 <input
-                  type="checkbox"
-                  aria-label="Admins only"
-                  checked={channel.adminsOnly}
+                  aria-label="Channel name"
+                  value={channel.name}
                   onChange={(event) =>
                     updateChannel(category.key, channel.key, {
-                      adminsOnly: event.target.checked,
+                      name: event.target.value,
                     })
                   }
-                  className={checkboxClasses}
+                  className={`${textInputClasses} min-w-0 flex-1`}
                 />
-                Admins only
-              </label>
-              <Button
-                variant="ghost"
-                aria-label={`Remove channel ${channel.name || ''}`.trim()}
-                icon={<DeleteIcon aria-hidden="true" className="size-4" />}
-                onClick={() =>
-                  void removeChannel(category.key, channel.key, channel.name)
-                }
-              />
-            </div>
-          ))}
-          <Button
-            variant="secondary"
-            icon={<AddIcon aria-hidden="true" className="size-4" />}
-            onClick={() => addChannel(category.key)}
-          >
-            Add channel
-          </Button>
-        </fieldset>
-      ))}
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    aria-label="Admins only"
+                    checked={channel.adminsOnly}
+                    onChange={(event) =>
+                      updateChannel(category.key, channel.key, {
+                        adminsOnly: event.target.checked,
+                      })
+                    }
+                    className={checkboxClasses}
+                  />
+                  Admins only
+                </label>
+                <Button
+                  variant="ghost"
+                  aria-label={`Remove channel ${channel.name || ''}`.trim()}
+                  icon={<DeleteIcon aria-hidden="true" className="size-4" />}
+                  onClick={() =>
+                    void removeChannel(category.key, channel.key, channel.name)
+                  }
+                />
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              icon={<AddIcon aria-hidden="true" className="size-4" />}
+              onClick={() => addChannel(category.key)}
+            >
+              Add channel
+            </Button>
+          </fieldset>
+        )
+      })}
       <Button
         variant="secondary"
         icon={<AddIcon aria-hidden="true" className="size-4" />}

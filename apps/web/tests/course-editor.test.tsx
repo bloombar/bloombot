@@ -2694,3 +2694,152 @@ describe('CourseEditor Discord scaffold "connect a server" guard (SRV-6/WEB-16)'
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * WEB-51: a category name is unique on a Discord server ignoring
+ * capitalisation and every whitespace character — the same comparison
+ * `@bloombot/db`'s own `normalizeCategoryName` applies server-side
+ * (BOT-13/PROJ-10). This form tells an instructor that up front (a
+ * persistent hint), catches a same-course duplicate before a save is even
+ * attempted (blur, then re-validated on every edit), and — when the server
+ * still refuses one it could not have known about locally, a duplicate
+ * against a *different* course — locates the refusal back to the row it
+ * concerns rather than only the generic top-level `ErrorMessage`.
+ */
+describe('CourseEditor category-name uniqueness feedback (WEB-51)', () => {
+  it('shows a persistent hint under a category name, linked by aria-describedby', () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+
+    const input = screen.getByLabelText('Category name')
+    expect(
+      screen.getByText(/must be unique.*ignoring capitalisation and spaces/i)
+    ).toBeInTheDocument()
+    const describedBy = input.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const hintId = describedBy!.split(' ')[0]!
+    expect(document.getElementById(hintId)).toHaveTextContent(
+      /must be unique.*ignoring capitalisation and spaces/i
+    )
+  })
+
+  it('flags a same-course duplicate on blur (ignoring case and whitespace), blocks the save, and clears once edited', async () => {
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId={undefined}
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }))
+    const [firstInput, secondInput] = screen.getAllByLabelText('Category name')
+    fireEvent.change(firstInput!, { target: { value: 'Web Design' } })
+    fireEvent.change(secondInput!, { target: { value: ' web  DESIGN' } })
+    fireEvent.blur(secondInput!)
+
+    expect(secondInput).toHaveAttribute('aria-invalid', 'true')
+    const duplicateError = screen.getByText(
+      /Another category in this course is already named/
+    )
+    expect(duplicateError).toBeInTheDocument()
+    expect(secondInput!.getAttribute('aria-describedby')).toContain(
+      duplicateError.id
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+    expect(saveCourse).not.toHaveBeenCalled()
+    // Held back on a save attempt, and focus goes to the first invalid row.
+    expect(document.activeElement).toBe(secondInput)
+
+    fireEvent.change(secondInput!, { target: { value: 'Design 2' } })
+    expect(secondInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.queryByText(/Another category in this course is already named/)
+    ).not.toBeInTheDocument()
+  })
+
+  it('places a server-refused category conflict on the row it concerns, focuses it, and clears it on edit', async () => {
+    getCourse.mockResolvedValue(COURSE)
+    saveCourse.mockRejectedValue(
+      new ApiError(409, {
+        error: 'action_conflict',
+        conflict: {
+          field: 'category',
+          name: 'Web Design - GLOBAL',
+          conflictingProjectName: 'Fall 2026',
+          conflictingCourseTitle: 'Intro to CS',
+          message:
+            'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".',
+        },
+      })
+    )
+
+    renderWithModal(
+      <CourseEditor
+        navigate={vi.fn()}
+        organizationId="org-1"
+        project={PROJECT}
+        courseId="course-1"
+        tab="discord"
+        onSaved={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    const categoryInput = await screen.findByDisplayValue('Web Design - GLOBAL')
+    // `Save course` is disabled while the form is clean (`isDirty`) — an
+    // edit elsewhere is enough to make the button live, without touching
+    // the category name this test is asserting against.
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }))
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Web Design II' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save course' }))
+
+    await waitFor(() =>
+      expect(categoryInput).toHaveAttribute('aria-invalid', 'true')
+    )
+    // The same sentence renders twice — once in the top-level `ErrorMessage`
+    // (kept, per the brief, since some readers only ever look there) and
+    // once on the category row itself; the field-level one is the id
+    // `aria-describedby` actually points at.
+    const conflictError = screen
+      .getAllByText(
+        'Category name "Web Design - GLOBAL" is already used by course "Intro to CS" in project "Fall 2026".'
+      )
+      .find((element) => element.id.startsWith('category-error-'))
+    expect(conflictError).toBeDefined()
+    expect(categoryInput.getAttribute('aria-describedby')).toContain(
+      conflictError!.id
+    )
+    expect(document.activeElement).toBe(categoryInput)
+
+    fireEvent.change(categoryInput, {
+      target: { value: 'Web Design - GLOBAL 2' },
+    })
+    expect(categoryInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.queryByText(
+        (_, element) =>
+          element?.id.startsWith('category-error-') === true &&
+          element.textContent === conflictError!.textContent
+      )
+    ).not.toBeInTheDocument()
+  })
+})

@@ -1528,6 +1528,98 @@ describe('courses repo', () => {
     })
   })
 
+  // BOT-13/PROJ-10: category names compare the same way SRV-11 already made
+  // role names compare — ignoring case and every whitespace character
+  // (leading, trailing, doubled inner) — both across courses and within one.
+  describe('cross-course category name collisions ignore case and whitespace (PROJ-10)', () => {
+    it('refuses a second course whose category name differs from the first only in case and spacing', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            categories: [{ name: 'Web Design', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          title: 'Data Science',
+          adminsRole: 'admins-ds-fa26',
+          studentsRole: 'students-ds-fa26',
+          categories: [{ name: '  webdesign  ', channels: [] }], // same category as Web Design's
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict).toMatchObject({
+        field: 'category',
+        name: '  webdesign  ',
+        conflictingCourseTitle: 'Web Design',
+        conflictingProjectName: 'Fall 2026',
+      })
+      // Both spellings named, and the message explains Discord treats them
+      // as the same category — the same defect SRV-11 fixed for roles.
+      expect(result.conflict.message).toContain('"  webdesign  "')
+      expect(result.conflict.message).toContain('"Web Design"')
+      expect(result.conflict.message.toLowerCase()).toContain('case')
+    })
+
+    it('refuses a duplicate category within one course that differs only in whitespace', () => {
+      testDb = createTestDatabase()
+      const { orgA, projectA } = seedTwoOrganizations(testDb)
+
+      const result = courses.createCourse(
+        orgA,
+        courseInput(projectA.id, {
+          categories: [
+            { name: 'Web Design', channels: [] },
+            { name: 'Web  Design', channels: [] }, // doubled inner space
+          ],
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a conflict')
+      expect(result.conflict.field).toBe('category')
+      expect(result.conflict.message).toContain('"Web  Design"')
+      expect(result.conflict.message).toContain('"Web Design"')
+    })
+
+    it('allows two different organizations to name the same category, even differing only in whitespace', () => {
+      testDb = createTestDatabase()
+      const { orgA, orgB, projectA, projectB } = seedTwoOrganizations(testDb)
+      expectOk(
+        courses.createCourse(
+          orgA,
+          courseInput(projectA.id, {
+            categories: [{ name: 'Web Design', channels: [] }],
+          }),
+          testDb.db
+        )
+      )
+
+      const result = courses.createCourse(
+        orgB,
+        courseInput(projectB.id, {
+          adminsRole: 'admins-wd-fa26-b',
+          studentsRole: 'students-wd-fa26-b',
+          categories: [{ name: 'WebDesign', channels: [] }], // same organization-B category, different org
+        }),
+        testDb.db
+      )
+
+      expect(result.ok).toBe(true)
+    })
+  })
+
   // TEN-9 — PROJ-3's own text always said "unique across every enabled
   // course in *that server*": two courses that route in different servers
   // may now share a category or role name, and two in the same server still
@@ -2247,6 +2339,32 @@ describe('courses repo', () => {
         ).toHaveLength(2)
       })
 
+      // BOT-13/PROJ-10: the same case/whitespace-insensitive comparison as
+      // `createCourse`/`updateCourse` — `addCourseCategory` runs through the
+      // same `checkCategoryNameAgainstCourse` helper, so this fails without
+      // the fix the same way the plain-string test above never would.
+      it('refuses adding a category that differs from an existing one only in case and whitespace (PROJ-10)', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+
+        const result = courses.addCourseCategory(
+          orgA,
+          course.id,
+          '  global  ',
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(false)
+        if (result?.ok !== false) throw new Error('expected a conflict')
+        expect(result.conflict.field).toBe('category')
+        expect(result.conflict.message).toContain('"  global  "')
+        expect(result.conflict.message).toContain('"GLOBAL"')
+        // Refused before any write.
+        expect(
+          courses.getCourse(orgA, course.id, testDb.db)?.categories
+        ).toHaveLength(2)
+      })
+
       it('refuses a category name colliding with another enabled course routing in the same server (PROJ-3 cross-course)', () => {
         testDb = createTestDatabase()
         const { orgA, projectA } = seedTwoOrganizations(testDb)
@@ -2364,6 +2482,27 @@ describe('courses repo', () => {
         expect(
           courses.getCourse(orgA, course.id, testDb.db)?.categories[0]?.name
         ).toBe(target.name)
+      })
+
+      // BOT-13/PROJ-10: `renameCourseCategory` runs through the same
+      // `checkCategoryNameAgainstCourse` helper as `addCourseCategory`.
+      it('refuses renaming a category to a sibling name differing only in whitespace (PROJ-10)', () => {
+        testDb = createTestDatabase()
+        const { orgA, course } = seedCourseWithTwoCategories(testDb)
+        const target = course.categories[0]!
+
+        const result = courses.renameCourseCategory(
+          orgA,
+          target.id,
+          'WEEK  1', // doubled inner space, matches sibling "WEEK 1" ignoring whitespace
+          testDb.db
+        )
+
+        expect(result?.ok).toBe(false)
+        if (result?.ok !== false) throw new Error('expected a conflict')
+        expect(result.conflict.field).toBe('category')
+        expect(result.conflict.message).toContain('"WEEK  1"')
+        expect(result.conflict.message).toContain('"WEEK 1"')
       })
 
       it('returns undefined for a foreign-organization categoryId (TEN-2)', () => {

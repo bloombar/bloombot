@@ -71,6 +71,57 @@ describe('routeMessage (CORE-2)', () => {
     expect(result).toEqual({ kind: 'unmatched' })
   })
 
+  // BOT-13: a category matches however it was typed — case and whitespace
+  // (leading, trailing, or doubled inner) never distinguish two spellings of
+  // the same category.
+  it('matches by category regardless of case, spacing or a missing space entirely (BOT-13)', () => {
+    const variants = [
+      'web design',
+      'WEB DESIGN',
+      '  Web Design  ',
+      'Web   Design',
+      'Web\tDesign',
+      'WebDesign',
+    ]
+    for (const categoryName of variants) {
+      const result = routeMessage([webDesign, dataScience], {
+        categoryName,
+        channelName: 'general',
+        roleNames: [],
+      })
+      expect(result).toEqual({ kind: 'matched', course: webDesign })
+    }
+  })
+
+  it('does not loosen punctuation — "Web-Design" is not the same category as "Web Design" (BOT-13)', () => {
+    const result = routeMessage([webDesign, dataScience], {
+      categoryName: 'Web-Design',
+      channelName: 'general',
+      roleNames: [],
+    })
+    expect(result).toEqual({ kind: 'unmatched' })
+  })
+
+  it('reports two courses whose category names normalize equal as an ambiguity (BOT-13)', () => {
+    const webDesignAlias: RoutableCourse = {
+      id: 'course-web-design-alias',
+      categoryNames: ['webdesign'],
+      adminsRole: 'admins-alias',
+      studentsRole: 'students-alias',
+      enabled: true,
+    }
+    const result = routeMessage([webDesign, webDesignAlias], {
+      categoryName: 'Web Design',
+      channelName: 'general',
+      roleNames: [],
+    })
+    expect(result).toEqual({
+      kind: 'ambiguous',
+      signal: 'category',
+      courseIds: [webDesign.id, webDesignAlias.id],
+    })
+  })
+
   it('reports a category matched by two courses as an ambiguity, not a silent pick', () => {
     const duplicateCategory: RoutableCourse = {
       id: 'course-duplicate',

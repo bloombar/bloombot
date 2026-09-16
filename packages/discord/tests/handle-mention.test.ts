@@ -1429,6 +1429,25 @@ describe('handleMention — PROJ-2/finding 2: an archived project stops its cour
     expect(result.kind).toBe('answered')
     expect(model.calls).toHaveLength(1)
   })
+
+  // BOT-13: a category matches however it was typed in Discord — case and
+  // any amount of surrounding or inner whitespace never distinguish two
+  // spellings of the same category, end to end through `handleMention`.
+  it('routes a message whose category differs only in case and whitespace from the one the course declares', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      categoryName: 'Web Design',
+    })
+
+    const { deps, model } = makeDeps(testDb)
+    const result = await handleMention(
+      inboundMention({ guildId, categoryName: '  WEB design ' }),
+      deps
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
 })
 
 describe('handleMention — CORE-2/finding 13: an ambiguous route is dropped, not answered', () => {

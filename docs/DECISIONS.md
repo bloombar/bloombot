@@ -12205,3 +12205,30 @@ differently from "not connected" or "read failed" — all three redirect identic
 already renders its own sign-in-required or not-a-member cases through `App.tsx`'s ordinary `isShellRoute`/
 `isReachableShellRoute` machinery once there, so this page does not need to duplicate that distinction
 either; it only needs to stop asserting a claim it has not verified.
+
+## D-114 — `packages/db`: BOT-13/PROJ-10 — a category name match removes all whitespace, it does not collapse runs of it to one space
+
+**`normalizeCategoryName` (`packages/db/src/category-name.ts`) lowercases and then removes *every*
+whitespace character (`/\s+/g` → `''`), rather than trimming the ends and collapsing each inner run to a
+single space the way `discord-scaffold.ts`'s pre-existing `normalizeName` (still used for role names, and
+still trim-only) does.** The brief settled this explicitly, but it is worth recording why the stricter rule
+is the right one for a category specifically, and not just an arbitrary tightening: an instructor retyping
+a category name from memory, or copying it out of a syllabus that dropped a space during a paste, is
+exactly the failure mode BOT-13 exists to route around — "Web Design" and "WebDesign" read as the same
+category to a human glancing at a Discord sidebar, even though a byte-for-byte or merely-collapsed
+comparison would not treat them that way. `courses.ts`'s own role comparison (`normalizeRoleName`,
+SRV-10/SRV-11) stays trim-plus-lowercase, unchanged by this slice — a role name is resolved against
+Discord's own list of real roles a moment before use (`resolveRoleId`), so a typo there fails loudly and
+immediately, in a way a category typo silently mis-routing a whole channel's worth of messages does not.
+
+**Lives in `@bloombot/db`, not `@bloombot/core`, even though `@bloombot/core`'s `routing.ts` is one of its
+two callers.** `core` already depends on `db` (`package.json`), not the reverse, and `repos/courses.ts`'s
+own PROJ-3 checks need the identical comparison at save time — putting it in `core` would have required
+`db` to depend on `core` just for this one helper, inverting the dependency graph the rest of the package
+already assumes.
+
+**No migration or grandfathering for existing category names.** Unlike SRV-10/SRV-11's role-name rework,
+which had to reckon with role pairs already saved before that comparison existed, this slice's brief
+confirmed no two category names in the existing data are known to collide only under the new, stricter
+comparison — so this is a straight compare-and-refuse change, with nothing analogous to
+`findSelfConflict`'s `checkRoles` escape hatch needed on the category side.

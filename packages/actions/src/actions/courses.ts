@@ -9,16 +9,82 @@
  */
 
 import {
+  courseAttachments,
   courses,
+  deletions,
   discordServers,
+  jobs,
   projects,
   schema,
+  transcriptExports,
   type Database,
 } from '@bloombot/db'
 import { z } from 'zod'
 
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
+
+/**
+ * PROJ-8/PROJ-9's own bytes cleanup — `apps/worker/src/handlers/content-deletions.ts`'s
+ * job kind, duplicated here as a literal rather than imported (the same
+ * "both sides own the identical string, no shared constant module"
+ * convention `course-attachments.ts`'s own `DETACH_JOB_KIND` already
+ * follows): an app depends on this package, never the reverse, so nothing
+ * here can import from `apps/worker`. `deleteCourseAction`/`deleteProjectAction`
+ * (below, and `projects.ts`) both enqueue it — the ids named in this job's
+ * payload are read *before* the delete transaction runs, since the rows
+ * naming them (`course_attachments`, `transcript_exports`) are gone by the
+ * time this job's own handler reads its payload.
+ */
+export const REMOVE_DELETED_CONTENT_BYTES_JOB_KIND =
+  'contentDeletions.removeBytes'
+const REMOVE_DELETED_CONTENT_BYTES_JOB_MAX_ATTEMPTS = 5
+
+/**
+ * Every course attachment's and transcript export's own id a course owns —
+ * what `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`'s payload needs, read before
+ * `deletions.deleteCourse`/`deletions.deleteProject` removes the rows that
+ * name them. Shared by `courses.ts#deleteCourseAction` and
+ * `projects.ts#deleteProjectAction` (which calls this once per course).
+ */
+export function collectCourseByteIds(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): { attachmentIds: string[]; exportIds: string[] } {
+  return {
+    attachmentIds: courseAttachments
+      .listAttachmentsForCourse(organizationId, courseId, db)
+      .map((attachment) => attachment.id),
+    exportIds: transcriptExports
+      .listExportsForCourse(organizationId, courseId, db)
+      .map((exportRow) => exportRow.id),
+  }
+}
+
+/**
+ * Enqueues `REMOVE_DELETED_CONTENT_BYTES_JOB_KIND`, naming every id
+ * `collectCourseByteIds` gathered — a no-op (no job enqueued at all) when
+ * there is nothing to remove, so a course or project with no attachments
+ * and no exports never leaves a job with an empty payload sitting in the
+ * queue.
+ */
+export function enqueueRemoveDeletedContentBytes(
+  organizationId: string,
+  ids: { attachmentIds: string[]; exportIds: string[] },
+  db: Database
+): void {
+  if (ids.attachmentIds.length === 0 && ids.exportIds.length === 0) return
+  jobs.enqueueJob(
+    organizationId,
+    {
+      kind: REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+      payload: ids,
+      maxAttempts: REMOVE_DELETED_CONTENT_BYTES_JOB_MAX_ATTEMPTS,
+    },
+    db
+  )
+}
 
 type Project = NonNullable<ReturnType<typeof projects.getProject>>
 type Course = NonNullable<ReturnType<typeof courses.getCourse>>
@@ -552,5 +618,93 @@ export const disableCourseAction: Action<
     // once this returns; report that state, not the row count.
     courses.disableCourse(organizationId, entity.id, db)
     return { disabled: true }
+  },
+}
+
+/** PROJ-8's `courses.delete` needs the caller's own account id — a deletion with no real actor is exactly what its own audit trail (`content_deletions`) exists to prevent. Refuses outright when `dispatch` was not given one, the same "a self-reported author is a forgeable audit trail" reasoning `course-instructions.ts`'s own identical helper gives. */
+function requireAccountId(accountId: string | undefined): string {
+  if (!accountId) throw new ActionRefusedError()
+  return accountId
+}
+
+/**
+ * PROJ-8: preview what deleting a course would remove — read access only,
+ * the same "a preview is a read, not a write" shape ADMIN-5's own
+ * `organizations.previewOrganizationDeletion` route already treats it as.
+ * Resolves the same way `courses.disable` does: this is the delete's own
+ * confirmation screen, so it must refuse a course a caller could not delete
+ * either.
+ */
+export const previewDeleteCourseAction: Action<
+  'courses.previewDelete',
+  CourseIdInput,
+  Course,
+  deletions.CourseDeletionPreview
+> = {
+  name: 'courses.previewDelete',
+  description:
+    'Preview deleting a course (PROJ-8): the counts a person recognises — conversations, messages, enrolments, knowledge files — before anything is removed.',
+  inputSchema: courseIdInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'read' },
+    resolve: resolveOwnCourse,
+  },
+  execute: ({ organizationId, entity, db }) => {
+    const preview = deletions.previewCourseDeletion(
+      organizationId,
+      entity.id,
+      db
+    )
+    // Unreachable in practice — the policy already proved this course
+    // exists and belongs to this organization moments earlier (the same
+    // TEN-2 race every other action in this file guards against, not
+    // asserted away).
+    if (!preview) throw new ActionRefusedError()
+    return preview
+  },
+}
+
+/**
+ * PROJ-8: permanently delete a course, and everything that exists only
+ * because of it, in one transaction (`@bloombot/db`'s `deletions.ts#deleteCourse`
+ * does the actual removal — see its own module comment for the full
+ * ordering and for why `cost_ledger_entries` survives). Same access as
+ * `courses.disable` (this file's own module comment on the brief this
+ * mirrors) — deleting is not a step up in privilege from disabling, it is
+ * the same "stop this course" decision taken further.
+ */
+export const deleteCourseAction: Action<
+  'courses.delete',
+  CourseIdInput,
+  Course,
+  deletions.CourseDeletionPreview
+> = {
+  name: 'courses.delete',
+  description:
+    'Permanently delete a course (PROJ-8) and everything that exists only because of it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Cannot be undone.',
+  inputSchema: courseIdInputSchema,
+  policy: {
+    descriptor: { resource: 'course', access: 'write' },
+    resolve: resolveOwnCourse,
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    const deletedByAccountId = requireAccountId(accountId)
+    // Gathered *before* the delete — the rows naming these ids are about to
+    // be removed, and the bytes on disk have no other index back to them
+    // once that happens (this file's own module comment on
+    // `collectCourseByteIds`).
+    const byteIds = collectCourseByteIds(organizationId, entity.id, db)
+    const result = deletions.deleteCourse(
+      organizationId,
+      entity.id,
+      { deletedByAccountId },
+      db
+    )
+    // Same TEN-2 race guarded above, for the write half of this pair.
+    if (!result) throw new ActionRefusedError()
+    // Only after the delete actually committed — bytes are removed once
+    // the rows naming them are confirmed gone, never before.
+    enqueueRemoveDeletedContentBytes(organizationId, byteIds, db)
+    return result
   },
 }

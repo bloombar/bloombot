@@ -44,6 +44,10 @@ import {
   DETACH_COURSE_ATTACHMENT_JOB_KIND,
 } from './handlers/course-attachments.js'
 import {
+  createRemoveDeletedContentBytesHandler,
+  REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+} from './handlers/content-deletions.js'
+import {
   createDiscordScaffoldHandler,
   DISCORD_SCAFFOLD_JOB_KIND,
 } from './handlers/discord-scaffold.js'
@@ -203,6 +207,13 @@ async function main(): Promise<void> {
   handlers.register(
     TRANSCRIPT_EXPORT_JOB_KIND,
     createTranscriptExportHandler({ attachmentStorage })
+  )
+  // PROJ-8/PROJ-9 — this process's sixth handler: removes a deleted
+  // course's or project's own attachment/export bytes, the same
+  // `attachmentStorage` every handler above shares.
+  handlers.register(
+    REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+    createRemoveDeletedContentBytesHandler({ attachmentStorage, logger })
   )
 
   let shuttingDown = false

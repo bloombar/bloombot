@@ -12235,3 +12235,70 @@ which had to reckon with role pairs already saved before that comparison existed
 confirmed no two category names in the existing data are known to collide only under the new, stricter
 comparison — so this is a straight compare-and-refuse change, with nothing analogous to
 `findSelfConflict`'s `checkRoles` escape hatch needed on the category side.
+## D-115 — `packages/db`/`packages/actions`/`apps/worker`/`apps/web`: PROJ-8/PROJ-9/WEB-50 — deleting a project or a course, and only `cost_ledger_entries` survives it
+
+**Only `cost_ledger_entries.course_id` was made nullable, not any other table that carries `courseId`.**
+PROJ-8's own text singles out spending: "cost ledger entries survive the course they were charged to". Every
+other course-scoped table — `conversations`/`messages` (transcripts included, PROJ-8's own text), enrolments,
+join links, self-enrolment intents, web sources, roster channel assignments, transcript access log and
+exports, course attachments, instruction revisions, categories and channels — is a fact *about* the course,
+not a fact about money already spent independent of it, so PROJ-8 does not ask any of them to outlive it, and
+`deletions.ts#emptyCourse` deletes every one outright. `cost_ledger_entries` is the one table in this schema
+whose whole point (COST-1/COST-3's cumulative, never-reset cap) is to be read *after* the thing it priced is
+long gone — an organization's recorded spend must not shrink because an instructor deleted a course, the exact
+invariant a delete-then-recount would violate. No other table in this schema shares that "history of money"
+character today; the day one does, it should get the identical treatment (nullable FK, nulled on delete, this
+paragraph as its own precedent), not a bespoke shape invented per table.
+
+**`repos/deletions.ts` is a new file, not more functions added to `repos/courses.ts`/`repos/projects.ts`.**
+`emptyCourse` (module-private) is the one function that actually empties a course's tables, in FK-safe order,
+and both `deleteCourse` and `deleteProject` call it — `deleteProject` once per course, before removing the
+project row itself. Splitting that logic across two existing files would mean either duplicating it (an
+in-project course deleted by `deleteProject` slightly differently from one deleted directly by `deleteCourse`,
+the exact drift PROJ-9's own "every course in it exactly as PROJ-8 describes" text forbids) or one file
+importing the other's private helper across a boundary neither file's own module comment would then describe
+accurately.
+
+**The audit row (`content_deletions`) is written inside the same transaction as the delete itself**, unlike
+ADMIN-5's `tenantDeletions`, which `apps/api/src/routes/admin.ts` writes in a *second*, separate call after
+`deleteOrganizationData` has already committed. That two-step exists there because the row it audits — the
+organization — is gone by the time `recordTenantDeletion` runs, so `organizationId` on `tenant_deletions` is a
+plain value, not a foreign key, and the whole operation cannot be one atomic transaction without violating the
+very row it is trying to describe mid-transaction. A course or a project deletion has no such problem: the
+*organization* survives every one of them, so `content_deletions.organizationId` is an ordinary foreign key,
+and there is no reason to split the delete and its own audit record into two transactions that could disagree
+if the process died between them. `deletions.ts#recordContentDeletion` runs inside `writeTransaction`'s own
+callback, immediately before it returns.
+
+**No dedicated HTTP routes.** `courses.previewDelete`/`courses.delete`/`projects.previewDelete`/`projects.delete`
+are ordinary actions, reached the one way every other course/project action already is —
+`POST /organizations/:organizationId/actions/:actionName` (`routes/actions.ts`'s own generic dispatcher). The
+phase brief's own text suggested `GET .../courses/:id/deletion-preview`/`DELETE .../courses/:id`, modelled on
+ADMIN-5's bespoke `routes/admin.ts`; that router is bespoke specifically because a platform administrator is
+not acting within any one organization at all (that file's own module comment), which is not true here — a
+course or a project delete is exactly the kind of organization-scoped, membership-gated write every other
+action in this catalog already is, and inventing a second, REST-shaped path for these four when the other 50-
+odd actions in this catalog all go through one dispatcher would be the inconsistency, not the fix.
+
+**Knowledge-file/transcript-export bytes are removed by a new job, `contentDeletions.removeBytes`
+(`apps/worker/src/handlers/content-deletions.ts`), not by reusing `courseAttachments.detach`'s own job.** The
+detach handler reads the attachment's row (for its `providerFileId`) and the course's row (for its
+`vectorStoreId`) to reach the *provider* before removing the local bytes and the row — none of that is
+available once `deleteCourse`/`deleteProject` has already committed, since both rows are gone. The delete
+actions instead gather every attachment's and export's own id *before* the delete transaction runs
+(`courses.ts#collectCourseByteIds`), then enqueue the cleanup job with those ids directly in its payload —
+after the delete has committed, never before — and the job removes only the local bytes
+(`AttachmentStorage#remove`), the same scope PROJ-8's own text asks for ("knowledge files (the stored bytes as
+well as the rows)"). It does **not** reach the provider to delete the vector-store file or file object the way
+`courseAttachments.detach` does — PROJ-8's text does not ask for that, and by job-run time there is no local
+row left to read a `providerFileId`/`vectorStoreId` from even if it did. An orphaned provider-side file object
+is not a new problem this slice introduces: `scripts/prune-orphaned-attachments.mjs` already exists to find
+and remove exactly that class of leftover, independent of how a local row disappeared.
+
+**`scripts/board/config.mjs`'s `PHASES` array stopped at 31, though `MILESTONE_TITLE` already had an entry for
+32** — a pre-existing gap from an earlier slice's own board commit, not something this slice's diff caused,
+caught only because `npm test` runs `scripts/board/derive.test.mjs`, which fails the moment a ROADMAP phase has
+no milestone to derive against. Extended to include 32 and 33 (this phase) directly, per `CLAUDE.md`'s own
+carve-out for "project tooling under `scripts/`" landing straight on the default branch without a PR — fixing
+it here rather than filing it separately was the smaller change, and leaving it broken would have made this
+slice's own `npm run board:derive` verification step impossible to satisfy.

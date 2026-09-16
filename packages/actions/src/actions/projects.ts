@@ -9,6 +9,7 @@
 import {
   courses,
   courseWebSources,
+  deletions,
   organizations,
   projects,
   writeTransaction,
@@ -16,6 +17,10 @@ import {
 } from '@bloombot/db'
 import { z } from 'zod'
 
+import {
+  collectCourseByteIds,
+  enqueueRemoveDeletedContentBytes,
+} from './courses.js'
 import { ActionConflictError, ActionRefusedError } from '../errors.js'
 import type { Action } from '../types.js'
 
@@ -473,4 +478,106 @@ export const duplicateProjectAction: Action<
 
       return { project: newProject, coursesCopied, coursesDisabled: true }
     }),
+}
+
+/** PROJ-9's `projects.delete` needs the caller's own account id, the same reason `courses.ts`'s identically-named helper gives — see that file's own doc comment. */
+function requireAccountId(accountId: string | undefined): string {
+  if (!accountId) throw new ActionRefusedError()
+  return accountId
+}
+
+/**
+ * PROJ-9: preview what deleting a project would remove — PROJ-8's own
+ * per-course counts, totalled across every course in it, plus how many
+ * courses will go. Read access only, the same "a preview is a read"
+ * reasoning `courses.ts#previewDeleteCourseAction`'s own doc comment gives.
+ */
+export const previewDeleteProjectAction: Action<
+  'projects.previewDelete',
+  ProjectIdInput,
+  Project,
+  deletions.ProjectDeletionPreview
+> = {
+  name: 'projects.previewDelete',
+  description:
+    'Preview deleting a project (PROJ-9): PROJ-8’s own counts, totalled across every course in it, plus how many courses will go.',
+  inputSchema: projectIdInputSchema,
+  policy: {
+    descriptor: { resource: 'project', access: 'read' },
+    resolve: resolveOwnProject,
+  },
+  execute: ({ organizationId, entity, db }) => {
+    const preview = deletions.previewProjectDeletion(
+      organizationId,
+      entity.id,
+      db
+    )
+    // Same TEN-2 race every other action in this file guards against, not
+    // asserted away — the policy already proved this project exists and
+    // belongs to this organization moments earlier.
+    if (!preview) throw new ActionRefusedError()
+    return preview
+  },
+}
+
+/**
+ * PROJ-9: permanently delete a project — every course in it exactly as
+ * `courses.delete` describes, then the project itself, in one transaction
+ * (`@bloombot/db`'s `deletions.ts#deleteProject` does the actual removal).
+ * Same access as `projects.archive` (this action's own sibling): deleting is
+ * not a step up in privilege from archiving, and an archived project is
+ * deleted exactly as readily as a live one (nothing here reads `archivedAt`).
+ */
+export const deleteProjectAction: Action<
+  'projects.delete',
+  ProjectIdInput,
+  Project,
+  deletions.ProjectDeletionPreview
+> = {
+  name: 'projects.delete',
+  description:
+    'Permanently delete a project (PROJ-9) and every course in it — categories and channels, knowledge files, conversations and their messages, enrolments and join links. Spending already recorded survives. Cannot be undone.',
+  inputSchema: projectIdInputSchema,
+  policy: {
+    descriptor: { resource: 'project', access: 'write' },
+    resolve: resolveOwnProject,
+  },
+  execute: ({ organizationId, entity, accountId, db }) => {
+    const deletedByAccountId = requireAccountId(accountId)
+    // Gathered *before* the delete, once per course — the same reason
+    // `courses.ts#deleteCourseAction`'s own comment gives, applied across
+    // every course this project owns.
+    const courseRows = courses.listCourses(organizationId, db, {
+      projectId: entity.id,
+    })
+    const byteIds = courseRows.reduce(
+      (totals, course) => {
+        const courseByteIds = collectCourseByteIds(
+          organizationId,
+          course.id,
+          db
+        )
+        return {
+          attachmentIds: [
+            ...totals.attachmentIds,
+            ...courseByteIds.attachmentIds,
+          ],
+          exportIds: [...totals.exportIds, ...courseByteIds.exportIds],
+        }
+      },
+      { attachmentIds: [] as string[], exportIds: [] as string[] }
+    )
+
+    const result = deletions.deleteProject(
+      organizationId,
+      entity.id,
+      { deletedByAccountId },
+      db
+    )
+    if (!result) throw new ActionRefusedError()
+    // Only after the delete actually committed — same reason
+    // `courses.ts#deleteCourseAction` gives.
+    enqueueRemoveDeletedContentBytes(organizationId, byteIds, db)
+    return result
+  },
 }

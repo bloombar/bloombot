@@ -690,6 +690,29 @@ export interface OrganizationDeletionPreview {
   queuedJobs: number
 }
 
+/** PROJ-8's own "names exactly what will be deleted before it happens" — mirrored by hand from `@bloombot/db`'s `deletions.CourseDeletionPreview`, the same boundary this file's own module comment already explains. */
+export interface CourseDeletionPreview {
+  organizationId: string
+  courseId: string
+  courseTitle: string
+  conversations: number
+  messages: number
+  enrolments: number
+  courseAttachments: number
+}
+
+/** PROJ-9's own preview — PROJ-8's own counts, totalled across every course in the project, plus how many courses will go. Mirrors `@bloombot/db`'s `deletions.ProjectDeletionPreview` by hand. */
+export interface ProjectDeletionPreview {
+  organizationId: string
+  projectId: string
+  projectName: string
+  courses: number
+  conversations: number
+  messages: number
+  enrolments: number
+  courseAttachments: number
+}
+
 /** ADMIN-5's own audit trail, read back. */
 export interface TenantDeletion {
   id: string

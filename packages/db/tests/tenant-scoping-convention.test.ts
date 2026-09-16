@@ -283,7 +283,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twenty-eight repo files this test is written against', () => {
+  it('found the twenty-nine repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -296,6 +296,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'course-join-links.ts',
         'course-web-sources.ts',
         'courses.ts',
+        'deletions.ts',
         'discord-gateway-status.ts',
         'discord-handled-messages.ts',
         'discord-install-states.ts',

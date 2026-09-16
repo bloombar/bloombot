@@ -26,11 +26,15 @@ const {
   unarchiveProject,
   renameProject,
   duplicateProject,
+  previewDeleteProject,
+  deleteProject,
   listCourses,
   disableCourse,
   enableCourse,
   exportCourse,
   downloadTextFile,
+  previewDeleteCourse,
+  deleteCourse,
 } = vi.hoisted(() => ({
   listProjects: vi.fn(),
   createProject: vi.fn(),
@@ -38,6 +42,8 @@ const {
   unarchiveProject: vi.fn(),
   renameProject: vi.fn(),
   duplicateProject: vi.fn(),
+  previewDeleteProject: vi.fn(),
+  deleteProject: vi.fn(),
   // WEB-42 — `Projects` now fetches each listed project's own courses, and
   // its shared `CourseRows` row offers the same Export/Disable-Enable
   // `pages/Courses.tsx` does — every test in this file needs all four of
@@ -49,6 +55,8 @@ const {
   enableCourse: vi.fn(),
   exportCourse: vi.fn(),
   downloadTextFile: vi.fn(),
+  previewDeleteCourse: vi.fn(),
+  deleteCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -63,11 +71,15 @@ vi.mock('../src/api/client.js', async () => {
     unarchiveProject,
     renameProject,
     duplicateProject,
+    previewDeleteProject,
+    deleteProject,
     listCourses,
     disableCourse,
     enableCourse,
     exportCourse,
     downloadTextFile,
+    previewDeleteCourse,
+    deleteCourse,
   }
 })
 
@@ -1080,5 +1092,150 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
         'bloombotCourseExport: 1\n'
       )
     )
+  })
+})
+
+/**
+ * PROJ-9/WEB-50: a project row's own Delete item — last in its kebab, a
+ * preview (PROJ-8's own counts, totalled across every course) read into
+ * the confirmation, and a typed-name prompt before the destructive call
+ * ever runs, the same shape `admin.test.tsx`'s own ADMIN-5 tests already
+ * pin for a tenant, and `courses.test.tsx`'s own tests pin for one course.
+ */
+describe('Projects — delete (PROJ-9/WEB-50)', () => {
+  const PREVIEW = {
+    organizationId: 'org-1',
+    projectId: 'project-1',
+    projectName: 'Fall 2026',
+    courses: 2,
+    conversations: 3,
+    messages: 12,
+    enrolments: 2,
+    courseAttachments: 1,
+  }
+
+  it('offers Delete, last, in the project row’s kebab', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    const items = within(menu).getAllByRole('button')
+    expect(items.at(-1)).toHaveTextContent('Delete')
+  })
+
+  it('previews what will be deleted — the number of courses included — before confirming', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('2 course(s)')
+    expect(dialog).toHaveTextContent('3 conversation(s)')
+    expect(dialog).toHaveTextContent('12 message(s)')
+
+    // Cancelling deletes nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteProject).not.toHaveBeenCalled()
+  })
+
+  it('typing the wrong name keeps the dialog open and never calls through; the exact name proceeds and the row disappears', async () => {
+    listProjects.mockResolvedValueOnce([PROJECT]).mockResolvedValueOnce([])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+
+    const field = within(dialog).getByLabelText('Project name')
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    expect(
+      await screen.findByText('Type the name exactly to confirm.')
+    ).toBeInTheDocument()
+    expect(deleteProject).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: 'Fall 2026' } })
+    deleteProject.mockResolvedValue(PREVIEW)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(deleteProject).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    await waitFor(() =>
+      expect(screen.queryByText('Fall 2026')).not.toBeInTheDocument()
+    )
+  })
+
+  it('a failed delete is reported and the row stays', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+    deleteProject.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Fall 2026' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(await screen.findByText('Fall 2026')).toBeInTheDocument()
   })
 })

@@ -5,14 +5,25 @@
  * `packages/db`'s own tests.
  */
 
-import { accounts, courses, discordServers, projects } from '@bloombot/db'
+import {
+  accounts,
+  courseAttachments,
+  courses,
+  discordServers,
+  jobs,
+  projects,
+} from '@bloombot/db'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   archiveProjectAction,
   createProjectAction,
+  deleteCourseAction,
+  deleteProjectAction,
   disableCourseAction,
   enableCourseAction,
+  previewDeleteCourseAction,
+  previewDeleteProjectAction,
   renameProjectAction,
   saveCourseAction,
   unarchiveProjectAction,
@@ -1108,5 +1119,177 @@ describe('courses.enable / courses.disable', () => {
     expect(
       courses.getCourse(organizationId, courseA.course.id, testDb.db)?.enabled
     ).toBe(false)
+  })
+})
+
+describe('courses.previewDelete / courses.delete (PROJ-8)', () => {
+  it('previews, then deletes, a course — the row is gone afterward and the preview matches what was removed', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      {
+        email: `${organizationId}@example.edu`,
+        displayName: 'Owner',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const preview = await dispatch(
+      previewDeleteCourseAction,
+      { courseId: created.course.id },
+      { organizationId, db: testDb.db }
+    )
+    expect(preview).toMatchObject({ courseId: created.course.id })
+    // A preview reads, it does not delete.
+    expect(
+      courses.getCourse(organizationId, created.course.id, testDb.db)
+    ).toBeDefined()
+
+    const result = await dispatch(
+      deleteCourseAction,
+      { courseId: created.course.id },
+      { organizationId, accountId: owner.id, db: testDb.db }
+    )
+    expect(result).toMatchObject(preview as object)
+    expect(
+      courses.getCourse(organizationId, created.course.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('enqueues a bytes-cleanup job naming the attachment ids the deleted course owned', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      {
+        email: `${organizationId}@example.edu`,
+        displayName: 'Owner',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+    const attachment = courseAttachments.createPendingAttachment(
+      organizationId,
+      {
+        courseId: created.course.id,
+        filename: 'syllabus.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+      },
+      testDb.db
+    )
+
+    await dispatch(
+      deleteCourseAction,
+      { courseId: created.course.id },
+      { organizationId, accountId: owner.id, db: testDb.db }
+    )
+
+    const queued = jobs.listJobsForOrganization(organizationId, 10, testDb.db)
+    const cleanupJob = queued.find(
+      (job) => job.kind === 'contentDeletions.removeBytes'
+    )
+    expect(cleanupJob).toBeDefined()
+    expect(JSON.parse(cleanupJob?.payload ?? '{}')).toMatchObject({
+      attachmentIds: [attachment.id],
+      exportIds: [],
+    })
+  })
+
+  it('refuses to delete a course with no authenticated caller (no accountId)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    await expect(
+      dispatch(
+        deleteCourseAction,
+        { courseId: created.course.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    expect(
+      courses.getCourse(organizationId, created.course.id, testDb.db)
+    ).toBeDefined()
+  })
+})
+
+describe('projects.previewDelete / projects.delete (PROJ-9)', () => {
+  it('previews, then deletes, a project and every course in it', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      {
+        email: `${organizationId}@example.edu`,
+        displayName: 'Owner',
+        role: 'owner',
+      },
+      testDb.db
+    )
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const preview = await dispatch(
+      previewDeleteProjectAction,
+      { projectId },
+      { organizationId, db: testDb.db }
+    )
+    expect(preview).toMatchObject({ projectId, courses: 1 })
+    expect(
+      projects.getProject(organizationId, projectId, testDb.db)
+    ).toBeDefined()
+
+    const result = await dispatch(
+      deleteProjectAction,
+      { projectId },
+      { organizationId, accountId: owner.id, db: testDb.db }
+    )
+    expect(result).toMatchObject(preview as object)
+    expect(
+      projects.getProject(organizationId, projectId, testDb.db)
+    ).toBeUndefined()
+    expect(
+      courses.getCourse(organizationId, created.course.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('refuses to delete a project with no authenticated caller (no accountId)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        deleteProjectAction,
+        { projectId },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+    expect(
+      projects.getProject(organizationId, projectId, testDb.db)
+    ).toBeDefined()
   })
 })

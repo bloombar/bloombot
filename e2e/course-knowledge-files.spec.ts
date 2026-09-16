@@ -73,6 +73,7 @@ import {
   createDetachCourseAttachmentHandler,
 } from '../apps/worker/src/handlers/course-attachments.js'
 import { E2E_ATTACHMENT_STORAGE_DIR, E2E_DATABASE_PATH } from './support/env.js'
+import { createFakeLogger } from './support/fake-logger.js'
 import { FakeOpenAiFilesServer } from './support/fake-openai-files-server.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
@@ -127,6 +128,7 @@ async function runOneWorkerJob(
     createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger: createFakeLogger(),
     })
   )
   handlers.register(
@@ -134,6 +136,7 @@ async function runOneWorkerJob(
     createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger: createFakeLogger(),
     })
   )
   return runNextJob({

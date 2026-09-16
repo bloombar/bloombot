@@ -36,6 +36,7 @@ import type {
   CourseExportResult,
   CourseInstructionRevisionSummary,
   CourseJoinLinkSummary,
+  CourseDeletionPreview,
   CourseSummary,
   CourseWebSourceSummary,
   CreatedCourseJoinLink,
@@ -57,6 +58,7 @@ import type {
   PersonLinkBeginResponse,
   PersonLinkStatusResponse,
   Project,
+  ProjectDeletionPreview,
   RevealedCourseJoinLink,
   SetSpendingCapResult,
   SignedInResponse,
@@ -411,6 +413,30 @@ export function unarchiveProject(
   })
 }
 
+/** PROJ-9's own preview — PROJ-8's own counts, totalled across every course in the project, plus how many courses will go. */
+export function previewDeleteProject(
+  organizationId: string,
+  projectId: string
+): Promise<ProjectDeletionPreview> {
+  return dispatchAction<ProjectDeletionPreview>(
+    organizationId,
+    'projects.previewDelete',
+    { projectId }
+  )
+}
+
+/** PROJ-9: permanently delete a project, and every course in it. Cannot be undone. */
+export function deleteProject(
+  organizationId: string,
+  projectId: string
+): Promise<ProjectDeletionPreview> {
+  return dispatchAction<ProjectDeletionPreview>(
+    organizationId,
+    'projects.delete',
+    { projectId }
+  )
+}
+
 /** PROJ-6/WEB-26: rename a project — the same thin wrapper shape as `archiveProject`/`duplicateProject` above, over `projects.rename`. */
 export function renameProject(
   organizationId: string,
@@ -525,6 +551,32 @@ export function disableCourse(
   courseId: string
 ): Promise<{ disabled: boolean }> {
   return dispatchAction(organizationId, 'courses.disable', { courseId })
+}
+
+/** PROJ-8's own "names exactly what will be deleted before it happens" — read before `deleteCourse` below is ever confirmed. */
+export function previewDeleteCourse(
+  organizationId: string,
+  courseId: string
+): Promise<CourseDeletionPreview> {
+  return dispatchAction<CourseDeletionPreview>(
+    organizationId,
+    'courses.previewDelete',
+    { courseId }
+  )
+}
+
+/** PROJ-8: permanently delete a course. Cannot be undone. */
+export function deleteCourse(
+  organizationId: string,
+  courseId: string
+): Promise<CourseDeletionPreview> {
+  return dispatchAction<CourseDeletionPreview>(
+    organizationId,
+    'courses.delete',
+    {
+      courseId,
+    }
+  )
 }
 
 /**

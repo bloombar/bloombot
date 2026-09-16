@@ -26,11 +26,15 @@ const {
   unarchiveProject,
   renameProject,
   duplicateProject,
+  previewDeleteProject,
+  deleteProject,
   listCourses,
   disableCourse,
   enableCourse,
   exportCourse,
   downloadTextFile,
+  previewDeleteCourse,
+  deleteCourse,
 } = vi.hoisted(() => ({
   listProjects: vi.fn(),
   createProject: vi.fn(),
@@ -38,6 +42,8 @@ const {
   unarchiveProject: vi.fn(),
   renameProject: vi.fn(),
   duplicateProject: vi.fn(),
+  previewDeleteProject: vi.fn(),
+  deleteProject: vi.fn(),
   // WEB-42 — `Projects` now fetches each listed project's own courses, and
   // its shared `CourseRows` row offers the same Export/Disable-Enable
   // `pages/Courses.tsx` does — every test in this file needs all four of
@@ -49,6 +55,8 @@ const {
   enableCourse: vi.fn(),
   exportCourse: vi.fn(),
   downloadTextFile: vi.fn(),
+  previewDeleteCourse: vi.fn(),
+  deleteCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -63,11 +71,15 @@ vi.mock('../src/api/client.js', async () => {
     unarchiveProject,
     renameProject,
     duplicateProject,
+    previewDeleteProject,
+    deleteProject,
     listCourses,
     disableCourse,
     enableCourse,
     exportCourse,
     downloadTextFile,
+    previewDeleteCourse,
+    deleteCourse,
   }
 })
 
@@ -243,7 +255,7 @@ describe('Projects (WEB-7)', () => {
   // rejected the same way everywhere) into the modal `prompt()` now handles
   // every project name: the dialog stays open, naming the problem, rather
   // than silently accepting it.
-  it('a whitespace-only name is refused by the "New project" modal, not silently accepted', async () => {
+  it('a whitespace-only name leaves the "New project" modal\'s Create button disabled, not silently accepted', async () => {
     listProjects.mockResolvedValue([])
 
     renderWithModal(
@@ -261,12 +273,22 @@ describe('Projects (WEB-7)', () => {
     fireEvent.change(within(dialog).getByLabelText('Project name'), {
       target: { value: '   ' },
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
 
+    // WEB-50 rework finding: the confirm button is disabled while the
+    // typed value does not validate, not merely checked after a click —
+    // a disabled button never fires `onConfirm` at all, so there is no
+    // inline error to click into being here.
     expect(
-      within(dialog).getByText('Enter a project name.')
-    ).toBeInTheDocument()
+      within(dialog).getByRole('button', { name: 'Create' })
+    ).toBeDisabled()
     expect(createProject).not.toHaveBeenCalled()
+
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Fall 2026' },
+    })
+    expect(
+      within(dialog).getByRole('button', { name: 'Create' })
+    ).not.toBeDisabled()
   })
 
   it('archives an active project from its kebab menu, behind a (non-destructive) confirmation — WEB-15: archiving stops every course in it routing, more consequence than disabling one', async () => {
@@ -1080,5 +1102,154 @@ describe('Projects — courses beneath each project (WEB-42)', () => {
         'bloombotCourseExport: 1\n'
       )
     )
+  })
+})
+
+/**
+ * PROJ-9/WEB-50: a project row's own Delete item — last in its kebab, a
+ * preview (PROJ-8's own counts, totalled across every course) read into
+ * the confirmation, and a typed-name prompt before the destructive call
+ * ever runs, the same shape `admin.test.tsx`'s own ADMIN-5 tests already
+ * pin for a tenant, and `courses.test.tsx`'s own tests pin for one course.
+ */
+describe('Projects — delete (PROJ-9/WEB-50)', () => {
+  const PREVIEW = {
+    organizationId: 'org-1',
+    projectId: 'project-1',
+    projectName: 'Fall 2026',
+    courses: 2,
+    conversations: 3,
+    messages: 12,
+    enrolments: 2,
+    courseAttachments: 1,
+  }
+
+  it('offers Delete, last, in the project row’s kebab', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    const menu = screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+    const items = within(menu).getAllByRole('button')
+    expect(items.at(-1)).toHaveTextContent('Delete')
+  })
+
+  it('previews what will be deleted — the number of courses included — before confirming', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('2 course(s)')
+    expect(dialog).toHaveTextContent('3 conversation(s)')
+    expect(dialog).toHaveTextContent('12 message(s)')
+
+    // Cancelling deletes nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteProject).not.toHaveBeenCalled()
+  })
+
+  it('typing the wrong name keeps the dialog open and never calls through; the exact name proceeds and the row disappears', async () => {
+    listProjects.mockResolvedValueOnce([PROJECT]).mockResolvedValueOnce([])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+
+    const field = within(dialog).getByLabelText('Project name')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    // WEB-50 rework finding: disabled until the name typed matches
+    // exactly — not merely checked after a click.
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteProject).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: 'Fall 2026' } })
+    expect(confirmButton).not.toBeDisabled()
+    deleteProject.mockResolvedValue(PREVIEW)
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(deleteProject).toHaveBeenCalledWith('org-1', 'project-1')
+    )
+    await waitFor(() =>
+      expect(screen.queryByText('Fall 2026')).not.toBeInTheDocument()
+    )
+  })
+
+  it('a failed delete is reported and the row stays', async () => {
+    listProjects.mockResolvedValue([PROJECT])
+    previewDeleteProject.mockResolvedValue(PREVIEW)
+    deleteProject.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+
+    renderWithModal(
+      <Projects
+        organizationId="org-1"
+        onOpenProject={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Fall 2026')
+
+    openProjectMenu('Fall 2026')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Fall 2026"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Project name'), {
+      target: { value: 'Fall 2026' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(await screen.findByText('Fall 2026')).toBeInTheDocument()
   })
 })

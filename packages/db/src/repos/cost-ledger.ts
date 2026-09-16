@@ -303,8 +303,22 @@ export function getOrganizationUsageSummary(
   // organization's `bySurface` breakdown across every course. All three
   // come from the single `totals` row set above; none of this re-reads
   // `cost_ledger_entries`.
+  // PROJ-8 — `costLedgerEntries.courseId` is nullable now: a course's own
+  // deletion nulls it rather than deleting the row it charged (`schema.ts`'s
+  // own comment on why). `totalsByCourseId`'s key type widens to admit that;
+  // `coursesSummary` below only ever looks this map up by a *real*
+  // `courseRows` id, so a `null`-keyed entry simply never joins a course
+  // again — exactly PROJ-8's own "survives the course it was charged to".
+  // `totalCostMicros`/`totalEstimatedCostMicros` are accumulated in this same
+  // loop instead of by summing `coursesSummary` afterward, precisely so a
+  // deleted course's own spend is not silently dropped from the
+  // organization's own total the way it is from its per-course breakdown —
+  // this is COST-4's own read, but it must stay consistent with COST-3's cap
+  // (`getOrganizationSpentMicros`, unaffected by this column since it sums
+  // by `organizationId` alone), which the "spend-cap sums must be unchanged
+  // after a delete" requirement (PROJ-8) means for this summary too.
   const totalsByCourseId = new Map<
-    string,
+    string | null,
     {
       costMicros: number
       estimatedCostMicros: number
@@ -313,10 +327,14 @@ export function getOrganizationUsageSummary(
     }
   >()
   const organizationBySurface = new Map<CostLedgerSurface, CostBySurface>()
+  let totalCostMicros = 0
+  let totalEstimatedCostMicros = 0
   for (const row of totals) {
     const costMicros = Number(row.costMicros ?? 0)
     const estimatedCostMicros = Number(row.estimatedCostMicros ?? 0)
     const callCount = Number(row.callCount)
+    totalCostMicros += costMicros
+    totalEstimatedCostMicros += estimatedCostMicros
 
     const courseTotals = totalsByCourseId.get(row.courseId) ?? {
       costMicros: 0,
@@ -362,14 +380,8 @@ export function getOrganizationUsageSummary(
   return {
     organizationId,
     spendingCapMicros: organization?.spendingCapMicros ?? null,
-    totalCostMicros: coursesSummary.reduce(
-      (sumSoFar, course) => sumSoFar + course.costMicros,
-      0
-    ),
-    totalEstimatedCostMicros: coursesSummary.reduce(
-      (sumSoFar, course) => sumSoFar + course.estimatedCostMicros,
-      0
-    ),
+    totalCostMicros,
+    totalEstimatedCostMicros,
     courses: coursesSummary,
     bySurface: sortBySurface([...organizationBySurface.values()]),
   }

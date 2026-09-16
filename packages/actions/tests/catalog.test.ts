@@ -94,6 +94,9 @@ describe('ACT-6 — machine-readable catalog', () => {
         'projects.create',
         'projects.archive',
         'projects.unarchive',
+        // PROJ-9 — added by this slice.
+        'projects.previewDelete',
+        'projects.delete',
         // PROJ-6 — added by this slice.
         'projects.rename',
         'projects.list',
@@ -103,6 +106,9 @@ describe('ACT-6 — machine-readable catalog', () => {
         'courses.updateSettings',
         'courses.enable',
         'courses.disable',
+        // PROJ-8 — added by this slice.
+        'courses.previewDelete',
+        'courses.delete',
         'courses.list',
         'courses.export',
         'courses.get',

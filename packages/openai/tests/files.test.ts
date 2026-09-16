@@ -10,6 +10,7 @@ import {
   attachFileToVectorStore,
   createVectorStore,
   deleteFile,
+  deleteVectorStore,
   deleteVectorStoreFile,
   uploadFile,
   type FilesHttpOptions,
@@ -433,6 +434,27 @@ describe('files.ts (FILE-1..3)', () => {
       server.respondToFileDelete({ status: 404, body: {} })
 
       await expect(deleteFile(options, 'file_1')).rejects.toBeInstanceOf(
+        ModelRequestError
+      )
+    })
+  })
+
+  // PROJ-8's own cheap-fix 2 (rework round 2): the vector store itself, not
+  // just its files, once the course that owned it is gone.
+  describe('deleteVectorStore', () => {
+    it('reaches the right path with DELETE', async () => {
+      await deleteVectorStore(options, 'vs_1')
+
+      expect(server.requests[0]).toMatchObject({
+        method: 'DELETE',
+        path: '/vector_stores/vs_1',
+      })
+    })
+
+    it('throws a classified error on failure', async () => {
+      server.respondToVectorStoreDelete({ status: 500, body: {} })
+
+      await expect(deleteVectorStore(options, 'vs_1')).rejects.toBeInstanceOf(
         ModelRequestError
       )
     })

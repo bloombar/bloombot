@@ -12235,3 +12235,144 @@ which had to reckon with role pairs already saved before that comparison existed
 confirmed no two category names in the existing data are known to collide only under the new, stricter
 comparison — so this is a straight compare-and-refuse change, with nothing analogous to
 `findSelfConflict`'s `checkRoles` escape hatch needed on the category side.
+## D-115 — `packages/db`/`packages/actions`/`apps/worker`/`apps/web`: PROJ-8/PROJ-9/WEB-50 — deleting a project or a course, and only `cost_ledger_entries` survives it
+
+**Only `cost_ledger_entries.course_id` was made nullable, not any other table that carries `courseId`.**
+PROJ-8's own text singles out spending: "cost ledger entries survive the course they were charged to". Every
+other course-scoped table — `conversations`/`messages` (transcripts included, PROJ-8's own text), enrolments,
+join links, self-enrolment intents, web sources, roster channel assignments, transcript access log and
+exports, course attachments, instruction revisions, categories and channels — is a fact *about* the course,
+not a fact about money already spent independent of it, so PROJ-8 does not ask any of them to outlive it, and
+`deletions.ts#emptyCourse` deletes every one outright. `cost_ledger_entries` is the one table in this schema
+whose whole point (COST-1/COST-3's cumulative, never-reset cap) is to be read *after* the thing it priced is
+long gone — an organization's recorded spend must not shrink because an instructor deleted a course, the exact
+invariant a delete-then-recount would violate. No other table in this schema shares that "history of money"
+character today; the day one does, it should get the identical treatment (nullable FK, nulled on delete, this
+paragraph as its own precedent), not a bespoke shape invented per table.
+
+**`repos/deletions.ts` is a new file, not more functions added to `repos/courses.ts`/`repos/projects.ts`.**
+`emptyCourse` (module-private) is the one function that actually empties a course's tables, in FK-safe order,
+and both `deleteCourse` and `deleteProject` call it — `deleteProject` once per course, before removing the
+project row itself. Splitting that logic across two existing files would mean either duplicating it (an
+in-project course deleted by `deleteProject` slightly differently from one deleted directly by `deleteCourse`,
+the exact drift PROJ-9's own "every course in it exactly as PROJ-8 describes" text forbids) or one file
+importing the other's private helper across a boundary neither file's own module comment would then describe
+accurately.
+
+**The audit row (`content_deletions`) is written inside the same transaction as the delete itself**, unlike
+ADMIN-5's `tenantDeletions`, which `apps/api/src/routes/admin.ts` writes in a *second*, separate call after
+`deleteOrganizationData` has already committed. That two-step exists there because the row it audits — the
+organization — is gone by the time `recordTenantDeletion` runs, so `organizationId` on `tenant_deletions` is a
+plain value, not a foreign key, and the whole operation cannot be one atomic transaction without violating the
+very row it is trying to describe mid-transaction. A course or a project deletion has no such problem: the
+*organization* survives every one of them, so `content_deletions.organizationId` is an ordinary foreign key,
+and there is no reason to split the delete and its own audit record into two transactions that could disagree
+if the process died between them. `deletions.ts#recordContentDeletion` runs inside `writeTransaction`'s own
+callback, immediately before it returns.
+
+**No dedicated HTTP routes.** `courses.previewDelete`/`courses.delete`/`projects.previewDelete`/`projects.delete`
+are ordinary actions, reached the one way every other course/project action already is —
+`POST /organizations/:organizationId/actions/:actionName` (`routes/actions.ts`'s own generic dispatcher). The
+phase brief's own text suggested `GET .../courses/:id/deletion-preview`/`DELETE .../courses/:id`, modelled on
+ADMIN-5's bespoke `routes/admin.ts`; that router is bespoke specifically because a platform administrator is
+not acting within any one organization at all (that file's own module comment), which is not true here — a
+course or a project delete is exactly the kind of organization-scoped, membership-gated write every other
+action in this catalog already is, and inventing a second, REST-shaped path for these four when the other 50-
+odd actions in this catalog all go through one dispatcher would be the inconsistency, not the fix.
+
+**Knowledge-file/transcript-export bytes *and* their provider-side resources are removed by a new job,
+`contentDeletions.removeBytes` (`apps/worker/src/handlers/content-deletions.ts`), not by reusing
+`courseAttachments.detach`'s own job.** Rework round 1, must-fix 3 corrected an earlier version of this same
+entry, which claimed this job does not reach the provider at all — that was true of the first cut, and wrong:
+PROJ-8's own "removes ... its ... knowledge files" is not honestly satisfied while a deleted course's file
+still sits in the provider's own vector store and file storage, discoverable by anyone who can list them, long
+after every local row naming it is gone. The detach handler reaches the *provider* by reading the attachment's
+own `providerFileId` and the course's own `vectorStoreId` off their rows — neither is available once
+`deleteCourse`/`deleteProject` has already committed, since both rows are gone. The fix (also must-fix 3, and
+the same race cheap-fix 6 asks about) is `deletions.ts#CourseByteRemoval`: `deleteCourse`/`deleteProject`
+gather every attachment's own `providerFileId`, the course's own `vectorStoreId`, and every export's own id
+*inside* the same transaction that deletes the rows naming them — not read separately, before the transaction,
+by the action calling them (an earlier version of this file did that, and was must-fix 3's own "race: an
+attachment upload overlapping a course delete", closed by moving the read inside the transaction instead of
+narrowing the window). The job's own handler then makes the identical two provider calls
+`courseAttachments.detach` makes, in the identical order (vector-store entry, then the file object itself),
+treating a `404` from either as "already gone" the same way. Transcript exports still never reach the
+provider: they are written only to `AttachmentStorage`, never uploaded anywhere
+(`repos/transcript-exports.ts`'s own module comment).
+
+**Rework round 2, must-fix 1 corrected a real orphaning bug in that same job: a non-404 provider failure used
+to be logged and shrugged off, and the local bytes were removed anyway, so the job reported success and
+nothing ever retried** — the exact combination that leaves a file object sitting at the provider forever, with
+every local row that could have named it for a later sweep already gone. Fixed two ways together: (1) a
+provider delete that fails with anything other than 404 (`deleteIgnoringAlreadyGone`'s own contract) now skips
+that attachment's local byte removal entirely — the id survives locally specifically so a retry has something
+left to retry against; (2) the handler throws once, after every course in the payload has been processed, if
+any provider delete failed, so `@bloombot/jobs`' own retry policy (JOB-2) actually re-runs the job. Throwing
+*after* processing every course, not on the first failure, is deliberate: one course's own provider outage must
+not stop another course's independent cleanup from running in the same pass. The 404-tolerance
+(`deleteIgnoringAlreadyGone`) is what makes that retry safe rather than merely persistent — a delete that
+already landed on a previous attempt 404s harmlessly on the next one, instead of failing the same way forever.
+This is also what makes the "idempotence" claim the previous round of this same entry made actually true: that
+version threw nothing, so there was no retry for the 404-tolerance to *be* idempotent against — a bug this
+paragraph's own first sentence names outright rather than quietly fixing without comment.
+
+**Cheap-fix 2 (rework round 2): the vector store itself is also deleted, once per course, after its files.**
+`deleteVectorStore` (`packages/openai/src/files.ts`) is a new, small export — the identical shape
+`deleteFile`/`deleteVectorStoreFile` already are, `DELETE /vector_stores/{id}` — the API never grew a call for
+this earlier because nothing before PROJ-8 ever needed to delete a whole store; `courseAttachments.detach`
+(FILE-3) only ever removes one file from a store other attachments may still need. Attempted regardless of
+whether every file inside it was removed successfully — an independent resource, the same "each id cleaned up
+on its own merits" reasoning `removeBytes` already applies per attachment/export — and it is 404-tolerant and
+subject to the identical must-fix 1 retry rule as an attachment's own files: a failed store delete also fails
+the job attempt.
+
+**`content_deletions` needed its own line in `organizations.ts#deleteOrganizationData`** (must-fix 2, a
+regression this slice's first cut introduced and rework round 1 caught): it is a real foreign key to
+`organizations.id` (the paragraph above explains why, unlike `tenant_deletions`), so any organization that had
+ever had a course or a project deleted inside it left a row here — and deleting the organization without first
+deleting these rows threw `FOREIGN KEY constraint failed` on the `organizations` delete itself, every time.
+Deleted, not preserved: unlike `tenant_deletions`, which deliberately outlives the organization it describes,
+a `content_deletions` row has nothing left to be an audit trail *for* once the tenant it names is gone.
+`content_deletions.deletedByAccountId` (a foreign key to `accounts.id`) posed no equivalent risk to check for
+the reverse direction — nothing in this codebase ever deletes an `accounts` row at all (accounts are only
+disabled, TEN-1/AUTH-4's own "never deleted" discipline), so there is no delete path this FK could ever block.
+
+**Cheap-fix 3 (rework round 2): `ModalProvider`'s prompt shows `validate`'s own message as live helper text,
+not only on a failed submit.** Round 1's own fix disabled the confirm button until `validate` passed — correct
+on its own terms, but it left a disabled button with no visible reason at all: `handleConfirm`'s
+validate-on-submit branch, the only place that ever set `promptError` before, can no longer run while the value
+is invalid, since the button a click would need to reach is disabled. `promptTouched` (`ModalProvider.tsx`) is
+the fix: `false` until the field is actually edited once, so an untouched, empty "type the name to confirm"
+field never opens already accusing the person of a mistake they have not had a chance to make, and `true` from
+the first edit on, at which point `validate(promptValue)`'s own message is read live, every render, the
+identical call `confirmDisabled` already makes — the two can never drift, because neither is computed from the
+other; both read the same function against the same value.
+
+Moving the error out of the `<label>` and into its own element, reached through `aria-describedby`
+(`Modal.tsx`), was not optional once the message could appear on essentially every keystroke rather than only
+after a submit attempt: a `<label>` whose own text content includes both the field's name *and* whatever error
+happens to be showing computes an accessible **name** that changes as the person types (screen reader and
+`getByLabelText('Course title')` both compute it the identical way) — before this, that only mattered for the
+brief window between a failed submit and the next edit; now, live, it would have meant the field's own name
+never staying still. `aria-describedby` is the standard split for exactly this: the name says what the field
+is, the description says what is currently wrong with it, and the two are independent.
+
+**`scripts/board/config.mjs`'s `PHASES` array stopped at 31, though `MILESTONE_TITLE` already had an entry for
+32** — a pre-existing gap from an earlier slice's own board commit, not something this slice's diff caused,
+caught only because `npm test` runs `scripts/board/derive.test.mjs`, which fails the moment a ROADMAP phase has
+no milestone to derive against. This slice's first cut extended `PHASES` to include 32 and 33 directly, per
+`CLAUDE.md`'s own carve-out for "project tooling under `scripts/`" landing straight on the default branch
+without a PR; rebasing onto `origin/master` for rework round 1 found master had since fixed the identical gap
+itself (and added phase 34 alongside it) — that edit was dropped entirely in favour of master's own, rather
+than merged, so there is exactly one place phases 32-34 were ever added, not two that happened to agree.
+
+**NOTE, no code change**: a course's own per-course usage total (`costLedger.getOrganizationUsageSummary`'s
+own `courses` array) no longer sums to the organization's own grand total once a course in it has been deleted
+— `totalCostMicros`/`totalEstimatedCostMicros` are accumulated directly from every ledger row regardless of
+`courseId` (including the now-`null` ones a deleted course leaves behind, this file's own first paragraph), but
+the per-course breakdown only ever lists courses `courses.listCourses` still returns, so a deleted course's own
+spend is present in the organization's total and absent from every course's own line. This is PROJ-8's own
+invariant working as intended (spend survives the course it was charged to) read from a second angle, not a
+defect: the alternative — inventing a synthetic "(deleted course)" line to keep the two numbers reconciling on
+this one screen — would be new product surface no requirement asked for, for a screen (COST-4) whose own text
+is about *current* courses' usage.

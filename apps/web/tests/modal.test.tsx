@@ -5,7 +5,13 @@
  * real destructive flow through it; this file tests the primitive itself.
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -49,9 +55,11 @@ function ConfirmHarness({
 function PromptHarness({
   onResult,
   destructive = false,
+  validate,
 }: {
   onResult: (result: string | undefined) => void
   destructive?: boolean
+  validate?: (value: string) => string | undefined
 }) {
   const { prompt } = useModal()
   return (
@@ -62,6 +70,7 @@ function PromptHarness({
           title: 'Type the course name',
           label: 'Course name',
           destructive,
+          ...(validate ? { validate } : {}),
         }).then(onResult)
       }
     >
@@ -192,6 +201,69 @@ describe('Modal primitive (WEB-15/WEB-16/WEB-17)', () => {
     await waitFor(() =>
       expect(onResult).toHaveBeenCalledWith('Intro to Testing')
     )
+  })
+
+  // WEB-50 rework round 1: the confirm button is disabled while `validate`
+  // rejects the current value, not merely checked on click.
+  it('prompt(): the confirm button is disabled while validate rejects the value, and enables once it does not', async () => {
+    const validate = (value: string) =>
+      value === 'Web Design' ? undefined : 'Type the name exactly to confirm.'
+    render(
+      <ModalProvider>
+        <PromptHarness onResult={vi.fn()} validate={validate} />
+      </ModalProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'trigger prompt' }))
+    await screen.findByRole('dialog')
+    const field = screen.getByLabelText('Course name')
+    const confirmButton = screen.getByRole('button', { name: 'Confirm' })
+
+    // Nothing typed yet — disabled, but no error visible (round 2's own
+    // "not on an untouched field" rule, the test right below this one).
+    expect(confirmButton).toBeDisabled()
+
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(confirmButton).toBeDisabled()
+
+    fireEvent.change(field, { target: { value: 'Web Design' } })
+    expect(confirmButton).not.toBeDisabled()
+  })
+
+  // WEB-50 rework round 2: a disabled button with no visible reason is a
+  // dead end — `validate`'s own message now shows as helper text once the
+  // field has actually been edited, but never for an untouched, empty
+  // field the person has not had a chance to fix yet.
+  it('prompt(): validate’s message shows once the field is touched and invalid, never on an untouched field', async () => {
+    const validate = (value: string) =>
+      value === 'Web Design' ? undefined : 'Type the name exactly to confirm.'
+    render(
+      <ModalProvider>
+        <PromptHarness onResult={vi.fn()} validate={validate} />
+      </ModalProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'trigger prompt' }))
+    const dialog = await screen.findByRole('dialog')
+    const field = within(dialog).getByLabelText('Course name')
+
+    // Untouched, empty — invalid by `validate`'s own rule, but nothing
+    // typed yet, so no error shows.
+    expect(
+      within(dialog).queryByText('Type the name exactly to confirm.')
+    ).not.toBeInTheDocument()
+
+    fireEvent.change(field, { target: { value: 'the wrong name' } })
+    expect(
+      within(dialog).getByText('Type the name exactly to confirm.')
+    ).toBeInTheDocument()
+    // The field's own accessible name stays exactly the label — the error
+    // is reached through `aria-describedby`, not folded into the name
+    // (this file's own module comment in `Modal.tsx` has why).
+    expect(within(dialog).getByLabelText('Course name')).toBe(field)
+
+    fireEvent.change(field, { target: { value: 'Web Design' } })
+    expect(
+      within(dialog).queryByText('Type the name exactly to confirm.')
+    ).not.toBeInTheDocument()
   })
 
   // Fails before the change: `choose()` did not exist, and `Modal` had no

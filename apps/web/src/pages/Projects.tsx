@@ -39,9 +39,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   archiveProject,
   createProject,
+  deleteProject,
   duplicateProject,
   listCourses,
   listProjects,
+  previewDeleteProject,
   renameProject,
   unarchiveProject,
 } from '../api/client.js'
@@ -58,6 +60,7 @@ import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
 import {
   AddIcon,
   ArchiveIcon,
+  DeleteIcon,
   DuplicateIcon,
   EditIcon,
   ImportIcon,
@@ -407,6 +410,57 @@ export function Projects({
     }
   }
 
+  /**
+   * PROJ-9/WEB-50: preview, then confirm by typing the project's own name,
+   * then permanently delete — the same shape `pages/Admin.tsx#handleDelete`
+   * already gives ADMIN-5's own tenant deletion, and the same one
+   * `components/CourseRows.tsx#handleDelete` gives one course at a time. On
+   * success `refresh()` is what makes the row disappear; on failure the row
+   * stays and the error is reported the usual way (WEB-5).
+   */
+  const handleDelete = async (project: Project) => {
+    setError(undefined)
+    let preview
+    try {
+      preview = await previewDeleteProject(organizationId, project.id)
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+      return
+    }
+
+    const typed = await prompt({
+      title: `Delete ${project.name}?`,
+      description:
+        `This permanently deletes ${preview.courses} course(s), ` +
+        `${preview.conversations} conversation(s), ${preview.messages} message(s), ` +
+        `${preview.enrolments} enrolment(s) and ${preview.courseAttachments} ` +
+        'knowledge file(s). Spending already recorded survives. Discord channels ' +
+        'and roles are not touched. This cannot be undone. Type the project’s ' +
+        'name to confirm.',
+      label: 'Project name',
+      placeholder: project.name,
+      confirmLabel: 'Delete',
+      destructive: true,
+      validate: (value) =>
+        value === project.name
+          ? undefined
+          : 'Type the name exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setBusyProjectId(project.id)
+    try {
+      await deleteProject(organizationId, project.id)
+      refresh()
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setBusyProjectId(undefined)
+    }
+  }
+
   return (
     <section
       aria-label="Projects"
@@ -525,6 +579,15 @@ export function Projects({
                 label: 'Rename',
                 icon: <EditIcon aria-hidden="true" className="size-4" />,
                 onSelect: () => void handleRename(project),
+              },
+              // PROJ-9/WEB-50 — Delete, last, styled destructive: the row's
+              // most severe action sits at the end of the menu.
+              {
+                key: 'delete',
+                label: 'Delete',
+                icon: <DeleteIcon aria-hidden="true" className="size-4" />,
+                destructive: true,
+                onSelect: () => void handleDelete(project),
               },
             ]
             const courseState = courseStates[project.id]

@@ -205,13 +205,22 @@ function conflict(
 ): CourseNameConflict {
   const kind = field === 'category' ? 'Category' : 'Role'
   const sameSpelling = candidateName === undefined || candidateName === name
+  // Rework round 1: a category's insensitivity is wider than a role's —
+  // `normalizeCategoryName` (BOT-13/PROJ-10) removes *every* whitespace
+  // character, not only the surrounding kind a role name still tolerates
+  // (`normalizeRoleName`, below, is trim-only) — so the two fields need
+  // different wording here, not a shared "surrounding whitespace" that
+  // would understate what actually made a category name collide.
+  const insensitivityDescription =
+    field === 'category'
+      ? 'ignoring capitalisation and all whitespace'
+      : 'ignoring case and surrounding whitespace'
   const message = sameSpelling
     ? `${kind} name "${name}" is already used by course "${candidate.title}" ` +
       `in project "${candidate.projectName}".`
     : `${kind} name "${name}" is already used by course "${candidate.title}" ` +
       `in project "${candidate.projectName}" as "${candidateName}"; Discord ` +
-      `treats the two as the same ${kind.toLowerCase()}, ignoring case and ` +
-      `surrounding whitespace.`
+      `treats the two as the same ${kind.toLowerCase()}, ${insensitivityDescription}.`
   return {
     field,
     name,

@@ -12209,17 +12209,20 @@ either; it only needs to stop asserting a claim it has not verified.
 ## D-114 — `packages/db`: BOT-13/PROJ-10 — a category name match removes all whitespace, it does not collapse runs of it to one space
 
 **`normalizeCategoryName` (`packages/db/src/category-name.ts`) lowercases and then removes *every*
-whitespace character (`/\s+/g` → `''`), rather than trimming the ends and collapsing each inner run to a
-single space the way `discord-scaffold.ts`'s pre-existing `normalizeName` (still used for role names, and
-still trim-only) does.** The brief settled this explicitly, but it is worth recording why the stricter rule
-is the right one for a category specifically, and not just an arbitrary tightening: an instructor retyping
-a category name from memory, or copying it out of a syllabus that dropped a space during a paste, is
-exactly the failure mode BOT-13 exists to route around — "Web Design" and "WebDesign" read as the same
-category to a human glancing at a Discord sidebar, even though a byte-for-byte or merely-collapsed
-comparison would not treat them that way. `courses.ts`'s own role comparison (`normalizeRoleName`,
-SRV-10/SRV-11) stays trim-plus-lowercase, unchanged by this slice — a role name is resolved against
-Discord's own list of real roles a moment before use (`resolveRoleId`), so a typo there fails loudly and
-immediately, in a way a category typo silently mis-routing a whole channel's worth of messages does not.
+whitespace character (`/\s+/g` → `''`), rather than only trimming the ends the way
+`discord-scaffold.ts`'s pre-existing `normalizeName` (still used for role names, and still trim-only, never
+a collapse of inner runs — it never touched inner whitespace at all) did before this slice.** The brief
+settled this explicitly, but it is worth recording why the stricter rule is the right one for a category
+specifically, and not just an arbitrary tightening: an instructor retyping a category name from memory, or
+copying it out of a syllabus that dropped a space during a paste, is exactly the failure mode BOT-13 exists
+to route around — "Web Design" and "WebDesign" read as the same category to a human glancing at a Discord
+sidebar, even though a byte-for-byte or trim-only comparison would not treat them that way. `courses.ts`'s
+own role comparison (`normalizeRoleName`, SRV-10/SRV-11) stays trim-plus-lowercase, unchanged by this slice
+— a role name is resolved against Discord's own list of real roles a moment before use (`resolveRoleId`),
+so a typo there fails loudly and immediately, in a way a category typo silently mis-routing a whole
+channel's worth of messages does not. `packages/legacy-import` deliberately keeps exact, byte-for-byte
+category-name matching too — it mirrors `roster_setup.ipynb`/`hydrate_server.py`'s own historical behaviour
+against data already imported under that exact-match rule, not this slice's own forward-looking one.
 
 **Lives in `@bloombot/db`, not `@bloombot/core`, even though `@bloombot/core`'s `routing.ts` is one of its
 two callers.** `core` already depends on `db` (`package.json`), not the reverse, and `repos/courses.ts`'s

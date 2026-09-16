@@ -1565,10 +1565,16 @@ describe('courses repo', () => {
         conflictingProjectName: 'Fall 2026',
       })
       // Both spellings named, and the message explains Discord treats them
-      // as the same category — the same defect SRV-11 fixed for roles.
+      // as the same category — the same defect SRV-11 fixed for roles, but
+      // described as "capitalisation and all whitespace" rather than the
+      // role wording's "surrounding whitespace": a category also collides on
+      // *inner* whitespace, which the role message never claims. This
+      // fails against the old, shared wording.
       expect(result.conflict.message).toContain('"  webdesign  "')
       expect(result.conflict.message).toContain('"Web Design"')
-      expect(result.conflict.message.toLowerCase()).toContain('case')
+      expect(result.conflict.message).toContain(
+        'ignoring capitalisation and all whitespace'
+      )
     })
 
     it('refuses a duplicate category within one course that differs only in whitespace', () => {

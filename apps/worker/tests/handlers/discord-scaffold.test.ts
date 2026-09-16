@@ -976,6 +976,40 @@ describe('discordServers.scaffold handler', () => {
     expect(report.undeclaredCategories).toEqual([])
   })
 
+  // BOT-13/PROJ-10: `loadOrganizationDeclaredNames`' own diff base has to
+  // recognise a declared category under the same case/whitespace-insensitive
+  // comparison the rest of this handler now uses — a guild category
+  // differing only by inner whitespace or case from a course's own declared
+  // one is the *same* category, not a stray leftover to report.
+  it('does not report a declared category as undeclared when the guild spells it with different inner whitespace and case', async () => {
+    testDb = createTestDatabase()
+    discordServer = await FakeDiscordGuildServer.start()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+      { name: 'Week One', channels: [] },
+    ])
+    discordServer.setGuildChannels(seeded.guildId, [
+      {
+        id: 'cat-1',
+        // Same category once normalized (all whitespace removed, not
+        // merely trimmed) — "weekone" has no inner space at all.
+        name: 'weekone',
+        type: 4,
+        parent_id: null,
+      },
+    ])
+    discordServer.setGuildRoles(seeded.guildId, [
+      { id: 'role-admins', name: seeded.adminsRole },
+      { id: 'role-students', name: seeded.studentsRole },
+    ])
+
+    const report = (await runScaffold(
+      seeded.organizationId,
+      seeded.courseId
+    )) as { undeclaredCategories: string[] }
+
+    expect(report.undeclaredCategories).toEqual([])
+  })
+
   // Finding 3 of the SRV-6..8 rework: SRV-8's "or channel" half — a channel
   // removed from a course's config, inside a category the course (and so
   // the organization) still declares, must be named too, on the same

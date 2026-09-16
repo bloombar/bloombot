@@ -13,11 +13,15 @@
  * `apps/web/tests/bundle.test.ts`), and `@bloombot/schemas` is this repo's
  * existing home for a small, dependency-free string helper more than one
  * package reuses (`web-source-domain.ts`'s own module comment). The two
- * copies must stay identical — `packages/db/src/category-name.ts`'s own
- * comment cross-references this one — but a single shared function across
- * that boundary would cost `apps/web` a dependency on the entire database
- * package just to normalize a string, the same trade `web-source-domain.ts`
- * already declined for `@bloombot/core`.
+ * copies must stay identical, but `packages/db/src/category-name.ts` does
+ * not itself know this one exists — `packages/actions` is the one package
+ * in the workspace that already depends on both
+ * (`packages/actions/tests/category-name-drift.test.ts` is what actually
+ * catches the two ever disagreeing, not a comment on either side). A single
+ * shared function across the `apps/web`/`@bloombot/db` boundary would cost
+ * `apps/web` a dependency on the entire database package just to normalize a
+ * string, the same trade `web-source-domain.ts` already declined for
+ * `@bloombot/core`.
  *
  * Used client-side for two things (`pages/CourseEditor.tsx`): flagging a
  * same-course category duplicate before a save is even attempted, and

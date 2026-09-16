@@ -562,6 +562,27 @@ export function CourseEditor({
   // move focus to the row it concerns; a `Map` rather than one ref each,
   // since the number of categories is dynamic (`addCategory`/`removeCategory`).
   const categoryInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
+  // WEB-51 (rework round 1, must-fix 1) — the category row key waiting to
+  // be focused, once its own input actually exists in the DOM. A refusal
+  // that names a category on the Discord tab, reached while sitting on a
+  // *different* tab that has never visited Discord before, calls
+  // `switchToTabForField('categories')` and then needs focus — but that
+  // tab's own panel is not mounted yet (this file's own module comment: a
+  // panel only mounts once its tab has actually been visited), so an
+  // immediate `categoryInputRefs.current.get(key)?.focus()` right there
+  // finds nothing and silently does nothing. Recording the request here
+  // and retrying in the effect just below, on every render, is what
+  // survives the render that actually mounts the panel.
+  const [categoryFocusRequest, setCategoryFocusRequest] = useState<
+    string | undefined
+  >(undefined)
+  useEffect(() => {
+    if (categoryFocusRequest === undefined) return
+    const element = categoryInputRefs.current.get(categoryFocusRequest)
+    if (!element) return
+    element.focus()
+    setCategoryFocusRequest(undefined)
+  })
   const [saving, setSaving] = useState(false)
   // Review must-fix 1: true for the whole of the tab prompt's own "Save
   // changes" — `saving` alone leaves the `Save course` button live while
@@ -772,6 +793,13 @@ export function CourseEditor({
   const handleSave = async (): Promise<boolean> => {
     setError(undefined)
     setHalfSaved(false)
+    // WEB-51 (rework round 1, must-fix 2) — a category conflict from a
+    // *previous* refusal is stale the moment a new save is attempted: this
+    // save might refuse for an entirely different reason (a role collision,
+    // say), and without this, row A would still show the old category
+    // message even though nothing about this attempt's own refusal
+    // concerns it.
+    setCategoryConflict(undefined)
     const maxRequestsPerDay = parseMaxRequestsPerDay(form.maxRequestsPerDay)
     if (!maxRequestsPerDay.ok) {
       // Finding 2 (WEB-7 rework): refuse client-side rather than ever
@@ -810,7 +838,7 @@ export function CourseEditor({
       )
       if (firstDuplicate) {
         switchToTabForField('categories')
-        categoryInputRefs.current.get(firstDuplicate.key)?.focus()
+        setCategoryFocusRequest(firstDuplicate.key)
       }
       return false
     }
@@ -885,6 +913,17 @@ export function CourseEditor({
       // instead of reaching this line at all.
       showSavedConfirmation()
       onSaved(saved)
+      // WEB-51 (rework round 1, must-fix 5) — a successful save clears the
+      // "a save was attempted" flag too, the same "the form now agrees with
+      // the server again" reasoning `setForm`/`setBaseline` just above
+      // already apply: `savedForm`'s own categories carry fresh keys
+      // (`formFromCourse`'s own `newKey()`), so `touchedCategoryKeys` and
+      // `categoryConflict` are already harmless dangling references at this
+      // point, but `categorySaveAttempted` is a plain boolean with nothing
+      // to key it back to any particular category — left `true`, it would
+      // keep showing a duplicate error on a brand-new row added *after*
+      // this save, one that was never itself part of a refused attempt.
+      setCategorySaveAttempted(false)
       return true
     } catch (caught) {
       if (caught instanceof ApiError) {
@@ -938,7 +977,7 @@ export function CourseEditor({
               message: conflict.message,
             })
             switchToTabForField('categories')
-            categoryInputRefs.current.get(matchedCategory.key)?.focus()
+            setCategoryFocusRequest(matchedCategory.key)
           }
         }
       } else throw caught

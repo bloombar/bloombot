@@ -44,6 +44,21 @@ test('a same-course category duplicate is flagged inline and never reaches the s
     .getByRole('button', { name: `Fall 2026 — ${suffix}`, exact: true })
     .click()
 
+  // Counts every real request this browser makes to `courses.save`
+  // (`api/client.ts`'s own `POST /organizations/:organizationId/actions/
+  // courses.save`) — the actual proof that a same-course duplicate never
+  // reaches `apps/api` at all, rather than inferring it indirectly from
+  // whether the settings tabs happen to be showing (rework round 1,
+  // must-fix 3: relying on the tab being hidden proves this form did not
+  // yet render a saved course, which is also true for a save this browser
+  // simply has not clicked yet).
+  let courseSaveRequests = 0
+  page.on('request', (request) => {
+    if (request.url().includes('/actions/courses.save')) {
+      courseSaveRequests += 1
+    }
+  })
+
   await page.getByRole('button', { name: 'New course' }).click()
   await page.getByLabel('Title').fill(`Web Design — ${suffix}`)
   await page.getByRole('button', { name: 'Add category' }).click()
@@ -63,12 +78,14 @@ test('a same-course category duplicate is flagged inline and never reaches the s
     page.getByText('Another category in this course is already named')
   ).toBeVisible()
 
-  // A save attempt is held back client-side — no settings tabs ever appear,
-  // which only render once `courses.save` actually returns a saved course.
+  // A save attempt is held back client-side — no request to `courses.save`
+  // is ever made for it.
   await page.getByRole('button', { name: 'Save course' }).click()
   await expect(page.getByRole('tab', { name: 'General' })).toBeHidden()
+  expect(courseSaveRequests).toBe(0)
 
-  // Editing the duplicate clears the error, and the save now goes through.
+  // Editing the duplicate clears the error, and the save now goes through —
+  // exactly one real request, once the form is actually valid.
   await categoryInputs.nth(1).fill(`Web Design - EXTRA - ${suffix}`)
   await expect(categoryInputs.nth(1)).not.toHaveAttribute(
     'aria-invalid',
@@ -79,6 +96,7 @@ test('a same-course category duplicate is flagged inline and never reaches the s
   ).toBeHidden()
   await page.getByRole('button', { name: 'Save course' }).click()
   await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
+  expect(courseSaveRequests).toBe(1)
 })
 
 test('a category matching another course only by case/spelling is refused by the server, and the field-level message names that course (WEB-51/BOT-13/PROJ-10)', async ({

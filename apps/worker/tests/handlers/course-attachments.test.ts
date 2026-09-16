@@ -12,9 +12,11 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  accounts,
   courseAttachments,
   courses,
   createFilesystemAttachmentStorage,
+  deletions,
   jobs,
 } from '@bloombot/db'
 import { HandlerRegistry, runNextJob, type RetryPolicy } from '@bloombot/jobs'
@@ -94,6 +96,7 @@ describe('courseAttachments.attach handler', () => {
       createAttachCourseAttachmentHandler({
         openaiHttpOptions,
         attachmentStorage: storage,
+        logger: createFakeLogger(),
       })
     )
     jobs.enqueueJob(
@@ -175,6 +178,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     await handler(
       { attachmentId: attachment.id },
@@ -245,6 +249,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -304,6 +309,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -361,6 +367,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -402,9 +409,12 @@ describe('courseAttachments.attach handler', () => {
     expect(course?.vectorStoreId).toBeNull()
   })
 
-  // Scoping: a job payload naming another organization's attachment is
-  // refused by the repo layer.
-  it("refuses a payload naming another organization's attachment", async () => {
+  // Scoping: a job payload naming another organization's attachment finds
+  // nothing — the repo layer's own `getAttachment` is scoped by
+  // `organizationId` (TEN-2/TEN-5), so this is indistinguishable from the
+  // attachment never having existed at all, and reported the identical
+  // no-op way (PROJ-8 rework finding, this file's own module comment).
+  it("reports 'abandoned', not thrown, for a payload naming another organization's attachment", async () => {
     const { storage, openaiHttpOptions } = await setUp()
     const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
     const otherOrg = seedOrganizationWithBoundCourse(testDb.db, [])
@@ -424,19 +434,87 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
-    await expect(
-      handler(
-        { attachmentId: attachment.id },
-        {
-          organizationId: otherOrg.organizationId,
-          jobId: randomUUID(),
-          attempts: 1,
-          db: testDb.db,
-          logger: createFakeLogger(),
-        }
-      )
-    ).rejects.toThrow(/was not found in this organization/)
+    const report = await handler(
+      { attachmentId: attachment.id },
+      {
+        organizationId: otherOrg.organizationId,
+        jobId: randomUUID(),
+        attempts: 1,
+        db: testDb.db,
+        logger: createFakeLogger(),
+      }
+    )
+
+    expect(report).toMatchObject({
+      attachmentId: attachment.id,
+      status: 'abandoned',
+    })
+  })
+
+  // Cheap-fix 6 (rework round 1): the real-world shape of the race this
+  // file's own module comment now describes — an attach job enqueued by
+  // `courseAttachments.attach` (the action), still queued when
+  // `courses.delete`/`projects.delete` removes the course, and everything
+  // that belonged to it, in one transaction before this job ever runs.
+  // This job's own first attempt must complete as a no-op, not throw and
+  // exhaust every retry against an id that can never resolve again.
+  it('a course deleted while its attach job was still queued completes as a no-op, not a thrown/retried error', async () => {
+    const { storage, openaiHttpOptions } = await setUp()
+    const seeded = seedOrganizationWithBoundCourse(testDb.db, [])
+    await storage.write(seeded.organizationId, 'att-race', Buffer.from('x'))
+    const attachment = courseAttachments.createPendingAttachment(
+      seeded.organizationId,
+      {
+        id: 'att-race',
+        courseId: seeded.courseId,
+        filename: 'a.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1,
+      },
+      testDb.db
+    )
+    const deleter = accounts.createAccount(
+      seeded.organizationId,
+      {
+        email: `${randomUUID()}@example.edu`,
+        displayName: 'Deleter',
+        role: 'owner',
+      },
+      testDb.db
+    )
+
+    // The course (and this attachment's own row with it,
+    // `repos/deletions.ts#emptyCourse`) is gone before the attach job this
+    // test simulates ever runs.
+    deletions.deleteCourse(
+      seeded.organizationId,
+      seeded.courseId,
+      { deletedByAccountId: deleter.id },
+      testDb.db
+    )
+
+    const handler = createAttachCourseAttachmentHandler({
+      openaiHttpOptions,
+      attachmentStorage: storage,
+      logger: createFakeLogger(),
+    })
+    const report = await handler(
+      { attachmentId: attachment.id },
+      {
+        organizationId: seeded.organizationId,
+        jobId: randomUUID(),
+        attempts: 1,
+        db: testDb.db,
+        logger: createFakeLogger(),
+      }
+    )
+
+    expect(report).toMatchObject({
+      attachmentId: attachment.id,
+      status: 'abandoned',
+    })
   })
 
   // Rework finding 4: the original only guarded the upload (step 2) — a
@@ -489,6 +567,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -547,6 +626,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     await expect(
       handler(
@@ -600,6 +680,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     await expect(
       handler(
@@ -663,6 +744,7 @@ describe('courseAttachments.attach handler', () => {
     const handler = createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -736,6 +818,7 @@ describe('courseAttachments.detach handler', () => {
     const handler = createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -836,6 +919,7 @@ describe('courseAttachments.detach handler', () => {
     const handler = createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     const report = await handler(
       { attachmentId: attachment.id },
@@ -880,6 +964,7 @@ describe('courseAttachments.detach handler', () => {
     const handler = createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage: storage,
+      logger: createFakeLogger(),
     })
     await handler(
       { attachmentId: attachment.id },

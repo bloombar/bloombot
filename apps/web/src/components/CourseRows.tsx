@@ -24,10 +24,12 @@
 import { useState } from 'react'
 
 import {
+  deleteCourse,
   disableCourse,
   downloadTextFile,
   enableCourse,
   exportCourse,
+  previewDeleteCourse,
 } from '../api/client.js'
 import { ApiError } from '../api/client.js'
 import type { CourseSummary } from '../api/types.js'
@@ -35,7 +37,13 @@ import { Button } from './Button.js'
 import { ErrorMessage } from './ErrorMessage.js'
 import { KebabMenu, type KebabMenuItem } from './KebabMenu.js'
 import { useModal } from './modal/ModalProvider.js'
-import { ChatIcon, DisableIcon, DownloadIcon, EnableIcon } from '../icons.js'
+import {
+  ChatIcon,
+  DeleteIcon,
+  DisableIcon,
+  DownloadIcon,
+  EnableIcon,
+} from '../icons.js'
 
 export interface CourseRowsProps {
   organizationId: string
@@ -75,7 +83,7 @@ export function CourseRows({
   const [busyCourseId, setBusyCourseId] = useState<string | undefined>(
     undefined
   )
-  const { confirm } = useModal()
+  const { confirm, prompt } = useModal()
 
   const handleToggle = async (course: CourseSummary) => {
     // WEB-15: disabling a live course is destructive (students stop being
@@ -129,6 +137,56 @@ export function CourseRows({
     }
   }
 
+  /**
+   * PROJ-8/WEB-50: preview, then confirm by typing the course's own title,
+   * then permanently delete — the same shape `pages/Admin.tsx#handleDelete`
+   * already gives ADMIN-5's own tenant deletion. On success, `onChanged()`
+   * (the caller's own refetch) is what makes the row disappear — this
+   * component never removes it from `courses` itself. On failure the row
+   * stays and the error is reported the usual way (WEB-5).
+   */
+  const handleDelete = async (course: CourseSummary) => {
+    setError(undefined)
+    let preview
+    try {
+      preview = await previewDeleteCourse(organizationId, course.id)
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+      return
+    }
+
+    const typed = await prompt({
+      title: `Delete ${course.title}?`,
+      description:
+        `This permanently deletes ${preview.conversations} conversation(s), ` +
+        `${preview.messages} message(s), ${preview.enrolments} enrolment(s) and ` +
+        `${preview.courseAttachments} knowledge file(s). Spending already recorded ` +
+        'survives. Discord channels and roles are not touched. ' +
+        'This cannot be undone. Type the course’s title to confirm.',
+      label: 'Course title',
+      placeholder: course.title,
+      confirmLabel: 'Delete',
+      destructive: true,
+      validate: (value) =>
+        value === course.title
+          ? undefined
+          : 'Type the title exactly to confirm.',
+    })
+    if (typed === undefined) return
+
+    setBusyCourseId(course.id)
+    try {
+      await deleteCourse(organizationId, course.id)
+      onChanged()
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setBusyCourseId(undefined)
+    }
+  }
+
   return (
     <>
       {error && <ErrorMessage error={error} />}
@@ -158,6 +216,16 @@ export function CourseRows({
               ),
               destructive: course.enabled,
               onSelect: () => void handleToggle(course),
+            },
+            // PROJ-8/WEB-50 — Delete, last, styled destructive: the row's
+            // most severe action sits at the end of the menu, the same
+            // placement WEB-50's own text asks for.
+            {
+              key: 'delete',
+              label: 'Delete',
+              icon: <DeleteIcon aria-hidden="true" className="size-4" />,
+              destructive: true,
+              onSelect: () => void handleDelete(course),
             },
           ]
           return (

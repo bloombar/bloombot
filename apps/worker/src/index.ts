@@ -44,6 +44,10 @@ import {
   DETACH_COURSE_ATTACHMENT_JOB_KIND,
 } from './handlers/course-attachments.js'
 import {
+  createRemoveDeletedContentBytesHandler,
+  REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+} from './handlers/content-deletions.js'
+import {
   createDiscordScaffoldHandler,
   DISCORD_SCAFFOLD_JOB_KIND,
 } from './handlers/discord-scaffold.js'
@@ -188,6 +192,7 @@ async function main(): Promise<void> {
     createAttachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger,
     })
   )
   handlers.register(
@@ -195,6 +200,7 @@ async function main(): Promise<void> {
     createDetachCourseAttachmentHandler({
       openaiHttpOptions,
       attachmentStorage,
+      logger,
     })
   )
   // ADMIN-3 — this process's fifth handler, sharing the same
@@ -203,6 +209,19 @@ async function main(): Promise<void> {
   handlers.register(
     TRANSCRIPT_EXPORT_JOB_KIND,
     createTranscriptExportHandler({ attachmentStorage })
+  )
+  // PROJ-8/PROJ-9 — this process's sixth handler: removes a deleted
+  // course's or project's own attachment/export bytes, and its
+  // attachments' own provider resources, sharing the same
+  // `attachmentStorage`/`openaiHttpOptions` FILE-1..3's own handlers above
+  // already use.
+  handlers.register(
+    REMOVE_DELETED_CONTENT_BYTES_JOB_KIND,
+    createRemoveDeletedContentBytesHandler({
+      attachmentStorage,
+      openaiHttpOptions,
+      logger,
+    })
   )
 
   let shuttingDown = false

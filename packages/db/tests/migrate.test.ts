@@ -62,6 +62,7 @@ describe('runMigrations', () => {
     expect(Object.keys(schema).sort()).toEqual([
       '__drizzle_migrations',
       'accounts',
+      'content_deletions',
       'conversations',
       'cost_ledger_entries',
       'course_attachments',

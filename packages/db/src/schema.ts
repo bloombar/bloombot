@@ -925,13 +925,23 @@ export const COST_LEDGER_SURFACES = [...SURFACES, 'unknown'] as const
 export type CostLedgerSurface = (typeof COST_LEDGER_SURFACES)[number]
 
 // COST-1/COST-2 — one row per model call, attributed to the organization,
-// course and person it was made for. `organizationId`, `courseId` and
-// `personId` are all `.notNull()` — COST-2's "a call that cannot be
-// attributed is a defect, not a row with a null" is enforced structurally
-// here, the same "let the database refuse it" approach `discordServerBindings`
-// takes for TEN-3, rather than trusted to an application check alone:
-// nothing can construct a row with any of the three missing, not even a
-// future direct writer that skips `repos/cost-ledger.ts` entirely.
+// course and person it was made for. `organizationId` and `personId` are
+// `.notNull()` — COST-2's "a call that cannot be attributed is a defect, not
+// a row with a null" is enforced structurally here, the same "let the
+// database refuse it" approach `discordServerBindings` takes for TEN-3,
+// rather than trusted to an application check alone: nothing can construct a
+// row with either missing, not even a future direct writer that skips
+// `repos/cost-ledger.ts` entirely.
+// PROJ-8 — `courseId` is nullable, the one exception to that: spending
+// already incurred must survive the course it was charged to (this table's
+// own row is a fact about money already spent, not about the course), so
+// `repos/deletions.ts#deleteCourse` sets it to `null` rather than deleting
+// the row, before the course itself is removed. Every reader that sums this
+// table (COST-3's cap, COST-4's per-course read) already filters or groups
+// by whatever `courseId` a row happens to carry, so a `null` here simply
+// never joins a `courses` row again — it still counts toward an
+// organization's own total (COST-3), which is the one invariant PROJ-8
+// requires: deleting a course never lowers a recorded spend against a cap.
 // `inputTokens`/`outputTokens` are nullable, for a caller with genuinely
 // nothing to report — `0` would read as a fact ("this call used zero
 // tokens") rather than what it actually is. In practice
@@ -950,9 +960,7 @@ export const costLedgerEntries = sqliteTable(
     organizationId: text('organization_id')
       .notNull()
       .references(() => organizations.id),
-    courseId: text('course_id')
-      .notNull()
-      .references(() => courses.id),
+    courseId: text('course_id').references(() => courses.id),
     personId: text('person_id')
       .notNull()
       .references(() => people.id),
@@ -1479,6 +1487,49 @@ export const tenantDeletions = sqliteTable('tenant_deletions', {
   summary: text('summary').notNull(),
   deletedAt: integer('deleted_at').notNull(),
 })
+
+// PROJ-8/PROJ-9 — the audit record a course or a project deletion leaves
+// behind, the same shape `tenantDeletions` above already gives ADMIN-5's own
+// tenant delete: who deleted what, when, and a count of what went with it.
+// Unlike `tenantDeletions`, `organizationId` here *is* a real foreign key —
+// the organization the deletion happened in always survives it (only the
+// course or project, and what belonged to it, is gone), so there is no
+// "outlive the row it describes" problem this table has to work around.
+export const CONTENT_DELETION_KINDS = ['course', 'project'] as const
+export type ContentDeletionKind = (typeof CONTENT_DELETION_KINDS)[number]
+
+export const contentDeletions = sqliteTable(
+  'content_deletions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id')
+      .notNull()
+      .references(() => organizations.id),
+    kind: text('kind', { enum: CONTENT_DELETION_KINDS }).notNull(),
+    // The course's or project's own id — not a foreign key: the row it
+    // named is, by definition, the thing this delete just removed.
+    subjectId: text('subject_id').notNull(),
+    // Captured before the delete, the same reason `tenantDeletions.organizationName`
+    // is: the row it would otherwise be read from is gone immediately after.
+    subjectName: text('subject_name').notNull(),
+    deletedByAccountId: text('deleted_by_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    // What was actually removed, as `repos/deletions.ts`'s own preview
+    // reports it — opaque JSON here, the same "not this table's to
+    // interpret" discipline `tenantDeletions.summary` above already holds
+    // itself to.
+    summary: text('summary').notNull(),
+    deletedAt: integer('deleted_at').notNull(),
+  },
+  (table) => [
+    index('content_deletions_organization_id_idx').on(table.organizationId),
+    check(
+      'content_deletions_kind_check',
+      sql`${table.kind} in ('course', 'project')`
+    ),
+  ]
+)
 
 // ENRL-10 — an invitation: the missing layer beneath ENRL-5's
 // `memberships.grant`, which only ever changes the role of an account that

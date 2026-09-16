@@ -296,3 +296,29 @@ export async function deleteFile(
     throw classifyHttpError(response.status, response.body)
   }
 }
+
+/**
+ * PROJ-8's own rework — cheap-fix 2: delete a vector store itself, once a
+ * course that owned it is gone (`apps/worker/src/handlers/content-deletions.ts`'s
+ * own doc comment has why nothing calls this on an ordinary detach — FILE-3
+ * only ever removes one file from a store other attachments may still
+ * need). The store's own files must already be removed for this to reclaim
+ * anything real; the caller is responsible for that ordering (this
+ * function does not cascade).
+ */
+export async function deleteVectorStore(
+  options: PostJsonOptions,
+  vectorStoreId: string
+): Promise<void> {
+  const response = await postJson(
+    `/vector_stores/${vectorStoreId}`,
+    undefined,
+    {
+      ...options,
+      method: 'DELETE',
+    }
+  )
+  if (!response.ok) {
+    throw classifyHttpError(response.status, response.body)
+  }
+}

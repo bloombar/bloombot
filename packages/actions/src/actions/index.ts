@@ -17,16 +17,20 @@ import { ActionRegistry } from '../registry.js'
 import {
   archiveProjectAction,
   createProjectAction,
+  deleteProjectAction,
   duplicateProjectAction,
   listProjectsAction,
+  previewDeleteProjectAction,
   renameProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 import {
+  deleteCourseAction,
   disableCourseAction,
   enableCourseAction,
   getCourseAction,
   listCoursesAction,
+  previewDeleteCourseAction,
   saveCourseAction,
   updateSettingsCourseAction,
 } from './courses.js'
@@ -96,16 +100,20 @@ import {
 export {
   archiveProjectAction,
   createProjectAction,
+  deleteProjectAction,
   duplicateProjectAction,
   listProjectsAction,
+  previewDeleteProjectAction,
   renameProjectAction,
   unarchiveProjectAction,
 } from './projects.js'
 export {
+  deleteCourseAction,
   disableCourseAction,
   enableCourseAction,
   getCourseAction,
   listCoursesAction,
+  previewDeleteCourseAction,
   saveCourseAction,
   updateSettingsCourseAction,
 } from './courses.js'
@@ -247,6 +255,8 @@ export function createPlatformRegistry(options?: {
   registry.register(createProjectAction)
   registry.register(archiveProjectAction)
   registry.register(unarchiveProjectAction)
+  registry.register(previewDeleteProjectAction)
+  registry.register(deleteProjectAction)
   registry.register(renameProjectAction)
   registry.register(listProjectsAction)
   registry.register(duplicateProjectAction)
@@ -254,6 +264,8 @@ export function createPlatformRegistry(options?: {
   registry.register(updateSettingsCourseAction)
   registry.register(enableCourseAction)
   registry.register(disableCourseAction)
+  registry.register(previewDeleteCourseAction)
+  registry.register(deleteCourseAction)
   registry.register(listCoursesAction)
   registry.register(getCourseAction)
   registry.register(exportCourseAction)

@@ -8,6 +8,7 @@ import {
   costLedger,
   courseAttachments,
   courses,
+  deletions,
   discordServers,
   enrolments,
   jobs,
@@ -331,5 +332,34 @@ describe('organizations.recordTenantDeletion / listTenantDeletions (ADMIN-5)', (
     expect(JSON.parse(listed[0]?.summary ?? '{}')).toMatchObject({
       courses: 1,
     })
+  })
+})
+
+describe('deleteOrganizationData after a course was already deleted (PROJ-8/PROJ-9 rework finding)', () => {
+  it('deletes an organization that has a course-deletion audit row, rather than throwing FOREIGN KEY constraint failed', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, instructor } = seedFullTenant(testDb)
+
+    // PROJ-8: deleting the course first leaves a `content_deletions` row
+    // behind — a real foreign key to this organization
+    // (`schema.ts`'s own comment on why, unlike `tenant_deletions`) — which
+    // `deleteOrganizationData` used to leave untouched, throwing `FOREIGN
+    // KEY constraint failed` on the `organizations` delete the moment one
+    // existed.
+    const courseDeletion = deletions.deleteCourse(
+      organizationId,
+      course.id,
+      { deletedByAccountId: instructor.id },
+      testDb.db
+    )
+    expect(courseDeletion).toBeDefined()
+
+    expect(() =>
+      organizations.deleteOrganizationData(organizationId, testDb.db)
+    ).not.toThrow()
+
+    expect(
+      organizations.getOrganizationById(organizationId, testDb.db)
+    ).toBeUndefined()
   })
 })

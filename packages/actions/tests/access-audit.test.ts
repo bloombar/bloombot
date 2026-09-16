@@ -24,6 +24,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'projects.create': { resource: 'organization', access: 'write' },
   'projects.archive': { resource: 'project', access: 'write' },
   'projects.unarchive': { resource: 'project', access: 'write' },
+  // PROJ-9: a preview is a read, the same "preview is a read, not a write"
+  // reasoning `courses.previewDelete`'s own row below gives.
+  'projects.previewDelete': { resource: 'project', access: 'read' },
+  // PROJ-9: same access as `projects.archive` above — deleting is not a
+  // step up in privilege from archiving.
+  'projects.delete': { resource: 'project', access: 'write' },
   // PROJ-6: resolves the project being renamed, the same `resolveOwnProject`
   // shape `projects.archive`/`projects.unarchive` already use above.
   'projects.rename': { resource: 'project', access: 'write' },
@@ -55,6 +61,12 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   'courses.updateSettings': { resource: 'course', access: 'write' },
   'courses.enable': { resource: 'course', access: 'write' },
   'courses.disable': { resource: 'course', access: 'write' },
+  // PROJ-8: a preview is a read — it changes nothing, only counts what a
+  // delete would remove.
+  'courses.previewDelete': { resource: 'course', access: 'read' },
+  // PROJ-8: same access as `courses.disable` above — deleting is not a step
+  // up in privilege from disabling.
+  'courses.delete': { resource: 'course', access: 'write' },
   // PROJ-5: resolves the project a course list is scoped to, read.
   'courses.list': { resource: 'project', access: 'read' },
   // PROJ-5: resolves the course itself, read.

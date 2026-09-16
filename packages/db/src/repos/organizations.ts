@@ -13,6 +13,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import type { Database, Executor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
+  contentDeletions,
   conversations,
   costLedgerEntries,
   courseAttachments,
@@ -364,6 +365,20 @@ export function deleteOrganizationData(
     tx.delete(jobs).where(eq(jobs.organizationId, organizationId)).run()
     tx.delete(memberships)
       .where(eq(memberships.organizationId, organizationId))
+      .run()
+    // PROJ-8/PROJ-9 rework finding: `content_deletions` is a real foreign
+    // key to `organizations.id` (`schema.ts`'s own comment on why it is,
+    // unlike this table's own `tenant_deletions`) — any course or project
+    // ever deleted in this organization left a row here, and deleting the
+    // organization without deleting these first threw `FOREIGN KEY
+    // constraint failed` on the `organizations` delete below. Deleted, not
+    // preserved: unlike `tenant_deletions` (deliberately outliving the
+    // organization it describes, ADMIN-5's own audit trail of *this*
+    // operation), a course or project deletion recorded here is a fact
+    // about a tenant that, once the tenant itself is gone, has nothing
+    // left to be an audit trail *for*.
+    tx.delete(contentDeletions)
+      .where(eq(contentDeletions.organizationId, organizationId))
       .run()
     tx.delete(organizations).where(eq(organizations.id, organizationId)).run()
 

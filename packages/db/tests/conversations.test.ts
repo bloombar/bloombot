@@ -740,7 +740,16 @@ describe('conversations repo', () => {
   // else in that file later. Narrowed to `deleteOrganizationData`'s own
   // body: everything else in `organizations.ts` is still scanned exactly
   // like every other repo file.
-  it('no repo source deletes a message or a conversation, anywhere in this package, except ADMIN-5’s own deliberate tenant deletion (TEN-6)', () => {
+  //
+  // PROJ-8/PROJ-9 add a second, equally deliberate exception:
+  // `deletions.ts#emptyCourse` — a course's own conversations and messages
+  // are named explicitly in PROJ-8's own text ("its conversations and their
+  // messages, transcripts included") as part of what deleting a course
+  // removes, previewed and audited the same way `deleteOrganizationData`
+  // already is. Narrowed the identical way — only `emptyCourse`'s own body,
+  // not the whole file — so a delete added anywhere else in `deletions.ts`
+  // later is still caught.
+  it('no repo source deletes a message or a conversation, anywhere in this package, except ADMIN-5’s tenant deletion and PROJ-8/PROJ-9’s course/project deletion (TEN-6)', () => {
     const reposDir = fileURLToPath(new URL('../src/repos', import.meta.url))
     const files = readdirSync(reposDir).filter((name) => name.endsWith('.ts'))
     expect(files.length).toBeGreaterThan(0)
@@ -752,24 +761,31 @@ describe('conversations repo', () => {
       /delete\s+from\s+`?conversations`?/i,
     ]
 
-    // Every top-level `export function`/`export const` start, in
-    // `organizations.ts` only — used to find where `deleteOrganizationData`'s
-    // own body ends: the next export after it, or end of file.
-    const topLevelExportStart = /^export (?:function|const) \w+/gm
+    // Every top-level `function`/`export function`/`export const` start —
+    // used to find where a named exception's own body ends: the next
+    // top-level declaration after it, or end of file. Deliberately matches
+    // both exported and unexported declarations: `deletions.ts#emptyCourse`
+    // is module-private, unlike `organizations.ts#deleteOrganizationData`.
+    const topLevelDeclarationStart = /^(?:export )?(?:function|const) \w+/gm
+
+    const deliberateDeletes: { file: string; functionName: string }[] = [
+      { file: 'organizations.ts', functionName: 'deleteOrganizationData' },
+      { file: 'deletions.ts', functionName: 'emptyCourse' },
+    ]
 
     for (const file of files) {
       const source = readFileSync(`${reposDir}/${file}`, 'utf8')
       let scanned = source
-      if (file === 'organizations.ts') {
-        const starts = [...source.matchAll(topLevelExportStart)].map(
+      const exception = deliberateDeletes.find((entry) => entry.file === file)
+      if (exception) {
+        const starts = [...source.matchAll(topLevelDeclarationStart)].map(
           (match) => match.index ?? 0
         )
-        const deleteStart = source.indexOf(
-          'export function deleteOrganizationData'
-        )
-        expect(deleteStart, 'deleteOrganizationData not found').toBeGreaterThan(
-          -1
-        )
+        const deleteStart = source.indexOf(`function ${exception.functionName}`)
+        expect(
+          deleteStart,
+          `${exception.functionName} not found`
+        ).toBeGreaterThan(-1)
         const deleteEnd =
           starts.find((index) => index > deleteStart) ?? source.length
         scanned = source.slice(0, deleteStart) + source.slice(deleteEnd)

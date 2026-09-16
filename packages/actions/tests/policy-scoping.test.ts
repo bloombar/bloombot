@@ -10,15 +10,24 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
 import {
+  deleteCourseAction,
   disableCourseAction,
   enableCourseAction,
+  previewDeleteCourseAction,
   saveCourseAction,
 } from '../src/actions/courses.js'
-import { archiveProjectAction } from '../src/actions/projects.js'
+import {
+  archiveProjectAction,
+  deleteProjectAction,
+  previewDeleteProjectAction,
+} from '../src/actions/projects.js'
 import { dispatch } from '../src/dispatch.js'
 import { ActionRefusedError } from '../src/errors.js'
 import type { Action } from '../src/types.js'
-import { seedOrganizationWithProject } from './helpers/seed.js'
+import {
+  seedOrganizationWithCourse,
+  seedOrganizationWithProject,
+} from './helpers/seed.js'
 import { createTestDatabase, type TestDatabase } from './helpers/test-db.js'
 
 /** A minimal course, created directly through the repo (not through `dispatch`) so a test can seed a scenario `courses.save`/`enable`/`disable` are then checked against. */
@@ -236,5 +245,103 @@ describe('ACT-2 — courses.save, courses.enable, courses.disable scope by organ
     ).rejects.toThrow(ActionRefusedError)
 
     expect(courses.getCourse(orgB, courseB.id, testDb.db)?.enabled).toBe(true)
+  })
+})
+
+// PROJ-8/PROJ-9: `courses.previewDelete`/`courses.delete` and
+// `projects.previewDelete`/`projects.delete` resolve the same way
+// `courses.disable`/`projects.archive` already do — the same cross-tenant
+// regression this file's own comment above describes for those applies
+// here too, for both the read (preview) and the write (delete) half of
+// each pair.
+describe('ACT-2 — courses.previewDelete, courses.delete, projects.previewDelete, projects.delete scope by organization', () => {
+  it("courses.previewDelete refuses to preview another organization's course", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithProject(testDb.db)
+    const { organizationId: orgB, course: courseB } =
+      seedOrganizationWithCourse(testDb.db)
+
+    await expect(
+      dispatch(
+        previewDeleteCourseAction,
+        { courseId: courseB.id },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // Untouched — a refused preview reads nothing.
+    expect(courses.getCourse(orgB, courseB.id, testDb.db)).toBeDefined()
+  })
+
+  it("courses.delete refuses to delete another organization's course", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, ownerId: ownerA } =
+      seedOrganizationWithCourse(testDb.db)
+    const { organizationId: orgB, course: courseB } =
+      seedOrganizationWithCourse(testDb.db)
+
+    await expect(
+      dispatch(
+        deleteCourseAction,
+        { courseId: courseB.id },
+        { organizationId: orgA, accountId: ownerA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // Org B's course is untouched — the policy refused before `execute`
+    // (which deletes by `entity.id`, never `input.courseId`) ever ran.
+    expect(courses.getCourse(orgB, courseB.id, testDb.db)).toBeDefined()
+  })
+
+  it('courses.delete refuses when dispatch was given no accountId — a deletion needs a real author', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb.db)
+
+    await expect(
+      dispatch(
+        deleteCourseAction,
+        { courseId: course.id },
+        { organizationId, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      courses.getCourse(organizationId, course.id, testDb.db)
+    ).toBeDefined()
+  })
+
+  it("projects.previewDelete refuses to preview another organization's project", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA } = seedOrganizationWithProject(testDb.db)
+    const { organizationId: orgB, projectId: projectBId } =
+      seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        previewDeleteProjectAction,
+        { projectId: projectBId },
+        { organizationId: orgA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(projects.getProject(orgB, projectBId, testDb.db)).toBeDefined()
+  })
+
+  it("projects.delete refuses to delete another organization's project, even handed its id", async () => {
+    testDb = createTestDatabase()
+    const { organizationId: orgA, ownerId: ownerA } =
+      seedOrganizationWithCourse(testDb.db)
+    const { organizationId: orgB, projectId: projectBId } =
+      seedOrganizationWithProject(testDb.db)
+
+    await expect(
+      dispatch(
+        deleteProjectAction,
+        { projectId: projectBId },
+        { organizationId: orgA, accountId: ownerA, db: testDb.db }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(projects.getProject(orgB, projectBId, testDb.db)).toBeDefined()
   })
 })

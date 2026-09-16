@@ -51,6 +51,7 @@ export class FakeOpenAiFilesServer {
   private vectorStoreFileAttachQueue: Responder[] = []
   private vectorStoreFileDeleteQueue: Responder[] = []
   private fileDeleteQueue: Responder[] = []
+  private vectorStoreDeleteQueue: Responder[] = []
 
   private constructor(server: Server) {
     this.server = server
@@ -103,6 +104,11 @@ export class FakeOpenAiFilesServer {
     this.fileDeleteQueue.push(toResponder(response))
   }
 
+  /** PROJ-8's own `deleteVectorStore` (cheap-fix 2, rework round 2) — the store itself, not one file inside it. */
+  respondToVectorStoreDelete(response: FakeResponse | Responder): void {
+    this.vectorStoreDeleteQueue.push(toResponder(response))
+  }
+
   private route(
     method: string | undefined,
     path: string
@@ -137,6 +143,12 @@ export class FakeOpenAiFilesServer {
     if (method === 'DELETE' && /^\/files\/[^/]+$/.test(path)) {
       return {
         queue: this.fileDeleteQueue,
+        fallback: { status: 200, body: { deleted: true } },
+      }
+    }
+    if (method === 'DELETE' && /^\/vector_stores\/[^/]+$/.test(path)) {
+      return {
+        queue: this.vectorStoreDeleteQueue,
         fallback: { status: 200, body: { deleted: true } },
       }
     }

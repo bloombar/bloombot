@@ -18,12 +18,16 @@ const {
   disableCourse,
   exportCourse,
   downloadTextFile,
+  previewDeleteCourse,
+  deleteCourse,
 } = vi.hoisted(() => ({
   listCourses: vi.fn(),
   enableCourse: vi.fn(),
   disableCourse: vi.fn(),
   exportCourse: vi.fn(),
   downloadTextFile: vi.fn(),
+  previewDeleteCourse: vi.fn(),
+  deleteCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -37,6 +41,8 @@ vi.mock('../src/api/client.js', async () => {
     disableCourse,
     exportCourse,
     downloadTextFile,
+    previewDeleteCourse,
+    deleteCourse,
   }
 })
 
@@ -492,5 +498,160 @@ describe('Courses — export (WEB-39)', () => {
         'bloombotCourseExport: 1\n'
       )
     )
+  })
+})
+
+/**
+ * PROJ-8/WEB-50: a course row's own Delete item — last in its kebab, a
+ * preview read into the confirmation, and a typed-name prompt before the
+ * destructive call ever runs, the same shape `admin.test.tsx`'s own
+ * ADMIN-5 tests already pin for a tenant.
+ */
+describe('Courses — delete (PROJ-8/WEB-50)', () => {
+  const PREVIEW = {
+    organizationId: 'org-1',
+    courseId: 'course-1',
+    courseTitle: 'Web Design',
+    conversations: 3,
+    messages: 12,
+    enrolments: 2,
+    courseAttachments: 1,
+  }
+
+  it('offers Delete, last, in the row’s kebab', async () => {
+    listCourses.mockResolvedValue([COURSE])
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    openCourseMenu('Web Design')
+    const menu = screen.getByRole('group', { name: 'Actions for "Web Design"' })
+    const items = within(menu).getAllByRole('button')
+    expect(items.at(-1)).toHaveTextContent('Delete')
+  })
+
+  it('previews what will be deleted, then requires the course’s own title typed exactly', async () => {
+    listCourses.mockResolvedValue([COURSE])
+    previewDeleteCourse.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    openCourseMenu('Web Design')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Web Design"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+
+    // PROJ-8: "names exactly what will be deleted before it happens" — the
+    // preview's own counts are read into the confirmation itself.
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('3 conversation(s)')
+    expect(dialog).toHaveTextContent('12 message(s)')
+    expect(dialog).toHaveTextContent('2 enrolment(s)')
+    expect(dialog).toHaveTextContent('1 knowledge file(s)')
+
+    // Cancelling deletes nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(deleteCourse).not.toHaveBeenCalled()
+  })
+
+  it('typing the wrong title keeps the dialog open and never calls through; the exact title proceeds and the row disappears', async () => {
+    listCourses.mockResolvedValueOnce([COURSE]).mockResolvedValueOnce([])
+    previewDeleteCourse.mockResolvedValue(PREVIEW)
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    openCourseMenu('Web Design')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Web Design"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+
+    const field = within(dialog).getByLabelText('Course title')
+    const confirmButton = within(dialog).getByRole('button', {
+      name: 'Delete',
+    })
+    // WEB-50 rework finding: disabled until the title typed matches
+    // exactly — not merely checked after a click.
+    expect(confirmButton).toBeDisabled()
+    fireEvent.change(field, { target: { value: 'the wrong title' } })
+    expect(confirmButton).toBeDisabled()
+    expect(deleteCourse).not.toHaveBeenCalled()
+
+    fireEvent.change(field, { target: { value: 'Web Design' } })
+    expect(confirmButton).not.toBeDisabled()
+    deleteCourse.mockResolvedValue(PREVIEW)
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(deleteCourse).toHaveBeenCalledWith('org-1', 'course-1')
+    )
+    // The list refetches on success — the row is gone.
+    await waitFor(() =>
+      expect(screen.queryByText('Web Design')).not.toBeInTheDocument()
+    )
+  })
+
+  it('a failed delete is reported and the row stays', async () => {
+    listCourses.mockResolvedValue([COURSE])
+    previewDeleteCourse.mockResolvedValue(PREVIEW)
+    deleteCourse.mockRejectedValue(
+      new ApiError(403, { error: 'not_authorized' })
+    )
+
+    renderWithModal(
+      <Courses
+        organizationId="org-1"
+        project={PROJECT}
+        onBack={vi.fn()}
+        onOpenCourse={vi.fn()}
+        onOpenChat={vi.fn()}
+      />
+    )
+    await screen.findByText('Web Design')
+
+    openCourseMenu('Web Design')
+    fireEvent.click(
+      within(
+        screen.getByRole('group', { name: 'Actions for "Web Design"' })
+      ).getByRole('button', { name: 'Delete' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Course title'), {
+      target: { value: 'Web Design' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
   })
 })

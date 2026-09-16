@@ -14,7 +14,19 @@
  *     `@bloombot/actions`' `courseAttachments.attach` action before this job
  *     was ever enqueued (the action's own module comment has why: a
  *     filesystem write is not the network call this queue exists to defer,
- *     FILE-1's own text).
+ *     FILE-1's own text). PROJ-8 rework finding: neither the attachment nor
+ *     its course is guaranteed to still exist by the time this job actually
+ *     runs — `courses.delete`/`projects.delete` can remove both, in one
+ *     transaction, while this job still sits queued (or mid-flight) behind
+ *     it. Missing either used to throw, which `@bloombot/jobs`' own retry
+ *     policy (JOB-2) would keep re-running against an id that can never
+ *     resolve again, until it exhausted its attempts and failed
+ *     permanently — for a job whose *first* attempt already knew there was
+ *     nothing left to do. Reported `'abandoned'` instead, the identical
+ *     outcome step 5 below already reports for the *mid-flight* version of
+ *     the same race (a concurrent `courseAttachments.detach`, there) —
+ *     logged, not thrown, mirroring how `handlers/transcripts.ts`'s own
+ *     export handler copes with its row disappearing.
  *  2. Upload the bytes to the provider (`@bloombot/openai`'s `uploadFile`),
  *     then immediately `recordProviderFileId` — a rework finding: a rejection
  *     or an exhausted retry on either of the two calls below used to leave
@@ -82,6 +94,7 @@ import {
   type Database,
 } from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
+import type { Logger } from '@bloombot/logger'
 import {
   attachFileToVectorStore,
   createVectorStore,
@@ -99,6 +112,8 @@ export const DETACH_COURSE_ATTACHMENT_JOB_KIND = 'courseAttachments.detach'
 export interface CourseAttachmentsHandlerDependencies {
   openaiHttpOptions: FilesHttpOptions
   attachmentStorage: AttachmentStorage
+  /** PROJ-8 rework finding — `createAttachCourseAttachmentHandler`'s own no-op-rather-than-throw path (below) logs it, the same "worth a record, not worth failing the job over" treatment `handlers/content-deletions.ts` gives a single id's own removal failure. */
+  logger: Logger
 }
 
 /** What `courseAttachments.attach`'s own job resolved with — `jobs.get` (`@bloombot/actions`) is what a caller reads this back through (FILE-2). */
@@ -147,9 +162,16 @@ export function createAttachCourseAttachmentHandler(
       db
     )
     if (!attachment) {
-      throw new Error(
-        `courseAttachments.attach: attachment "${attachmentId}" was not found in this organization`
+      // PROJ-8 rework finding — this file's own module comment has the
+      // full reasoning: a course delete can remove this row before this
+      // job ever runs, and retrying can never make it exist again.
+      const reason =
+        'the attachment was removed (a course or project deletion) before this attach ever ran'
+      deps.logger.warn(
+        { organizationId: context.organizationId, attachmentId },
+        `courseAttachments.attach: ${reason}`
       )
+      return { attachmentId, status: 'abandoned', reason }
     }
 
     const course = courses.getCourse(
@@ -158,9 +180,24 @@ export function createAttachCourseAttachmentHandler(
       db
     )
     if (!course) {
-      throw new Error(
-        `courseAttachments.attach: course "${attachment.courseId}" was not found in this organization`
+      // Same race, one level up: the course itself (and, transitively,
+      // this attachment row too — `repos/deletions.ts#emptyCourse` deletes
+      // `course_attachments` before `courses`) is gone. Unreachable in
+      // practice once the guard above has already proved the attachment
+      // row exists — `deleteCourse` removes both in the same transaction —
+      // but kept, not merged into the check above, the same "guarded
+      // rather than asserted" discipline every other repo-backed lookup in
+      // this file already holds itself to.
+      const reason = `the course "${attachment.courseId}" was removed before this attach ever ran`
+      deps.logger.warn(
+        {
+          organizationId: context.organizationId,
+          attachmentId,
+          courseId: attachment.courseId,
+        },
+        `courseAttachments.attach: ${reason}`
       )
+      return { attachmentId, status: 'abandoned', reason }
     }
 
     const bytes = await deps.attachmentStorage.read(

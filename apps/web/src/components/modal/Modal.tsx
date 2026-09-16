@@ -138,6 +138,17 @@ export function Modal({
   const id = useId()
   const titleId = `${id}-title`
   const descriptionId = description ? `${id}-description` : undefined
+  const promptInputId = `${id}-prompt`
+  // WEB-50 rework finding, round 2: the error text used to be a sibling
+  // text node *inside* the `<label>` — which reads into the label's own
+  // accessible *name* (an `aria-invalid` field whose name is "Course
+  // title Type the title exactly to confirm" is not what a screen reader,
+  // or `getByLabelText('Course title')`, should hear back). Given its own
+  // id and reached through `aria-describedby` instead — the standard
+  // "name says what the field is, description says what is wrong with it"
+  // split — so the field's own accessible name stays exactly `promptLabel`
+  // regardless of whether an error is currently showing.
+  const promptErrorId = promptError ? `${id}-prompt-error` : undefined
 
   return (
     <dialog
@@ -184,23 +195,33 @@ export function Modal({
           <div className="flex flex-col gap-3">{body}</div>
         )}
         {kind === 'prompt' && (
-          <label className="flex flex-col gap-1 text-sm font-medium text-neutral-800">
-            {promptLabel}
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor={promptInputId}
+              className="text-sm font-medium text-neutral-800"
+            >
+              {promptLabel}
+            </label>
             <input
+              id={promptInputId}
               ref={promptRef}
               type="text"
               value={promptValue}
               onChange={(event) => onPromptValueChange?.(event.target.value)}
               placeholder={promptPlaceholder}
               aria-invalid={promptError ? true : undefined}
+              {...(promptErrorId ? { 'aria-describedby': promptErrorId } : {})}
               className={textInputClasses}
             />
             {promptError && (
-              <span className="text-sm font-normal text-danger-700">
+              <span
+                id={promptErrorId}
+                className="text-sm font-normal text-danger-700"
+              >
                 {promptError}
               </span>
             )}
-          </label>
+          </div>
         )}
         <div className="flex justify-end gap-2">
           {kind !== 'alert' && (

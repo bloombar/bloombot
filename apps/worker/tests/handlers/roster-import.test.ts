@@ -3067,6 +3067,62 @@ describe('roster.import handler', () => {
       ).toBe(true)
     })
 
+    // BOT-13/PROJ-10: matching a declared student category to the guild's own
+    // requires the same case-and-all-whitespace-insensitive comparison as
+    // `discord-scaffold.ts`/`repos/courses.ts` — a guild category spelled
+    // with no inner space at all must still be recognised as the declared
+    // one, not treated as unscaffolded and duplicated.
+    it('reuses a guild category matching a declared one only after removing case and inner whitespace', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedOrganizationWithBoundCourse(testDb.db, [
+        { name: 'Test Course - STUDENTS 01', channels: [] },
+      ])
+      discordServer.setGuildChannels(seeded.guildId, [
+        {
+          id: 'cat-1',
+          type: 4,
+          // Same category once normalized (BOT-13/PROJ-10 removes every
+          // whitespace character, not merely trims), spelled with no space
+          // at all — a plain trim-and-lowercase comparison would miss this.
+          name: 'testcourse-students01',
+          parent_id: null,
+        },
+      ])
+      discordServer.setGuildRoles(seeded.guildId, [
+        { id: 'role-admins', name: seeded.adminsRole },
+        { id: 'role-students', name: seeded.studentsRole },
+      ])
+      discordServer.setGuildMembers(seeded.guildId, [])
+
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        rosterCsv(1),
+        { createStudentCategories: true }
+      )
+
+      // Reused, not duplicated as a second "Test Course - STUDENTS 01".
+      expect(report.categoriesCreated).toEqual([])
+      expect(
+        discordServer.requests.some(
+          (r) =>
+            r.method === 'POST' &&
+            r.path.endsWith('/channels') &&
+            r.body?.['type'] === 4
+        )
+      ).toBe(false)
+      expect(report.channelsCreated).toHaveLength(1)
+
+      // The student's own channel actually landed inside the existing
+      // category, not a phantom duplicate this run believed it needed.
+      const created = discordServer
+        .guildChannelsFor(seeded.guildId)
+        .find((channel) => (channel as { id?: string }).id !== 'cat-1') as
+        { parent_id?: string } | undefined
+      expect(created?.parent_id).toBe('cat-1')
+    })
+
     it("the checkbox off reproduces exactly today's reporting — nothing created", async () => {
       testDb = createTestDatabase()
       discordServer = await FakeDiscordGuildServer.start()

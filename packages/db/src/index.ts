@@ -10,6 +10,7 @@ export {
 } from './client.js'
 export { runMigrations } from './migrate.js'
 export { resolveReal, repoDataDir, isUnderRepoData } from './path-guard.js'
+export { normalizeCategoryName } from './category-name.js'
 export {
   createFilesystemAttachmentStorage,
   type AttachmentStorage,

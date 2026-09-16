@@ -158,6 +158,7 @@ import {
   courses,
   discordServers,
   enrolments,
+  normalizeCategoryName,
   people,
   rosterChannelAssignments,
 } from '@bloombot/db'
@@ -500,7 +501,17 @@ function parsePayload(raw: unknown): {
   }
 }
 
-/** Case- and whitespace-insensitive name matching — the same normalization `discord-scaffold.ts`'s own `normalizeName` applies to a *category's* own name (Discord does not slug a category's name the way it does a channel's). Duplicated rather than imported: this file and `discord-scaffold.ts` are two handlers in the same app, not a shared library either owns. */
+/**
+ * Case- and whitespace-insensitive *role* name matching — the same
+ * normalization `discord-scaffold.ts`'s own `normalizeName` applies to a
+ * role. Duplicated rather than imported: this file and `discord-scaffold.ts`
+ * are two handlers in the same app, not a shared library either owns. A
+ * category's own name uses `normalizeCategoryName` (`@bloombot/db`,
+ * BOT-13/PROJ-10) instead, below — it removes every inner whitespace
+ * character too, not just leading/trailing, matching what
+ * `discord-scaffold.ts` and `repos/courses.ts` both now require of a
+ * category name.
+ */
 function normalizeName(name: string): string {
   return name.trim().toLowerCase()
 }
@@ -1082,9 +1093,13 @@ function loadStudentCategoryStates(
     { name: string; guildCategoryId: string; number: number }
   >()
   for (const { category, number } of declaredStudentCategories) {
+    // BOT-13/PROJ-10: a category name compares the same way
+    // `discord-scaffold.ts` and `repos/courses.ts` both now require —
+    // ignoring case and *all* whitespace, not only leading/trailing.
     const guildCategory = guildCategories.find(
       (candidate) =>
-        normalizeName(candidate.name) === normalizeName(category.name)
+        normalizeCategoryName(candidate.name) ===
+        normalizeCategoryName(category.name)
     )
     if (!guildCategory) continue // Not scaffolded in the guild yet — nothing to place a channel into.
     byGuildCategoryId.set(guildCategory.id, {

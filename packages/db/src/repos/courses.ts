@@ -28,6 +28,7 @@
 
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 
+import { normalizeCategoryName } from '../category-name.js'
 import type { Database, TransactingExecutor } from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
@@ -193,16 +194,33 @@ function conflict(
   // the two spellings are the same role to Discord at all — the same defect
   // SRV-10 round 3 fixed for `findSelfConflict`'s own message, reworked here
   // for the cross-course one.
+  //
+  // PROJ-10: the same optional parameter now also carries the candidate's
+  // own spelling of a colliding *category* name, for the same reason —
+  // `normalizeCategoryName` (BOT-13/PROJ-10) matches "Web Design" and
+  // "webdesign" as the same category, and the message below has to show
+  // both spellings rather than leave an instructor looking at two visibly
+  // different strings with no explanation.
   candidateName?: string
 ): CourseNameConflict {
   const kind = field === 'category' ? 'Category' : 'Role'
   const sameSpelling = candidateName === undefined || candidateName === name
+  // Rework round 1: a category's insensitivity is wider than a role's —
+  // `normalizeCategoryName` (BOT-13/PROJ-10) removes *every* whitespace
+  // character, not only the surrounding kind a role name still tolerates
+  // (`normalizeRoleName`, below, is trim-only) — so the two fields need
+  // different wording here, not a shared "surrounding whitespace" that
+  // would understate what actually made a category name collide.
+  const insensitivityDescription =
+    field === 'category'
+      ? 'ignoring capitalisation and all whitespace'
+      : 'ignoring case and surrounding whitespace'
   const message = sameSpelling
     ? `${kind} name "${name}" is already used by course "${candidate.title}" ` +
       `in project "${candidate.projectName}".`
-    : `Role name "${name}" is already used by course "${candidate.title}" ` +
+    : `${kind} name "${name}" is already used by course "${candidate.title}" ` +
       `in project "${candidate.projectName}" as "${candidateName}"; Discord ` +
-      `treats the two as the same role, ignoring case and surrounding whitespace.`
+      `treats the two as the same ${kind.toLowerCase()}, ${insensitivityDescription}.`
   return {
     field,
     name,
@@ -421,12 +439,24 @@ function findCourseNameConflict(
     candidates.map((candidate) => [candidate.id, candidate])
   )
 
+  // BOT-13/PROJ-10: compared normalized, the same way Discord's own routing
+  // now resolves a category (`@bloombot/core`'s `routing.ts`) — "Web Design"
+  // and "webdesign" collide across courses exactly as they already do within
+  // one (the self-conflict check, below).
   for (const category of input.categories) {
-    const hit = categoryRows.find((row) => row.name === category.name)
+    const normalized = normalizeCategoryName(category.name)
+    const hit = categoryRows.find(
+      (row) => normalizeCategoryName(row.name) === normalized
+    )
     if (hit) {
       // `hit.courseId` is drawn from `candidates`, so this lookup cannot miss.
       const candidate = candidatesById.get(hit.courseId)
-      if (candidate) return conflict('category', category.name, candidate)
+      if (candidate) {
+        // The candidate's own spelling, for the same reason `conflict`
+        // quotes a role candidate's own spelling — `hit.name` may differ
+        // from `category.name` only by case or whitespace.
+        return conflict('category', category.name, candidate, hit.name)
+      }
     }
   }
 
@@ -513,16 +543,30 @@ function findSelfConflict(
     }
   }
 
-  const seenCategoryNames = new Set<string>()
+  // BOT-13/PROJ-10: keyed by the normalized spelling, not the literal
+  // string — two categories in one course that differ only by case or
+  // whitespace are the same category to Discord, so they collide here too.
+  // `seenCategoryNames` maps the normalized key back to whichever spelling
+  // was seen first, so a second, differently-cased category can name both
+  // spellings in its refusal.
+  const seenCategoryNames = new Map<string, string>()
   for (const category of input.categories) {
-    if (seenCategoryNames.has(category.name)) {
+    const normalized = normalizeCategoryName(category.name)
+    const firstSpelling = seenCategoryNames.get(normalized)
+    if (firstSpelling !== undefined) {
+      const sameSpelling = firstSpelling === category.name
       return {
         field: 'category',
         name: category.name,
-        message: `Category name "${category.name}" is used more than once in this course.`,
+        message: sameSpelling
+          ? `Category name "${category.name}" is used more than once in this course.`
+          : `Category name "${category.name}" and "${firstSpelling}" differ ` +
+            `only in capitalization or whitespace, so Discord would treat ` +
+            `them as the same category; rename one so they are clearly ` +
+            `different.`,
       }
     }
-    seenCategoryNames.add(category.name)
+    seenCategoryNames.set(normalized, category.name)
   }
 
   return undefined

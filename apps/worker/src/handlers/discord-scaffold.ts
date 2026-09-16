@@ -74,7 +74,12 @@
  * for an instructor, given this package's structural inability to fix it.
  */
 
-import { courses, discordServers, type Database } from '@bloombot/db'
+import {
+  courses,
+  discordServers,
+  normalizeCategoryName,
+  type Database,
+} from '@bloombot/db'
 import type { JobContext, JobHandler } from '@bloombot/jobs'
 import {
   allowBotOverwrite,
@@ -196,7 +201,16 @@ export interface ScaffoldReport {
   rolesCreated: string[]
 }
 
-/** Case- and whitespace-insensitive name matching — `discord_manager.py`'s own `.lower().strip()` comparison, carried over so a *category* named identically but for casing is recognised as the same one. Not used for a channel's own name — see `normalizeChannelName`, below, and this file's own module comment. */
+/**
+ * Case- and whitespace-insensitive *role* name matching — `discord_manager.py`'s
+ * own `.lower().strip()` comparison, carried over. Only used for
+ * `resolveRoleId`, below — a *category*'s own name uses `normalizeCategoryName`
+ * (`@bloombot/db`, BOT-13/PROJ-10) instead, which also removes every inner
+ * whitespace character rather than merely trimming, matching what
+ * `courses.ts`'s own save-time uniqueness check and `@bloombot/core`'s
+ * `routeMessage` now both require. Role names are not part of that slice's
+ * scope and keep this narrower, trim-only comparison unchanged.
+ */
 function normalizeName(name: string): string {
   return name.trim().toLowerCase()
 }
@@ -207,15 +221,15 @@ function normalizeName(name: string): string {
  * whitespace to a single `-` — silently, with no way to opt out through the
  * API. A declared channel named `general chat` therefore comes back from
  * `listGuildChannels` as `general-chat`, never `general chat`; comparing a
- * declared name against the guild's own by `normalizeName` alone (case and
- * whitespace only) never matches it, so every scaffold run after the first
- * created a fresh duplicate — SRV-7 broken on the first channel name with a
- * space in it. Applying this same transform to *both* sides of a channel
- * name comparison before normalizing is what fixes that: a declared `general
- * chat` and a guild's own `general-chat` compare equal. `GUILD_CATEGORY`
- * names are not slugged this way — Discord stores and returns a category's
- * name verbatim but for case/whitespace, so categories keep using
- * `normalizeName` above. `normalizeChannelName` itself now lives in
+ * declared name against the guild's own by trimming and lowercasing alone
+ * never matches it, so every scaffold run after the first created a fresh
+ * duplicate — SRV-7 broken on the first channel name with a space in it.
+ * Applying this same transform to *both* sides of a channel name comparison
+ * before normalizing is what fixes that: a declared `general chat` and a
+ * guild's own `general-chat` compare equal. `GUILD_CATEGORY` names are not
+ * slugged this way — Discord stores and returns a category's name verbatim
+ * but for case/whitespace, so categories keep using `normalizeCategoryName`
+ * (BOT-13/PROJ-10) instead. `normalizeChannelName` itself now lives in
  * `@bloombot/discord-rest` (`channel-naming.ts`'s own module comment has
  * the reasoning for why this stopped being copied by hand) — imported
  * above, not redefined here.
@@ -298,7 +312,7 @@ function loadOrganizationDeclaredNames(
     if (!fullCourse) continue // Deleted between the list and this read — nothing left to declare.
 
     for (const category of fullCourse.categories) {
-      const normalizedCategory = normalizeName(category.name)
+      const normalizedCategory = normalizeCategoryName(category.name)
       categoryNames.add(normalizedCategory)
       const channelNames =
         channelNamesByCategory.get(normalizedCategory) ?? new Set<string>()
@@ -597,7 +611,8 @@ export function createDiscordScaffoldHandler(
     for (const category of course.categories) {
       const existingCategory = guildCategories.find(
         (channel) =>
-          normalizeName(channel.name) === normalizeName(category.name)
+          normalizeCategoryName(channel.name) ===
+          normalizeCategoryName(category.name)
       )
 
       let categoryId: string
@@ -776,7 +791,7 @@ export function createDiscordScaffoldHandler(
     const undeclaredCategories = guildCategories
       .filter(
         (channel) =>
-          !declaredNames.categoryNames.has(normalizeName(channel.name))
+          !declaredNames.categoryNames.has(normalizeCategoryName(channel.name))
       )
       .map((channel) => channel.name)
 
@@ -788,12 +803,12 @@ export function createDiscordScaffoldHandler(
     // at.
     const undeclaredChannels = guildCategories
       .filter((category) =>
-        declaredNames.categoryNames.has(normalizeName(category.name))
+        declaredNames.categoryNames.has(normalizeCategoryName(category.name))
       )
       .flatMap((category) => {
         const declaredChannelNames =
           declaredNames.channelNamesByCategory.get(
-            normalizeName(category.name)
+            normalizeCategoryName(category.name)
           ) ?? new Set<string>()
         return guildChannels
           .filter((channel) => channel.parentId === category.id)

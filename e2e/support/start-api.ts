@@ -121,6 +121,11 @@ const app = buildApp({
   // `computeCost` estimates from the request/answer text's own length
   // regardless of which table prices that estimate.
   pricing: getModelPricingTable(),
+  // SURF-10/COST-8 — a fixed, real address so `chat.spec.ts`'s own
+  // not-approved case can assert on the exact rendered notice text
+  // (`courseNotApprovedNotice`, `@bloombot/core`) rather than merely that
+  // some text showed up.
+  supportContact: 'e2e-support@bloombot.test',
   // ADMIN-4 — no bot/worker process runs in this harness (this file's own
   // module comment: one Playwright project at a time, `apps/web` and this
   // process only), so these are loopback, unreachable placeholders, the

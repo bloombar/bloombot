@@ -31,6 +31,7 @@ import {
   type OmitPartialGroupDMChannel,
 } from 'discord.js'
 
+import { isPlatformAdministrator } from '@bloombot/auth'
 import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import {
   closeDatabase,
@@ -93,6 +94,10 @@ async function main(): Promise<void> {
   // connect link this builds can never double a slash the way it could
   // before that normalisation moved into the schema itself.
   const connectUrl = CONFIG.PUBLIC_APP_URL
+  // SURF-10 — named in `handleMention`'s own not-approved notice (COST-8),
+  // read once here alongside every other `CONFIG` value this process reads
+  // at startup.
+  const supportContact = CONFIG.SUPPORT_CONTACT
   // SURF-9 — the same "read CONFIG once in main(), thread it through"
   // discipline every other configured value above already follows:
   // `@bloombot/discord`'s own `decideCatchUp` never reads `CONFIG` either.
@@ -204,6 +209,12 @@ async function main(): Promise<void> {
     admission,
     pricing,
     connectUrl,
+    supportContact,
+    // COST-8 — the real predicate, re-checked live on every call
+    // (`isPlatformAdministrator`'s own module comment), the same discipline
+    // `apps/api/src/index.ts`'s own identical wiring already holds itself
+    // to.
+    isPlatformAdministratorEmail: isPlatformAdministrator,
     bounds: catchUpBounds,
     inFlight: inFlightMessageIds,
   })
@@ -231,6 +242,8 @@ async function main(): Promise<void> {
           admission,
           pricing,
           connectUrl,
+          supportContact,
+          isPlatformAdministratorEmail: isPlatformAdministrator,
           catchUpEnabled: catchUpBounds.lookbackMs > 0,
           inFlight: inFlightMessageIds,
         }).catch((error: unknown) => {

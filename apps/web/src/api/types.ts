@@ -700,6 +700,30 @@ export interface AdminOrganizationsResponse {
   platformHealth: AdminPlatformHealth
 }
 
+/**
+ * WEB-53 — `GET /admin/courses`'s own row, one course, pending or approved,
+ * across every organization. Mirrors `@bloombot/db`'s own
+ * `courseApproval.CourseForApproval` by hand, the same boundary this file's
+ * own module comment already explains for every other admin-console type
+ * here.
+ */
+export interface AdminCourseSummary {
+  courseId: string
+  courseTitle: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  ownerEmails: string[]
+  createdAt: number
+  aiApprovedAt: number | null
+  aiApprovedByAccountId: string | null
+  aiApprovedByEmail: string | null
+}
+
+export interface AdminCoursesResponse {
+  courses: AdminCourseSummary[]
+}
+
 /** ADMIN-5's own "names exactly what will be deleted before it happens". */
 export interface OrganizationDeletionPreview {
   organizationId: string

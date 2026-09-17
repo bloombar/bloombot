@@ -382,13 +382,92 @@ describe('courseApproval.listCoursesForApproval (COST-8/WEB-53)', () => {
       projectName: 'Fall 2026',
       organizationName: 'Org',
       ownerEmails: ['owner@example.edu'],
+      // WEB-53's "who acted" — the deliberate `'approve'` above names the
+      // owner both by id and by email.
+      aiApprovedByAccountId: owner.id,
+      aiApprovedByEmail: 'owner@example.edu',
     })
     expect(approvedRow?.aiApprovedAt).not.toBeNull()
     expect(pendingRow).toMatchObject({
       courseTitle: 'Pending Course',
       projectName: 'Spring 2027',
       organizationName: 'Other Org',
+      aiApprovedByAccountId: null,
+      aiApprovedByEmail: null,
     })
     expect(pendingRow?.aiApprovedAt).toBeNull()
+  })
+
+  it("leaves the approver email null for an auto-approved course — this file’s own module comment on `accountId` being null for `'auto-approve'`", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    courseApproval.approveCourse(
+      organizationId,
+      course.id,
+      null,
+      'auto-approve',
+      Date.now(),
+      testDb.db
+    )
+
+    const row = courseApproval
+      .listCoursesForApproval(testDb.db)
+      .find((candidate) => candidate.courseId === course.id)
+
+    expect(row?.aiApprovedAt).not.toBeNull()
+    expect(row?.aiApprovedByAccountId).toBeNull()
+    expect(row?.aiApprovedByEmail).toBeNull()
+  })
+})
+
+describe('courseApproval.listApprovalEventsForCourse (WEB-53)', () => {
+  it('lists a course’s approve/revoke history, newest first', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, owner } = seedOrganizationWithCourse(testDb)
+    courseApproval.approveCourse(
+      organizationId,
+      course.id,
+      owner.id,
+      'approve',
+      1000,
+      testDb.db
+    )
+    courseApproval.revokeCourseApproval(
+      organizationId,
+      course.id,
+      owner.id,
+      2000,
+      testDb.db
+    )
+
+    const events = courseApproval.listApprovalEventsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({ action: 'revoke', createdAt: 2000 })
+    expect(events[1]).toMatchObject({ action: 'approve', createdAt: 1000 })
+  })
+
+  it('is empty for a course with no decisions yet, and scoped by organization', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+
+    expect(
+      courseApproval.listApprovalEventsForCourse(
+        organizationId,
+        course.id,
+        testDb.db
+      )
+    ).toEqual([])
+    expect(
+      courseApproval.listApprovalEventsForCourse(
+        randomUUID(),
+        course.id,
+        testDb.db
+      )
+    ).toEqual([])
   })
 })

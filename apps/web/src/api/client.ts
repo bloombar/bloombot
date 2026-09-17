@@ -23,6 +23,7 @@
  */
 
 import type {
+  AdminCoursesResponse,
   AdminOrganizationsResponse,
   ApiErrorBody,
   ChatAnswerResult,
@@ -1230,6 +1231,31 @@ export function transcriptExportDownloadUrl(
 /** ADMIN-4: every organization, its usage, and the platform's own health. Throws `ApiError` (403, `not_platform_administrator`) for a signed-in caller who is not one (AUTH-4) — this app shows that refusal plainly rather than hiding the screen, since hiding it would be the panel deciding on AUTH-4's behalf who may even attempt this. */
 export function fetchAdminOrganizations(): Promise<AdminOrganizationsResponse> {
   return request<AdminOrganizationsResponse>('/admin/organizations')
+}
+
+/** WEB-53: every pending and approved course, across every organization — `apps/api`'s own `routes/admin.ts#GET /courses`. Same 403 treatment as `fetchAdminOrganizations` above. */
+export function fetchAdminCourses(): Promise<AdminCoursesResponse> {
+  return request<AdminCoursesResponse>('/admin/courses')
+}
+
+/** WEB-53's Approve button. Idempotent — approving an already-approved course succeeds without a second audit event (`routes/admin.ts`'s own doc comment). */
+export function approveAdminCourse(
+  courseId: string
+): Promise<{ approved: true }> {
+  return request(`/admin/courses/${courseId}/approve`, {
+    method: 'POST',
+    body: {},
+  })
+}
+
+/** WEB-53's Unapprove button — COST-8's `ai_approval_decided_at` is set by this, which is what stops `answerQuestion`'s own lazy auto-approval from re-approving the course afterwards. Idempotent the same way approve is. */
+export function unapproveAdminCourse(
+  courseId: string
+): Promise<{ approved: false }> {
+  return request(`/admin/courses/${courseId}/unapprove`, {
+    method: 'POST',
+    body: {},
+  })
 }
 
 /** ADMIN-5's own "names exactly what will be deleted before it happens". */

@@ -43,6 +43,12 @@
  * own arrival list can draw the identical presentation; this screen just
  * builds `rows` and passes `activeOrganizationId`/`onSwitchOrganization`/
  * `navigate` straight through, unchanged.
+ *
+ * WEB-57/WEB-58 — `refreshAccount` is new: `OrganizationList`'s own Rename
+ * and Leave, on a row this account owns or holds a non-owner membership in,
+ * both re-read `GET /auth/me` afterward (that file's own module comment on
+ * why), and this screen has no `refreshSession` of its own to hand it —
+ * `pages/Shell.tsx` threads through whatever `App.tsx` gave it, unchanged.
  */
 
 import type { AccountSummary } from '../api/types.js'
@@ -58,6 +64,8 @@ export interface AccountProps {
   onSwitchOrganization: (organizationId: string) => void
   /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, threaded down the same way `pages/Shell.tsx` already threads it to every other screen it renders. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
+  /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, threaded through `pages/Shell.tsx` unchanged; passed straight to `OrganizationList` (this file's own module comment on why). */
+  refreshAccount: () => Promise<unknown>
 }
 
 export function Account({
@@ -65,6 +73,7 @@ export function Account({
   activeOrganizationId,
   onSwitchOrganization,
   navigate,
+  refreshAccount,
 }: AccountProps) {
   const rows: OrganizationListRow[] = [
     ...account.memberships.map((membership) => ({
@@ -102,6 +111,7 @@ export function Account({
           onSelectOrganization={onSwitchOrganization}
           navigate={navigate}
           actionLabel="Switch"
+          refreshAccount={refreshAccount}
         />
       </section>
     </div>

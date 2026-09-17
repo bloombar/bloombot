@@ -185,3 +185,227 @@ test('the arrival list’s own address is reachable by a direct page load, not o
   ).toBeVisible()
   await expect(page.getByTestId('organizations-page')).toBeVisible()
 })
+
+/**
+ * WEB-57, end to end: an owner renames their own organization from the
+ * account screen's own `OrganizationList` kebab, and the new name appears
+ * in the header's own switcher — proof that `refreshAccount` (this file's
+ * own `OrganizationList.tsx`, `components/OrganizationList.tsx`'s own
+ * module comment) actually re-reads `GET /auth/me` rather than leaving the
+ * header showing a stale name until the next reload.
+ */
+test('an owner renames their organization from the account screen, and the new name appears in the header (WEB-57)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web57-${suffix}@example.edu`
+  const organizationId = randomUUID()
+  const originalName = `Before Rename — ${suffix}`
+  const renamedName = `After Rename — ${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      organizationId,
+      { name: originalName, isPersonal: false },
+      seedDb
+    )
+    accounts.createAccount(
+      organizationId,
+      { email, displayName: 'Owner', role: 'owner' },
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    originalName
+  )
+
+  await page.getByRole('button', { name: 'Account settings' }).click()
+  const accountPage = page.getByTestId('account-page')
+  const row = accountPage.locator('li').filter({ hasText: originalName })
+  await row
+    .getByRole('button', { name: `Actions for "${originalName}"` })
+    .click()
+  await page
+    .getByRole('group', { name: `Actions for "${originalName}"` })
+    .getByRole('button', { name: 'Rename' })
+    .click()
+
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Organization name').fill(renamedName)
+  await dialog.getByRole('button', { name: 'Rename' }).click()
+
+  // Every place this name shows updates without a page reload — the row
+  // itself, and the header's own switcher.
+  await expect(
+    accountPage.getByText(renamedName, { exact: false })
+  ).toBeVisible()
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    renamedName
+  )
+})
+
+/**
+ * WEB-58, end to end: a member of a second organization leaves it from the
+ * arrival list, confirms first, and it disappears from both the list itself
+ * and the header's own switcher — the same `refreshAccount` proof WEB-57's
+ * own test above gives for a rename, for a leave instead.
+ */
+test('a member of a second organization leaves it from the arrival list, confirms, and it is gone from both the list and the switcher (WEB-58)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web58-${suffix}@example.edu`
+  const firstOrganizationId = randomUUID()
+  const secondOrganizationId = randomUUID()
+  const firstName = `Stays — ${suffix}`
+  const secondName = `Leaves — ${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      firstOrganizationId,
+      { name: firstName, isPersonal: false },
+      seedDb
+    )
+    organizations.createOrganization(
+      secondOrganizationId,
+      { name: secondName, isPersonal: false },
+      seedDb
+    )
+    const account = accounts.createAccount(
+      firstOrganizationId,
+      { email, displayName: 'Instructor', role: 'owner' },
+      seedDb
+    )
+    // A *non-owner* membership — WEB-58's own leave is refused for an
+    // owner (`memberships.leave`'s own `execute`), so this second
+    // relationship has to be one this account can actually leave.
+    memberships.createMembership(
+      secondOrganizationId,
+      account.id,
+      'assistant',
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, email)
+  await expect(page).toHaveURL('/choose-organization')
+  const list = page.getByTestId('organizations-page')
+  await expect(list.getByText(secondName)).toBeVisible()
+
+  const row = list.locator('li').filter({ hasText: secondName })
+  await row.getByRole('button', { name: `Actions for "${secondName}"` }).click()
+  await page
+    .getByRole('group', { name: `Actions for "${secondName}"` })
+    .getByRole('button', { name: 'Leave' })
+    .click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText(secondName)
+  await dialog.getByRole('button', { name: 'Leave' }).click()
+
+  // Only one relationship left — the arrival list's own precondition guard
+  // (`pages/Organizations.tsx`'s own module comment) redirects straight
+  // into it, and the header's own switcher, now single-organization, never
+  // offers the left organization again.
+  await expect(page).toHaveURL(new RegExp(`/o/${firstOrganizationId}/`))
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    firstName
+  )
+  await expect(page.getByTestId('organization-switcher')).not.toContainText(
+    secondName
+  )
+})
+
+/**
+ * WEB-57/WEB-58, mobile viewport — the kebab and both dialogs it opens
+ * (Rename and the Leave confirmation) still work at a phone-sized width;
+ * `e2e/chat-scroll.spec.ts`'s own `setViewportSize({ width: 375, ... })` is
+ * the same device used here, resized before either dialog opens rather than
+ * mid-interaction.
+ */
+test('the organization kebab and its Rename/Leave dialogs work at a mobile viewport (WEB-57, WEB-58)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web57-58-mobile-${suffix}@example.edu`
+  const firstOrganizationId = randomUUID()
+  const secondOrganizationId = randomUUID()
+  const firstName = `Owned — ${suffix}`
+  const secondName = `Membership — ${suffix}`
+  const renamedName = `Renamed — ${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      firstOrganizationId,
+      { name: firstName, isPersonal: false },
+      seedDb
+    )
+    organizations.createOrganization(
+      secondOrganizationId,
+      { name: secondName, isPersonal: false },
+      seedDb
+    )
+    const account = accounts.createAccount(
+      firstOrganizationId,
+      { email, displayName: 'Instructor', role: 'owner' },
+      seedDb
+    )
+    memberships.createMembership(
+      secondOrganizationId,
+      account.id,
+      'assistant',
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, email)
+  await expect(page).toHaveURL('/choose-organization')
+  await page.setViewportSize({ width: 400, height: 800 })
+  const list = page.getByTestId('organizations-page')
+  await expect(list.getByText(firstName)).toBeVisible()
+
+  // Rename the owned row.
+  const ownedRow = list.locator('li').filter({ hasText: firstName })
+  await ownedRow
+    .getByRole('button', { name: `Actions for "${firstName}"` })
+    .click()
+  await page
+    .getByRole('group', { name: `Actions for "${firstName}"` })
+    .getByRole('button', { name: 'Rename' })
+    .click()
+  const renameDialog = page.getByRole('dialog')
+  await expect(renameDialog).toBeVisible()
+  await renameDialog.getByLabel('Organization name').fill(renamedName)
+  await renameDialog.getByRole('button', { name: 'Rename' }).click()
+  await expect(list.getByText(renamedName)).toBeVisible()
+
+  // Leave the non-owner membership row.
+  const memberRow = list.locator('li').filter({ hasText: secondName })
+  await memberRow
+    .getByRole('button', { name: `Actions for "${secondName}"` })
+    .click()
+  await page
+    .getByRole('group', { name: `Actions for "${secondName}"` })
+    .getByRole('button', { name: 'Leave' })
+    .click()
+  const leaveDialog = page.getByRole('dialog')
+  await expect(leaveDialog).toBeVisible()
+  await expect(leaveDialog).toContainText(secondName)
+  await leaveDialog.getByRole('button', { name: 'Leave' }).click()
+
+  await expect(page).toHaveURL(new RegExp(`/o/${firstOrganizationId}/`))
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    renamedName
+  )
+})

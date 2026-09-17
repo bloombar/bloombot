@@ -321,7 +321,16 @@ function renderSignedInNotFound(
 function renderOrganizationsList(
   account: AccountSummary,
   navigate: (route: Route, options?: { replace?: boolean }) => void,
-  onSignedOut: () => void
+  onSignedOut: () => void,
+  // WEB-57/WEB-58 — `refreshSession` again, this time for `Organizations`'s
+  // own `OrganizationList` (`pages/Organizations.tsx`'s own doc comment on
+  // why a leave from this screen never needs to navigate itself away).
+  // Passed separately from `onSignedOut` above, even though this render's
+  // own call site hands both the same function: the two exist for
+  // unrelated reasons (one signs a reader out on the header's own control,
+  // the other re-reads `/auth/me` after a rename or a leave), and a future
+  // change to either must not silently change the other.
+  refreshAccount: () => Promise<unknown>
 ) {
   return (
     <SignedInChrome
@@ -331,7 +340,11 @@ function renderOrganizationsList(
       navigate={navigate}
       onSignedOut={onSignedOut}
     >
-      <Organizations account={account} navigate={navigate} />
+      <Organizations
+        account={account}
+        navigate={navigate}
+        refreshAccount={refreshAccount}
+      />
     </SignedInChrome>
   )
 }
@@ -721,7 +734,12 @@ export function App() {
     // WEB-55 — the arrival list's own address, reached either directly
     // (a bookmark, Back) or by `resolveHomeRoute` landing `/` here.
     if (route.kind === 'organizations') {
-      return renderOrganizationsList(session.account, navigate, refreshSession)
+      return renderOrganizationsList(
+        session.account,
+        navigate,
+        refreshSession,
+        refreshSession
+      )
     }
 
     // WEB-34: `/` resolves and replaces before this ever renders anything
@@ -763,6 +781,7 @@ export function App() {
             setJoinedCourse(undefined)
             refreshSession()
           }}
+          refreshAccount={refreshSession}
         />
       )
     }

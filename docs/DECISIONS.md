@@ -12868,3 +12868,45 @@ inconsistent about how a switch is driven.
   `returnToShell`) fails this test the same way it failed the real colleague in
   `e2e/membership-invitation-panel.spec.ts` — landing on the stale personal organization's own Projects
   screen instead of the arrival list.
+
+## D-122 — `apps/web`: WEB-57/WEB-58 — Rename and Leave, from both organization lists
+
+**Problem.** D-120 shipped `organizations.rename`/`memberships.leave` server side only; this slice is the UI
+— a kebab on each `OrganizationList` row, so `pages/Account.tsx`'s own list and `pages/Organizations.tsx`'s
+own arrival list both get it from one change, per the brief.
+
+**`refreshAccount` is threaded, not invented — but only as far as `pages/Shell.tsx`, where it defaults to a
+no-op rather than being required.** The brief's own instruction is to thread `App.tsx#refreshSession` rather
+than build a second refetch (D-121's own invitation race is the reason this discipline exists at all).
+`pages/Account.tsx` and `pages/Organizations.tsx` both take it as a required prop — every caller of either
+already has a real `refreshSession` in scope, so there is no honest default for either. `pages/Shell.tsx` is
+different: it renders eight other tabs that never touch this feature, and `tests/shell.test.tsx` mounts it
+directly, not through `App.tsx`, at roughly forty call sites that supply no such prop. Making `refreshAccount`
+required there would have meant editing every one of them for a feature none of them exercises — real scope
+creep for a slice the brief scoped to "the UI that calls [the existing actions]." `refreshAccount?: () =>
+Promise<unknown>`, defaulting to `() => Promise.resolve()` in `ShellInner`'s own destructuring (the identical
+shape `supportContact = ''` already uses one prop above it), is the judgment call: `App.tsx`'s own real
+`<Shell>` render passes the genuine `refreshSession`, and every test that does not care about this feature is
+untouched.
+
+**Leaving the organization currently active is resolved inside `OrganizationList` itself, not by threading a
+second navigation decision through `Account.tsx`/`Shell.tsx`.** The brief requires that leaving the active
+organization not strand the app there. The alternative — having `Account.tsx` decide where to send a reader
+who just left it, the way `changeActiveOrganization` already picks a _target_ organization for an ordinary
+switch — needs a fresh, post-leave account to choose from, and the caller that dispatched the leave has no
+way to get one synchronously: `refreshAccount()`'s own state update lands in a _later_ render, not in the
+still-running async handler that awaited it. `OrganizationList#handleLeave` instead picks from its own
+`rows` prop, filtered to drop the row just left — data it already has, at the moment it needs it — preferring
+a remaining membership over a remaining connected organization (the same order `resolveDefaultOrganization`
+already uses), falling back to `{ kind: 'account' }` when nothing is left. `pages/Organizations.tsx`'s own
+arrival list never sets `activeOrganizationId`, so this branch can never fire there — a leave from that
+screen is corrected entirely by its own existing `relationshipCount <= 1` redirect (D-121's cheap-fix 3) once
+the refreshed `account` propagates, exactly as the brief's own out-of-scope note ("no changes to
+`resolveHomeRoute`'s landing logic") implies it should be.
+
+**`renameOrganization`/`leaveOrganization` are new thin wrappers in `api/client.ts`**, the same
+`dispatchAction`-over-`organizations.rename`/`memberships.leave` shape every other action wrapper in that
+file already takes (`renameProject`/`archiveProject`, immediately above where these were added). Neither
+caller reads the resolved value — both re-read `GET /auth/me` instead (this file's own module comment on
+why) — so `renameOrganization`'s own return type is the minimal `{ id: string; name: string }` rather than a
+full `Organization` type this bundle has never needed to declare before.

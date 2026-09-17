@@ -163,6 +163,8 @@ export interface ShellProps {
     alreadyEnrolled: boolean
   }
   onSignedOut: () => void
+  /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, threaded straight to `pages/Account.tsx`'s own `OrganizationList` so a rename or a leave re-reads `GET /auth/me` (that file's own module comment on why). Optional, defaulting to a no-op below: most of this file's own tests never reach `/account`'s own kebab and do not care. */
+  refreshAccount?: () => Promise<unknown>
 }
 
 /**
@@ -208,6 +210,9 @@ function ShellInner({
   justInstalled,
   joinedCourse,
   onSignedOut,
+  // WEB-57/WEB-58 — `ShellProps`'s own doc comment on why this defaults to
+  // a no-op rather than being required.
+  refreshAccount = () => Promise.resolve(),
 }: ShellProps) {
   const { guardedNavigate } = useNavigationGuard()
   // WEB-32/WEB-34 — `route.organizationId` is the source of truth for every
@@ -683,6 +688,7 @@ function ShellInner({
             changeActiveOrganization(organizationId)
           }
           navigate={(route) => guardedNavigate(() => navigate(route))}
+          refreshAccount={refreshAccount}
         />
       ) : isProjectsRoute(route) ? (
         // Finding 5 (WEB-7 rework): `key={activeOrganizationId}` forces a

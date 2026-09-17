@@ -7,11 +7,12 @@
  * `tests/account.test.tsx` already holds itself to.
  */
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AccountSummary } from '../src/api/types.js'
 import { Organizations } from '../src/pages/Organizations.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
@@ -31,7 +32,13 @@ const ACCOUNT: AccountSummary = {
 
 describe('Organizations (WEB-55)', () => {
   it('names the screen, and lists every organization the account can act in — memberships with their role, and connected organizations marked "connected"', () => {
-    render(<Organizations account={ACCOUNT} navigate={vi.fn()} />)
+    renderWithModal(
+      <Organizations
+        account={ACCOUNT}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
     expect(
       screen.getByRole('heading', { name: 'Choose an organization' })
     ).toBeInTheDocument()
@@ -49,14 +56,26 @@ describe('Organizations (WEB-55)', () => {
   // Nothing is "active" yet at this address — every row offers its own
   // action button, unlike `Account.tsx` where the active one has none.
   it('marks no organization as active, and offers a "Choose" button for every row', () => {
-    render(<Organizations account={ACCOUNT} navigate={vi.fn()} />)
+    renderWithModal(
+      <Organizations
+        account={ACCOUNT}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
     expect(screen.queryByText('Active')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Choose' })).toHaveLength(3)
   })
 
   it('choosing a membership organization navigates to its Projects screen', () => {
     const navigate = vi.fn()
-    render(<Organizations account={ACCOUNT} navigate={navigate} />)
+    renderWithModal(
+      <Organizations
+        account={ACCOUNT}
+        navigate={navigate}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
     const row = screen.getByText(/Org Two/).closest('li')
     fireEvent.click(row!.querySelector('button') as HTMLButtonElement)
     expect(navigate).toHaveBeenCalledWith({
@@ -70,7 +89,13 @@ describe('Organizations (WEB-55)', () => {
   // that account can never actually reach there.
   it('choosing a connected-only organization navigates to its Chat screen, not Projects', () => {
     const navigate = vi.fn()
-    render(<Organizations account={ACCOUNT} navigate={navigate} />)
+    renderWithModal(
+      <Organizations
+        account={ACCOUNT}
+        navigate={navigate}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
     const row = screen.getByText(/A University/).closest('li')
     fireEvent.click(row!.querySelector('button') as HTMLButtonElement)
     expect(navigate).toHaveBeenCalledWith({
@@ -83,7 +108,13 @@ describe('Organizations (WEB-55)', () => {
   // `Account.tsx`'s own rows already have (`OrganizationList.tsx`'s own
   // module comment on the shared presentation).
   it('renders each row’s own name as a link to its organization’s main page', () => {
-    render(<Organizations account={ACCOUNT} navigate={vi.fn()} />)
+    renderWithModal(
+      <Organizations
+        account={ACCOUNT}
+        navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
+      />
+    )
     expect(screen.getByRole('link', { name: 'Org One' })).toHaveAttribute(
       'href',
       '/o/org-1/projects'

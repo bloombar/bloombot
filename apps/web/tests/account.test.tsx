@@ -12,11 +12,12 @@
  * for `onSwitchOrganization`.
  */
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AccountSummary } from '../src/api/types.js'
 import { Account } from '../src/pages/Account.js'
+import { renderWithModal } from './helpers/render-with-modal.js'
 
 const ACCOUNT: AccountSummary = {
   id: 'account-1',
@@ -36,12 +37,13 @@ const ACCOUNT: AccountSummary = {
 
 describe('Account (WEB-30)', () => {
   it('names the account — its email and id — before anything else', () => {
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     expect(screen.getByText('instructor@example.edu')).toBeInTheDocument()
@@ -49,12 +51,13 @@ describe('Account (WEB-30)', () => {
   })
 
   it('lists every organization the account can act in — memberships with their role, and connected organizations marked "connected"', () => {
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     // WEB-41 rework (finding 2, coordinator review) — scoped from the
@@ -77,12 +80,13 @@ describe('Account (WEB-30)', () => {
   })
 
   it('marks which organization is active, and offers no switch control for it', () => {
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     const activeRow = screen.getByText(/Org One/).closest('li')
@@ -101,12 +105,13 @@ describe('Account (WEB-30)', () => {
 
   it('switching to a different organization reports it through onSwitchOrganization', () => {
     const onSwitchOrganization = vi.fn()
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={onSwitchOrganization}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     const inactiveRow = screen.getByText(/Org Two/).closest('li')
@@ -116,12 +121,13 @@ describe('Account (WEB-30)', () => {
 
   it('offers a switch control for a connected-only organization too, not only a membership', () => {
     const onSwitchOrganization = vi.fn()
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={onSwitchOrganization}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     const connectedRow = screen.getByText(/A University/).closest('li')
@@ -132,12 +138,13 @@ describe('Account (WEB-30)', () => {
   // --- WEB-41: each row's own name is a real link ---------------------
 
   it('renders each membership row as a link to that organization’s Projects page', () => {
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     // A real `href`, built the same way `buildPath` builds every other
@@ -162,12 +169,13 @@ describe('Account (WEB-30)', () => {
   // so a Projects link would advertise, and briefly open, a screen this
   // account can never actually reach there.
   it('renders a connected-only row as a link to that organization’s Chat page, not Projects', () => {
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={vi.fn()}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     expect(screen.getByRole('link', { name: 'A University' })).toHaveAttribute(
@@ -178,12 +186,13 @@ describe('Account (WEB-30)', () => {
 
   it('an ordinary click navigates client-side rather than reloading the page', () => {
     const navigate = vi.fn()
-    render(
+    renderWithModal(
       <Account
         account={ACCOUNT}
         activeOrganizationId="org-1"
         onSwitchOrganization={vi.fn()}
         navigate={navigate}
+        refreshAccount={vi.fn().mockResolvedValue(undefined)}
       />
     )
     const link = screen.getByRole('link', { name: 'Org Two' })
@@ -207,12 +216,13 @@ describe('Account (WEB-30)', () => {
     '%s on an organization link falls through to the browser — no navigate, default not prevented',
     (_label, eventInit) => {
       const navigate = vi.fn()
-      render(
+      renderWithModal(
         <Account
           account={ACCOUNT}
           activeOrganizationId="org-1"
           onSwitchOrganization={vi.fn()}
           navigate={navigate}
+          refreshAccount={vi.fn().mockResolvedValue(undefined)}
         />
       )
       const link = screen.getByRole('link', { name: 'Org Two' })

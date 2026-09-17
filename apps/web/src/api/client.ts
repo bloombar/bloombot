@@ -370,6 +370,30 @@ export function dispatchAction<TResult = unknown>(
 }
 
 /**
+ * WEB-57/WEB-58: `organizations.rename` and `memberships.leave`
+ * (`packages/actions`), each a thin, typed wrapper over `dispatchAction` —
+ * this slice is the UI only, both actions already shipped and are already
+ * tested server-side (PR #458). `renameOrganization`'s return value is
+ * discarded by every caller today: `components/OrganizationList.tsx`
+ * re-reads `GET /auth/me` after either call rather than trusting this
+ * response, since a rename or a leave has to update every place that shows
+ * the organization's name or this account's relationship to it (the header,
+ * the drawer, both lists), not only the row that dispatched it.
+ */
+export function renameOrganization(
+  organizationId: string,
+  name: string
+): Promise<{ id: string; name: string }> {
+  return dispatchAction(organizationId, 'organizations.rename', { name })
+}
+
+export function leaveOrganization(
+  organizationId: string
+): Promise<{ left: boolean }> {
+  return dispatchAction(organizationId, 'memberships.leave', {})
+}
+
+/**
  * WEB-7: the project actions — `projects.list/create/archive/unarchive/rename/duplicate`
  * (PROJ-1, PROJ-2, PROJ-4, PROJ-5, PROJ-6) — each a thin, typed wrapper over
  * `dispatchAction`, the same route every other action goes through. No new

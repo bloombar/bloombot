@@ -39,7 +39,7 @@ import {
   type Route,
   type ShellRoute,
 } from '../src/routing/route.js'
-import { renderWithModal } from './helpers/render-with-modal.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 /**
  * WEB-32 — mounts `Shell` behind a tiny stateful wrapper standing in for
@@ -1361,6 +1361,80 @@ describe('Shell (WEB-3, WEB-4)', () => {
       expect(
         within(header).getByRole('link', { name: 'Org One' })
       ).toHaveAttribute('href', '/o/org-1/projects')
+    })
+
+    // Code review (round 2), must-fix 3 — `rememberedOrganizationId` used to
+    // be set only from `route` (never corrected against `account` itself),
+    // so leaving the remembered organization while `/account` was open
+    // (WEB-58, `pages/Account.tsx`'s own `OrganizationList`) left it naming
+    // an organization this account no longer belonged to:
+    // `navigate({ kind: 'account' })` — `OrganizationList.tsx`'s own
+    // fallback when nothing else is left to switch to — is a no-op here,
+    // since `route.kind` is already `'account'`. `OrganizationSwitcher.tsx`
+    // then found no option matching the stale id and fell back to rendering
+    // the raw id — precisely the leak `components/SignedInChrome.tsx`'s own
+    // module comment says must never happen. Exercised directly, by
+    // rerendering with a fresh `account` prop that no longer includes the
+    // remembered organization — the same shape a `refreshAccount()` after a
+    // Leave produces (`App.tsx#refreshAccount`), without needing a real
+    // Leave dispatch to reach it.
+    it('on /account, a refreshed account that no longer includes the remembered organization corrects the header rather than showing its raw id', async () => {
+      const beforeLeaving: AccountSummary = {
+        id: 'account-9',
+        email: 'member@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-team',
+            organizationName: 'Team Org',
+            role: 'assistant',
+          },
+          {
+            organizationId: 'org-personal',
+            organizationName: 'Personal Org',
+            role: 'owner',
+          },
+        ],
+        connectedOrganizations: [],
+      }
+      const afterLeaving: AccountSummary = {
+        ...beforeLeaving,
+        memberships: beforeLeaving.memberships.filter(
+          (membership) => membership.organizationId !== 'org-team'
+        ),
+      }
+      const { rerender } = renderWithModal(
+        <Shell
+          account={beforeLeaving}
+          route={{ kind: 'account' }}
+          navigate={vi.fn()}
+          onSignedOut={vi.fn()}
+        />
+      )
+      // Mounting directly on `/account` remembers the first membership
+      // listed (`rememberedOrganizationId`'s own initializer) — `org-team`.
+      expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+        'Team Org'
+      )
+
+      rerender(
+        withModal(
+          <Shell
+            account={afterLeaving}
+            route={{ kind: 'account' }}
+            navigate={vi.fn()}
+            onSignedOut={vi.fn()}
+          />
+        )
+      )
+
+      await waitFor(() =>
+        expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+          'Personal Org'
+        )
+      )
+      expect(screen.getByTestId('organization-switcher')).not.toHaveTextContent(
+        'org-team'
+      )
     })
 
     // WEB-41 rework (must-fix 1, coordinator review) — the header's own

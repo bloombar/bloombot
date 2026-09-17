@@ -29,8 +29,12 @@ import { randomUUID } from 'node:crypto'
 
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+import { closeDatabase, openDatabase, organizations } from '@bloombot/db'
+
+import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
+import { withRetry } from './support/with-retry.js'
 
 /**
  * `window`/`document` — Node's own type lib (`tsconfig.base.json` carries
@@ -176,4 +180,86 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
   await navigateTo(page, 'Team')
   await expect(page.getByTestId('team-panel')).toBeVisible()
   await assertNoHorizontalOverflow(page, 'the Team panel')
+})
+
+/**
+ * WEB-54, on a phone: the platform-administrator console gets its own nav
+ * and a health footer fixed to the viewport's own bottom, on every one of
+ * its screens. The console is outside `Shell` entirely (`pages/Admin.tsx`'s
+ * own module comment), so this is a spec of its own rather than a further
+ * step in the ordinary-panel walk above — a different sign-in
+ * (`E2E_ADMIN_EMAIL`) and a different starting address (`/platform-admin`).
+ */
+test('the platform-administrator console is readable on a phone: no screen overflows sideways, and the fixed health footer never covers a list’s own last row (WEB-54)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+
+  // Enough organizations to run the list past a 667px-tall viewport — the
+  // "last row" this test checks against the footer is only a meaningful
+  // check if that row actually sits below the fold to begin with.
+  // `withRetry` (code review, WEB-54): this is a second connection to the
+  // same file the live API process already holds open, the same lock
+  // contention `support/with-retry.ts`'s own module comment covers —
+  // without it, one lock collision across ten writes fails the whole spec
+  // before it ever reaches the footer-overlap assertion.
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    for (let index = 0; index < 10; index++) {
+      await withRetry(() =>
+        organizations.createOrganization(
+          randomUUID(),
+          {
+            name: `Mobile Console Tenant ${index} — ${suffix}`,
+            isPersonal: false,
+          },
+          seedDb
+        )
+      )
+    }
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, E2E_ADMIN_EMAIL)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await page.goto('/platform-admin')
+  await expect(page).toHaveURL('/platform-admin/organizations')
+  await assertNoHorizontalOverflow(page, 'the admin console (Organizations)')
+
+  const nav = page.getByRole('navigation', { name: 'Console' })
+  const footer = page.getByRole('contentinfo')
+  await expect(footer).toBeVisible()
+
+  // Whichever organization row rendered last in the DOM — this test does
+  // not depend on the API's own ordering, only on there being enough rows
+  // to run past the fold.
+  const lastRow = page.locator('[data-testid^="admin-org-"]').last()
+  await lastRow.scrollIntoViewIfNeeded()
+  const [rowBox, footerBox] = await Promise.all([
+    lastRow.boundingBox(),
+    footer.boundingBox(),
+  ])
+  if (!rowBox || !footerBox) {
+    throw new Error(
+      'expected both the last organization row and the health footer to be visible'
+    )
+  }
+  // The row's own bottom edge must sit at or above the footer's own top
+  // edge — a positive difference here is exactly "the footer covers it."
+  expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(footerBox.y)
+
+  // The rest of the console's own screens, reached entirely through the
+  // new nav (not a typed address) — each still fits the viewport, and the
+  // footer stays put on every one of them.
+  await nav.getByRole('link', { name: 'Courses' }).click()
+  await expect(page).toHaveURL('/platform-admin/courses')
+  await assertNoHorizontalOverflow(page, 'the admin console (Courses)')
+  await expect(footer).toBeVisible()
+
+  await nav.getByRole('link', { name: 'Deletion history' }).click()
+  await expect(page).toHaveURL('/platform-admin/deletions')
+  await assertNoHorizontalOverflow(page, 'the admin console (Deletion history)')
+  await expect(footer).toBeVisible()
 })

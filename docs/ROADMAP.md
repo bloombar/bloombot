@@ -456,4 +456,4 @@ course answers only after a platform administrator approves it from the console,
 approval and read a course's settings read-only. Every surface tells a student in an unapproved course
 that its owner should contact Bloombot support.
 
-**In scope:** COST-8, SURF-10, WEB-53, ADMIN-6
+**In scope:** COST-8, SURF-10, WEB-53, ADMIN-6, WEB-54

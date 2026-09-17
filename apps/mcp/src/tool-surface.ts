@@ -84,9 +84,13 @@
  * operational action against a live Discord server binding — meaningful
  * blast radius for a first cut), `roster.import` (a bulk write of students'
  * own names and emails — PII at a different scale than anything else here),
- * and `memberships.grant` (grants account-level authority within the
+ * `memberships.grant` (grants account-level authority within the
  * organization — a privilege change deserving its own confirmation design,
- * not folded into MCP-4's "destructive" bucket as an afterthought).
+ * not folded into MCP-4's "destructive" bucket as an afterthought), and,
+ * this slice, `memberships.leave` (WEB-58) for the identical reason —
+ * revoking the caller's own account-level authority is the same class of
+ * privilege change `memberships.grant` is already excluded for, even
+ * though it acts on the caller alone rather than a peer.
  * `discordServers.scaffold` (MCP-10) is on the surface, below — it is *also*
  * an operational action against a live Discord server, but it is the one
  * such action a course's own instructor plainly needs to reach without a
@@ -341,6 +345,15 @@ export const MCP_TOOL_SURFACE: readonly ToolSurfaceEntry[] = [
   { actionName: 'projects.unarchive' },
   { actionName: 'projects.rename' },
   { actionName: 'projects.duplicate' },
+  // WEB-57 — renames the organization itself, reversible (another rename
+  // undoes it) the same way `projects.rename` above already is; not marked
+  // destructive for the identical reason. `memberships.leave` (WEB-58) is
+  // deliberately left off this surface: it is account-level authority over
+  // the caller's own membership, the same class this file's own module
+  // comment already excludes `memberships.grant` for — a privilege change
+  // deserving its own confirmation design, not folded in here by default
+  // (`docs/DECISIONS.md` D-120).
+  { actionName: 'organizations.rename' },
   {
     actionName: 'courses.save',
     destructive: true,

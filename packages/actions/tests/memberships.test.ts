@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { setSpendingCapAction } from '../src/actions/cost-ledger.js'
 import {
   grantMembershipAction,
+  leaveMembershipAction,
   listMembershipsAction,
   revokeMembershipAction,
 } from '../src/actions/memberships.js'
@@ -1041,5 +1042,151 @@ describe('memberships.revoke (ENRL-11)', () => {
     expect(
       enrolments.getEnrolment(organizationId, enrolmentId, testDb.db)
     ).toMatchObject({ endedAt: null })
+  })
+})
+
+describe('memberships.leave (WEB-58)', () => {
+  it('a non-owner member leaves and no longer holds the membership', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      leaveMembershipAction,
+      {},
+      { organizationId, db: testDb.db, accountId: instructor.id }
+    )
+    expect(result).toEqual({ left: true })
+
+    expect(
+      memberships.getMembership(organizationId, instructor.id, testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('refuses an owner', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        leaveMembershipAction,
+        {},
+        { organizationId, db: testDb.db, accountId: owner.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    // The owner's own membership is untouched — refused, not silently
+    // revoked anyway.
+    expect(
+      memberships.getMembership(organizationId, owner.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  it('refuses an account with no membership in this organization', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    // No `createAccount` call for this id at all — an account id that holds
+    // no membership here, the same "no row for this pair" shape
+    // `memberships.getMembership`'s own doc comment describes.
+    const strangerAccountId = randomUUID()
+
+    await expect(
+      dispatch(
+        leaveMembershipAction,
+        {},
+        { organizationId, db: testDb.db, accountId: strangerAccountId }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+  })
+
+  it('leaving deletes no transcript, ends no enrolment, and leaves other members untouched', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+    const { enrolmentId } = seedCourseEnrolmentAndConversation(
+      organizationId,
+      testDb.db
+    )
+    const before = {
+      conversations: testDb.db.select().from(schema.conversations).all().length,
+      messages: testDb.db.select().from(schema.messages).all().length,
+    }
+
+    await dispatch(
+      leaveMembershipAction,
+      {},
+      { organizationId, db: testDb.db, accountId: instructor.id }
+    )
+
+    const after = {
+      conversations: testDb.db.select().from(schema.conversations).all().length,
+      messages: testDb.db.select().from(schema.messages).all().length,
+    }
+    expect(after).toEqual(before)
+    expect(
+      enrolments.getEnrolment(organizationId, enrolmentId, testDb.db)
+    ).toMatchObject({ endedAt: null })
+    // The owner's own membership — a different account entirely — is
+    // untouched by the instructor's own leave.
+    expect(
+      memberships.getMembership(organizationId, owner.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  it('a second leave is refused rather than silently succeeding', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+
+    await dispatch(
+      leaveMembershipAction,
+      {},
+      { organizationId, db: testDb.db, accountId: instructor.id }
+    )
+
+    await expect(
+      dispatch(
+        leaveMembershipAction,
+        {},
+        { organizationId, db: testDb.db, accountId: instructor.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
   })
 })

@@ -12690,3 +12690,55 @@ between it and the last row of a genuinely long list, and `AppShell` already est
 as this panel's own answer to that. Proven at a 375px viewport with a ten-organization seeded list
 (`e2e/mobile-viewport.spec.ts`) — the last rendered row's own bottom edge sits at or above the footer's own
 top edge, not merely "some padding exists."
+
+## D-120 — `packages/actions`/`packages/db`: WEB-57/WEB-58 — `organizations.rename` and `memberships.leave`, server side only
+
+**Problem.** WEB-57 (an owner renames their organization) and WEB-58 (a member leaves an organization that is
+not their own) both needed a new action and, for the rename, new repo support — `repos/organizations.ts` had
+no write for an organization's own `name` at all. This slice is server side only (the brief's own scope); the
+UI that calls either action is the next slice.
+
+**`organizations.rename` is a new `actions/organizations.ts`**, the first file in this package to register an
+action directly against an organization's own row rather than something scoped inside one. Its shape follows
+`actions/projects.ts`: the policy resolves the organization itself (there is nothing else to resolve against,
+the same "no existing record to resolve on create" reasoning `projects.create`/`memberships.grant` already
+give), and `execute` checks the caller is an owner of it — `PolicyContext` carries no `accountId`
+(`policy.ts`'s own module comment), so that check cannot live in the policy, the same split
+`memberships.grant`'s own module comment already documents. `repos/organizations.ts` gained one function,
+`renameOrganization`, doing no trimming or blank-checking of its own — that is the action's own
+`renameInputSchema`'s job (`z.string().trim().min(1).max(...)`), the same "repo reads and writes, the action
+layer validates" split this file's own module comment already holds every other repo in this directory to.
+
+**A maximum name length is a genuinely new constant, not a reused one.** No existing name field in this
+repository — `projects.rename`, `courses.save`'s own `title`, `accounts.createAccount`'s own `displayName`
+— enforces a maximum length at all; every one of them only refuses blank. WEB-57 is explicit that "the new
+name must not be blank" but the brief's own verification list additionally requires refusing an over-long
+one, so this slice had to pick a number with nothing to anchor it to. `MAX_ORGANIZATION_NAME_LENGTH = 200`
+(`actions/organizations.ts`) is that judgment call: generous enough that no real organization's name is
+anywhere near it, short enough that reaching it is unambiguously a mistake rather than a real name — pure
+input hygiene, not a business rule anyone asked for, so it is not expected to matter in practice.
+
+**`organizations.rename` is added to `apps/mcp`'s `MCP_TOOL_SURFACE`, undestructive** — the brief asks this
+slice to decide, explicitly. It is the same shape `projects.rename` already is on that surface: reversible
+(another rename undoes it), no restore path to worry about, an ordinary write. Nothing about renaming the
+organization itself is riskier than renaming a project inside it, so it gets the identical treatment.
+
+**`memberships.leave` (WEB-58) reuses `repos/memberships.ts#revokeMembership` rather than a second revoke
+function** — the brief's own instruction, and there is nothing `memberships.leave` needs from a revoke that
+the existing function does not already give: it marks the row, stamps who revoked it (here, the same account
+that held it), and holds the last-owner invariant, all in the repo, unchanged. The two actions differ only in
+*who* the target may be and what `execute` checks before calling it — `memberships.revoke` (ENRL-11) targets
+another account by id, restricted to an owner caller, with a peer-owner carve-out; `memberships.leave` takes
+no input at all and only ever targets the caller's own `accountId`. An owner is refused unconditionally
+(not merely "the last owner", the way `revokeMembership`'s own invariant is written) — stepping down is
+`memberships.revoke`'s own operation on oneself, not this action's, the same distinction the brief itself
+draws. That one refusal is also what makes an account's own personal organization (TEN-1, always the sole
+owner) permanently unleavable with no separate `isPersonal` check: the caller in a personal organization is
+always its owner, so the owner refusal already covers it.
+
+**`memberships.leave` is deliberately left off `MCP_TOOL_SURFACE`.** It is the same class `memberships.grant`
+is already excluded for in that file's own module comment — account-level authority, deserving its own
+confirmation design rather than folding into MCP-4's "destructive" bucket by default — even though it acts
+only on the caller's own membership rather than a peer's. The brief's own instruction to decide the surface
+question was scoped to `organizations.rename`; `memberships.leave`'s exclusion is this slice's own judgment
+call, recorded here for the same reason the rename inclusion is.

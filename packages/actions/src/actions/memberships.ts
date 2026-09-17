@@ -1,6 +1,9 @@
 /**
- * Actions over `packages/db`'s `memberships` repo (ENRL-5, ENRL-11):
- * `memberships.grant`, `memberships.list` and `memberships.revoke`.
+ * Actions over `packages/db`'s `memberships` repo (ENRL-5, ENRL-11, WEB-58):
+ * `memberships.grant`, `memberships.list`, `memberships.revoke` and
+ * `memberships.leave` — the last one added this slice, see its own doc
+ * comment (below, next to `revokeMembershipAction`) for how it differs from
+ * `memberships.revoke`.
  *
  * Membership roles carry authority over a tenant's courses, transcripts and
  * spending, and ENRL-5 requires they are "granted only by an existing owner
@@ -324,6 +327,88 @@ export const revokeMembershipAction: Action<
       throw new ActionRefusedError()
     }
     return { revoked: true }
+  },
+}
+
+const leaveInputSchema = z.strictObject({}).default({})
+type LeaveInput = z.infer<typeof leaveInputSchema>
+
+/**
+ * WEB-58: the caller revokes *their own* membership in the organization
+ * they are currently acting in — distinct from `revokeMembershipAction`
+ * above (ENRL-11), which is an owner acting on somebody else and stays
+ * exactly as it is; this action never touches another account's row.
+ *
+ * No input at all: there is nothing to name here that `organizationId`
+ * (every dispatched action's own scope) and the caller's own `accountId`
+ * do not already say — the same "self-target only" shape that makes
+ * `grantMembershipAction`'s own check 3 ("never self-selected") the
+ * mirror image of this action rather than a competitor to it.
+ *
+ * Like `grantMembershipAction`/`costLedger.setSpendingCap`, the policy has
+ * no `accountId` to resolve the caller's own membership against
+ * (`policy.ts`'s own module comment on why `PolicyContext` carries none),
+ * so it resolves the organization itself; `execute` is what actually reads
+ * and revokes the caller's own row. The descriptor still names `membership`,
+ * not `organization`, the same "name the resource the write actually
+ * reaches" reasoning `projects.duplicate`'s own row in
+ * `tests/access-audit.test.ts` documents for the identical resolve/reach
+ * mismatch.
+ *
+ * `execute` refuses in two cases besides "no membership at all" (ACT-3,
+ * indistinguishable from any other absence):
+ *
+ * - **The caller is an owner.** Stepping down is `memberships.revoke`'s own
+ *   business (an owner revoking themselves, `revokeMembershipAction`'s own
+ *   `entity.accountId === accountId` branch) — never this action's. This is
+ *   also what keeps an account's own personal organization (TEN-1, where it
+ *   is always the sole owner) permanently unleavable, with no separate
+ *   `isPersonal` check needed: the caller in a personal organization is
+ *   always its owner, so this same refusal already covers it.
+ * - **`revokeMembership` itself refuses** (its own last-owner invariant,
+ *   `repos/memberships.ts`'s own doc comment) — unreachable in practice
+ *   once the owner check above already ran, but guarded the same way every
+ *   other action in this package guards a repo call it does not fully
+ *   control the outcome of.
+ */
+export const leaveMembershipAction: Action<
+  'memberships.leave',
+  LeaveInput,
+  Organization,
+  { left: boolean }
+> = {
+  name: 'memberships.leave',
+  description:
+    "Leave the caller's own organization (WEB-58): revokes only the caller's own membership — no transcript deleted, no enrolment ended. An owner is refused; stepping down is memberships.revoke's own business.",
+  inputSchema: leaveInputSchema,
+  policy: {
+    descriptor: { resource: 'membership', access: 'write' },
+    resolve: (_input, context) =>
+      organizations.getOrganizationById(context.organizationId, context.db),
+  },
+  execute: ({ organizationId, accountId, db }) => {
+    if (!accountId) throw new ActionRefusedError()
+
+    const callerMembership = memberships.getMembership(
+      organizationId,
+      accountId,
+      db
+    )
+    if (!callerMembership) throw new ActionRefusedError()
+
+    // WEB-58: an owner is offered no leave — stepping down is
+    // `memberships.revoke`'s own operation (this action's own doc comment
+    // above has the full reasoning, including why this alone also keeps a
+    // personal organization, TEN-1, unleavable).
+    if (callerMembership.role === 'owner') throw new ActionRefusedError()
+
+    const revoked = memberships.revokeMembership(
+      organizationId,
+      { accountId, revokedByAccountId: accountId },
+      db
+    )
+    if (!revoked) throw new ActionRefusedError()
+    return { left: true }
   },
 }
 

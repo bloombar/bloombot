@@ -42,6 +42,7 @@ import { isPlatformAdministrator } from '@bloombot/auth'
 import {
   accounts,
   costLedger,
+  courseApproval,
   courseAttachments,
   courses,
   organizations,
@@ -108,6 +109,19 @@ export interface AdminOrganizationSummary {
 export interface AdminOrganizationsResponse {
   organizations: AdminOrganizationSummary[]
   platformHealth: PlatformHealthReport
+}
+
+/**
+ * WEB-53's own Courses screen row — one course, pending or approved, across
+ * every organization. Passed through from `courseApproval.CourseForApproval`
+ * (that repo function's own doc comment) with no reshaping: this router's
+ * job is authorization and audit, not a second copy of what counts as "the
+ * course's identifying detail."
+ */
+export type AdminCourseSummary = courseApproval.CourseForApproval
+
+export interface AdminCoursesResponse {
+  courses: AdminCourseSummary[]
 }
 
 // ADMIN-5's own race — `AdminRouterDependencies.deletedTenantSweepDelayMs`'s
@@ -183,6 +197,133 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
       })
       .catch(next)
   })
+
+  /**
+   * WEB-53: every pending and approved course, across every organization —
+   * `courseApproval.listCoursesForApproval`'s own documented TEN-2
+   * exception (this router's own module comment already names
+   * `costLedger.listOrganizationTotals` as the same shape). ADMIN-6, not
+   * this route, is where a single course's settings become readable; this
+   * one stays to the identifying detail ADMIN-4 still allows.
+   */
+  router.get('/courses', (req, res) => {
+    if (!req.session) {
+      res.status(401).json({ error: 'not_signed_in' })
+      return
+    }
+    if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+      res.status(403).json({ error: 'not_platform_administrator' })
+      return
+    }
+
+    const body: AdminCoursesResponse = {
+      courses: courseApproval.listCoursesForApproval(deps.db),
+    }
+    res.status(200).json(body)
+  })
+
+  /**
+   * WEB-53's Approve button. Idempotent (`courseApproval.approveCourse`'s
+   * own doc comment) — approving a course that is already approved
+   * succeeds without writing a second audit event, rather than refusing.
+   * `action` is always `'approve'` here: `'auto-approve'` is
+   * `answerQuestion`'s and `courses.save`/`courses.import`'s own
+   * automatic path (COST-8), never something a request body can select.
+   */
+  router.post<{ courseId: string }>(
+    '/courses/:courseId/approve',
+    (req, res) => {
+      if (!req.session) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+        res.status(403).json({ error: 'not_platform_administrator' })
+        return
+      }
+
+      // `approveCourse` is scoped by `organizationId` (TEN-2/TEN-5, that
+      // function's own doc comment) — resolved here from the same
+      // cross-organization read `GET /courses` above already uses, rather
+      // than adding a second, unscoped repo lookup by course id alone.
+      const found = courseApproval
+        .listCoursesForApproval(deps.db)
+        .find((course) => course.courseId === req.params.courseId)
+      if (!found) {
+        res.status(404).json({ error: 'course_not_found' })
+        return
+      }
+
+      const updated = courseApproval.approveCourse(
+        found.organizationId,
+        req.params.courseId,
+        req.session.accountId,
+        'approve',
+        Date.now(),
+        deps.db
+      )
+      if (!updated) {
+        // Unreachable in practice — `found` was just read, above — but
+        // guarded rather than assumed, the same TEN-2 race this router's
+        // delete route already guards against.
+        res.status(404).json({ error: 'course_not_found' })
+        return
+      }
+      res.status(200).json({ approved: true })
+    }
+  )
+
+  /**
+   * WEB-53's Unapprove button — always a deliberate revoke
+   * (`courseApproval.revokeCourseApproval`'s own doc comment), which also
+   * sets `aiApprovalDecidedAt` so `answerQuestion`'s lazy auto-approval
+   * cannot silently re-approve the course afterwards (COST-8). Idempotent
+   * the same way approve is: unapproving an already-pending course
+   * succeeds without a second audit event.
+   */
+  router.post<{ courseId: string }>(
+    '/courses/:courseId/unapprove',
+    (req, res) => {
+      if (!req.session) {
+        res.status(401).json({ error: 'not_signed_in' })
+        return
+      }
+      if (!isRequestFromPlatformAdministrator(req.session.accountId, deps.db)) {
+        res.status(403).json({ error: 'not_platform_administrator' })
+        return
+      }
+
+      const found = courseApproval
+        .listCoursesForApproval(deps.db)
+        .find((course) => course.courseId === req.params.courseId)
+      if (!found) {
+        res.status(404).json({ error: 'course_not_found' })
+        return
+      }
+
+      // Already pending — a no-op, not an error (this route's own doc
+      // comment); `revokeCourseApproval` itself always writes (unlike
+      // `approveCourse`, it has no early "already in this state" return),
+      // so that idempotence is enforced here instead.
+      if (found.aiApprovedAt === null) {
+        res.status(200).json({ approved: false })
+        return
+      }
+
+      const updated = courseApproval.revokeCourseApproval(
+        found.organizationId,
+        req.params.courseId,
+        req.session.accountId,
+        Date.now(),
+        deps.db
+      )
+      if (!updated) {
+        res.status(404).json({ error: 'course_not_found' })
+        return
+      }
+      res.status(200).json({ approved: false })
+    }
+  )
 
   /** ADMIN-5's own "names exactly what will be deleted before it happens" — read before any confirmation is even shown. */
   router.get<{ organizationId: string }>(

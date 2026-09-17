@@ -16,7 +16,7 @@
  * `cost-ledger.ts#listOrganizationTotals` already is.
  */
 
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 
 import type { Database, Executor } from '../client.js'
 import {
@@ -30,6 +30,30 @@ import {
 } from '../schema.js'
 
 export type CourseApprovalEvent = typeof courseApprovalEvents.$inferSelect
+
+/**
+ * `courseId`'s own audit trail (WEB-53's "recorded with who acted and
+ * when"), newest first — the same shape `transcript-access.ts#listAccessLogForCourse`
+ * already reads back ADMIN-2's audit trail in. Scoped by `organizationId`
+ * like every function in this file except `listCoursesForApproval`.
+ */
+export function listApprovalEventsForCourse(
+  organizationId: string,
+  courseId: string,
+  db: Database
+): CourseApprovalEvent[] {
+  return db
+    .select()
+    .from(courseApprovalEvents)
+    .where(
+      and(
+        eq(courseApprovalEvents.organizationId, organizationId),
+        eq(courseApprovalEvents.courseId, courseId)
+      )
+    )
+    .orderBy(desc(courseApprovalEvents.createdAt))
+    .all()
+}
 
 /**
  * Record one approval event and return the row — used by `approveCourse`/
@@ -213,6 +237,17 @@ export interface CourseForApproval {
   ownerEmails: string[]
   createdAt: number
   aiApprovedAt: number | null
+  /**
+   * `null` for a pending course, and also for one approved by
+   * `'auto-approve'` (this file's own module comment — no human
+   * decision-maker to name). WEB-53's console shows the email rather than
+   * this id; kept here too since a caller that already has the id has no
+   * other way to distinguish "approved automatically" from "the account
+   * that approved it was later deleted".
+   */
+  aiApprovedByAccountId: string | null
+  /** The approving account's email — WEB-53's "who acted" — `null` under the same conditions as `aiApprovedByAccountId`. */
+  aiApprovedByEmail: string | null
 }
 
 /**
@@ -233,12 +268,36 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
       projectName: projects.name,
       createdAt: courses.createdAt,
       aiApprovedAt: courses.aiApprovedAt,
+      aiApprovedByAccountId: courses.aiApprovedByAccountId,
     })
     .from(courses)
     .innerJoin(projects, eq(projects.id, courses.projectId))
     .innerJoin(organizations, eq(organizations.id, courses.organizationId))
     .orderBy(desc(courses.createdAt))
     .all()
+
+  // Approver emails, batched by id — the same "one extra query rather than
+  // one per row" shape the owner-email lookup below already takes, over
+  // only the (usually small) set of accounts this page's courses were
+  // actually approved by.
+  const approverAccountIds = [
+    ...new Set(
+      rows
+        .map((row) => row.aiApprovedByAccountId)
+        .filter((id): id is string => id !== null)
+    ),
+  ]
+  const approverEmailsByAccountId = new Map<string, string>()
+  if (approverAccountIds.length > 0) {
+    const approverRows = db
+      .select({ id: accounts.id, email: accounts.email })
+      .from(accounts)
+      .where(inArray(accounts.id, approverAccountIds))
+      .all()
+    for (const approver of approverRows) {
+      approverEmailsByAccountId.set(approver.id, approver.email)
+    }
+  }
 
   // One query for every organization's active owners, rather than one per
   // course row — the same "batch the fan-out" shape `costLedger`'s own
@@ -274,5 +333,10 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     ownerEmails: ownerEmailsByOrganizationId.get(row.organizationId) ?? [],
     createdAt: row.createdAt,
     aiApprovedAt: row.aiApprovedAt,
+    aiApprovedByAccountId: row.aiApprovedByAccountId,
+    aiApprovedByEmail:
+      row.aiApprovedByAccountId === null
+        ? null
+        : (approverEmailsByAccountId.get(row.aiApprovedByAccountId) ?? null),
   }))
 }

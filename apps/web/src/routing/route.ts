@@ -127,6 +127,10 @@ export type AdminRoute =
   | { kind: 'admin-organizations' }
   | { kind: 'admin-organization'; organizationId: string }
   | { kind: 'admin-deletions' }
+  // WEB-53 — the Courses screen: every pending and approved course, across
+  // every organization, the same "no organization of its own" shape
+  // `admin-organizations` already has.
+  | { kind: 'admin-courses' }
 
 /**
  * Every address this whole app can be asked to render, signed in or out.
@@ -221,6 +225,9 @@ export function parseRoute(pathname: string): Route {
     }
     if (second === 'deletions' && rest.length === 0) {
       return { kind: 'admin-deletions' }
+    }
+    if (second === 'courses' && rest.length === 0) {
+      return { kind: 'admin-courses' }
     }
   }
   if (first === 'discord' && second === 'callback' && segments.length === 2) {
@@ -397,6 +404,8 @@ export function buildPath(route: Route): string {
       return `/platform-admin/organizations/${route.organizationId}`
     case 'admin-deletions':
       return '/platform-admin/deletions'
+    case 'admin-courses':
+      return '/platform-admin/courses'
     case 'discord-callback':
       return '/discord/callback'
     case 'sign-in':
@@ -485,6 +494,7 @@ export function isAdminRoute(route: Route): route is AdminRoute {
     case 'admin-organizations':
     case 'admin-organization':
     case 'admin-deletions':
+    case 'admin-courses':
       return true
     default:
       return false

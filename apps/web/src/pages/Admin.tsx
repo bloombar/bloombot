@@ -45,6 +45,15 @@
  *    console this small does not otherwise need.
  *  - `'admin-deletions'` — ADMIN-5's own audit trail, broken out of the
  *    list's own page into its own address.
+ *  - `'admin-courses'` — WEB-53's Courses screen: every pending course with
+ *    an Approve button, and every approved course with an Unapprove one
+ *    (`api/client.ts`'s own `fetchAdminCourses`/`approveAdminCourse`/
+ *    `unapproveAdminCourse`). Unapprove is the destructive direction and
+ *    confirms through this same modal, the same plain `confirm()` (no typed
+ *    name) `components/CourseRows.tsx`'s own disable-a-course confirmation
+ *    already uses — revoking is reversible (an administrator can re-approve),
+ *    unlike ADMIN-5's own delete, which is why this stops at `confirm`
+ *    rather than `prompt`.
  * Every navigation between these pushes (`navigate`, no `{ replace: true }`)
  * — WEB-34's ordinary rule, the same the rest of the panel already follows.
  */
@@ -53,12 +62,16 @@ import { useCallback, useEffect, useState } from 'react'
 
 import {
   ApiError,
+  approveAdminCourse,
   deleteTenant,
+  fetchAdminCourses,
   fetchAdminOrganizations,
   fetchDeletionPreview,
   fetchTenantDeletions,
+  unapproveAdminCourse,
 } from '../api/client.js'
 import type {
+  AdminCourseSummary,
   AdminOrganizationsResponse,
   AdminOrganizationSummary,
   CostBySurface,
@@ -123,9 +136,18 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   const [deletions, setDeletions] = useState<TenantDeletion[] | undefined>(
     undefined
   )
+  const [courses, setCourses] = useState<AdminCourseSummary[] | undefined>(
+    undefined
+  )
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined)
-  const { prompt } = useModal()
+  // WEB-53 — the one course currently mid-approve/unapprove, the same
+  // "disable this row's own button while its own request is in flight"
+  // shape `deletingId` above already gives Delete.
+  const [decidingCourseId, setDecidingCourseId] = useState<string | undefined>(
+    undefined
+  )
+  const { confirm, prompt } = useModal()
 
   const refresh = useCallback(() => {
     fetchAdminOrganizations().then(
@@ -150,10 +172,30 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     )
   }, [])
 
+  // WEB-53 — read only for the Courses screen itself, unlike
+  // `refresh`/`refreshDeletions` above (every other admin screen resolves
+  // against those two regardless of which one is current): no other screen
+  // here needs a course's own approval state, so there is no reason to pay
+  // for this read on every visit to `/platform-admin`.
+  const refreshCourses = useCallback(() => {
+    fetchAdminCourses().then(
+      (result) => setCourses(result.courses),
+      (caught: unknown) => {
+        if (caught instanceof ApiError) setError(caught)
+        else throw caught
+      }
+    )
+  }, [])
+
   useEffect(() => {
     refresh()
     refreshDeletions()
   }, [refresh, refreshDeletions])
+
+  useEffect(() => {
+    if (route.kind !== 'admin-courses') return
+    refreshCourses()
+  }, [route.kind, refreshCourses])
 
   // WEB-33/WEB-34: `/platform-admin` itself is never rendered past this —
   // once mounted, it replaces to the console's own landing screen, the
@@ -219,6 +261,53 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     }
   }
 
+  // WEB-53's Approve button — not destructive, runs immediately, the same
+  // "enabling is not destructive" treatment `components/CourseRows.tsx`'s
+  // own toggle already gives the non-destructive direction of that choice.
+  const handleApprove = async (courseId: string) => {
+    setError(undefined)
+    setDecidingCourseId(courseId)
+    try {
+      await approveAdminCourse(courseId)
+      refreshCourses()
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setDecidingCourseId(undefined)
+    }
+  }
+
+  // WEB-53's Unapprove button — the destructive direction (a course stops
+  // answering the moment this lands), confirmed through this panel's one
+  // modal, the same plain `confirm()` `components/CourseRows.tsx`'s own
+  // disable-a-course confirmation already uses — no typed name, unlike
+  // ADMIN-5's own delete: revoking an approval is reversible (an
+  // administrator can simply approve again), where deleting a tenant is
+  // not.
+  const handleUnapprove = async (course: AdminCourseSummary) => {
+    setError(undefined)
+    const confirmed = await confirm({
+      title: `Unapprove ${course.courseTitle}?`,
+      description:
+        'This course stops answering questions until a platform administrator approves it again.',
+      confirmLabel: 'Unapprove',
+      destructive: true,
+    })
+    if (!confirmed) return
+
+    setDecidingCourseId(course.courseId)
+    try {
+      await unapproveAdminCourse(course.courseId)
+      refreshCourses()
+    } catch (caught) {
+      if (caught instanceof ApiError) setError(caught)
+      else throw caught
+    } finally {
+      setDecidingCourseId(undefined)
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
@@ -264,6 +353,15 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           failed={error !== undefined}
           onBack={() => navigate({ kind: 'admin-organizations' })}
         />
+      ) : route.kind === 'admin-courses' ? (
+        <CoursesView
+          courses={courses}
+          failed={error !== undefined}
+          decidingCourseId={decidingCourseId}
+          onApprove={handleApprove}
+          onUnapprove={handleUnapprove}
+          onBack={() => navigate({ kind: 'admin-organizations' })}
+        />
       ) : (
         <OrganizationsList
           data={data}
@@ -274,6 +372,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           }
           onDelete={handleDelete}
           onViewDeletions={() => navigate({ kind: 'admin-deletions' })}
+          onViewCourses={() => navigate({ kind: 'admin-courses' })}
         />
       )}
     </div>
@@ -288,6 +387,7 @@ function OrganizationsList({
   onOpen,
   onDelete,
   onViewDeletions,
+  onViewCourses,
 }: {
   data: AdminOrganizationsResponse | undefined
   /** True once the read this screen renders from has failed — the refusal itself is already on screen above (`Admin`'s own `ErrorMessage`), so this screen must not also claim to still be loading. Restores the `!error &&` guard the split into three screens dropped: a non-administrator reaching `/platform-admin` saw the 403 *and* a permanent "Loading…" underneath it. */
@@ -296,6 +396,8 @@ function OrganizationsList({
   onOpen: (organizationId: string) => void
   onDelete: (organizationId: string, name: string) => void
   onViewDeletions: () => void
+  /** WEB-53 — the console's own entry point into the Courses screen. */
+  onViewCourses: () => void
 }) {
   return (
     <>
@@ -362,7 +464,10 @@ function OrganizationsList({
         </ul>
       )}
 
-      <div>
+      <div className="flex gap-2">
+        <Button variant="secondary" onClick={onViewCourses}>
+          Courses
+        </Button>
         <Button variant="secondary" onClick={onViewDeletions}>
           Deletion history
         </Button>
@@ -502,6 +607,138 @@ function DeletionsView({
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+/**
+ * WEB-33's `'admin-courses'` screen — pending courses first, each with an
+ * Approve button, then approved courses with an Unapprove one. Rows do not
+ * link anywhere yet — ADMIN-6, the read-only per-course settings view, is
+ * the next slice (this file's own module comment).
+ */
+function CoursesView({
+  courses,
+  failed,
+  decidingCourseId,
+  onApprove,
+  onUnapprove,
+  onBack,
+}: {
+  courses: AdminCourseSummary[] | undefined
+  /** See `OrganizationsList`'s own `failed` — same reason, same treatment. */
+  failed: boolean
+  decidingCourseId: string | undefined
+  onApprove: (courseId: string) => void
+  onUnapprove: (course: AdminCourseSummary) => void
+  onBack: () => void
+}) {
+  if (courses === undefined) {
+    if (failed) {
+      return (
+        <Button variant="secondary" onClick={onBack}>
+          ← Organizations
+        </Button>
+      )
+    }
+    // WEB-45: shaped like the `<li>` rows below, once the read resolves.
+    return (
+      <div className="flex flex-col gap-3">
+        <SkeletonRow />
+        <SkeletonRow />
+        <LoadingStatus />
+      </div>
+    )
+  }
+
+  const pending = courses.filter((course) => course.aiApprovedAt === null)
+  const approved = courses.filter((course) => course.aiApprovedAt !== null)
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Button variant="secondary" onClick={onBack}>
+        ← Organizations
+      </Button>
+      <h2 className="text-sm font-semibold text-neutral-900">
+        Pending approval
+      </h2>
+      {pending.length === 0 ? (
+        <p className="text-sm text-neutral-500">
+          No courses awaiting approval.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2" data-testid="admin-courses-pending">
+          {pending.map((course) => (
+            <li
+              key={course.courseId}
+              data-testid={`admin-course-${course.courseId}`}
+              className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <CourseRowDetail course={course} />
+              <Button
+                variant="primary"
+                onClick={() => onApprove(course.courseId)}
+                disabled={decidingCourseId === course.courseId}
+              >
+                {decidingCourseId === course.courseId
+                  ? 'Approving…'
+                  : 'Approve'}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h2 className="text-sm font-semibold text-neutral-900">Approved</h2>
+      {approved.length === 0 ? (
+        <p className="text-sm text-neutral-500">No approved courses yet.</p>
+      ) : (
+        <ul
+          className="flex flex-col gap-2"
+          data-testid="admin-courses-approved"
+        >
+          {approved.map((course) => (
+            <li
+              key={course.courseId}
+              data-testid={`admin-course-${course.courseId}`}
+              className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <CourseRowDetail course={course} />
+              <Button
+                variant="destructive"
+                onClick={() => onUnapprove(course)}
+                disabled={decidingCourseId === course.courseId}
+              >
+                {decidingCourseId === course.courseId
+                  ? 'Unapproving…'
+                  : 'Unapprove'}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** WEB-53's own identifying detail for one course row — title, project, organization, owner(s) and when created, plus (for an approved course) who approved it and when. Shared between the pending and approved lists above, the same "one row shape, two action columns" the `<Button>` alone differs between. */
+function CourseRowDetail({ course }: { course: AdminCourseSummary }) {
+  return (
+    <div>
+      <p className="text-sm font-medium text-neutral-900">
+        {course.courseTitle}
+      </p>
+      <p className="text-xs text-neutral-500">
+        {course.projectName} · {course.organizationName}
+        {course.ownerEmails.length > 0 && ` · ${course.ownerEmails.join(', ')}`}
+      </p>
+      <p className="text-xs text-neutral-400">
+        Created {new Date(course.createdAt).toLocaleString()}
+        {course.aiApprovedAt !== null &&
+          ` · approved ${new Date(course.aiApprovedAt).toLocaleString()}${
+            course.aiApprovedByEmail ? ` by ${course.aiApprovedByEmail}` : ''
+          }`}
+      </p>
     </div>
   )
 }

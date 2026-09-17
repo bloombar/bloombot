@@ -48,11 +48,17 @@ const {
   fetchDeletionPreview,
   fetchTenantDeletions,
   deleteTenant,
+  fetchAdminCourses,
+  approveAdminCourse,
+  unapproveAdminCourse,
 } = vi.hoisted(() => ({
   fetchAdminOrganizations: vi.fn(),
   fetchDeletionPreview: vi.fn(),
   fetchTenantDeletions: vi.fn(),
   deleteTenant: vi.fn(),
+  fetchAdminCourses: vi.fn(),
+  approveAdminCourse: vi.fn(),
+  unapproveAdminCourse: vi.fn(),
 }))
 
 vi.mock('../src/api/client.js', async () => {
@@ -65,6 +71,9 @@ vi.mock('../src/api/client.js', async () => {
     fetchDeletionPreview,
     fetchTenantDeletions,
     deleteTenant,
+    fetchAdminCourses,
+    approveAdminCourse,
+    unapproveAdminCourse,
   }
 })
 
@@ -451,5 +460,120 @@ describe('Admin — WEB-33’s own screens', () => {
     })
 
     expect(await screen.findByTestId('not-found-page')).toBeInTheDocument()
+  })
+})
+
+describe('Admin — WEB-53’s Courses screen', () => {
+  const PENDING_COURSE = {
+    courseId: 'course-1',
+    courseTitle: 'Web Design',
+    projectName: 'Fall 2026',
+    organizationId: 'org-1',
+    organizationName: 'A Real Tenant',
+    ownerEmails: ['owner@example.edu'],
+    createdAt: Date.now(),
+    aiApprovedAt: null,
+    aiApprovedByAccountId: null,
+    aiApprovedByEmail: null,
+  }
+  const APPROVED_COURSE = {
+    courseId: 'course-2',
+    courseTitle: 'Intro to Bloom',
+    projectName: 'Spring 2027',
+    organizationId: 'org-2',
+    organizationName: 'Another Tenant',
+    ownerEmails: ['other-owner@example.edu'],
+    createdAt: Date.now(),
+    aiApprovedAt: Date.now(),
+    aiApprovedByAccountId: 'admin-1',
+    aiApprovedByEmail: 'admin@bloombot.example',
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('lists pending courses with an Approve button, and approved courses with an Unapprove button', async () => {
+    fetchAdminCourses.mockResolvedValue({
+      courses: [PENDING_COURSE, APPROVED_COURSE],
+    })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+
+    const pending = await screen.findByTestId('admin-courses-pending')
+    expect(within(pending).getByText('Web Design')).toBeInTheDocument()
+    expect(
+      within(pending).getByRole('button', { name: 'Approve' })
+    ).toBeInTheDocument()
+
+    const approved = screen.getByTestId('admin-courses-approved')
+    expect(within(approved).getByText('Intro to Bloom')).toBeInTheDocument()
+    expect(
+      within(approved).getByRole('button', { name: 'Unapprove' })
+    ).toBeInTheDocument()
+    // WEB-53: "recorded with who acted and when" — the approver shows on
+    // the approved row.
+    expect(approved).toHaveTextContent('admin@bloombot.example')
+  })
+
+  it('reached from the organizations list’s own Courses button', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+
+    renderAdmin()
+    fireEvent.click(await screen.findByRole('button', { name: 'Courses' }))
+
+    expect(await screen.findByText('Web Design')).toBeInTheDocument()
+  })
+
+  it('approve runs immediately, with no confirmation, and refreshes the list', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+    approveAdminCourse.mockResolvedValue({ approved: true })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    await waitFor(() =>
+      expect(approveAdminCourse).toHaveBeenCalledWith('course-1')
+    )
+    // Not destructive — no dialog opened for this direction.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  // WEB-53's brief: Unapprove is the destructive direction and confirms
+  // through this panel's one modal — but needs no typed-name prompt, unlike
+  // ADMIN-5's own delete (revoking is reversible; deleting a tenant is not).
+  it('unapprove confirms first, with a plain confirm rather than a typed-name prompt', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [APPROVED_COURSE] })
+    unapproveAdminCourse.mockResolvedValue({ approved: false })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Unapprove' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Intro to Bloom')
+    // No typed-name field — a plain confirm, unlike ADMIN-5's own prompt.
+    expect(screen.queryByLabelText(/name/i)).not.toBeInTheDocument()
+    expect(unapproveAdminCourse).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unapprove' }))
+
+    await waitFor(() =>
+      expect(unapproveAdminCourse).toHaveBeenCalledWith('course-2')
+    )
+  })
+
+  it('backing out of the unapprove confirmation calls nothing', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [APPROVED_COURSE] })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Unapprove' }))
+
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(unapproveAdminCourse).not.toHaveBeenCalled()
   })
 })

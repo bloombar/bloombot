@@ -282,6 +282,12 @@ export interface CourseSummary {
   // all once the organization holds more than one active binding.
   discordServerId: string | null
   createdAt: number
+  // COST-8 — read-only: no course owner can set this (`courses.save`'s own
+  // input schema declares no such field), only read it. `null` means
+  // pending — `pages/CourseEditor.tsx`'s own banner reads this to show the
+  // same pending state SURF-10 requires "is not discovered only by
+  // asking."
+  aiApprovedAt: number | null
 }
 
 /** `courses.get`'s own shape: a course with its categories and channels attached (CFG-4). */
@@ -605,6 +611,12 @@ export type ChatAnswerResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'not-connected' }
+  // COST-8/SURF-10 — `notice` is the fully rendered text
+  // (`@bloombot/core`'s `courseNotApprovedNotice`, already naming the
+  // deployment's configured support contact), attached by `routes/chat.ts`
+  // so this app never has to read `SUPPORT_CONTACT` itself (PLAT-2's own
+  // "this app does not import `@bloombot/config`" boundary).
+  | { kind: 'declined-not-approved'; notice: string }
 
 /** ADMIN-1: one message in a read-back transcript — mirrors `@bloombot/db`'s own `transcriptAccess.TranscriptEntry` by hand, the same "this app does not import `@bloombot/db`" boundary this whole file's own module comment already explains for every other shape here. */
 export interface TranscriptEntry {

@@ -66,8 +66,8 @@ export interface ChatProps {
  * here anyway, for the same reason every other "unreachable in practice"
  * guard in this codebase does: defended, not assumed.
  */
-function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
-  switch (kind) {
+function describeDeclineNotice(result: ChatAnswerResult): string {
+  switch (result.kind) {
     case 'declined-over-limit':
       return 'You have reached the maximum number of questions for today.'
     case 'declined-over-cap':
@@ -80,6 +80,13 @@ function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
       return 'This course has not been set up to answer questions yet.'
     case 'not-connected':
       return 'Your account is not connected here yet. Ask your instructor for help connecting it.'
+    // COST-8/SURF-10 — `routes/chat.ts` already renders the full notice
+    // (naming the deployment's own support contact) and attaches it to the
+    // result, so this surface shows exactly that text rather than
+    // inventing its own — the one kind here whose wording is not local to
+    // this file (`@bloombot/core`'s own `courseNotApprovedNotice`).
+    case 'declined-not-approved':
+      return result.notice
     case 'answered':
     case 'answered-last-request':
     case 'failed-with-apology':
@@ -87,9 +94,9 @@ function describeDeclineNotice(kind: ChatAnswerResult['kind']): string {
       // one of these — see this function's own doc comment.
       return 'Something went wrong.'
     default: {
-      const exhaustive: never = kind
+      const exhaustive: never = result
       throw new Error(
-        `describeDeclineNotice: unhandled kind ${String(exhaustive)}`
+        `describeDeclineNotice: unhandled kind ${String((exhaustive as ChatAnswerResult).kind)}`
       )
     }
   }
@@ -317,7 +324,7 @@ export function Chat({
           },
         ])
       } else {
-        setNotice(describeDeclineNotice(result.kind))
+        setNotice(describeDeclineNotice(result))
       }
     } catch (caught) {
       if (caught instanceof ApiError) setMessagesError(caught)

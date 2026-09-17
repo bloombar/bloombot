@@ -438,6 +438,14 @@ export function CourseEditor({
   // (`route.ts#isSameCourseEditorScreen`) and lets the new `tab` prop
   // through directly (WEB-34).
   const [activeTab, setActiveTab] = useState<CourseEditorTab>(tab ?? 'general')
+  // COST-8/SURF-10 — read-only, never part of `form` (no field an
+  // instructor edits reaches it — `courses.save`'s own input schema
+  // declares no such field at all). `undefined` while a new course's blank
+  // form is showing (nothing to be pending yet) or before the fetch below
+  // resolves; `null` is the pending state the banner (below) renders on.
+  const [aiApprovedAt, setAiApprovedAt] = useState<number | null | undefined>(
+    undefined
+  )
   // Rework round 1, must-fix 3: `switchToTabForField` runs inside a
   // `handleSave` that has just crossed an `await` (the server round trip),
   // so a plain closure over `activeTab` would read whatever tab was active
@@ -739,6 +747,7 @@ export function CourseEditor({
       setBaseline(blank)
       setLoadError(undefined)
       setLoading(false)
+      setAiApprovedAt(undefined)
       return
     }
     setLoading(true)
@@ -749,6 +758,7 @@ export function CourseEditor({
         const loaded = formFromCourse(course)
         setForm(loaded)
         setBaseline(loaded)
+        setAiApprovedAt(course.aiApprovedAt)
         setLoading(false)
       },
       (caught: unknown) => {
@@ -1798,6 +1808,23 @@ export function CourseEditor({
       <h1 className="text-page-title font-semibold text-neutral-900">
         {courseId === undefined ? 'New course' : form.title || 'Course'}
       </h1>
+
+      {/* COST-8/SURF-10 — an existing course's owner sees the same pending
+          state a student asking it would be told about, rather than
+          discovering it only by asking (SURF-10's own text). Never shown
+          for a new course (`aiApprovedAt` stays `undefined` until a real
+          course loads, above) — a course this screen has not saved yet has
+          no approval decision to report at all. */}
+      {courseId !== undefined && aiApprovedAt === null && (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-md border border-warning-600 bg-warning-50 px-3 py-2 text-sm text-warning-600"
+        >
+          <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
+          Pending approval — this course won&apos;t answer questions until
+          Bloombot support approves it.
+        </p>
+      )}
 
       {courseId === undefined ? (
         // WEB-35 — a new course cannot have join links, a roster import,

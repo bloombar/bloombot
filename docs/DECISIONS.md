@@ -12742,3 +12742,62 @@ confirmation design rather than folding into MCP-4's "destructive" bucket by def
 only on the caller's own membership rather than a peer's. The brief's own instruction to decide the surface
 question was scoped to `organizations.rename`; `memberships.leave`'s exclusion is this slice's own judgment
 call, recorded here for the same reason the rename inclusion is.
+
+## D-121 — `apps/web`: WEB-55/WEB-56 — the arrival list, and the header's organization control as a real menu
+
+**Problem.** `resolveHomeRoute` (`App.tsx`) picked `account.memberships[0]` — insertion order — as `/`'s own
+landing organization; TEN-1 gives every account a personal organization on first sign-in, so that was almost
+always the empty one, never the institution a student actually joined a course through. WEB-55 asks for an
+arrival list instead of a guess; WEB-56 asks for the header's own organization control to become a real menu
+rather than a `<select>`.
+
+**The arrival-list check sits between `justInstalled` and the ordinary fallback in `resolveHomeRoute`, not
+before `joinedCourse`/`justInstalled`.** Both of those already name a specific destination this account just
+earned (a redemption, an OAuth round trip) — showing a list a moment later would ask a person to re-pick
+something the app already knows. The check itself is a plain count,
+`account.memberships.length + account.connectedOrganizations.length > 1`: an account with exactly one
+relationship never reaches it, so `resolveHomeRoute`'s own fallback (`resolveDefaultOrganization`) is
+unchanged for the common case (TEN-1's own personal organization, alone).
+
+**`OrganizationsRoute` (`{ kind: 'organizations' }`) is a real, top-level address — `/organizations` — not a
+transient app state**, following `routing/route.ts`'s own "own address, reachable, pushes rather than
+replaces" convention (WEB-33/WEB-34): it is bookmarkable, reachable by Back, and `App.tsx` renders it the
+same way it renders the signed-in `NotFound` — wrapped in `SignedInChrome`, acting in the account's own
+*default* organization for the header's sake (`resolveDefaultOrganization`), since the address itself names
+none. Outside `ShellRoute` rather than inside it, the identical reason `AccountRoute` already is: this
+screen is not organization-scoped, and `pages/Shell.tsx` never renders it.
+
+**The arrival list's own presentation is factored out of `pages/Account.tsx` into
+`components/OrganizationList.tsx`**, rather than `pages/Organizations.tsx` inventing a second one — the
+brief's own explicit ask. `OrganizationList` takes `activeOrganizationId` as optional and an `actionLabel`
+string, since the two callers differ in exactly those two respects: `Account.tsx` always has an active
+organization (marked "Active", no button of its own) and keeps its long-standing "Switch" label;
+`Organizations.tsx` has no active organization at all yet (nothing chosen), so every row offers its own
+button, labelled "Choose" — there is nothing yet to switch *away* from.
+
+**The header's organization control (`OrganizationSwitcher.tsx`) is rebuilt as a hand-rolled popup following
+`components/KebabMenu.tsx`'s own pattern** — a trigger button, `Escape`/click-outside dismissal, focus
+returned to the trigger, only one instance open at a time (broadcast through a *distinct* custom event name
+from `KebabMenu`'s own, since the two widgets have no reason to close one another) — rather than reusing
+`KebabMenu` itself: that component's trigger is deliberately icon-only (a kebab glyph with an `aria-label`),
+and this control needs a *visible* label (the active organization's own name), which is meaningful content
+an `aria-label` would hide from assistive technology, not decoration to caption. Like `KebabMenu`, the items
+are ordinary, independently-focusable `<button>`s, not `role="menu"`/`role="menuitem"` — the identical
+reasoning: a screen reader announcing "menu" for a widget that does not implement arrow-key navigation is
+worse than not claiming the role.
+
+**A second copy of the same control renders above the drawer's own links** (`components/AppShell.tsx`'s new
+`drawerHeader` slot, wired from `components/SignedInChrome.tsx`), so the drawer's links are never ambiguous
+about which organization they act in while it is open — the brief's own explicit ask. It needs a distinct
+`data-testid` (`OrganizationSwitcher`'s new optional `testId` prop, defaulting to the header's own
+`organization-switcher` so every existing caller and test is unaffected) purely so `getByTestId` never
+matches two elements at once; switching or opening a link from the drawer's own copy also closes the drawer
+itself, the same "close once the navigation actually proceeds" discipline every other drawer control already
+follows.
+
+**Test-suite fallout, not scope creep.** `tests/shell.test.tsx` drove every organization switch in the file
+through `fireEvent.change` against a `combobox` named "Organization" (eighteen call sites) — genuinely broken
+by WEB-56, since the control it exercised no longer exists in that shape. Replaced with one shared
+`switchOrganization(name)` helper (open the trigger, click the named item) rather than hand-editing each site
+differently, so the whole file keeps testing the same behaviour through the new control rather than becoming
+inconsistent about how a switch is driven.

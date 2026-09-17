@@ -21,6 +21,8 @@ import {
 const ROUTES: Route[] = [
   { kind: 'home' },
   { kind: 'account' },
+  // WEB-55 — the arrival list's own address.
+  { kind: 'organizations' },
   { kind: 'privacy' },
   { kind: 'terms' },
   { kind: 'platform-admin' },
@@ -120,6 +122,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/chat/course-1',
     '/o/org-1/mcp',
     '/account',
+    '/organizations',
     '/platform-admin',
     '/platform-admin/organizations',
     '/platform-admin/organizations/org-1',
@@ -200,6 +203,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/join',
     '/invitations',
     '/account/extra',
+    '/organizations/extra',
     '/platform-admin/sub',
     '/platform-admin/organizations/org-1/extra',
     '/platform-admin/deletions/extra',

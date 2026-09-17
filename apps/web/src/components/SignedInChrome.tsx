@@ -1,16 +1,16 @@
 /**
  * LINK-11/WEB-49 — the one place this app builds `AppShell`'s own
- * `navGroups`/`onHome`/`headerStart`/`headerEnd`/`drawerFooter` props from a
- * signed-in account. Before this slice, `pages/Shell.tsx` was the only
- * screen that ever rendered `AppShell` at all, and built those five props
- * inline from the organization it was acting in; every other signed-in
- * render — `pages/Connect.tsx`, `pages/Connected.tsx`, `pages/JoinLink.tsx`,
- * `pages/Invitation.tsx`, `pages/ConnectAssistant.tsx`, and the signed-in
- * `pages/NotFound.tsx` `App.tsx` renders directly — stood outside the shell
- * entirely, with no header, or a smaller one of their own
- * (`pages/Connect.tsx`'s former `BrandHeader`). This component is what both
- * now share, so the header is one implementation rather than two that can
- * drift apart.
+ * `navGroups`/`onHome`/`headerStart`/`headerEnd`/`drawerHeader`/`drawerFooter`
+ * props from a signed-in account. Before the WEB-49 slice named above,
+ * `pages/Shell.tsx` was the only screen that ever rendered `AppShell` at
+ * all, and built those props inline from the organization it was acting
+ * in; every other signed-in render — `pages/Connect.tsx`,
+ * `pages/Connected.tsx`, `pages/JoinLink.tsx`, `pages/Invitation.tsx`,
+ * `pages/ConnectAssistant.tsx`, and the signed-in `pages/NotFound.tsx`
+ * `App.tsx` renders directly — stood outside the shell entirely, with no
+ * header, or a smaller one of their own (`pages/Connect.tsx`'s former
+ * `BrandHeader`). This component is what both now share, so the header is
+ * one implementation rather than two that can drift apart.
  *
  * Two differences from `pages/Shell.tsx`'s own former inline construction,
  * both required for the standalone pages this now also serves:
@@ -247,6 +247,44 @@ export function SignedInChrome({
             navigate={(route, options) =>
               runAction(() => navigate(route, options))
             }
+          />
+        )
+      }
+      // WEB-56 — the same control again, above the drawer's own links, so
+      // they are never ambiguous about which organization they act in
+      // (`components/AppShell.tsx`'s own `drawerHeader` doc comment). A
+      // second, distinct element (not the one just above, reused) — unlike
+      // the header's own copy, switching or opening a link from here also
+      // closes the drawer itself, the same "close once the navigation this
+      // click starts actually proceeds" discipline every other drawer
+      // control here already follows (`navigateToTab`, above); `testId`
+      // keeps the two apart for `getByTestId` (`OrganizationSwitcher.tsx`'s
+      // own module comment on why).
+      drawerHeader={
+        activeOrganizationId === undefined ? undefined : (
+          <OrganizationSwitcher
+            memberships={account.memberships}
+            connectedOrganizations={account.connectedOrganizations}
+            activeOrganizationId={activeOrganizationId}
+            onChange={(organizationId) =>
+              runAction(() => {
+                navigate(
+                  landingForOrganizationSwitch(
+                    activeTab,
+                    organizationId,
+                    account
+                  )
+                )
+                appShellRef.current?.closeDrawer()
+              })
+            }
+            navigate={(route, options) =>
+              runAction(() => {
+                navigate(route, options)
+                appShellRef.current?.closeDrawer()
+              })
+            }
+            testId="organization-switcher-drawer"
           />
         )
       }

@@ -108,6 +108,18 @@ export type OrganizationRoute =
 /** WEB-34 — `/account` is deliberately not organization-scoped (the brief's own words); `pages/Shell.tsx` is the one place this and every `OrganizationRoute` below are ever rendered. */
 export type AccountRoute = { kind: 'account' }
 
+/**
+ * WEB-55 — `/organizations`, the arrival list a multi-organization account
+ * lands on when nothing else already named a destination
+ * (`App.tsx#resolveHomeRoute`'s own module comment has the full ordering).
+ * Deliberately outside `ShellRoute`, the same "not organization-scoped"
+ * reason `AccountRoute` is above — this address names no organization
+ * either, and `App.tsx` renders it directly, wrapped in `SignedInChrome`
+ * like every other standalone signed-in page, rather than through
+ * `pages/Shell.tsx`.
+ */
+export type OrganizationsRoute = { kind: 'organizations' }
+
 /** Every address `pages/Shell.tsx` can render — an organization-scoped screen, or the one account-level exception. */
 export type ShellRoute = OrganizationRoute | AccountRoute
 
@@ -147,6 +159,7 @@ export type AdminRoute =
 export type Route =
   | ShellRoute
   | AdminRoute
+  | OrganizationsRoute
   | { kind: 'home' }
   | { kind: 'sign-in'; token: string }
   | { kind: 'discord-callback' }
@@ -209,6 +222,12 @@ export function parseRoute(pathname: string): Route {
   const [first, second, ...rest] = segments
 
   if (first === 'account' && segments.length === 1) return { kind: 'account' }
+
+  // WEB-55 — the arrival list's own address, the same one-segment shape
+  // `/account` above already has.
+  if (first === 'organizations' && segments.length === 1) {
+    return { kind: 'organizations' }
+  }
 
   if (first === 'privacy' && segments.length === 1) return { kind: 'privacy' }
   if (first === 'terms' && segments.length === 1) return { kind: 'terms' }
@@ -403,6 +422,8 @@ export function buildPath(route: Route): string {
       return '/'
     case 'account':
       return '/account'
+    case 'organizations':
+      return '/organizations'
     case 'privacy':
       return '/privacy'
     case 'terms':

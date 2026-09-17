@@ -9,7 +9,7 @@
  * and neither was `fetchMe()` rejecting outright (finding 3).
  */
 
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
@@ -185,9 +185,12 @@ describe('App (WEB-1..4)', () => {
     // install actually bound the server to — before checking the install
     // banner itself: the Discord tab is not the default one (finding 10),
     // so this opens it explicitly the way an instructor would.
+    // WEB-56 — the header's own organization control is a real menu now,
+    // not a `<select>`: the trigger's own text already names the active
+    // organization.
     expect(
-      await screen.findByRole('combobox', { name: 'Organization' })
-    ).toHaveValue('org-2')
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org Two')
     // WEB-34: `/` is never a real address — it resolves, once the session
     // is known, to the account's own canonical landing address (Projects,
     // for a member) under whichever organization the install actually
@@ -1052,6 +1055,118 @@ describe('App — / home resolution (WEB-25, WEB-34)', () => {
       await screen.findByRole('heading', { name: 'Projects' })
     ).toBeInTheDocument()
     expect(window.location.pathname).toBe('/o/org-1/projects')
+  })
+})
+
+// WEB-55: an account belonging to more than one organization lands on the
+// arrival list instead of `resolveHomeRoute` guessing `memberships[0]` —
+// this file's own module comment above has the fuller reasoning for why
+// that guess was almost always the wrong one.
+describe('App — WEB-55: the arrival list', () => {
+  it('an account belonging to more than one organization lands on the arrival list, not a guess', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'instructor@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Choose an organization' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/organizations')
+    expect(screen.getByRole('link', { name: 'Org One' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Org Two' })).toBeInTheDocument()
+  })
+
+  it('choosing an organization from the arrival list lands in it', async () => {
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'instructor@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    await screen.findByRole('heading', { name: 'Choose an organization' })
+    fireEvent.click(
+      within(screen.getByTestId('organizations-page'))
+        .getByText(/Org Two/)
+        .closest('li')!
+        .querySelector('button') as HTMLButtonElement
+    )
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org Two')
+    expect(window.location.pathname).toBe('/o/org-2/projects')
+  })
+
+  // The connected-only case `resolveHomeRoute` already treats specially
+  // (this file's own module comment on the split between Projects and
+  // Chat): the arrival list still shows for two connected-only
+  // organizations, and choosing one lands on Chat, mirroring
+  // `Shell.tsx#effectiveTab`'s own member-vs-connected restriction.
+  it('a connected-only account with two organizations gets the arrival list too, and choosing one lands on Chat, not Projects', async () => {
+    listChatCourses.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-2',
+        email: 'student@example.edu',
+        memberships: [],
+        connectedOrganizations: [
+          { organizationId: 'org-a', organizationName: 'Org A' },
+          { organizationId: 'org-b', organizationName: 'Org B' },
+        ],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    await screen.findByRole('heading', { name: 'Choose an organization' })
+    fireEvent.click(
+      within(screen.getByTestId('organizations-page'))
+        .getByText(/Org B/)
+        .closest('li')!
+        .querySelector('button') as HTMLButtonElement
+    )
+
+    await waitFor(() => expect(listChatCourses).toHaveBeenCalledWith('org-b'))
+    expect(window.location.pathname).toBe('/o/org-b/chat')
   })
 })
 

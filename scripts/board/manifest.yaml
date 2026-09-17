@@ -4443,7 +4443,7 @@
   section: §42 Choosing and Managing an Organization
   family: WEB
   phase: 37
-  status: In progress
+  status: Done
   review: false
 - id: WEB-56
   title: The organization on screen is a menu that switches organizations
@@ -4456,7 +4456,7 @@
   section: §42 Choosing and Managing an Organization
   family: WEB
   phase: 37
-  status: In progress
+  status: Done
   review: false
 - id: WEB-57
   title: An owner renames their organization

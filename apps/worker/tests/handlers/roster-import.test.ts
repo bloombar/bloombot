@@ -267,6 +267,176 @@ describe('roster.import handler', () => {
     })
   })
 
+  describe('ROST-18 — a returning person’s name is authoritative from the roster', () => {
+    // A person who already existed before this import (Google sign-in's own
+    // AUTH-7 fill, simulated here directly) gets a *different* roster name
+    // overwritten onto them, not silently kept — the maintainer's own call
+    // that the roster, not an earlier Google claim, is the source of truth
+    // for a name. Fails without the fix: `mergeRosterFields` alone would
+    // leave the Google name in place, since both fields are already
+    // non-null.
+    it("overwrites an existing person's Google-supplied first/last with a different roster value", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const existingPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      // Simulates AUTH-7's own Google-sign-in fill — a name already stored
+      // from a different source, before this roster import ever runs.
+      people.overwriteRosterFields(
+        seeded.organizationId,
+        existingPerson.id,
+        { firstName: 'Adaline', lastName: 'Byron' },
+        testDb.db
+      )
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      const report = await runImport(
+        seeded.organizationId,
+        seeded.courseId,
+        csv
+      )
+
+      const after = people.getPerson(
+        seeded.organizationId,
+        existingPerson.id,
+        testDb.db
+      )
+      expect(after).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' })
+      // ROST-18: no longer reported as declined — it was overwritten, not
+      // merged, so `mergeRosterFields`'s own decline concept does not apply.
+      expect(report.rosterFieldsDeclined).toEqual([])
+    })
+
+    // A blank roster cell must never clear a name the person already has —
+    // "overwrite", not "replace with whatever the row happens to say,
+    // including nothing".
+    it('keeps an existing lastName when the roster row leaves that cell blank', async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const existingPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      people.overwriteRosterFields(
+        seeded.organizationId,
+        existingPerson.id,
+        { lastName: 'Lovelace' },
+        testDb.db
+      )
+
+      // No `last` value on this row — the CSV columns are
+      // first,last,email,discord,github (see `HEADER`).
+      const csv = [HEADER, 'Ada,,ada@example.edu,adalovelace,adal'].join('\n')
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      const after = people.getPerson(
+        seeded.organizationId,
+        existingPerson.id,
+        testDb.db
+      )
+      expect(after).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' })
+    })
+
+    // A later Google sign-in must not undo the roster's own name — Google's
+    // own fill-only write (`sign-in.ts#fillNamesFromGoogleIdentity`) never
+    // overwrites a non-null field, so once the roster has set a name here,
+    // nothing short of another roster import changes it again.
+    it("a subsequent Google-style fill (mergeRosterFields) does not change the roster's own name", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const existingPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      people.overwriteRosterFields(
+        seeded.organizationId,
+        existingPerson.id,
+        { firstName: 'Adaline', lastName: 'Byron' },
+        testDb.db
+      )
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      // The same fill-only call `sign-in.ts` makes on a later Google
+      // sign-in — a no-op here, since both fields are already set.
+      people.mergeRosterFields(
+        seeded.organizationId,
+        existingPerson.id,
+        { firstName: 'Google', lastName: 'Claim' },
+        testDb.db
+      )
+
+      const after = people.getPerson(
+        seeded.organizationId,
+        existingPerson.id,
+        testDb.db
+      )
+      expect(after).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' })
+    })
+
+    // `email` keeps today's fill-only behaviour even for a returning
+    // person — ROST-18 only changes `firstName`/`lastName`.
+    it("still fills email fill-only for a returning person, unaffected by the name's own authoritative overwrite", async () => {
+      testDb = createTestDatabase()
+      discordServer = await FakeDiscordGuildServer.start()
+      const seeded = seedCourseWithStudentCategory()
+      discordServer.setGuildMembers(seeded.guildId, [
+        { user: { id: 'snowflake-ada', username: 'adalovelace' } },
+      ])
+
+      const existingPerson = people.resolvePersonByIdentity(
+        seeded.organizationId,
+        { surface: 'discord', externalId: 'snowflake-ada' },
+        testDb.db
+      )
+      people.overwriteRosterFields(
+        seeded.organizationId,
+        existingPerson.id,
+        { firstName: 'Adaline', lastName: 'Byron' },
+        testDb.db
+      )
+
+      const csv = [
+        HEADER,
+        'Ada,Lovelace,ada@example.edu,adalovelace,adal',
+      ].join('\n')
+      await runImport(seeded.organizationId, seeded.courseId, csv)
+
+      const after = people.getPerson(
+        seeded.organizationId,
+        existingPerson.id,
+        testDb.db
+      )
+      expect(after?.email).toBe('ada@example.edu')
+    })
+  })
+
   describe('ROST-11 — per-student channels, batched around the category cap', () => {
     it('fills the first category to the cap, then spills into the second, in order', async () => {
       testDb = createTestDatabase()

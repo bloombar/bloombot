@@ -44,6 +44,7 @@ import request from 'supertest'
 
 import { beginDiscordPersonLink, issueMcpPersonLinkToken } from '@bloombot/auth'
 import {
+  accounts,
   courses,
   enrolments,
   people,
@@ -811,6 +812,52 @@ describe('POST .../discord/preview and .../discord/confirm', () => {
         testDb.db
       )?.id
     ).toBe(discordConnected?.id)
+  })
+
+  // AUTH-7 (rework round 1, must-fix 3) — `attachWebIdentityOrMerge`'s own
+  // fill call: the bare survivor this flow just gave a Discord identity to
+  // (above) is also the first person ever to hold this account's own `web`
+  // identity, so this is the fresh-attach branch, not a merge. Fails
+  // without the fill call: `firstName`/`lastName` would stay `null` on the
+  // resulting person even though the account already had them.
+  it("fills the Discord-proven survivor's names from the account's own stored ones, once the web identity attaches to it", async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    accounts.setAccountNames(
+      caller.accountId,
+      { firstName: 'Jane', lastName: 'Doe' },
+      testDb.db
+    )
+    const fakeDiscord = createFakeDiscordRestClient({
+      currentUser: { id: 'snowflake-named', username: 'a-student' },
+    })
+    const app = await buildTestApp(testDb.db, {
+      discordRestClient: fakeDiscord,
+    })
+    const { state } = await beginConnect(app, caller.organizationId, caller)
+    await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/person-link/discord/preview`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ code: 'the-code', state })
+
+    const confirm = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/person-link/discord/confirm`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ state })
+    expect(confirm.status).toBe(200)
+
+    const survivor = people.resolveIdentity(
+      caller.organizationId,
+      { surface: 'discord', externalId: 'snowflake-named' },
+      testDb.db
+    )
+    expect(survivor).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
   })
 
   it('confirm refuses a state that was never previewed', async () => {

@@ -46,10 +46,21 @@
  * `handle-mention.ts`'s own module comment and `docs/DECISIONS.md` for the
  * mechanics and what it deliberately still does not do.
  *
- * **Roster fields are merged, never overwritten (PPL-4)**: `mergeRosterFields`
- * fills in only what a surface has not already proven about this person —
- * exactly PPL-4's "a roster corroborates, it does not overwrite" — never
- * `overwriteRosterFields`, which this handler does not use at all.
+ * **Roster fields are merged, never overwritten (PPL-4) — except a returning
+ * person's own name (ROST-18)**: `mergeRosterFields` fills in only what a
+ * surface has not already proven about this person for `email` and
+ * `githubHandle` — exactly PPL-4's "a roster corroborates, it does not
+ * overwrite". `firstName`/`lastName` are the one deliberate exception: the
+ * maintainer's own call is that the roster is the authoritative source for a
+ * person's name, so a non-empty `first`/`last` cell *overwrites* whatever a
+ * person already had (Google's own claims — AUTH-7 — or an earlier import's
+ * typo), via `overwriteRosterFields`, for exactly the people who already
+ * existed before this import (`existedBeforehand`, below); a *newly created*
+ * person still gets its very first name from `mergeRosterFields`, since
+ * there is nothing yet to overwrite. An empty `first`/`last` cell never
+ * clears a name either way — `overwriteRosterFields` is only ever called
+ * with the roster's own non-empty values, never `null`. See
+ * `docs/DECISIONS.md`.
  *
  * **Channels (ROST-11)**: one private channel per student, inside the
  * course's own numbered `… - STUDENTS NN` categories (CFG-4) — matched by a
@@ -1684,10 +1695,48 @@ export function createRosterImportHandler(
         email: row.email || null,
         githubHandle: row.github || null,
       } as const
+      // ROST-18: a person who already existed before this import has their
+      // name overwritten by a non-empty roster cell, never merely filled —
+      // the maintainer's own call that the roster is authoritative for a
+      // name, ahead of Google's own claims (AUTH-7) or an earlier import's
+      // typo. A blank cell writes nothing (`overwriteRosterFields` is only
+      // ever called with the roster's own non-empty values), and a
+      // *brand-new* person (nothing to overwrite yet) still gets its first
+      // name from the ordinary fill-only `mergeRosterFields` call below.
+      if (existedBeforehand) {
+        const nameOverwrite: Partial<
+          Pick<people.RosterFields, 'firstName' | 'lastName'>
+        > = {}
+        if (row.first) nameOverwrite.firstName = row.first
+        if (row.last) nameOverwrite.lastName = row.last
+        if (Object.keys(nameOverwrite).length > 0) {
+          people.overwriteRosterFields(
+            context.organizationId,
+            person.id,
+            nameOverwrite,
+            context.db
+          )
+        }
+      }
       const mergedPerson = people.mergeRosterFields(
         context.organizationId,
         person.id,
-        desiredFields,
+        {
+          email: desiredFields.email,
+          githubHandle: desiredFields.githubHandle,
+          // Only asked of `mergeRosterFields` for a person new to this
+          // import — a returning person's name was just handled above,
+          // authoritatively, and must not also be *filled* here (a no-op in
+          // practice, since `overwriteRosterFields` already set it, but
+          // redundant and confusing to read as though this were still the
+          // fill-only path for names).
+          ...(existedBeforehand
+            ? {}
+            : {
+                firstName: desiredFields.firstName,
+                lastName: desiredFields.lastName,
+              }),
+        },
         context.db
       )
       // ENRL-3: a roster row is one of the three admission decisions — this
@@ -1711,10 +1760,16 @@ export function createRosterImportHandler(
       // because anything failed. Compared against what actually landed,
       // not merely re-asserted from `desiredFields`, so a re-import of a
       // corrected roster row can tell the correction did not take.
+      //
+      // ROST-18: `firstName`/`lastName` are deliberately absent from this
+      // list — a returning person's name is now *overwritten*, not merged
+      // (above), so it can no longer be "declined" the way `mergeRosterFields`'s
+      // own fill-only fields can; a brand-new person's name, filled by
+      // `mergeRosterFields`, can also never be declined (nothing was there
+      // to refuse it). Only `email`/`githubHandle` still go through the
+      // fill-only path this check exists for.
       const declinedFields = (
         [
-          ['firstName', desiredFields.firstName],
-          ['lastName', desiredFields.lastName],
           ['email', desiredFields.email],
           ['githubHandle', desiredFields.githubHandle],
         ] as const

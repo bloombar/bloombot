@@ -126,6 +126,71 @@ function createConnectedWebPerson(
       `createConnectedWebPerson: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
     )
   }
+  // AUTH-7 — a no-op for the ordinary "brand-new account, no names yet"
+  // case (`tryCreateAccountForEmail`'s own caller fills the account's names
+  // moments later, on the freshly connected person `resolveIdentity` will
+  // now find), but not a no-op for `healWebPersonForReturningAccount`'s own
+  // call: a returning account that already has names from an earlier
+  // Google sign-in gets them on this brand-new person immediately, rather
+  // than only on that account's *next* Google sign-in.
+  peopleRepo.fillPersonNamesFromAccount(
+    organizationId,
+    person.id,
+    accountId,
+    db
+  )
+}
+
+/**
+ * AUTH-7 — record whatever names `identity` (a verified Google ID token)
+ * carries, fill-only, on the account itself and on every person that
+ * account's `web` identity is already connected to.
+ *
+ * Two separate fill-only writes, not one: `accounts.firstName`/`lastName`
+ * (`accountsRepo.setAccountNames`) is the account's own copy — the one a
+ * *later* sign-in reads to fill a *new* person the account goes on to create
+ * or connect (`createConnectedWebPerson`, `ensureWebPersonForAccount`,
+ * `redeemJoinLinkForWebAccount`, `attachWebIdentityOrMerge` — none of those
+ * see a Google identity themselves, only an already-signed-in account) —
+ * while `people.mergeRosterFields` is what actually shows up on today's
+ * People list (WEB-52). Both use the identical "fill a `null` field, never
+ * overwrite one already set" rule, so a name a roster import or an earlier
+ * Google sign-in already supplied is never replaced by this one.
+ *
+ * `listConnectedOrganizationsForAccount` — not a single `getPerson` lookup —
+ * because LINK-10 means one account can hold a connected person in more than
+ * one organization (its institution's roster-admitted one, plus its own
+ * personal one): every one of them gets the same fill.
+ */
+function fillNamesFromGoogleIdentity(
+  identity: GoogleIdentity,
+  accountId: string,
+  db: TransactingExecutor
+): void {
+  if (identity.givenName === undefined && identity.familyName === undefined) {
+    return
+  }
+  // `exactOptionalPropertyTypes` — an omitted claim must be an *absent* key,
+  // not a key holding `undefined`, so each field is only added when the
+  // token actually carried it.
+  const names = {
+    ...(identity.givenName !== undefined
+      ? { firstName: identity.givenName }
+      : {}),
+    ...(identity.familyName !== undefined
+      ? { lastName: identity.familyName }
+      : {}),
+  }
+
+  accountsRepo.setAccountNames(accountId, names, db)
+
+  const connected = peopleRepo.listConnectedOrganizationsForAccount(
+    accountId,
+    db
+  )
+  for (const { organizationId, personId } of connected) {
+    peopleRepo.mergeRosterFields(organizationId, personId, names, db)
+  }
 }
 
 /**
@@ -247,6 +312,17 @@ export function ensureWebPersonForAccount(
           `ensureWebPersonForAccount: connectIdentity refused for a person (${person.id}) and organization (${organizationId}) this function just created — should be unreachable`
         )
       }
+      // AUTH-7 — this account's `web` identity has just been given a brand
+      // new person in an organization it had none in yet (LINK-6/7's own
+      // "on demand" case, above); fill in whatever names an earlier Google
+      // sign-in already recorded on the account, the same as
+      // `createConnectedWebPerson`'s own call.
+      peopleRepo.fillPersonNamesFromAccount(
+        organizationId,
+        person.id,
+        accountId,
+        tx
+      )
       // `person` (above) predates `connectIdentity`'s own write —
       // `connectedAt` on it is still `null`, since `createPerson` sets it
       // and `connectIdentity` is what changes it a moment later. Re-read so
@@ -529,6 +605,18 @@ export function signInWithGoogle(
       account = created
       createdAccount = true
     }
+
+    // AUTH-7 — fills the account's own stored names and every person its web
+    // identity is already connected to, fill-only. Run for both branches
+    // above: a brand-new account already has a connected person by this
+    // point (`tryCreateAccountForEmail` → `createConnectedWebPerson`), but
+    // that person's own fill ran *before* the account had any name to give
+    // it — this call is what actually lands the names on it, a moment
+    // later, through `listConnectedOrganizationsForAccount`'s own loop
+    // (below), once the account's names are recorded first; a returning
+    // account may already have one or more connected people (LINK-10) with
+    // roster or earlier-Google names to leave alone.
+    fillNamesFromGoogleIdentity(identity, account.id, tx)
 
     const session = createSession(account.id, tx)
     // AUTH-6: Google sign-in never leaves the tab it started in

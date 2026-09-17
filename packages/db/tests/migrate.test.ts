@@ -107,12 +107,15 @@ describe('runMigrations', () => {
       'name',
       'spending_cap_micros',
     ])
+    // AUTH-7 — `first_name`/`last_name` added by this slice.
     expect(schema.accounts).toEqual([
       'created_at',
       'disabled_at',
       'display_name',
       'email',
+      'first_name',
       'id',
+      'last_name',
     ])
     // ENRL-11 — `revoked_at`/`revoked_by_account_id` added by this slice.
     expect(schema.memberships).toEqual([
@@ -1360,5 +1363,63 @@ describe('0017 — membership_invitations', () => {
       )
       .get(organizationId) as { total: number }
     expect(total.total).toBe(1000)
+  })
+
+  // AUTH-7 — 0032 adds `first_name`/`last_name` to `accounts`, a plain
+  // `ALTER TABLE ... ADD` (nullable, so it needs no backfill), but the same
+  // "seed what a real deployment already has, then apply the real migration
+  // on top" shape as 0023/0030 above still matters: an account row written
+  // before this column existed must survive with both new columns `null`,
+  // not lost or defaulted to something else.
+  it('applies 0032 to a database with a pre-existing account, adding first_name/last_name as null', () => {
+    dir = mkdtempSync(join(tmpdir(), 'bloombot-db-migrate-'))
+    db = openDatabase(join(dir, 'test.db'))
+
+    const journal = JSON.parse(
+      readFileSync(join(REAL_MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8')
+    ) as { entries: { idx: number; tag: string }[] }
+    const entriesThrough0031 = journal.entries.filter(
+      (entry) => Number(entry.tag.slice(0, 4)) <= 31
+    )
+    const partialMigrationsDir = join(dir, 'partial-migrations')
+    mkdirSync(join(partialMigrationsDir, 'meta'), { recursive: true })
+    for (const entry of entriesThrough0031) {
+      copyFileSync(
+        join(REAL_MIGRATIONS_DIR, `${entry.tag}.sql`),
+        join(partialMigrationsDir, `${entry.tag}.sql`)
+      )
+    }
+    writeFileSync(
+      join(partialMigrationsDir, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: '7',
+        dialect: 'sqlite',
+        entries: entriesThrough0031,
+      })
+    )
+    migrate(db, { migrationsFolder: partialMigrationsDir })
+
+    const accountId = randomUUID()
+    const now = Date.now()
+    db.$client
+      .prepare(
+        'insert into accounts (id, email, display_name, created_at) values (?, ?, ?, ?)'
+      )
+      .run(accountId, 'instructor@example.edu', 'Instructor', now)
+
+    // The migration under test: 0032, applied through the real migrations
+    // folder — this must not throw.
+    expect(() => runMigrations(db as Database)).not.toThrow()
+
+    const account = db.$client
+      .prepare('select * from accounts where id = ?')
+      .get(accountId)
+    expect(account).toMatchObject({
+      id: accountId,
+      email: 'instructor@example.edu',
+      display_name: 'Instructor',
+      first_name: null,
+      last_name: null,
+    })
   })
 })

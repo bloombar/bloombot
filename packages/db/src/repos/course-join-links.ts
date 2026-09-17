@@ -29,6 +29,7 @@ import * as enrolments from './enrolments.js'
 import {
   connectIdentity,
   createPerson,
+  fillPersonNamesFromAccount,
   findPeopleByEmail,
   getPerson,
   resolveIdentity,
@@ -415,6 +416,13 @@ export function redeemJoinLinkForWebAccount(
           `redeemJoinLinkForWebAccount: connectIdentity refused for a person (${created.id}) and organization (${link.organizationId}) this function just created — should be unreachable`
         )
       }
+      // AUTH-7 — this account's `web` identity has just been given a brand
+      // new person here, in an organization it had none in yet; fill in
+      // whatever names an earlier Google sign-in already recorded on the
+      // account, the same fill-only call `sign-in.ts#createConnectedWebPerson`/
+      // `#ensureWebPersonForAccount` already make for their own identical
+      // shape.
+      fillPersonNamesFromAccount(link.organizationId, created.id, accountId, tx)
       // The only later use of `person` is its own `id` (below), which
       // `connectIdentity` never changes — no re-read needed to see
       // `created` "as it actually stands" the way `connectedAt` would.

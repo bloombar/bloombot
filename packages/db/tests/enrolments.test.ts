@@ -920,6 +920,45 @@ describe('enrolments repo (ENRL-1..6)', () => {
     })
   })
 
+  // WEB-52 — the panel's own People list now shows email and a real name
+  // (not merely `displayName`, roster/Discord's own field): the repo layer
+  // has to hand those back too.
+  it('listEnrolmentsForCourse includes email, firstName and lastName', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+    const person = people.createPerson(
+      organizationId,
+      {
+        displayName: 'adalovelace',
+        email: 'ada@example.edu',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      },
+      testDb.db
+    )
+    enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      testDb.db
+    )
+
+    const listed = enrolments.listEnrolmentsForCourse(
+      organizationId,
+      course.id,
+      testDb.db
+    )
+
+    expect(listed).toEqual([
+      expect.objectContaining({
+        personId: person.id,
+        displayName: 'adalovelace',
+        email: 'ada@example.edu',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      }),
+    ])
+  })
+
   // Cheap-fix (rework): without deduping by person, the merge shape above
   // (a survivor holding both an active row and a stray, moved-in ended row
   // for the same course) listed the survivor twice — once per row — with a

@@ -12392,3 +12392,34 @@ instead of, the existing top-level `ErrorMessage` a server refusal already rende
 convention).** Two renderings of the same sentence is deliberate, not an oversight: an instructor scanning
 the page for what changed sees it on the row that concerns it; `ErrorMessage`'s own `role="alert"` is what a
 screen reader announces immediately regardless of which row currently has focus.
+
+**WEB-52 reverses the People screen's earlier "no email" choice — the maintainer asked for it on this
+specific screen.** `CoursePeople.tsx` is an instructor-only view of their own course's enrolments, not a
+public or cross-tenant surface, and the instructor already has every enrolled student's email through the
+roster they imported or the join link they issued; showing it back to them on the one screen that already
+identifies each person by name and join method removes friction (matching a name to an inbox) that hiding it
+never bought any privacy for. This is scoped to `CoursePeople.tsx` specifically, not a reversal of "no email"
+anywhere else in the product.
+
+**AUTH-7 — a Google ID token's `given_name`/`family_name` are recorded on the *account* (`accounts.firstName`/
+`lastName`), not only on whichever person happens to be connected at sign-in time, and both are fill-only:
+never overwritten once set.** The account-level copy is what lets a *later* person — created or connected
+for this account's `web` identity months after the Google sign-in that first supplied a name, in some other
+organization's roster or join link — inherit the same name without the account holder ever seeing Google's
+consent screen again. Fill-only mirrors `people.mergeRosterFields`'s own rule for the identical reason: a
+name volunteered once should not flip back and forth if a later token happens to omit the claim, and a name a
+roster import already corrected should not be silently replaced by whatever Google's own profile still says.
+
+**ROST-18 — a roster row's `first`/`last` are authoritative for a person who already existed before the
+import, overwriting a name from any earlier source (a Google sign-in's AUTH-7 fill, an earlier import's own
+typo), while `email`/`githubHandle` keep today's fill-only rule.** The maintainer's own call, not implied by
+PPL-4's original "a roster corroborates, it does not overwrite": an institution's own roster is judged the
+more authoritative source for a legal or preferred name specifically, values a Google account's own display
+name or an earlier, uncorrected import may get wrong, while `email`/`githubHandle` carry no equivalent reason
+to prefer a later roster's value over one already proven by a live surface. A blank roster cell still writes
+nothing either way — "authoritative" is about a *value the roster actually supplies* overwriting an older
+one, never about an absent cell clearing a name nobody asked to clear. A brand-new person (no
+`existedBeforehand` row) still gets its first name through the ordinary fill-only `mergeRosterFields` path —
+there is nothing yet for `overwriteRosterFields` to overwrite, so using it there would only add a second way
+to write the identical result. `mergeRosterFields` itself is unchanged; only `roster-import.ts`'s own choice
+of which function to call for which field on a returning person changed.

@@ -253,17 +253,24 @@ export function listPeopleForCourse(
 /**
  * WEB-22 — one row of `listEnrolmentsForCourse`'s own listing: everything
  * the panel needs to tell people apart and decide what to do about each of
- * them, and nothing more. `displayName`, not the full `Person` row
- * `listPeopleForCourse` above returns — no email (this file's own caller,
- * the panel's people screen, has no genuine need to disambiguate by it: a
- * `null` `displayName` is already told apart from another by `personId`,
- * the same fallback `Transcripts.tsx#personDisplayName` already uses in
- * `apps/web` for the identical "person never named itself" case).
+ * them.
+ *
+ * WEB-52 reverses this file's own earlier "no email" choice, above: `email`,
+ * `firstName` and `lastName` are now included alongside `displayName`, so
+ * `CoursePeople.tsx` can show a name, an email and a Discord display name
+ * side by side, omitting whichever are unknown, rather than falling back to
+ * a bare person id the moment `displayName` alone is `null`. This remains an
+ * instructor-only view of their own course's enrolments (`docs/DECISIONS.md`)
+ * — not a reason to widen `email`'s exposure anywhere else in this file or
+ * this package.
  */
 export interface CourseEnrolmentEntry {
   id: string
   personId: string
   displayName: string | null
+  email: string | null
+  firstName: string | null
+  lastName: string | null
   source: EnrolmentSource
   createdAt: number
   endedAt: number | null
@@ -316,6 +323,9 @@ export function listEnrolmentsForCourse(
       id: enrolments.id,
       personId: enrolments.personId,
       displayName: people.displayName,
+      email: people.email,
+      firstName: people.firstName,
+      lastName: people.lastName,
       source: enrolments.source,
       createdAt: enrolments.createdAt,
       endedAt: enrolments.endedAt,

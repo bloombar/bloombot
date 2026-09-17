@@ -173,6 +173,20 @@ export function createGoogleIdTokenVerifier(
             // this claim for a real account, and treating a missing value
             // as verified would be exactly the takeover AUTH-2 forbids.
             emailVerified: payload['email_verified'] === true,
+            // AUTH-7 — `given_name`/`family_name` are optional claims, unlike
+            // `email`/`email_verified` above: Google omits them for some
+            // account configurations, so only a non-empty string is taken as
+            // a name, never coerced from `undefined` or an empty string
+            // (`link.ts#GoogleIdentity`'s own doc comment on why `undefined`
+            // here, not `null`, is what "no claim sent" means downstream).
+            ...(typeof payload['given_name'] === 'string' &&
+            payload['given_name'].length > 0
+              ? { givenName: payload['given_name'] }
+              : {}),
+            ...(typeof payload['family_name'] === 'string' &&
+            payload['family_name'].length > 0
+              ? { familyName: payload['family_name'] }
+              : {}),
           },
         }
       } catch (error) {

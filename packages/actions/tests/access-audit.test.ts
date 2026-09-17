@@ -227,6 +227,16 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // is `execute`'s own check, not the policy's, the same reason
   // `memberships.grant`'s own row gives above.
   'memberships.revoke': { resource: 'membership', access: 'write' },
+  // WEB-58: no `accountId` at policy time to resolve the caller's own
+  // membership against (`policy.ts`'s own module comment) — resolves the
+  // organization itself, the same "no existing record to resolve against"
+  // shape `memberships.grant`'s own row above uses, but the descriptor
+  // still names `membership`, the resource the write actually reaches, the
+  // same "name what is reached, not what is resolved" reasoning
+  // `projects.duplicate`'s own row gives above. *Who* may call this (any
+  // member but an owner) is `execute`'s own check, not the policy's, the
+  // same reason `memberships.grant`'s own row gives.
+  'memberships.leave': { resource: 'membership', access: 'write' },
   // ENRL-10: no existing invitation to resolve on create either — the
   // organization itself is the resource, the same "no existing record to
   // resolve on create" shape `memberships.grant`/`projects.create` both use
@@ -275,6 +285,13 @@ const EXPECTED_DESCRIPTORS: Record<string, AccessDescriptor> = {
   // are), the same "restricted in execute, not the policy" split
   // `costLedger.setSpendingCap`/`memberships.grant` both already take.
   'transcripts.listAccessLog': { resource: 'course', access: 'read' },
+  // WEB-57: no existing record to resolve *against* — the record being
+  // reached *is* the organization, the same "resource is what there is to
+  // resolve on create" shape `projects.create`/`memberships.grant` both use
+  // above, written rather than a create. *Who* may call this (an existing
+  // owner) is `execute`'s own check, not the policy's, the same reason
+  // `memberships.grant`'s own row gives.
+  'organizations.rename': { resource: 'organization', access: 'write' },
 }
 
 describe('ACT-5 — access audit index', () => {

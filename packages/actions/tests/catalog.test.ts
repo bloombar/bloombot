@@ -151,6 +151,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'memberships.grant',
         'memberships.list',
         'memberships.revoke',
+        // WEB-58 — added by this slice.
+        'memberships.leave',
         'membershipInvitations.create',
         'membershipInvitations.list',
         'membershipInvitations.revoke',
@@ -159,6 +161,8 @@ describe('ACT-6 — machine-readable catalog', () => {
         'transcripts.export',
         'transcripts.listExports',
         'transcripts.listAccessLog',
+        // WEB-57 — added by this slice.
+        'organizations.rename',
       ].sort()
     )
 

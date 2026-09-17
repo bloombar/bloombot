@@ -77,6 +77,8 @@ const EXPECTED_DESTRUCTIVE: Record<string, boolean> = {
   'projects.unarchive': false,
   'projects.rename': false,
   'projects.duplicate': false,
+  // WEB-57 — reversible the same way `projects.rename` above already is.
+  'organizations.rename': false,
   // Replaces every category and channel on every call — see this file's
   // own module comment and `tool-surface.ts`'s.
   'courses.save': true,

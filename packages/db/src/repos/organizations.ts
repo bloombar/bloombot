@@ -101,6 +101,30 @@ export function getOrganizationById(
 }
 
 /**
+ * WEB-57: rename an organization — the name itself, and nothing else on
+ * the row. `name` is expected to already be validated and trimmed by the
+ * caller (`@bloombot/actions`' `organizations.rename` action) — this
+ * function does no trimming or blank-checking of its own, the same "a repo
+ * function reads and writes the database; validation is the action layer's
+ * job" split every other repo in this directory already holds itself to
+ * (`organizations.ts`'s own module comment). `undefined` when
+ * `organizationId` does not exist — the same "cannot tell you" refusal
+ * `setSpendingCap`, immediately below, already gives.
+ */
+export function renameOrganization(
+  organizationId: string,
+  name: string,
+  db: Database
+): Organization | undefined {
+  return db
+    .update(organizations)
+    .set({ name })
+    .where(eq(organizations.id, organizationId))
+    .returning()
+    .get()
+}
+
+/**
  * Set (or clear, with `null`) COST-3's spending cap. An audit
  * (`docs/ROADMAP.md`'s "Audit — surfaces that were never built") found this
  * doc comment used to claim "there is no action layer wired to this in this

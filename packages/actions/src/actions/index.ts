@@ -81,9 +81,11 @@ import {
 } from './enrolments.js'
 import {
   grantMembershipAction,
+  leaveMembershipAction,
   listMembershipsAction,
   revokeMembershipAction,
 } from './memberships.js'
+import { renameOrganizationAction } from './organizations.js'
 import {
   createMembershipInvitationAction,
   listMembershipInvitationsAction,
@@ -181,10 +183,15 @@ export {
 } from './enrolments.js'
 export {
   grantMembershipAction,
+  leaveMembershipAction,
   listMembershipsAction,
   revokeMembershipAction,
   type MembershipEntry,
 } from './memberships.js'
+export {
+  renameOrganizationAction,
+  MAX_ORGANIZATION_NAME_LENGTH,
+} from './organizations.js'
 export {
   createMembershipInvitationAction,
   listMembershipInvitationsAction,
@@ -307,6 +314,8 @@ export function createPlatformRegistry(options?: {
   registry.register(grantMembershipAction)
   registry.register(listMembershipsAction)
   registry.register(revokeMembershipAction)
+  registry.register(leaveMembershipAction)
+  registry.register(renameOrganizationAction)
   registry.register(createMembershipInvitationAction)
   registry.register(listMembershipInvitationsAction)
   registry.register(revokeMembershipInvitationAction)

@@ -457,3 +457,12 @@ approval and read a course's settings read-only. Every surface tells a student i
 that its owner should contact Bloombot support.
 
 **In scope:** COST-8, SURF-10, WEB-53, ADMIN-6, WEB-54
+
+## Phase 37 — Choosing and managing an organization
+
+Every account owns a personal organization from its first sign-in, so a student who joins a course by
+link belongs to two — and lands in the empty personal one, on a Projects screen they have no use for.
+This phase makes the choice explicit on arrival, makes the organization on screen switchable from the
+header and the drawer alike, and lets an owner rename an organization or a member leave one.
+
+**In scope:** WEB-55, WEB-56, WEB-57, WEB-58

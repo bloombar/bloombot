@@ -3219,3 +3219,38 @@ Courses, Deletion history — with the current screen marked as such, so moving 
 browser's Back button or a typed address. The health of the platform's processes, until now shown only on the
 organizations screen, moves to a footer fixed to the bottom of every console screen, so an operator sees at a
 glance whether the platform is up no matter which screen they are on.
+
+### 42. Choosing and Managing an Organization
+
+#### WEB-55 An account in several organizations chooses one on arrival
+
+Signing in lands an account that belongs to more than one organization on a list of them — the same
+presentation the account screen already uses — rather than in whichever one happened to be recorded
+first. Each entry names the organization and the account's relationship to it (its role, or that it is
+connected rather than a member), and choosing one opens that organization's own screens. An account
+with exactly one organization is unaffected and lands in it directly, as today; an account that has
+just redeemed a join link still lands in the course it joined.
+
+#### WEB-56 The organization on screen is a menu that switches organizations
+
+The organization's name in the header is a menu: opening it lists every organization the account
+belongs to or is connected to, marks the one currently on screen, and choosing another switches to it
+from wherever the account happens to be. The navigation drawer carries the same control above its
+links, so the links are never ambiguous about which organization they act in. An account with only one
+organization sees its name, not a menu.
+
+#### WEB-57 An owner renames their organization
+
+An organization an account owns can be renamed from its entry in either list — the arrival list
+(WEB-55) or the account screen — through a menu on that entry, which opens a dialog holding the
+current name. The new name must not be blank, the change is saved through an action only an owner of
+that organization may call, and every place the name is shown reflects it once saved. An account that
+does not own an organization is offered no rename for it, and the server refuses one regardless.
+
+#### WEB-58 A member leaves an organization that is not their own
+
+An account that holds a non-owner membership can leave that organization from the same menu, confirming
+in a dialog that names the organization before anything happens. Leaving revokes only that membership:
+it deletes no transcript, ends no enrolment, and touches nothing the account owns. An owner is offered
+no Leave — stepping down is ENRL-11's own revoke, a separate operation — and the account's own personal
+organization can never be left.

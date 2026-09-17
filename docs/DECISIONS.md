@@ -12647,3 +12647,46 @@ comment already accepts for every other admin-console type. A field added to a c
 should also see when deciding an approval needs a deliberate edit here; nothing forces the two to stay in
 sync, the same risk `docs/DECISIONS.md`'s own entries for `AdminCourseSummary`/`CourseForApproval` already
 carry.
+
+## D-119 — `apps/web`: WEB-54 — the console's nav and health footer live in `Admin.tsx` itself, `AppLink` grows an `aria-current` prop, and one `fetchAdminOrganizations` read feeds every screen
+
+**Problem.** The platform-administrator console's five screens (`Admin.tsx`'s own module comment) had no way
+to move between them but the browser's own Back button or a typed address, and the platform-health badges
+(`ProcessBadge`) rendered only inline on the organizations screen — invisible from Courses, a course's own
+detail, or Deletion history. The brief asks for a nav at the top of every screen and the health badges in a
+footer fixed to the bottom of every screen, with the current item marked `aria-current="page"` and the two
+detail screens (`admin-organization`, `admin-course`) marking their own parent list current.
+
+**Choice: `AdminNav`/`AdminHealthFooter` as two more functions inside `Admin.tsx`**, the same place every one
+of the five screen components (`OrganizationsList`, `OrganizationDetail`, `DeletionsView`, `CoursesView`,
+`CourseDetailView`) already lives, rather than a new file — the brief itself names `Admin.tsx` and its tests
+as the whole slice, and neither component has a second caller to justify pulling it out. `Admin`'s own render
+puts `AdminNav` once, above the five-way `route.kind` branch, and `AdminHealthFooter` once, after it — so
+every screen gets both without any of the five screen components having to know that either exists.
+
+**`AdminNav` renders real links, through `AppLink`** (`components/AppLink.tsx`), the same "a real `href`,
+but an ordinary click still does client-side navigation, and a modified click falls through to the browser
+untouched" component the rest of the panel already uses for exactly this — the brief's own "follow whatever
+`AppLink`/navigate pattern the console already uses rather than inventing one." `AppLink` gained one new,
+optional prop to make this possible: `'aria-current'?: 'page' | undefined` (the `| undefined` is
+`exactOptionalPropertyTypes`'s own requirement, not a stylistic choice — `AdminNav` always passes the key,
+sometimes with an `undefined` value, since only one of its three items is current at a time). Nothing before
+this slice needed a link to mark itself current, so every other `AppLink` call site is unaffected.
+
+**The health footer reads `data`, the same `fetchAdminOrganizations` result `Admin` already fetches once, on
+mount, regardless of which screen is current** (`refresh`'s own `useEffect`, unconditional — unlike
+`refreshCourses`/`refreshCourseDetail`, which only fire for the screens that actually need them). Every
+screen already had access to `data` as a prop before this slice; the footer is simply one more consumer of
+it, not a new read. A screen with no other use for the organizations list at all (Courses, a course's own
+detail, Deletion history) pays nothing extra for this — the read was already happening for the health data
+`OrganizationsList` used to render, and this slice's only change is *where* that data is rendered, not how
+often it is fetched.
+
+**Layout: a fixed `<footer>`, `h-footer` tall (`--spacing-footer`, the same token `components/AppShell.tsx`'s
+own footer already uses, `style.css`), with the screen's own outer `<div>` given
+`pb-[calc(var(--spacing-footer)+1.5rem)]`** — the identical calc `AppShell.tsx`'s own `<main>` already uses
+for the same reason, rather than a bare `pb-footer`: the footer's own height alone leaves no breathing room
+between it and the last row of a genuinely long list, and `AppShell` already established the "+1.5rem" figure
+as this panel's own answer to that. Proven at a 375px viewport with a ten-organization seeded list
+(`e2e/mobile-viewport.spec.ts`) — the last rendered row's own bottom edge sits at or above the footer's own
+top edge, not merely "some padding exists."

@@ -32,14 +32,23 @@ export interface AppLinkProps {
   navigate: (route: Route, options?: { replace?: boolean }) => void
   className?: string
   children?: ReactNode
+  /** WEB-54 — set by a caller rendering this link inside a navigation list, `'page'` for the destination that names the screen currently on-screen (`AdminNav`, `Admin.tsx`). `| undefined` (rather than a bare optional) since this workspace's `exactOptionalPropertyTypes` treats the two differently — a caller such as `AdminNav` that always passes the key, sometimes with an `undefined` value, needs the property to accept that explicitly. */
+  'aria-current'?: 'page' | undefined
 }
 
-export function AppLink({ to, navigate, className, children }: AppLinkProps) {
+export function AppLink({
+  to,
+  navigate,
+  className,
+  children,
+  'aria-current': ariaCurrent,
+}: AppLinkProps) {
   const href = buildPath(to)
   return (
     <a
       href={href}
       className={className}
+      aria-current={ariaCurrent}
       onClick={(event: MouseEvent<HTMLAnchorElement>) => {
         // A modified click, or a click from any button but the primary
         // one, is left alone — this is the whole reason an anchor is used

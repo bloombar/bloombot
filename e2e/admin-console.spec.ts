@@ -50,35 +50,7 @@ import {
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
-
-/**
- * This spec's own seeding writes directly to `E2E_DATABASE_PATH`
- * (this file's own module comment) through a *second* connection to the
- * same file `apps/api`'s own process already holds open — the same thing
- * `course-configuration.spec.ts` already does. SQLite's own "database is
- * locked" (`SQLITE_LOCKED`) is a different condition from "database is
- * busy" (`SQLITE_BUSY`) — `client.ts`'s own `busy_timeout` pragma governs
- * only the latter, so a genuine, if rare, lock contention between this
- * process's own writes and the live API process's (four Playwright workers
- * and one shared API process, all against one file) is not something that
- * pragma alone absorbs. Each call below is its own atomic write (a single
- * repo function, its own transaction) — safe to retry outright on this
- * specific condition, since a failed attempt commits nothing.
- */
-async function withRetry<T>(fn: () => T): Promise<T> {
-  const attempts = 5
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return fn()
-    } catch (error) {
-      const locked =
-        error instanceof Error && /database is locked/i.test(error.message)
-      if (!locked || attempt === attempts) throw error
-      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
-    }
-  }
-  throw new Error('unreachable')
-}
+import { withRetry } from './support/with-retry.js'
 
 test('an instructor reads their course’s transcript in the panel, and it is written to the audit trail (ADMIN-1, ADMIN-2)', async ({
   page,
@@ -364,4 +336,55 @@ test('the admin console’s own screens are addressable — a cold deep link, pa
     '/platform-admin/organizations/00000000-0000-0000-0000-000000000000'
   )
   await expect(page.getByTestId('not-found-page')).toBeVisible()
+})
+
+test('an administrator moves Organizations → Courses → Deletion history entirely through the console’s own navigation, with the health footer visible throughout (WEB-54)', async ({
+  page,
+}) => {
+  await signIn(page, E2E_ADMIN_EMAIL)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await page.goto('/platform-admin')
+  await expect(page).toHaveURL('/platform-admin/organizations')
+
+  const nav = page.getByRole('navigation', { name: 'Console' })
+  const footer = page.getByRole('contentinfo')
+
+  // Organizations — the console's own landing screen — is current, and the
+  // health footer is already visible, with no organizations-list read of
+  // its own left to wait on (`Admin.tsx`'s own module comment on WEB-54's
+  // one shared read).
+  await expect(
+    nav.getByRole('link', { name: 'Organizations' })
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(footer).toBeVisible()
+  await expect(footer.getByText('Bot')).toBeVisible()
+
+  // Organizations -> Courses, through the nav rather than a typed address.
+  await nav.getByRole('link', { name: 'Courses' }).click()
+  await expect(page).toHaveURL('/platform-admin/courses')
+  await expect(
+    page.getByRole('heading', { name: 'Pending approval' })
+  ).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Courses' })).toHaveAttribute(
+    'aria-current',
+    'page'
+  )
+  await expect(footer).toBeVisible()
+
+  // Courses -> Deletion history.
+  await nav.getByRole('link', { name: 'Deletion history' }).click()
+  await expect(page).toHaveURL('/platform-admin/deletions')
+  await expect(
+    page.getByRole('heading', { name: 'Deletion history' })
+  ).toBeVisible()
+  await expect(
+    nav.getByRole('link', { name: 'Deletion history' })
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(footer).toBeVisible()
+
+  // Deletion history -> Organizations, closing the loop.
+  await nav.getByRole('link', { name: 'Organizations' }).click()
+  await expect(page).toHaveURL('/platform-admin/organizations')
+  await expect(footer).toBeVisible()
 })

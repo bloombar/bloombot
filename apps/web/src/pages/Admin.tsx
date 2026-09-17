@@ -63,6 +63,25 @@
  *    already has), since this is where the decision actually gets made.
  * Every navigation between these pushes (`navigate`, no `{ replace: true }`)
  * — WEB-34's ordinary rule, the same the rest of the panel already follows.
+ *
+ * **WEB-54** adds two things every one of the five screens above now carries,
+ * rendered by `Admin` itself rather than by any one screen:
+ *  - `AdminNav`, above whichever screen is current — real links
+ *    (`components/AppLink.tsx`, the same push-and-`href`-both pattern the
+ *    rest of the panel already uses) to the console's three top-level
+ *    destinations, Organizations/Courses/Deletion history. The two detail
+ *    screens (`'admin-organization'`, `'admin-course'`) mark their own
+ *    parent list current (`aria-current="page"`) rather than showing no
+ *    current item at all — an operator who drilled into one organization is
+ *    still, in every sense that matters to this nav, on the Organizations
+ *    screen.
+ *  - The health footer (`ProcessBadge`, unchanged) — moved out of
+ *    `'admin-organizations'`'s own screen, where it used to render inline,
+ *    into a `<footer>` fixed to the console's own viewport bottom, on every
+ *    screen. Still reads off the one `fetchAdminOrganizations` result
+ *    (`data`) `Admin` already holds for the organizations list itself — no
+ *    second read, even on a screen (Courses, a course's own detail,
+ *    deletion history) that has no other use for that response at all.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -87,6 +106,7 @@ import type {
   OrganizationDeletionPreview,
   TenantDeletion,
 } from '../api/types.js'
+import { AppLink } from '../components/AppLink.js'
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { useModal } from '../components/modal/ModalProvider.js'
@@ -140,6 +160,110 @@ function ProcessBadge({
       )}
       {label}
     </span>
+  )
+}
+
+/**
+ * WEB-54 — the console's own secondary navigation, rendered by `Admin`
+ * above whichever of the five screens (`Admin.tsx`'s own module comment)
+ * is current, so every one of them carries it. Real links (`AppLink`),
+ * not buttons — the same "a real `href`, but an ordinary click still does
+ * client-side navigation" treatment `AppLink`'s own module comment gives
+ * every other in-panel destination, so a middle-click or cmd-click opens a
+ * destination in a new tab exactly the way the rest of the panel's own
+ * links already do. Navigation pushes (`AppLink` calls `navigate` with no
+ * `{ replace: true }`), WEB-34's ordinary rule.
+ */
+function AdminNav({
+  route,
+  navigate,
+}: {
+  route: AdminRoute
+  navigate: (route: Route, options?: { replace?: boolean }) => void
+}) {
+  // The two detail screens mark their own parent list current — an
+  // operator who has drilled into one organization or one course is still,
+  // for the purpose of this nav, on the Organizations/Courses screen
+  // (this file's own module comment).
+  const items: {
+    key: string
+    label: string
+    to: AdminRoute
+    current: boolean
+  }[] = [
+    {
+      key: 'organizations',
+      label: 'Organizations',
+      to: { kind: 'admin-organizations' },
+      current:
+        route.kind === 'admin-organizations' ||
+        route.kind === 'admin-organization',
+    },
+    {
+      key: 'courses',
+      label: 'Courses',
+      to: { kind: 'admin-courses' },
+      current: route.kind === 'admin-courses' || route.kind === 'admin-course',
+    },
+    {
+      key: 'deletions',
+      label: 'Deletion history',
+      to: { kind: 'admin-deletions' },
+      current: route.kind === 'admin-deletions',
+    },
+  ]
+
+  return (
+    <nav
+      aria-label="Console"
+      className="flex flex-wrap gap-4 border-b border-neutral-200 pb-4"
+    >
+      {items.map((item) => (
+        <AppLink
+          key={item.key}
+          to={item.to}
+          navigate={navigate}
+          aria-current={item.current ? 'page' : undefined}
+          className={
+            item.current
+              ? 'text-sm font-medium text-brand-700'
+              : 'text-sm font-medium text-neutral-600 hover:text-neutral-900'
+          }
+        >
+          {item.label}
+        </AppLink>
+      ))}
+    </nav>
+  )
+}
+
+/**
+ * WEB-54 — the platform-health badges (`ProcessBadge`, unchanged), fixed to
+ * the console's own viewport bottom on every screen — moved out of
+ * `'admin-organizations'`'s own inline rendering, where this used to be the
+ * only place they showed at all. `<footer>` (a `contentinfo` landmark),
+ * matching the accessibility habit `components/AppShell.tsx`'s own
+ * `Footer` already holds the rest of the panel to. Reads `data`, the same
+ * `fetchAdminOrganizations` result every screen here already gets from
+ * `Admin`'s own `refresh` — no second read for a screen (Courses, a
+ * course's own detail, deletion history) that has no other use for the
+ * organizations list itself.
+ */
+function AdminHealthFooter({
+  data,
+}: {
+  data: AdminOrganizationsResponse | undefined
+}) {
+  if (!data) return null
+  return (
+    <footer className="fixed inset-x-0 bottom-0 z-10 flex h-footer items-center gap-3 border-t border-neutral-200 bg-white px-6">
+      <ProcessBadge label="Bot" reachable={data.platformHealth.bot.reachable} />
+      <ProcessBadge
+        label="Worker"
+        reachable={data.platformHealth.worker.reachable}
+      />
+      <ProcessBadge label="API" reachable={data.platformHealth.api.reachable} />
+    </footer>
   )
 }
 
@@ -254,6 +378,55 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     refresh()
     refreshDeletions()
   }, [refresh, refreshDeletions])
+
+  // Code review (WEB-54): an error belongs to the screen — and the read —
+  // that produced it. `refresh`/`refreshDeletions` above fire once, on
+  // mount, not on every navigation, so a refusal from either of them (say,
+  // `fetchTenantDeletions` failing) would otherwise still be on screen long
+  // after an operator has moved on through the new nav to a screen that
+  // never re-ran either read: Organizations, an organization's own detail,
+  // or Deletion history. Keying on `route.kind` (not the full `route`, the
+  // same narrowing `refreshCourseDetail`'s own effect below already uses)
+  // clears it the moment the console moves to a different screen, before
+  // that screen's own read — if it fires one — has a chance to set a fresh
+  // one of its own.
+  //
+  // Deliberately *not* also cleared from inside each read's own success
+  // handler (a first version of this fix did exactly that, and a review
+  // round caught what it broke): `refresh` and `refreshDeletions` both fire
+  // unconditionally on every mount, concurrently, and a success handler
+  // that clears `error` cannot tell whether the error on screen was its own
+  // read's failure or the *other* concurrent read's — `fetchAdminOrganizations`
+  // rejecting and `fetchTenantDeletions` resolving (`admin.test.tsx`'s own
+  // "a non-administrator sees the refusal" case) would otherwise wipe the
+  // refusal the moment the unrelated deletions read happened to land after
+  // it. Clearing once, on navigation, sidesteps that race entirely: it runs
+  // before either of the new screen's own reads has had a chance to settle,
+  // so there is nothing left for a same-tick "other read succeeded" to
+  // accidentally undo.
+  //
+  // **`not_platform_administrator` is exempted — it stays on screen.**
+  // Second review round: a plain read failure (a 500, a network error) is
+  // that screen's own problem, and moving on genuinely leaves it behind.
+  // `not_platform_administrator` is not that — it is ADMIN-4's own gate
+  // (`routes/admin.ts`), the same check every route behind `/platform-admin`
+  // makes, so it describes this *account*, not this *screen*: it would only
+  // ever be replaced by the identical refusal from whatever screen an
+  // operator navigated to next, not by success. Worse, clearing it outright
+  // can strand a screen that fires no read of its own on navigation
+  // (`'admin-organization'`, `'admin-deletions'` both resolve against data
+  // `refresh`/`refreshDeletions` already fetched, once, at mount) — with
+  // `error` cleared but `data`/`deletions` still `undefined` from that same
+  // original refusal, `failed` would read `false` and the screen would show
+  // its own loading skeleton forever, with no fetch left in flight to ever
+  // resolve it. Left in place, this reads exactly as it should: the console
+  // says once, clearly, and keeps saying, "this requires
+  // platform-administrator access" — never a silent, permanent spinner.
+  useEffect(() => {
+    setError((current) =>
+      current?.body.error === 'not_platform_administrator' ? current : undefined
+    )
+  }, [route.kind])
 
   useEffect(() => {
     if (route.kind !== 'admin-courses') return
@@ -416,7 +589,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+    <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6 pb-[calc(var(--spacing-footer)+1.5rem)]">
       <div className="flex items-center justify-between">
         <h1 className="text-page-title font-semibold text-neutral-900">
           Platform administration
@@ -426,24 +599,11 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
         </Button>
       </div>
 
-      {error && <ErrorMessage error={error} />}
+      {/* WEB-54 — every one of the console's five screens, above whichever
+          is current. */}
+      <AdminNav route={route} navigate={navigate} />
 
-      {data && (
-        <div className="flex flex-wrap gap-3 rounded-md border border-neutral-200 p-4">
-          <ProcessBadge
-            label="Bot"
-            reachable={data.platformHealth.bot.reachable}
-          />
-          <ProcessBadge
-            label="Worker"
-            reachable={data.platformHealth.worker.reachable}
-          />
-          <ProcessBadge
-            label="API"
-            reachable={data.platformHealth.api.reachable}
-          />
-        </div>
-      )}
+      {error && <ErrorMessage error={error} />}
 
       {route.kind === 'admin-organization' ? (
         <OrganizationDetail
@@ -494,6 +654,11 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           onViewCourses={() => navigate({ kind: 'admin-courses' })}
         />
       )}
+
+      {/* WEB-54 — fixed to the console's own viewport bottom, on every
+          screen; the outer `<div>`'s own `pb-[calc(...)]` above keeps the
+          last row of a long list clear of it. */}
+      <AdminHealthFooter data={data} />
     </div>
   )
 }

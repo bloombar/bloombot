@@ -178,6 +178,8 @@ export interface ServerDependencies {
   model?: ModelClient
   admission?: AdmissionGate
   pricing?: PricingTable
+  /** SURF-10 — threaded to `chat-tools.ts`'s own `ChatToolDependencies.supportContact` the same way `admission`/`pricing` above are. Omitted, `courseNotApprovedNotice` drops the "at <contact>" clause entirely. */
+  supportContact?: string
   /**
    * How long an `elicitation/create` request waits for a human before
    * giving up. Defaults to `DEFAULT_ELICITATION_TIMEOUT_MS` (30s);
@@ -727,6 +729,9 @@ function registerChatTools(
           logger: deps.logger,
           ...(deps.admission ? { admission: deps.admission } : {}),
           ...(deps.pricing ? { pricing: deps.pricing } : {}),
+          ...(deps.supportContact !== undefined
+            ? { supportContact: deps.supportContact }
+            : {}),
         })
         return formatAskChatResult(result)
       } catch (error) {

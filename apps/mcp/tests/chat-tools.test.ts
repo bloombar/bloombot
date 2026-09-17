@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { conversations, enrolments } from '@bloombot/db'
+import { conversations, courseApproval, enrolments } from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 
 import {
@@ -127,6 +127,53 @@ describe('chat-tools.ts (MCP-8)', () => {
       )
 
       expect(result.kind).toBe('unlinked')
+      expect(model.calls).toHaveLength(0)
+    })
+
+    // COST-8/SURF-10 — the tool result carries the fully rendered notice,
+    // naming the configured support contact, so a client never has to
+    // read `SUPPORT_CONTACT` itself.
+    it('a course pending approval is refused with declined-not-approved and the rendered notice', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const { courseId, discordPersonId } = seedEnrolledCourse(
+        testDb.db,
+        caller.organizationId
+      )
+      courseApproval.revokeCourseApproval(
+        caller.organizationId,
+        courseId,
+        caller.accountId,
+        Date.now(),
+        testDb.db
+      )
+      connectAccountTo(
+        testDb.db,
+        caller.organizationId,
+        caller.accountId,
+        discordPersonId
+      )
+      const model = new FakeModelClient('unused')
+
+      const result = await askChatQuestion(
+        caller.accountId,
+        { courseId, text: 'Anybody there?' },
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          supportContact: 'support@bloombot.example.edu',
+        }
+      )
+
+      expect(result.kind).toBe('declined-not-approved')
+      if (result.kind !== 'declined-not-approved') {
+        throw new Error('expected declined-not-approved')
+      }
+      expect(result.notice).toBe(
+        "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
+      )
+      expect(result.course.courseId).toBe(courseId)
       expect(model.calls).toHaveLength(0)
     })
 

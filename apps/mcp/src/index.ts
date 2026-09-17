@@ -79,6 +79,10 @@ async function main(): Promise<void> {
   // (`ServerDependencies`'s own doc comment on why `chat.ask` needs them).
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // SURF-10 — named in `chat.ask`'s own not-approved notice (COST-8), read
+  // once here alongside every other `CONFIG` value this process reads at
+  // startup.
+  const supportContact = CONFIG.SUPPORT_CONTACT
   // Not `requireEnv` — `createUnconfiguredModelClient`'s own doc comment
   // just above has why a missing key degrades `chat.ask` rather than
   // stopping this whole process from starting.
@@ -140,6 +144,7 @@ async function main(): Promise<void> {
       model,
       admission,
       pricing,
+      supportContact,
     },
     undefined,
     () => shuttingDown

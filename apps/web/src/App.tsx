@@ -321,7 +321,17 @@ function renderSignedInNotFound(
 function renderOrganizationsList(
   account: AccountSummary,
   navigate: (route: Route, options?: { replace?: boolean }) => void,
-  onSignedOut: () => void
+  onSignedOut: () => void,
+  // WEB-57/WEB-58 — the `refreshAccount` adapter (this file's own module
+  // comment, above `App`), this time for `Organizations`'s own
+  // `OrganizationList` (`pages/Organizations.tsx`'s own doc comment on why
+  // a leave from this screen never needs to navigate itself away). Passed
+  // separately from `onSignedOut` above, even though this render's own call
+  // site hands both a function built from the same `refreshSession`: the
+  // two exist for unrelated reasons (one signs a reader out on the header's
+  // own control, the other re-reads `/auth/me` after a rename or a leave),
+  // and a future change to either must not silently change the other.
+  refreshAccount: () => Promise<AccountSummary | undefined>
 ) {
   return (
     <SignedInChrome
@@ -331,7 +341,11 @@ function renderOrganizationsList(
       navigate={navigate}
       onSignedOut={onSignedOut}
     >
-      <Organizations account={account} navigate={navigate} />
+      <Organizations
+        account={account}
+        navigate={navigate}
+        refreshAccount={refreshAccount}
+      />
     </SignedInChrome>
   )
 }
@@ -397,6 +411,30 @@ export function App() {
       }
     )
   }, [])
+
+  // WEB-57/WEB-58 — `components/OrganizationList.tsx`'s own Rename/Leave
+  // need to re-read `GET /auth/me` after either write, and `handleLeave`
+  // specifically needs the *fresh* account to pick where to send a reader
+  // who just left the organization currently active — not the whole
+  // `SessionState` `refreshSession` resolves, which is this file's own
+  // local type (`'loading'`/`'signed-out'`/`'unreachable'` besides
+  // `'signed-in'`) that `OrganizationList.tsx` has no reason to know the
+  // shape of. Code review (round 2), must-fix 1 — the first version of this
+  // slice threw the resolved value away (`refreshAccount: () =>
+  // Promise<unknown>`), so a caller computing a fallback destination had
+  // only the *stale* `rows` it was already holding, closed over at the
+  // moment its own row's kebab was opened: two Leaves confirmed back to
+  // back, the second still in flight when the first's refresh lands, picked
+  // its fallback from an account that no longer includes the first
+  // organization either, landing on `NotFound`. `undefined` here means
+  // exactly what it means to every other reader of `SessionState` — signed
+  // out, or `apps/api` unreachable — not "nothing changed."
+  const refreshAccount = useCallback(async (): Promise<
+    AccountSummary | undefined
+  > => {
+    const session = await refreshSession()
+    return session.kind === 'signed-in' ? session.account : undefined
+  }, [refreshSession])
 
   useEffect(() => {
     refreshSession()
@@ -721,7 +759,12 @@ export function App() {
     // WEB-55 — the arrival list's own address, reached either directly
     // (a bookmark, Back) or by `resolveHomeRoute` landing `/` here.
     if (route.kind === 'organizations') {
-      return renderOrganizationsList(session.account, navigate, refreshSession)
+      return renderOrganizationsList(
+        session.account,
+        navigate,
+        refreshSession,
+        refreshAccount
+      )
     }
 
     // WEB-34: `/` resolves and replaces before this ever renders anything
@@ -763,6 +806,7 @@ export function App() {
             setJoinedCourse(undefined)
             refreshSession()
           }}
+          refreshAccount={refreshAccount}
         />
       )
     }

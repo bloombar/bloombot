@@ -448,3 +448,12 @@ Google already sends at sign-in, and has the People tab show a person's name, em
 and how and when they joined, rather than one field or an id.
 
 **In scope:** AUTH-7, WEB-52, ROST-18
+
+## Phase 36 — Approving a course before it answers
+
+Anyone can sign up, create a course and start spending on the model. This phase adds a manual gate: a
+course answers only after a platform administrator approves it from the console, which can also revoke
+approval and read a course's settings read-only. Every surface tells a student in an unapproved course
+that its owner should contact Bloombot support.
+
+**In scope:** COST-8, SURF-10, WEB-53, ADMIN-6

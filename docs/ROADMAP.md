@@ -438,3 +438,13 @@ colliding name, and when scaffolding — and has the course editor tell an instr
 that category names must be unique on the server.
 
 **In scope:** BOT-13, PROJ-10, WEB-51
+
+## Phase 35 — Knowing who is enrolled
+
+A course's People tab names each person by a single display name that only a Discord message ever
+fills in, so a student who joined by link, signed in with Google, or arrived by roster import and
+has not yet spoken on Discord is listed by an internal id. This phase keeps the first and last name
+Google already sends at sign-in, and has the People tab show a person's name, email, Discord name
+and how and when they joined, rather than one field or an id.
+
+**In scope:** AUTH-7, WEB-52

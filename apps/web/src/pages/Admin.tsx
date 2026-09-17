@@ -379,6 +379,55 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     refreshDeletions()
   }, [refresh, refreshDeletions])
 
+  // Code review (WEB-54): an error belongs to the screen — and the read —
+  // that produced it. `refresh`/`refreshDeletions` above fire once, on
+  // mount, not on every navigation, so a refusal from either of them (say,
+  // `fetchTenantDeletions` failing) would otherwise still be on screen long
+  // after an operator has moved on through the new nav to a screen that
+  // never re-ran either read: Organizations, an organization's own detail,
+  // or Deletion history. Keying on `route.kind` (not the full `route`, the
+  // same narrowing `refreshCourseDetail`'s own effect below already uses)
+  // clears it the moment the console moves to a different screen, before
+  // that screen's own read — if it fires one — has a chance to set a fresh
+  // one of its own.
+  //
+  // Deliberately *not* also cleared from inside each read's own success
+  // handler (a first version of this fix did exactly that, and a review
+  // round caught what it broke): `refresh` and `refreshDeletions` both fire
+  // unconditionally on every mount, concurrently, and a success handler
+  // that clears `error` cannot tell whether the error on screen was its own
+  // read's failure or the *other* concurrent read's — `fetchAdminOrganizations`
+  // rejecting and `fetchTenantDeletions` resolving (`admin.test.tsx`'s own
+  // "a non-administrator sees the refusal" case) would otherwise wipe the
+  // refusal the moment the unrelated deletions read happened to land after
+  // it. Clearing once, on navigation, sidesteps that race entirely: it runs
+  // before either of the new screen's own reads has had a chance to settle,
+  // so there is nothing left for a same-tick "other read succeeded" to
+  // accidentally undo.
+  //
+  // **`not_platform_administrator` is exempted — it stays on screen.**
+  // Second review round: a plain read failure (a 500, a network error) is
+  // that screen's own problem, and moving on genuinely leaves it behind.
+  // `not_platform_administrator` is not that — it is ADMIN-4's own gate
+  // (`routes/admin.ts`), the same check every route behind `/platform-admin`
+  // makes, so it describes this *account*, not this *screen*: it would only
+  // ever be replaced by the identical refusal from whatever screen an
+  // operator navigated to next, not by success. Worse, clearing it outright
+  // can strand a screen that fires no read of its own on navigation
+  // (`'admin-organization'`, `'admin-deletions'` both resolve against data
+  // `refresh`/`refreshDeletions` already fetched, once, at mount) — with
+  // `error` cleared but `data`/`deletions` still `undefined` from that same
+  // original refusal, `failed` would read `false` and the screen would show
+  // its own loading skeleton forever, with no fetch left in flight to ever
+  // resolve it. Left in place, this reads exactly as it should: the console
+  // says once, clearly, and keeps saying, "this requires
+  // platform-administrator access" — never a silent, permanent spinner.
+  useEffect(() => {
+    setError((current) =>
+      current?.body.error === 'not_platform_administrator' ? current : undefined
+    )
+  }, [route.kind])
+
   useEffect(() => {
     if (route.kind !== 'admin-courses') return
     refreshCourses()
@@ -607,8 +656,8 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
       )}
 
       {/* WEB-54 — fixed to the console's own viewport bottom, on every
-          screen; `pb-footer` above keeps the last row of a long list clear
-          of it. */}
+          screen; the outer `<div>`'s own `pb-[calc(...)]` above keeps the
+          last row of a long list clear of it. */}
       <AdminHealthFooter data={data} />
     </div>
   )

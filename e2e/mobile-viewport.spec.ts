@@ -34,6 +34,7 @@ import { closeDatabase, openDatabase, organizations } from '@bloombot/db'
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
+import { withRetry } from './support/with-retry.js'
 
 /**
  * `window`/`document` — Node's own type lib (`tsconfig.base.json` carries
@@ -197,16 +198,23 @@ test('the platform-administrator console is readable on a phone: no screen overf
   // Enough organizations to run the list past a 667px-tall viewport — the
   // "last row" this test checks against the footer is only a meaningful
   // check if that row actually sits below the fold to begin with.
+  // `withRetry` (code review, WEB-54): this is a second connection to the
+  // same file the live API process already holds open, the same lock
+  // contention `support/with-retry.ts`'s own module comment covers —
+  // without it, one lock collision across ten writes fails the whole spec
+  // before it ever reaches the footer-overlap assertion.
   const seedDb = openDatabase(E2E_DATABASE_PATH)
   try {
     for (let index = 0; index < 10; index++) {
-      await organizations.createOrganization(
-        randomUUID(),
-        {
-          name: `Mobile Console Tenant ${index} — ${suffix}`,
-          isPersonal: false,
-        },
-        seedDb
+      await withRetry(() =>
+        organizations.createOrganization(
+          randomUUID(),
+          {
+            name: `Mobile Console Tenant ${index} — ${suffix}`,
+            isPersonal: false,
+          },
+          seedDb
+        )
       )
     }
   } finally {

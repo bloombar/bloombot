@@ -721,6 +721,66 @@ describe('Admin — WEB-54’s console navigation and health footer', () => {
     await screen.findByRole('navigation', { name: 'Console' })
     expect(screen.getAllByText('Bot')).toHaveLength(1)
   })
+
+  // Code review finding: a refusal on one screen's own read used to
+  // outlive that screen — `error` was only ever reset by the
+  // delete/approve/unapprove handlers, so a failed `fetchAdminCourses` on
+  // Courses kept showing its refusal banner on every screen the new nav
+  // reached afterward, including one (Organizations) whose own read had
+  // succeeded. Navigating away through the nav must leave the next screen
+  // clean.
+  it('a refusal on one screen does not follow an operator to the next one reached through the nav', async () => {
+    fetchAdminCourses.mockRejectedValue(
+      new ApiError(500, { error: 'internal_error' })
+    )
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Organizations' }))
+
+    expect(await screen.findByText('No organizations yet.')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  // Second review round: `not_platform_administrator` describes the
+  // account, not the screen — every route behind `/platform-admin` makes
+  // the identical check (`routes/admin.ts`), so navigating away must not
+  // clear it the way an ordinary per-screen read failure clears (the test
+  // just above). Left showing, it also keeps `'admin-organization'`/
+  // `'admin-deletions'` (screens that fire no read of their own on
+  // navigation, only at mount) from rendering a permanent loading skeleton
+  // with no fetch left in flight to ever resolve it.
+  it('a platform-administrator refusal stays on screen across navigation, unlike an ordinary per-screen failure', async () => {
+    fetchAdminOrganizations.mockRejectedValue(
+      new ApiError(403, { error: 'not_platform_administrator' })
+    )
+    fetchTenantDeletions.mockRejectedValue(
+      new ApiError(403, { error: 'not_platform_administrator' })
+    )
+    fetchAdminCourses.mockRejectedValue(
+      new ApiError(403, { error: 'not_platform_administrator' })
+    )
+
+    renderAdmin({ route: { kind: 'admin-organizations' } })
+
+    expect(
+      await screen.findByText(/platform-administrator access/i)
+    ).toBeInTheDocument()
+
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Deletion history' }))
+
+    // Still refused — `'admin-deletions'` fires no read of its own on
+    // navigation, so nothing but the sticky refusal from mount explains
+    // this not being a permanent, silent "Loading…" instead.
+    expect(
+      await screen.findByText(/platform-administrator access/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
 })
 
 describe('Admin — ADMIN-6’s read-only course settings screen', () => {

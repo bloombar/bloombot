@@ -54,16 +54,24 @@
  *    already uses — revoking is reversible (an administrator can re-approve),
  *    unlike ADMIN-5's own delete, which is why this stops at `confirm`
  *    rather than `prompt`.
+ *  - `'admin-course'` — ADMIN-6's own read-only settings screen, reached by
+ *    clicking a row on `'admin-courses'` (`api/client.ts`'s own
+ *    `fetchAdminCourse`). General, AI and Knowledge, grouped the way
+ *    `pages/CourseEditor.tsx` groups them for the course's own owner, with
+ *    nothing editable — no inputs a person can type into, no Save. Approve/
+ *    Unapprove are available here too (the same two handlers `'admin-courses'`
+ *    already has), since this is where the decision actually gets made.
  * Every navigation between these pushes (`navigate`, no `{ replace: true }`)
  * — WEB-34's ordinary rule, the same the rest of the panel already follows.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
   approveAdminCourse,
   deleteTenant,
+  fetchAdminCourse,
   fetchAdminCourses,
   fetchAdminOrganizations,
   fetchDeletionPreview,
@@ -71,6 +79,7 @@ import {
   unapproveAdminCourse,
 } from '../api/client.js'
 import type {
+  AdminCourseDetail,
   AdminCourseSummary,
   AdminOrganizationsResponse,
   AdminOrganizationSummary,
@@ -81,7 +90,12 @@ import type {
 import { Button } from '../components/Button.js'
 import { ErrorMessage } from '../components/ErrorMessage.js'
 import { useModal } from '../components/modal/ModalProvider.js'
-import { LoadingStatus, SkeletonRow } from '../components/Skeleton.js'
+import {
+  LoadingStatus,
+  Skeleton,
+  SkeletonLine,
+  SkeletonRow,
+} from '../components/Skeleton.js'
 import { DeleteIcon, FailureIcon, SuccessIcon } from '../icons.js'
 import type { AdminRoute, Route } from '../routing/route.js'
 import { surfaceLabel } from '../surface-label.js'
@@ -139,6 +153,16 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   const [courses, setCourses] = useState<AdminCourseSummary[] | undefined>(
     undefined
   )
+  // ADMIN-6 — `'admin-course'`'s own read, one course at a time. `undefined`
+  // covers both "still loading" and "the id last fetched is not this one"
+  // (below), so a stale course never flashes under a freshly-navigated
+  // address; `courseNotFound` is set apart from the shared `error` state —
+  // a 404 here means this course id, not a refusal the top-level
+  // `ErrorMessage` banner should also claim.
+  const [courseDetail, setCourseDetail] = useState<
+    AdminCourseDetail | undefined
+  >(undefined)
+  const [courseNotFound, setCourseNotFound] = useState(false)
   const [error, setError] = useState<ApiError | undefined>(undefined)
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined)
   // WEB-53 — the one course currently mid-approve/unapprove, the same
@@ -187,6 +211,45 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     )
   }, [])
 
+  // ADMIN-6 — one course's own settings, fetched only for `'admin-course'`,
+  // the same "no other screen needs this read" reasoning `refreshCourses`'s
+  // own comment already gives its sibling. A `course_not_found` (404) is
+  // this course id's own state, not a console-wide refusal — kept apart
+  // from `error` so it renders `NotFound` rather than the top-level banner.
+  //
+  // **Must-fix, first review round**: `currentCourseIdRef` guards against
+  // an out-of-order response — course A's read is slow, an operator goes
+  // back and opens course B (fast), and A's response then lands *after*
+  // B's already has. Without this, A's late `.then` would overwrite B's
+  // already-rendered detail (or, worse, mark B `courseNotFound` off the
+  // back of a stale 404 for A), and — since nothing re-fires the effect
+  // once B's own address is already current — the `course.courseId !==
+  // courseId` guard in `CourseDetailView` would then render the skeleton
+  // forever, with no fetch left in flight to ever resolve it. A plain
+  // boolean "ignore late responses" ref would not do: the *next* read for
+  // the *same* course (a retry, or Approve's own refresh) has to still be
+  // honoured, so this stores which course id is actually current rather
+  // than merely whether one read has already landed.
+  const currentCourseIdRef = useRef<string | undefined>(undefined)
+
+  const refreshCourseDetail = useCallback((courseId: string) => {
+    currentCourseIdRef.current = courseId
+    setCourseNotFound(false)
+    fetchAdminCourse(courseId).then(
+      (result) => {
+        if (currentCourseIdRef.current !== courseId) return
+        setCourseDetail(result)
+      },
+      (caught: unknown) => {
+        if (currentCourseIdRef.current !== courseId) return
+        if (caught instanceof ApiError) {
+          if (caught.status === 404) setCourseNotFound(true)
+          else setError(caught)
+        } else throw caught
+      }
+    )
+  }, [])
+
   useEffect(() => {
     refresh()
     refreshDeletions()
@@ -196,6 +259,32 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     if (route.kind !== 'admin-courses') return
     refreshCourses()
   }, [route.kind, refreshCourses])
+
+  useEffect(() => {
+    if (route.kind !== 'admin-course') {
+      // Leaving the detail screen entirely (not merely to another course):
+      // a still-in-flight response for the course last viewed here is now
+      // for nobody's own current address, so `currentCourseIdRef` above
+      // must not still call it current the next time this screen is
+      // reached — `refreshCourseDetail`, below, always overwrites it again
+      // before that happens regardless, this only prevents a leftover
+      // stale value from lingering unobserved in between.
+      currentCourseIdRef.current = undefined
+      return
+    }
+    // A fresh navigation between two courses must not render the previous
+    // one under the new address while the new read is still in flight.
+    setCourseDetail(undefined)
+    refreshCourseDetail(route.courseId)
+    // `route.kind === 'admin-course' ? route.courseId : undefined` (rather
+    // than `route` itself) is the dependency, the same narrowing
+    // `pages/ProjectsPanel.tsx`'s own equivalent effect already uses — a
+    // new `Route` object on every render must not refire this on its own.
+  }, [
+    route.kind,
+    route.kind === 'admin-course' ? route.courseId : undefined,
+    refreshCourseDetail,
+  ])
 
   // WEB-33/WEB-34: `/platform-admin` itself is never rendered past this —
   // once mounted, it replaces to the console's own landing screen, the
@@ -261,6 +350,16 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     }
   }
 
+  // ADMIN-6 — Approve/Unapprove refresh whichever of the two screens
+  // (`'admin-courses'`'s own list, `'admin-course'`'s own detail) is
+  // actually current, rather than always the list: a decision made from
+  // the detail screen must show up there too, not only once an operator
+  // navigates back.
+  const refreshCurrentCourseScreen = () => {
+    if (route.kind === 'admin-course') refreshCourseDetail(route.courseId)
+    else refreshCourses()
+  }
+
   // WEB-53's Approve button — not destructive, runs immediately, the same
   // "enabling is not destructive" treatment `components/CourseRows.tsx`'s
   // own toggle already gives the non-destructive direction of that choice.
@@ -269,7 +368,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     setDecidingCourseId(courseId)
     try {
       await approveAdminCourse(courseId)
-      refreshCourses()
+      refreshCurrentCourseScreen()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
@@ -285,7 +384,15 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
   // ADMIN-5's own delete: revoking an approval is reversible (an
   // administrator can simply approve again), where deleting a tenant is
   // not.
-  const handleUnapprove = async (course: AdminCourseSummary) => {
+  //
+  // ADMIN-6 — takes only `{ courseId, courseTitle }`, not the full
+  // `AdminCourseSummary`: the detail screen's own `AdminCourseDetail` names
+  // both under the same two field names, so this one handler serves both
+  // screens without either reshaping the other's response to match.
+  const handleUnapprove = async (course: {
+    courseId: string
+    courseTitle: string
+  }) => {
     setError(undefined)
     const confirmed = await confirm({
       title: `Unapprove ${course.courseTitle}?`,
@@ -299,7 +406,7 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
     setDecidingCourseId(course.courseId)
     try {
       await unapproveAdminCourse(course.courseId)
-      refreshCourses()
+      refreshCurrentCourseScreen()
     } catch (caught) {
       if (caught instanceof ApiError) setError(caught)
       else throw caught
@@ -358,9 +465,21 @@ export function Admin({ route, navigate, onBack }: AdminScreenProps) {
           courses={courses}
           failed={error !== undefined}
           decidingCourseId={decidingCourseId}
+          onOpen={(courseId) => navigate({ kind: 'admin-course', courseId })}
           onApprove={handleApprove}
           onUnapprove={handleUnapprove}
           onBack={() => navigate({ kind: 'admin-organizations' })}
+        />
+      ) : route.kind === 'admin-course' ? (
+        <CourseDetailView
+          courseId={route.courseId}
+          course={courseDetail}
+          notFound={courseNotFound}
+          failed={error !== undefined}
+          decidingCourseId={decidingCourseId}
+          onApprove={handleApprove}
+          onUnapprove={handleUnapprove}
+          onBack={() => navigate({ kind: 'admin-courses' })}
         />
       ) : (
         <OrganizationsList
@@ -613,14 +732,15 @@ function DeletionsView({
 
 /**
  * WEB-33's `'admin-courses'` screen — pending courses first, each with an
- * Approve button, then approved courses with an Unapprove one. Rows do not
- * link anywhere yet — ADMIN-6, the read-only per-course settings view, is
- * the next slice (this file's own module comment).
+ * Approve button, then approved courses with an Unapprove one. Since
+ * ADMIN-6, a row's own title is a link into `'admin-course'` — this file's
+ * own module comment.
  */
 function CoursesView({
   courses,
   failed,
   decidingCourseId,
+  onOpen,
   onApprove,
   onUnapprove,
   onBack,
@@ -629,8 +749,10 @@ function CoursesView({
   /** See `OrganizationsList`'s own `failed` — same reason, same treatment. */
   failed: boolean
   decidingCourseId: string | undefined
+  /** ADMIN-6 — a row's own title, clicked. */
+  onOpen: (courseId: string) => void
   onApprove: (courseId: string) => void
-  onUnapprove: (course: AdminCourseSummary) => void
+  onUnapprove: (course: { courseId: string; courseTitle: string }) => void
   onBack: () => void
 }) {
   if (courses === undefined) {
@@ -674,7 +796,7 @@ function CoursesView({
               data-testid={`admin-course-${course.courseId}`}
               className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-              <CourseRowDetail course={course} />
+              <CourseRowDetail course={course} onOpen={onOpen} />
               <Button
                 variant="primary"
                 onClick={() => onApprove(course.courseId)}
@@ -703,7 +825,7 @@ function CoursesView({
               data-testid={`admin-course-${course.courseId}`}
               className="flex flex-col gap-2 rounded-md border border-neutral-200 p-3 sm:flex-row sm:items-center sm:justify-between"
             >
-              <CourseRowDetail course={course} />
+              <CourseRowDetail course={course} onOpen={onOpen} />
               <Button
                 variant="destructive"
                 onClick={() => onUnapprove(course)}
@@ -721,13 +843,23 @@ function CoursesView({
   )
 }
 
-/** WEB-53's own identifying detail for one course row — title, project, organization, owner(s) and when created, plus (for an approved course) who approved it and when. Shared between the pending and approved lists above, the same "one row shape, two action columns" the `<Button>` alone differs between. */
-function CourseRowDetail({ course }: { course: AdminCourseSummary }) {
+/** WEB-53's own identifying detail for one course row — title, project, organization, owner(s) and when created, plus (for an approved course) who approved it and when. Shared between the pending and approved lists above, the same "one row shape, two action columns" the `<Button>` alone differs between. ADMIN-6 — the title is now a link into `'admin-course'`, the same underlined-button-as-link treatment `OrganizationsList`'s own name already uses for `'admin-organization'`. */
+function CourseRowDetail({
+  course,
+  onOpen,
+}: {
+  course: AdminCourseSummary
+  onOpen: (courseId: string) => void
+}) {
   return (
     <div>
-      <p className="text-sm font-medium text-neutral-900">
+      <button
+        type="button"
+        onClick={() => onOpen(course.courseId)}
+        className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+      >
         {course.courseTitle}
-      </p>
+      </button>
       <p className="text-xs text-neutral-500">
         {course.projectName} · {course.organizationName}
         {course.ownerEmails.length > 0 && ` · ${course.ownerEmails.join(', ')}`}
@@ -739,6 +871,280 @@ function CourseRowDetail({ course }: { course: AdminCourseSummary }) {
             course.aiApprovedByEmail ? ` by ${course.aiApprovedByEmail}` : ''
           }`}
       </p>
+    </div>
+  )
+}
+
+/**
+ * ADMIN-6's own `'admin-course'` screen — one course's settings, read-only,
+ * reached by clicking a row on `CoursesView` above. Grouped General/AI/
+ * Knowledge the way `pages/CourseEditor.tsx` groups them for the course's
+ * own owner (`docs/SPEC.md` §41's own words), rendered directly rather than
+ * through that component — `CourseEditor` is a large form wired to
+ * organization-scoped actions (`dispatchAction`) this console deliberately
+ * never calls (this file's own module comment on why every read here goes
+ * through `routes/admin.ts` instead); reusing it here would mean either
+ * contorting it to take a second, read-only data source, or leaving dead
+ * editable affordances behind a `readOnly` flag nobody asked for. See
+ * `docs/DECISIONS.md` D-118.
+ *
+ * Approve/Unapprove are rendered here too (the brief's own "this is where
+ * the decision gets made"), reusing `Admin`'s own two handlers — a decision
+ * made from this screen refreshes this screen (`refreshCurrentCourseScreen`,
+ * above), not only the list an operator would otherwise have to navigate
+ * back to to see it take effect.
+ */
+function CourseDetailView({
+  courseId,
+  course,
+  notFound,
+  failed,
+  decidingCourseId,
+  onApprove,
+  onUnapprove,
+  onBack,
+}: {
+  courseId: string
+  course: AdminCourseDetail | undefined
+  /** ADMIN-6 — this course id 404'd, distinct from `failed` (a refusal, e.g. 403) below: this renders `NotFound`, `failed` renders nothing further (the top-level `ErrorMessage` already has it). */
+  notFound: boolean
+  failed: boolean
+  decidingCourseId: string | undefined
+  onApprove: (courseId: string) => void
+  onUnapprove: (course: { courseId: string; courseTitle: string }) => void
+  onBack: () => void
+}) {
+  if (notFound) {
+    return <NotFound onHome={onBack} />
+  }
+
+  // `course.courseId !== courseId` — a stale read from the *previous*
+  // address, still in `course` because `refreshCourseDetail`'s own request
+  // has not resolved yet, would otherwise flash under the new one for one
+  // render (`Admin`'s own effect already clears this to `undefined` first,
+  // but a caller that skips that guard is not a case worth trusting away).
+  if (course === undefined || course.courseId !== courseId) {
+    if (failed) {
+      return (
+        <Button variant="secondary" onClick={onBack}>
+          ← Courses
+        </Button>
+      )
+    }
+    // WEB-45: shaped like the settled screen below, once the read resolves.
+    return (
+      <div className="flex flex-col gap-3">
+        <SkeletonLine className="h-4 w-24" />
+        <Skeleton className="h-8 w-64" />
+        <SkeletonRow />
+        <SkeletonRow />
+        <LoadingStatus />
+      </div>
+    )
+  }
+
+  const deciding = decidingCourseId === course.courseId
+
+  return (
+    <div
+      className="flex flex-col gap-6"
+      data-testid={`admin-course-detail-${course.courseId}`}
+    >
+      <Button variant="secondary" onClick={onBack}>
+        ← Courses
+      </Button>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-page-title font-semibold text-neutral-900">
+            {course.courseTitle}
+          </h2>
+          <p className="text-xs text-neutral-500">
+            {course.projectName} · {course.organizationName}
+          </p>
+          <p className="text-xs text-neutral-400">
+            {course.aiApprovedAt === null
+              ? 'Pending approval'
+              : `Approved ${new Date(course.aiApprovedAt).toLocaleString()}${
+                  course.aiApprovedByEmail
+                    ? ` by ${course.aiApprovedByEmail}`
+                    : ''
+                }`}
+          </p>
+        </div>
+        {course.aiApprovedAt === null ? (
+          <Button
+            variant="primary"
+            onClick={() => onApprove(course.courseId)}
+            disabled={deciding}
+          >
+            {deciding ? 'Approving…' : 'Approve'}
+          </Button>
+        ) : (
+          <Button
+            variant="destructive"
+            onClick={() => onUnapprove(course)}
+            disabled={deciding}
+          >
+            {deciding ? 'Unapproving…' : 'Unapprove'}
+          </Button>
+        )}
+      </div>
+
+      {/* WEB-35's own three of five groups — Discord, Roster and People stay
+          out of this screen entirely: the first has no place in a
+          three-group read (this file's own module comment/D-118), and the
+          latter two are exactly ADMIN-4's own boundary (never a person, an
+          enrolment or anything that could identify a student). */}
+      <section
+        aria-label="General"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          General
+        </h3>
+        {/* Must-fix, second review round: a `<dt>`/`<dd>` pair with no `<dl>`
+            ancestor is invalid HTML, and it drops exactly the description-
+            list semantics `ReadOnlyField`'s own doc comment gives as the
+            reason to use `<dt>`/`<dd>` over a disabled `<input>` in the
+            first place. Wrapped the same way `pages/Home.tsx`'s own
+            "What it does" list and `pages/Mcp.tsx`'s own per-client field
+            lists already wrap theirs — a `<dl>` around the series of
+            `<div>`s each `ReadOnlyField` renders. */}
+        <dl className="flex flex-col gap-2">
+          <ReadOnlyField
+            label="Enabled"
+            value={course.enabled ? 'Yes' : 'No'}
+          />
+          <ReadOnlyField label="Admins role" value={course.adminsRole ?? '—'} />
+          <ReadOnlyField
+            label="Students role"
+            value={course.studentsRole ?? '—'}
+          />
+          <ReadOnlyField
+            label="Categories"
+            value={
+              course.categories.length === 0
+                ? '—'
+                : course.categories
+                    .map(
+                      (category) =>
+                        `${category.name} (${category.channels
+                          .map((channel) => channel.name)
+                          .join(', ')})`
+                    )
+                    .join('; ')
+            }
+          />
+          <ReadOnlyField
+            label="Self-enrolment from Discord"
+            value={course.selfEnrolFromDiscord ? 'On' : 'Off'}
+          />
+          <ReadOnlyField
+            label="Answers an unenrolled student"
+            value={course.answerUnenrolled ? 'Yes' : 'No'}
+          />
+          <ReadOnlyField
+            label="Conversation scope"
+            value={course.conversationScope}
+          />
+        </dl>
+      </section>
+
+      <section
+        aria-label="AI"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          AI
+        </h3>
+        <dl className="flex flex-col gap-2">
+          <ReadOnlyField label="Model" value={course.model ?? '—'} />
+          {course.promptId && (
+            <ReadOnlyField label="Prompt id" value={course.promptId} />
+          )}
+          <ReadOnlyField
+            label="Max requests per day"
+            value={course.maxRequestsPerDay?.toString() ?? '—'}
+          />
+          <ReadOnlyField
+            label="Instructions"
+            value={course.instructions ?? '—'}
+            multiline
+          />
+        </dl>
+      </section>
+
+      <section
+        aria-label="Knowledge"
+        className="flex flex-col gap-3 rounded-md border border-neutral-200 p-4"
+      >
+        <h3 className="text-section-title font-semibold text-neutral-900">
+          Knowledge
+        </h3>
+        {course.attachments.length === 0 ? (
+          <p className="text-sm text-neutral-500">No knowledge files.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {course.attachments.map((attachment, index) => (
+              // No stable id in `AdminCourseAttachment` (metadata only,
+              // `routes/admin.ts`'s own doc comment) — index is safe here:
+              // this list is read-only and never reorders itself.
+              <li key={index} className="text-sm text-neutral-700">
+                {attachment.filename} ·{' '}
+                {(attachment.sizeBytes / 1024).toFixed(1)} KB ·{' '}
+                {attachment.status}
+              </li>
+            ))}
+          </ul>
+        )}
+        {course.webSources.length === 0 ? (
+          <p className="text-sm text-neutral-500">No websites.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {course.webSources.map((webSource) => (
+              <li key={webSource.domain} className="text-sm text-neutral-700">
+                {webSource.domain}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+
+/**
+ * ADMIN-6 — a label/value pair rendered as plain text, never a control a
+ * person can type into: this screen's own "nothing editable" requirement
+ * (the brief's own words), so every setting below is a `<dt>`/`<dd>` pair,
+ * not a disabled `<input>` — a disabled input still renders as a textbox to
+ * assistive technology and to a test asserting "nothing editable" by role,
+ * where a plain paragraph does not.
+ */
+function ReadOnlyField({
+  label,
+  value,
+  multiline = false,
+}: {
+  label: string
+  value: string
+  multiline?: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-2">
+      <dt className="w-48 shrink-0 text-xs font-medium text-neutral-500">
+        {label}
+      </dt>
+      <dd
+        className={
+          multiline
+            ? 'whitespace-pre-wrap text-sm text-neutral-900'
+            : 'text-sm text-neutral-900'
+        }
+      >
+        {value}
+      </dd>
     </div>
   )
 }

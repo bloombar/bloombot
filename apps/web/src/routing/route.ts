@@ -131,6 +131,10 @@ export type AdminRoute =
   // every organization, the same "no organization of its own" shape
   // `admin-organizations` already has.
   | { kind: 'admin-courses' }
+  // ADMIN-6 — one course's own settings, read-only, reached by clicking a
+  // row on `admin-courses` — the same "own address, reached from the list"
+  // shape `admin-organization` already has for an organization.
+  | { kind: 'admin-course'; courseId: string }
 
 /**
  * Every address this whole app can be asked to render, signed in or out.
@@ -228,6 +232,13 @@ export function parseRoute(pathname: string): Route {
     }
     if (second === 'courses' && rest.length === 0) {
       return { kind: 'admin-courses' }
+    }
+    // ADMIN-6 — `/platform-admin/courses/:courseId`, matched after the
+    // bare `/platform-admin/courses` above, the same "no segment, then one
+    // segment" ordering `/platform-admin/organizations` and
+    // `/platform-admin/organizations/:organizationId` already follow.
+    if (second === 'courses' && rest.length === 1 && rest[0]) {
+      return { kind: 'admin-course', courseId: rest[0] }
     }
   }
   if (first === 'discord' && second === 'callback' && segments.length === 2) {
@@ -406,6 +417,8 @@ export function buildPath(route: Route): string {
       return '/platform-admin/deletions'
     case 'admin-courses':
       return '/platform-admin/courses'
+    case 'admin-course':
+      return `/platform-admin/courses/${route.courseId}`
     case 'discord-callback':
       return '/discord/callback'
     case 'sign-in':
@@ -495,6 +508,7 @@ export function isAdminRoute(route: Route): route is AdminRoute {
     case 'admin-organization':
     case 'admin-deletions':
     case 'admin-courses':
+    case 'admin-course':
       return true
     default:
       return false

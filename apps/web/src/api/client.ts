@@ -23,6 +23,7 @@
  */
 
 import type {
+  AdminCourseDetail,
   AdminCoursesResponse,
   AdminOrganizationsResponse,
   ApiErrorBody,
@@ -1236,6 +1237,11 @@ export function fetchAdminOrganizations(): Promise<AdminOrganizationsResponse> {
 /** WEB-53: every pending and approved course, across every organization — `apps/api`'s own `routes/admin.ts#GET /courses`. Same 403 treatment as `fetchAdminOrganizations` above. */
 export function fetchAdminCourses(): Promise<AdminCoursesResponse> {
   return request<AdminCoursesResponse>('/admin/courses')
+}
+
+/** ADMIN-6: one course's settings, read-only — `apps/api`'s own `routes/admin.ts#GET /courses/:courseId`. Throws `ApiError` (404, `course_not_found`) for an unknown id, the same shape `fetchDeletionPreview` throws for an unknown organization. */
+export function fetchAdminCourse(courseId: string): Promise<AdminCourseDetail> {
+  return request<AdminCourseDetail>(`/admin/courses/${courseId}`)
 }
 
 /** WEB-53's Approve button. Idempotent — approving an already-approved course succeeds without a second audit event (`routes/admin.ts`'s own doc comment). */

@@ -24,7 +24,7 @@ import { ApiError } from '../src/api/client.js'
 import { Admin } from '../src/pages/Admin.js'
 import type { AdminRoute, Route } from '../src/routing/route.js'
 import { isAdminRoute } from '../src/routing/route.js'
-import { renderWithModal } from './helpers/render-with-modal.js'
+import { renderWithModal, withModal } from './helpers/render-with-modal.js'
 
 /** Mirrors `tests/shell.test.tsx`'s own `renderShell` — defaults to `'admin-organizations'`, the console's own landing screen once `'platform-admin'` itself resolves and replaces (`Admin.tsx`'s own module comment). */
 function renderAdmin({
@@ -49,6 +49,7 @@ const {
   fetchTenantDeletions,
   deleteTenant,
   fetchAdminCourses,
+  fetchAdminCourse,
   approveAdminCourse,
   unapproveAdminCourse,
 } = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ const {
   fetchTenantDeletions: vi.fn(),
   deleteTenant: vi.fn(),
   fetchAdminCourses: vi.fn(),
+  fetchAdminCourse: vi.fn(),
   approveAdminCourse: vi.fn(),
   unapproveAdminCourse: vi.fn(),
 }))
@@ -72,6 +74,7 @@ vi.mock('../src/api/client.js', async () => {
     fetchTenantDeletions,
     deleteTenant,
     fetchAdminCourses,
+    fetchAdminCourse,
     approveAdminCourse,
     unapproveAdminCourse,
   }
@@ -575,5 +578,262 @@ describe('Admin — WEB-53’s Courses screen', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
 
     expect(unapproveAdminCourse).not.toHaveBeenCalled()
+  })
+
+  // ADMIN-6 — a row's own title is a link into `'admin-course'`.
+  it('a row’s title navigates to its own admin-course screen', async () => {
+    fetchAdminCourses.mockResolvedValue({ courses: [PENDING_COURSE] })
+    fetchAdminCourse.mockResolvedValue({
+      ...PENDING_COURSE,
+      projectId: 'proj-1',
+      adminsRole: null,
+      studentsRole: null,
+      categories: [],
+      conversationScope: 'course',
+      model: null,
+      promptId: null,
+      instructions: null,
+      maxRequestsPerDay: null,
+      selfEnrolFromDiscord: false,
+      answerUnenrolled: true,
+      attachments: [],
+      webSources: [],
+      aiApprovalDecidedAt: null,
+    })
+
+    renderAdmin({ route: { kind: 'admin-courses' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Web Design' }))
+
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-1')
+    )
+  })
+})
+
+describe('Admin — ADMIN-6’s read-only course settings screen', () => {
+  const COURSE_DETAIL = {
+    courseId: 'course-1',
+    courseTitle: 'Web Design',
+    enabled: true,
+    projectId: 'proj-1',
+    projectName: 'Fall 2026',
+    organizationId: 'org-1',
+    organizationName: 'A Real Tenant',
+    adminsRole: 'admins-wd',
+    studentsRole: 'students-wd',
+    categories: [
+      {
+        name: 'Web Design',
+        channels: [{ name: 'general', adminsOnly: false }],
+      },
+    ],
+    conversationScope: 'course',
+    model: 'gpt-5',
+    promptId: null,
+    instructions: 'Answer only from the syllabus.',
+    maxRequestsPerDay: 20,
+    selfEnrolFromDiscord: true,
+    answerUnenrolled: false,
+    attachments: [
+      { filename: 'syllabus.pdf', sizeBytes: 4096, status: 'ready' as const },
+    ],
+    webSources: [{ domain: 'example.edu' }],
+    aiApprovedAt: null,
+    aiApprovedByAccountId: null,
+    aiApprovedByEmail: null,
+    aiApprovalDecidedAt: null,
+  }
+
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+  })
+
+  it('renders each settings group, read-only — nothing a person can type into', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+
+    expect(
+      await screen.findByRole('region', { name: 'General' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'AI' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Knowledge' })
+    ).toBeInTheDocument()
+
+    // General
+    expect(screen.getByText('admins-wd')).toBeInTheDocument()
+    expect(screen.getByText('students-wd')).toBeInTheDocument()
+    // AI
+    expect(screen.getByText('gpt-5')).toBeInTheDocument()
+    expect(
+      screen.getByText('Answer only from the syllabus.')
+    ).toBeInTheDocument()
+    // Knowledge
+    expect(screen.getByText(/syllabus\.pdf/)).toBeInTheDocument()
+    expect(screen.getByText('example.edu')).toBeInTheDocument()
+
+    // Nothing editable — no inputs, no selects, no Save.
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /save/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('back returns to the Courses list', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+    fetchAdminCourses.mockResolvedValue({ courses: [] })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    await screen.findByRole('region', { name: 'General' })
+
+    fireEvent.click(screen.getByRole('button', { name: '← Courses' }))
+
+    await waitFor(() => expect(fetchAdminCourses).toHaveBeenCalled())
+  })
+
+  it('a course id absent from the API (404) renders not-found', async () => {
+    fetchAdminCourse.mockRejectedValue(
+      new ApiError(404, { error: 'course_not_found' })
+    )
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'missing' } })
+
+    expect(await screen.findByText(/not found/i)).toBeInTheDocument()
+  })
+
+  it('approves from this screen and refreshes it, not only the list', async () => {
+    fetchAdminCourse.mockResolvedValue(COURSE_DETAIL)
+    approveAdminCourse.mockResolvedValue({ approved: true })
+
+    renderAdmin({ route: { kind: 'admin-course', courseId: 'course-1' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+
+    await waitFor(() =>
+      expect(approveAdminCourse).toHaveBeenCalledWith('course-1')
+    )
+    // Refreshed the detail screen itself, not the list — the list was
+    // never fetched by this test at all.
+    await waitFor(() => expect(fetchAdminCourse).toHaveBeenCalledTimes(2))
+    expect(fetchAdminCourses).not.toHaveBeenCalled()
+  })
+
+  // Must-fix, second review round: `currentCourseIdRef`'s own doc comment
+  // in `Admin.tsx` has the full scenario — course A's read is slow, an
+  // operator moves on to course B (fast), and A's response then lands
+  // after B's already has. Controls `route` directly across two renders
+  // (`rerender`, not `renderAdmin`'s own click-driven navigation) so A's
+  // own fetch can be left deliberately unresolved while B's already has —
+  // the failure this guards against is a *timing* one, not reachable by
+  // driving the UI at whatever speed a click resolves at.
+  it('a slow response for a previous course does not overwrite the one now on screen', async () => {
+    const courseA = {
+      ...COURSE_DETAIL,
+      courseId: 'course-a',
+      courseTitle: 'Course A',
+    }
+    const courseB = {
+      ...COURSE_DETAIL,
+      courseId: 'course-b',
+      courseTitle: 'Course B',
+    }
+    let resolveA: ((value: typeof courseA) => void) | undefined
+    fetchAdminCourse.mockImplementation((courseId: string) => {
+      if (courseId === 'course-a') {
+        return new Promise((resolve) => {
+          resolveA = resolve
+        })
+      }
+      if (courseId === 'course-b') return Promise.resolve(courseB)
+      throw new Error(`unexpected courseId ${courseId}`)
+    })
+
+    const navigate = vi.fn()
+    const { rerender } = renderWithModal(
+      <Admin
+        route={{ kind: 'admin-course', courseId: 'course-a' }}
+        navigate={navigate}
+        onBack={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-a')
+    )
+
+    // Course B's own address becomes current before A's response has
+    // landed — A's own fetch (`resolveA`) is still unsettled here.
+    rerender(
+      withModal(
+        <Admin
+          route={{ kind: 'admin-course', courseId: 'course-b' }}
+          navigate={navigate}
+          onBack={vi.fn()}
+        />
+      )
+    )
+    await screen.findByText('Course B')
+
+    // A's late response arrives now — must be ignored, not overwrite B.
+    resolveA?.(courseA)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Course B')).toBeInTheDocument()
+    expect(screen.queryByText('Course A')).not.toBeInTheDocument()
+  })
+
+  // The mirrored direction — a stale *404* for the previous course must not
+  // mark the current one not-found, and must not leave the current one
+  // stuck on a skeleton either (nothing re-fires the effect once its own
+  // address is already current).
+  it('a stale 404 for a previous course does not mark the current one not-found', async () => {
+    const courseB = {
+      ...COURSE_DETAIL,
+      courseId: 'course-b',
+      courseTitle: 'Course B',
+    }
+    let rejectA: ((reason: unknown) => void) | undefined
+    fetchAdminCourse.mockImplementation((courseId: string) => {
+      if (courseId === 'course-a') {
+        return new Promise((_resolve, reject) => {
+          rejectA = reject
+        })
+      }
+      if (courseId === 'course-b') return Promise.resolve(courseB)
+      throw new Error(`unexpected courseId ${courseId}`)
+    })
+
+    const navigate = vi.fn()
+    const { rerender } = renderWithModal(
+      <Admin
+        route={{ kind: 'admin-course', courseId: 'course-a' }}
+        navigate={navigate}
+        onBack={vi.fn()}
+      />
+    )
+    await waitFor(() =>
+      expect(fetchAdminCourse).toHaveBeenCalledWith('course-a')
+    )
+
+    rerender(
+      withModal(
+        <Admin
+          route={{ kind: 'admin-course', courseId: 'course-b' }}
+          navigate={navigate}
+          onBack={vi.fn()}
+        />
+      )
+    )
+    await screen.findByText('Course B')
+
+    // A's stale 404 lands now — must be ignored, not render NotFound over B.
+    rejectA?.(new ApiError(404, { error: 'course_not_found' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByText('Course B')).toBeInTheDocument()
+    expect(screen.queryByText(/not found/i)).not.toBeInTheDocument()
   })
 })

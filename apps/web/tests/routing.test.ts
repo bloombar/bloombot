@@ -21,6 +21,8 @@ import {
 const ROUTES: Route[] = [
   { kind: 'home' },
   { kind: 'account' },
+  // WEB-55 — the arrival list's own address.
+  { kind: 'organizations' },
   { kind: 'privacy' },
   { kind: 'terms' },
   { kind: 'platform-admin' },
@@ -120,6 +122,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/o/org-1/chat/course-1',
     '/o/org-1/mcp',
     '/account',
+    '/choose-organization',
     '/platform-admin',
     '/platform-admin/organizations',
     '/platform-admin/organizations/org-1',
@@ -200,6 +203,14 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/join',
     '/invitations',
     '/account/extra',
+    '/choose-organization/extra',
+    // Code review, must-fix 1 — `/organizations` itself is reserved for
+    // `vite.config.ts`'s own API proxy, not a page this router recognises
+    // at all (`OrganizationsRoute`'s own doc comment has the full
+    // reasoning); this proves the collision this app's own router could
+    // create is one it deliberately does not, rather than merely
+    // documenting the intent in a comment nothing here checks.
+    '/organizations',
     '/platform-admin/sub',
     '/platform-admin/organizations/org-1/extra',
     '/platform-admin/deletions/extra',

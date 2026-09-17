@@ -150,6 +150,26 @@ function openDrawer() {
   fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
 }
 
+// WEB-56 — the header's own organization control is a real menu now, not a
+// `<select>` (`components/OrganizationSwitcher.tsx`'s own module comment):
+// open it (the one button inside `organization-switcher` while it is
+// closed), then click the named organization's own item. Every "switch
+// organization" step in this file used to be one `fireEvent.change` against
+// a `combobox` named "Organization" — replaced here, once, rather than at
+// each of this file's own many call sites.
+function switchOrganization(organizationName: string) {
+  fireEvent.click(
+    within(screen.getByTestId('organization-switcher')).getByRole('button')
+  )
+  // A prefix match, not an exact one — each item's own accessible name also
+  // carries its role or "(connected)" after the name (this file's own
+  // fixtures never share a common prefix, so this never matches more than
+  // one item).
+  fireEvent.click(
+    screen.getByRole('button', { name: new RegExp(`^${organizationName}`) })
+  )
+}
+
 const MULTI_MEMBERSHIP_ACCOUNT: AccountSummary = {
   id: 'account-1',
   email: 'instructor@example.edu',
@@ -322,9 +342,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
 
     // Switch away from the organization this mounted with...
-    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-      target: { value: 'org-2' },
-    })
+    switchOrganization('Org Two')
     // ...and begin an install. If Shell carried the *initial* organization
     // into this request instead of the actively selected one, this would
     // call beginDiscordInstall with 'org-1' — exactly the class of bug
@@ -458,9 +476,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     // Switch organizations. Without `key={activeOrganizationId}` on
     // `ProjectsPanel` (`pages/Shell.tsx`), this refusal — and the project it
     // belonged to — would still be showing, unclearable short of a reload.
-    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-      target: { value: 'org-2' },
-    })
+    switchOrganization('Org Two')
 
     await waitFor(() =>
       expect(listProjects).toHaveBeenCalledWith('org-2', false)
@@ -531,9 +547,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     })
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-      target: { value: 'org-2' },
-    })
+    switchOrganization('Org Two')
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
 
@@ -567,9 +581,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
     listMemberships.mockResolvedValue([])
 
     renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-      target: { value: 'org-2' },
-    })
+    switchOrganization('Org Two')
     openDrawer()
     fireEvent.click(screen.getByRole('button', { name: 'Team' }))
 
@@ -609,9 +621,9 @@ describe('Shell (WEB-3, WEB-4)', () => {
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),
       })
-      expect(
-        screen.getByRole('combobox', { name: 'Organization' })
-      ).toHaveValue('personal-org')
+      expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+        'Student'
+      )
       openDrawer()
       expect(
         screen.getByRole('button', { name: 'Discord' })
@@ -631,9 +643,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         onSignedOut: vi.fn(),
       })
 
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
 
       // Discord, Projects and Transcripts are gone — not merely disabled —
       // once this organization is active. The drawer is opened first so
@@ -672,9 +682,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // ...then switch. Without `effectiveTab` overriding a stale
       // `activeTab`, this would still try to render `InstallButton` here —
       // a control this account's every click against would refuse.
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
 
       expect(
         screen.queryByRole('heading', { name: 'Discord' })
@@ -689,9 +697,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),
       })
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
       await screen.findByRole('heading', { name: 'Chat' })
 
       fireEvent.click(screen.getByRole('button', { name: 'Home' }))
@@ -711,8 +717,14 @@ describe('Shell (WEB-3, WEB-4)', () => {
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),
       })
-      const select = screen.getByRole('combobox', { name: 'Organization' })
-      expect(select).toHaveTextContent('A University (connected)')
+      // WEB-56 — the switcher is a real menu now, not a `<select>`: its
+      // options only render once opened.
+      fireEvent.click(
+        within(screen.getByTestId('organization-switcher')).getByRole('button')
+      )
+      expect(
+        screen.getByRole('button', { name: 'A University (connected)' })
+      ).toBeInTheDocument()
     })
   })
 
@@ -948,12 +960,8 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       // The reviewer's own repro: switch away, then back — no reload in
       // between.
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'org-2' },
-      })
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'org-1' },
-      })
+      switchOrganization('Org Two')
+      switchOrganization('Org One')
 
       // The bug's own window: synchronously after the switch back, before
       // the refetch resolves, `justInstalled` must not answer for this
@@ -993,9 +1001,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Discord' }))
       expect(await screen.findByText(/guild-1/)).toBeInTheDocument()
 
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'org-2' },
-      })
+      switchOrganization('Org Two')
 
       // A second, org-2-scoped request actually happened — fetching only on
       // mount (`useEffect(..., [])`) would leave this never called with
@@ -1106,9 +1112,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         expect(listDiscordServers).toHaveBeenCalledWith('personal-org')
       )
 
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
       await screen.findByRole('heading', { name: 'Chat' })
 
       // `routes/actions.ts` refuses `discordServers.list` outright for a
@@ -1135,9 +1139,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
         account: CONNECTED_NON_MEMBER_ACCOUNT,
         onSignedOut: vi.fn(),
       })
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
       openDrawer()
       expect(screen.getByRole('button', { name: 'MCP' })).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
@@ -1190,11 +1192,48 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // The account's own membership organization (`personal-org`) is the
       // initial active one, and offers every tab — the connected-only
       // organization (LINK-10) is what has no organization group at all.
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
       openDrawer()
       expect(screen.queryByRole('separator')).not.toBeInTheDocument()
+    })
+
+    // WEB-56 — a second copy of the organization control, above the
+    // drawer's own links, so which organization they act in is never
+    // ambiguous while the drawer is open.
+    it('shows the organization control above the drawer’s own links, and switches from there', async () => {
+      renderShell({ account: MULTI_MEMBERSHIP_ACCOUNT, onSignedOut: vi.fn() })
+      openDrawer()
+
+      const drawerSwitcher = screen.getByTestId('organization-switcher-drawer')
+      expect(drawerSwitcher).toHaveTextContent('Org One')
+      const nav = screen.getByRole('navigation', { name: 'Main' })
+      const projects = screen.getByRole('button', { name: 'Projects' })
+      expect(
+        drawerSwitcher.compareDocumentPosition(nav) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(nav).toContainElement(projects)
+
+      fireEvent.click(
+        within(drawerSwitcher).getByRole('button', { name: /Org One/ })
+      )
+      fireEvent.click(screen.getByRole('button', { name: /Org Two/ }))
+
+      // Switching from the drawer's own copy also closes the drawer, the
+      // same discipline every other drawer control already follows
+      // (`components/SignedInChrome.tsx`'s own module comment on why) —
+      // `AppShell.tsx`'s own closing transition is pinned in
+      // `tests/app-shell.test.tsx`, so this only checks that closing was
+      // actually requested (the drawer's own translated-away position),
+      // not the transition itself.
+      expect(screen.getByRole('dialog', { name: 'Navigation' })).toHaveClass(
+        '-translate-x-full'
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId('organization-switcher')).toHaveTextContent(
+          'Org Two'
+        )
+      )
     })
 
     it('carries sign-out at the drawer’s foot, reachable once the drawer is open', () => {
@@ -1267,9 +1306,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // membership organization (`personal-org`) is otherwise already
       // active by default, which would not actually exercise the
       // non-member case this test names.
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'institution-org' },
-      })
+      switchOrganization('A University')
       await screen.findByRole('heading', { name: 'Chat' })
 
       fireEvent.click(screen.getByRole('button', { name: 'Account settings' }))
@@ -1291,8 +1328,8 @@ describe('Shell (WEB-3, WEB-4)', () => {
       // offered again (`effectiveTab`'s own `'account'` carve-out, this
       // file's own module comment).
       expect(
-        await screen.findByRole('combobox', { name: 'Organization' })
-      ).toHaveValue('personal-org')
+        await screen.findByTestId('organization-switcher')
+      ).toHaveTextContent('Student')
     })
 
     // --- WEB-41: the header's organization name is a real link ------------
@@ -1534,9 +1571,7 @@ describe('Shell (WEB-3, WEB-4)', () => {
 
       // Switch to Org Two — `course-1` belongs to Org One and must not
       // survive the switch.
-      fireEvent.change(screen.getByRole('combobox', { name: 'Organization' }), {
-        target: { value: 'org-2' },
-      })
+      switchOrganization('Org Two')
 
       await waitFor(() =>
         expect(getChatMessages).toHaveBeenCalledWith('org-2', 'course-9')

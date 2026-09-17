@@ -21,6 +21,13 @@
  * `isMember`) — the divider is data this component renders, not an index
  * `pages/Shell.tsx` would otherwise have to hardcode here.
  *
+ * WEB-56 — `drawerHeader`, an optional slot rendered above every link, at
+ * the drawer's own top, below the "Menu" title bar: the same organization
+ * control the header itself shows (`components/SignedInChrome.tsx`'s own
+ * module comment on why a second copy lives here) — the drawer's own links
+ * act on whichever organization is current, and this is what keeps that
+ * from ever being ambiguous while the drawer is open.
+ *
  * WEB-17: the drawer is a native `<dialog>` (the same device
  * `components/modal/Modal.tsx` uses, and for the same reason — focus trap,
  * `Escape` to close and focus restoration all come from the browser rather
@@ -112,6 +119,8 @@ export interface AppShellProps {
   headerStart: ReactNode
   /** WEB-30: rendered at the header's trailing edge — the profile control that opens account settings. The organization switcher and sign-out, which both lived here before this slice, have moved (to `headerStart` and the drawer's foot, respectively) — this slot now carries the profile control alone. */
   headerEnd: ReactNode
+  /** WEB-56 — a second copy of the same organization control, rendered above the drawer's own links so which organization they act in is never ambiguous (`components/SignedInChrome.tsx`'s own module comment on why). Optional: `tests/app-shell.test.tsx`'s own fixture drawer names no organization at all. */
+  drawerHeader?: ReactNode
   /** WEB-29: the drawer's own foot — sign-out. A slot, not a bespoke `onSignOut`/`signOutLabel` pair: `pages/Shell.tsx`'s sign-out button already carries its own pending-state label ("Signing out…") and `guardedNavigate` wiring, and passing the whole rendered control through is less for this component to know about than reconstructing an equivalent set of props for one button. */
   drawerFooter: ReactNode
   children: ReactNode
@@ -173,6 +182,7 @@ export function AppShell({
   onHome,
   headerStart,
   headerEnd,
+  drawerHeader,
   drawerFooter,
   children,
   ref,
@@ -319,6 +329,14 @@ export function AppShell({
               onClick={closeDrawer}
             />
           </div>
+          {/* WEB-56 — the acting organization, above every link below it, so
+              the drawer's own nav is never ambiguous about which
+              organization it acts in. */}
+          {drawerHeader && (
+            <div className="border-b border-neutral-200 p-2">
+              {drawerHeader}
+            </div>
+          )}
           <nav aria-label="Main" className="flex flex-1 flex-col gap-1 p-2">
             {navGroups.map((group, index) => (
               <div key={group.key} className="flex flex-col gap-1">

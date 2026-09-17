@@ -37,12 +37,20 @@
  * the same member-vs-connected split `Shell.tsx#effectiveTab` already
  * enforces server-side-adjacent — a connected-only row's link must not
  * advertise a screen that account can never actually reach there).
+ *
+ * WEB-55 — the list itself (this file's own former `<ul>`) now lives in
+ * `components/OrganizationList.tsx`, factored out so `pages/Organizations.tsx`'s
+ * own arrival list can draw the identical presentation; this screen just
+ * builds `rows` and passes `activeOrganizationId`/`onSwitchOrganization`/
+ * `navigate` straight through, unchanged.
  */
 
 import type { AccountSummary } from '../api/types.js'
-import { AppLink } from '../components/AppLink.js'
-import { Button } from '../components/Button.js'
-import { routeForTab, type Route } from '../routing/route.js'
+import {
+  OrganizationList,
+  type OrganizationListRow,
+} from '../components/OrganizationList.js'
+import type { Route } from '../routing/route.js'
 
 export interface AccountProps {
   account: AccountSummary
@@ -52,20 +60,13 @@ export interface AccountProps {
   navigate: (route: Route, options?: { replace?: boolean }) => void
 }
 
-/** One row this screen can render — a membership's own role, or `undefined` for a connected-only relationship, the same `Option` shape `OrganizationSwitcher.tsx` already draws from the identical two fields. */
-interface OrganizationRow {
-  organizationId: string
-  organizationName: string
-  role?: string
-}
-
 export function Account({
   account,
   activeOrganizationId,
   onSwitchOrganization,
   navigate,
 }: AccountProps) {
-  const rows: OrganizationRow[] = [
+  const rows: OrganizationListRow[] = [
     ...account.memberships.map((membership) => ({
       organizationId: membership.organizationId,
       organizationName: membership.organizationName,
@@ -95,70 +96,13 @@ export function Account({
         <h2 className="text-section-title font-semibold text-neutral-900">
           Organizations
         </h2>
-        <ul className="flex flex-col gap-2">
-          {rows.map((row) => {
-            const isActive = row.organizationId === activeOrganizationId
-            return (
-              <li
-                key={row.organizationId}
-                className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 p-3"
-              >
-                <div>
-                  <p className="text-sm font-medium text-neutral-900">
-                    {/* WEB-41 rework — the organization's own main page, not
-                        a switch: opening this does not change which
-                        organization is active (`onSwitchOrganization`,
-                        below, still owns that). The role label sits
-                        *outside* the link, matching the header's own
-                        `OrganizationSwitcher.tsx` (that file's own module
-                        comment on why) — a link's accessible name should
-                        not announce the account's own relationship to the
-                        destination, and the role label is not itself a
-                        second destination to click. A membership's own
-                        `projects` and a connected-only relationship's
-                        `chat` mirror `Shell.tsx#effectiveTab`'s own
-                        member-vs-connected split (`OrganizationSwitcher.tsx`'s
-                        identical fix) — a connected-only row would otherwise
-                        advertise, and briefly open, a Projects screen this
-                        account can never actually reach there. */}
-                    {/* WEB-41 rework (finding 6) — a hover underline
-                        here, deliberately: this settings list is not the
-                        header, which the brief for this slice explicitly
-                        froze ("same font, size, weight, color, spacing" —
-                        `OrganizationSwitcher.tsx`'s own link stays bare for
-                        that reason alone), so there is no reason to leave
-                        this row's own link with no hover affordance at
-                        all. */}
-                    <AppLink
-                      to={routeForTab(
-                        row.role !== undefined ? 'projects' : 'chat',
-                        row.organizationId
-                      )}
-                      navigate={navigate}
-                      className="hover:underline"
-                    >
-                      {row.organizationName}
-                    </AppLink>{' '}
-                    <span className="font-normal text-neutral-500">
-                      ({row.role ?? 'connected'})
-                    </span>
-                  </p>
-                  {isActive && (
-                    <p className="text-sm text-neutral-500">Active</p>
-                  )}
-                </div>
-                {!isActive && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => onSwitchOrganization(row.organizationId)}
-                  >
-                    Switch
-                  </Button>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+        <OrganizationList
+          rows={rows}
+          activeOrganizationId={activeOrganizationId}
+          onSelectOrganization={onSwitchOrganization}
+          navigate={navigate}
+          actionLabel="Switch"
+        />
       </section>
     </div>
   )

@@ -108,6 +108,33 @@ export type OrganizationRoute =
 /** WEB-34 — `/account` is deliberately not organization-scoped (the brief's own words); `pages/Shell.tsx` is the one place this and every `OrganizationRoute` below are ever rendered. */
 export type AccountRoute = { kind: 'account' }
 
+/**
+ * WEB-55 — `/choose-organization`, the arrival list a multi-organization
+ * account lands on when nothing else already named a destination
+ * (`App.tsx#resolveHomeRoute`'s own module comment has the full ordering).
+ * Deliberately outside `ShellRoute`, the same "not organization-scoped"
+ * reason `AccountRoute` is above — this address names no organization
+ * either, and `App.tsx` renders it directly, wrapped in `SignedInChrome`
+ * like every other standalone signed-in page, rather than through
+ * `pages/Shell.tsx`.
+ *
+ * Not `/organizations` (code review, must-fix 1): `vite.config.ts`'s own
+ * `proxy` maps that exact segment to `apps/api` — for both
+ * `server.proxy`/`preview.proxy`, Vite matches a proxy context with a bare
+ * `url.startsWith(context)` — and `docs/DEPLOY_DROPLET.md`'s own nginx
+ * block does the identical thing in production (`location /organizations/`).
+ * A page address sharing that top-level segment is exactly the collision
+ * this file's own `parseRoute` module comment and `/admin`/`/platform-admin`
+ * (below) already state the rule against: it would 404 at the proxy on a
+ * hard reload or a bookmark, never reaching this app's own router at all —
+ * invisible to a component or `useRoute` test, which never asks a real
+ * proxy to resolve anything, and invisible to an e2e spec that only ever
+ * reaches this address by client-side `pushState`, never a fresh
+ * `page.goto`. `e2e/organizations-arrival.spec.ts` now covers a direct
+ * `page.goto` for exactly this reason.
+ */
+export type OrganizationsRoute = { kind: 'organizations' }
+
 /** Every address `pages/Shell.tsx` can render — an organization-scoped screen, or the one account-level exception. */
 export type ShellRoute = OrganizationRoute | AccountRoute
 
@@ -147,6 +174,7 @@ export type AdminRoute =
 export type Route =
   | ShellRoute
   | AdminRoute
+  | OrganizationsRoute
   | { kind: 'home' }
   | { kind: 'sign-in'; token: string }
   | { kind: 'discord-callback' }
@@ -209,6 +237,14 @@ export function parseRoute(pathname: string): Route {
   const [first, second, ...rest] = segments
 
   if (first === 'account' && segments.length === 1) return { kind: 'account' }
+
+  // WEB-55 — the arrival list's own address, the same one-segment shape
+  // `/account` above already has. `'choose-organization'`, not
+  // `'organizations'` — `OrganizationsRoute`'s own doc comment has why that
+  // exact segment is reserved for `vite.config.ts`'s own proxy.
+  if (first === 'choose-organization' && segments.length === 1) {
+    return { kind: 'organizations' }
+  }
 
   if (first === 'privacy' && segments.length === 1) return { kind: 'privacy' }
   if (first === 'terms' && segments.length === 1) return { kind: 'terms' }
@@ -403,6 +439,8 @@ export function buildPath(route: Route): string {
       return '/'
     case 'account':
       return '/account'
+    case 'organizations':
+      return '/choose-organization'
     case 'privacy':
       return '/privacy'
     case 'terms':

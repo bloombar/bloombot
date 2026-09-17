@@ -11,6 +11,14 @@
  * is exactly one place this app decides it, rather than a second copy
  * invented for the standalone pages' own header.
  *
+ * WEB-55 — `pages/Organizations.tsx`'s own arrival list is one more
+ * standalone page this now serves the header for (`App.tsx`'s own
+ * `renderOrganizationsList`): the very address that exists because
+ * `resolveHomeRoute` no longer trusts this function's own answer as the
+ * *landing* organization once an account has more than one relationship —
+ * it is still exactly right for what the header should merely *show* while
+ * that choice is being made, since nothing else names one yet either.
+ *
  * Returns `undefined` when the account has neither a membership nor a
  * connected organization at all — should not happen (TEN-1 gives every
  * account its own personal organization on first sign in), but this app is

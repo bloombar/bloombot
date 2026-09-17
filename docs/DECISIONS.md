@@ -12742,3 +12742,129 @@ confirmation design rather than folding into MCP-4's "destructive" bucket by def
 only on the caller's own membership rather than a peer's. The brief's own instruction to decide the surface
 question was scoped to `organizations.rename`; `memberships.leave`'s exclusion is this slice's own judgment
 call, recorded here for the same reason the rename inclusion is.
+
+## D-121 — `apps/web`: WEB-55/WEB-56 — the arrival list, and the header's organization control as a real menu
+
+**Problem.** `resolveHomeRoute` (`App.tsx`) picked `account.memberships[0]` — insertion order — as `/`'s own
+landing organization; TEN-1 gives every account a personal organization on first sign-in, so that was almost
+always the empty one, never the institution a student actually joined a course through. WEB-55 asks for an
+arrival list instead of a guess; WEB-56 asks for the header's own organization control to become a real menu
+rather than a `<select>`.
+
+**The arrival-list check sits between `justInstalled` and the ordinary fallback in `resolveHomeRoute`, not
+before `joinedCourse`/`justInstalled`.** Both of those already name a specific destination this account just
+earned (a redemption, an OAuth round trip) — showing a list a moment later would ask a person to re-pick
+something the app already knows. The check itself is a plain count,
+`account.memberships.length + account.connectedOrganizations.length > 1`: an account with exactly one
+relationship never reaches it, so `resolveHomeRoute`'s own fallback (`resolveDefaultOrganization`) is
+unchanged for the common case (TEN-1's own personal organization, alone).
+
+**`OrganizationsRoute` (`{ kind: 'organizations' }`) is a real, top-level address — `/choose-organization` —
+not a transient app state**, following `routing/route.ts`'s own "own address, reachable, pushes rather than
+replaces" convention (WEB-33/WEB-34): it is bookmarkable, reachable by Back, and `App.tsx` renders it the
+same way it renders the signed-in `NotFound` — wrapped in `SignedInChrome`, with **no** active organization
+(a correction — see "Code review" below), since the address itself names none and choosing one is exactly
+this screen's own job. Outside `ShellRoute` rather than inside it, the identical reason `AccountRoute`
+already is: this screen is not organization-scoped, and `pages/Shell.tsx` never renders it.
+
+Not `/organizations`, this slice's own first choice: `vite.config.ts`'s own `server.proxy`/`preview.proxy`
+(and `docs/DEPLOY_DROPLET.md`'s own nginx block, the identical shape in production) maps that exact
+top-level segment to `apps/api`, matched with a bare `url.startsWith(context)` — a page address sharing it
+would 404 at the proxy on a hard reload or a bookmark, never reaching this app's own router, and invisible
+to every check this slice ran short of a real `page.goto` (code review, must-fix 1; caught only by a fresh
+pair of eyes against `vite.config.ts`, not by any test in this branch's own first pass —
+`e2e/organizations-arrival.spec.ts` now has a case that loads the address directly, specifically so a future
+collision would fail loudly here rather than needing a second review to notice).
+
+**The arrival list's own presentation is factored out of `pages/Account.tsx` into
+`components/OrganizationList.tsx`**, rather than `pages/Organizations.tsx` inventing a second one — the
+brief's own explicit ask. `OrganizationList` takes `activeOrganizationId` as optional and an `actionLabel`
+string, since the two callers differ in exactly those two respects: `Account.tsx` always has an active
+organization (marked "Active", no button of its own) and keeps its long-standing "Switch" label;
+`Organizations.tsx` has no active organization at all yet (nothing chosen), so every row offers its own
+button, labelled "Choose" — there is nothing yet to switch *away* from.
+
+**The header's organization control (`OrganizationSwitcher.tsx`) is rebuilt as a hand-rolled popup following
+`components/KebabMenu.tsx`'s own pattern** — a trigger button, `Escape`/click-outside dismissal, focus
+returned to the trigger, only one instance open at a time (broadcast through a *distinct* custom event name
+from `KebabMenu`'s own, since the two widgets have no reason to close one another) — rather than reusing
+`KebabMenu` itself: that component's trigger is deliberately icon-only (a kebab glyph with an `aria-label`),
+and this control needs a *visible* label (the active organization's own name), which is meaningful content
+an `aria-label` would hide from assistive technology, not decoration to caption. Like `KebabMenu`, the items
+are ordinary, independently-focusable `<button>`s, not `role="menu"`/`role="menuitem"` — the identical
+reasoning: a screen reader announcing "menu" for a widget that does not implement arrow-key navigation is
+worse than not claiming the role.
+
+**A second copy of the same control renders above the drawer's own links** (`components/AppShell.tsx`'s new
+`drawerHeader` slot, wired from `components/SignedInChrome.tsx`), so the drawer's links are never ambiguous
+about which organization they act in while it is open — the brief's own explicit ask. It needs a distinct
+`data-testid` (`OrganizationSwitcher`'s new optional `testId` prop, defaulting to the header's own
+`organization-switcher` so every existing caller and test is unaffected) purely so `getByTestId` never
+matches two elements at once; switching or opening a link from the drawer's own copy also closes the drawer
+itself, the same "close once the navigation actually proceeds" discipline every other drawer control already
+follows.
+
+**Test-suite fallout, not scope creep.** `tests/shell.test.tsx` drove every organization switch in the file
+through `fireEvent.change` against a `combobox` named "Organization" (eighteen call sites) — genuinely broken
+by WEB-56, since the control it exercised no longer exists in that shape. Replaced with one shared
+`switchOrganization(name)` helper (open the trigger, click the named item) rather than hand-editing each site
+differently, so the whole file keeps testing the same behaviour through the new control rather than becoming
+inconsistent about how a switch is driven.
+
+**Code review (second pass) — two real defects, three cheap ones, one gap. All fixed on this same branch.**
+
+- **Must-fix 1 — `/organizations` collided with `vite.config.ts`'s own API proxy** (above). Renamed to
+  `/choose-organization`, checked against every `proxy` context in that file and every `location` block in
+  `docs/DEPLOY_DROPLET.md` by hand, and pinned two ways: `tests/routing.test.ts` now asserts `/organizations`
+  *alone* parses to `not-found` (this router deliberately does not own that segment, not merely does not
+  happen to), and `e2e/organizations-arrival.spec.ts` gained a `page.goto('/choose-organization')` case — a
+  genuine fresh navigation through the Playwright harness's own `vite preview` proxy, not a client-side
+  `pushState` the original slice's own specs happened to only ever exercise.
+
+- **Must-fix 2 — the arrival page's own header contradicted it.** `App.tsx#renderOrganizationsList` used to
+  pass `resolveDefaultOrganization(account)` through as `activeOrganizationId`, so the one screen whose whole
+  job is choosing an organization showed the header's own switcher (and the drawer's copy) already claiming
+  to act in a guessed one — `aria-current`, and `OrganizationSwitcher.tsx`'s own `!isActive` guard made
+  clicking that entry a no-op, the guessed organization being the one you could not actually pick from the
+  header. Fixed by passing `activeOrganizationId={undefined}` unconditionally — `SignedInChrome`'s own
+  existing "no organization at all" case (already used for a genuinely relationship-less account on every
+  other standalone page), applied here on purpose: no organization switcher, no organization-scoped drawer
+  nav, nothing in the header claiming to already be acting anywhere. The page body's own `OrganizationList`
+  (which never received an `activeOrganizationId` either) stays the one place to choose.
+
+- **Cheap-fix 3 — `Organizations.tsx` had no precondition guard.** A real bookmarkable address is reachable
+  with any relationship count, not only "more than one": WEB-58 (`memberships.leave`) shipped on this same
+  branch's own predecessor, so a two-organization account can leave one and return to a stale bookmark of
+  this exact page with only one relationship left, or (defensively — should not happen, TEN-1's own
+  guarantee, the same discipline `resolveHomeRoute`'s own comment holds itself to) none at all. Fixed with a
+  `useEffect` that redirects on mount whenever `relationshipCount <= 1` — one relationship lands directly in
+  it (`resolveDefaultOrganization`'s own membership-then-connected split), none lands on `/account` — with a
+  brief loading skeleton (the identical one `App.tsx` shows while `/` itself resolves) rendered in the
+  meantime rather than a flash of "you belong to more than one" over a list that does not back the claim.
+
+- **Cheap-fix 4 — `aria-haspopup="true"` promised menu semantics this component does not implement.**
+  `KebabMenu.tsx`, the pattern this control follows, sets none — dropped, rather than building out real
+  `role="menu"`/arrow-key navigation to match it, the same "do not claim a keyboard contract this widget does
+  not honour" reasoning `KebabMenu.tsx`'s own module comment already gives for skipping `role="menu"`
+  entirely.
+
+- **Cheap-fix 5 — the trigger's own accessible name silently lost its space.** `OrganizationSwitcher.tsx`'s
+  trigger put `{' '}` as the *first child inside* the role span (`{' '}(owner)`) rather than as a sibling text
+  node before it (`{' '}<span>(owner)</span>`, `OrganizationList.tsx`'s own already-correct pattern) — most
+  accessible-name computations trim each node's own leading whitespace before concatenating, so the trigger
+  read `Acme U(owner)` while the identically-labelled menu item read `Acme U (owner)`, and
+  `tests/organization-switcher.test.tsx` happened to pass only because the two strings never collided by
+  accident. Fixed to match `OrganizationList.tsx`, which makes the two elements now *genuinely* share one
+  accessible name when the active item is showing in the open popup — so both affected tests scope their
+  item queries with `within()` on the `role="group"` popup, the disambiguation the two elements now actually
+  need instead of a coincidence standing in for it.
+
+- **Note 6 — the `Invitation` race fix had no vitest coverage, only the e2e that found it.** Added
+  `tests/app.test.tsx`'s own `'a redeemed invitation lands on the arrival list once the fresh session
+  reflects the granted membership, not the stale one it started with'`, mirroring the file's own cross-account
+  race tests: `fetchMe` resolves once with the stale, one-organization session (the mount's own
+  `refreshSession()`), then with the fresh, two-organization one (the `refreshSession()` `onRedeemed` now
+  awaits) for every call after. Reverting `App.tsx`'s own `onRedeemed` hunk for `'invitation'` (back to bare
+  `returnToShell`) fails this test the same way it failed the real colleague in
+  `e2e/membership-invitation-panel.spec.ts` — landing on the stale personal organization's own Projects
+  screen instead of the arrival list.

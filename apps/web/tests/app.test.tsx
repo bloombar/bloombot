@@ -9,7 +9,7 @@
  * and neither was `fetchMe()` rejecting outright (finding 3).
  */
 
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../src/App.js'
@@ -185,9 +185,12 @@ describe('App (WEB-1..4)', () => {
     // install actually bound the server to — before checking the install
     // banner itself: the Discord tab is not the default one (finding 10),
     // so this opens it explicitly the way an instructor would.
+    // WEB-56 — the header's own organization control is a real menu now,
+    // not a `<select>`: the trigger's own text already names the active
+    // organization.
     expect(
-      await screen.findByRole('combobox', { name: 'Organization' })
-    ).toHaveValue('org-2')
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org Two')
     // WEB-34: `/` is never a real address — it resolves, once the session
     // is known, to the account's own canonical landing address (Projects,
     // for a member) under whichever organization the install actually
@@ -1055,6 +1058,118 @@ describe('App — / home resolution (WEB-25, WEB-34)', () => {
   })
 })
 
+// WEB-55: an account belonging to more than one organization lands on the
+// arrival list instead of `resolveHomeRoute` guessing `memberships[0]` —
+// this file's own module comment above has the fuller reasoning for why
+// that guess was almost always the wrong one.
+describe('App — WEB-55: the arrival list', () => {
+  it('an account belonging to more than one organization lands on the arrival list, not a guess', async () => {
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'instructor@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Choose an organization' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/choose-organization')
+    expect(screen.getByRole('link', { name: 'Org One' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Org Two' })).toBeInTheDocument()
+  })
+
+  it('choosing an organization from the arrival list lands in it', async () => {
+    listProjects.mockResolvedValue([])
+    listDiscordServers.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-1',
+        email: 'instructor@example.edu',
+        memberships: [
+          {
+            organizationId: 'org-1',
+            organizationName: 'Org One',
+            role: 'owner',
+          },
+          {
+            organizationId: 'org-2',
+            organizationName: 'Org Two',
+            role: 'assistant',
+          },
+        ],
+        connectedOrganizations: [],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    await screen.findByRole('heading', { name: 'Choose an organization' })
+    fireEvent.click(
+      within(screen.getByTestId('organizations-page'))
+        .getByText(/Org Two/)
+        .closest('li')!
+        .querySelector('button') as HTMLButtonElement
+    )
+
+    expect(
+      await screen.findByTestId('organization-switcher')
+    ).toHaveTextContent('Org Two')
+    expect(window.location.pathname).toBe('/o/org-2/projects')
+  })
+
+  // The connected-only case `resolveHomeRoute` already treats specially
+  // (this file's own module comment on the split between Projects and
+  // Chat): the arrival list still shows for two connected-only
+  // organizations, and choosing one lands on Chat, mirroring
+  // `Shell.tsx#effectiveTab`'s own member-vs-connected restriction.
+  it('a connected-only account with two organizations gets the arrival list too, and choosing one lands on Chat, not Projects', async () => {
+    listChatCourses.mockResolvedValue([])
+    fetchMe.mockResolvedValue({
+      account: {
+        id: 'account-2',
+        email: 'student@example.edu',
+        memberships: [],
+        connectedOrganizations: [
+          { organizationId: 'org-a', organizationName: 'Org A' },
+          { organizationId: 'org-b', organizationName: 'Org B' },
+        ],
+      },
+    })
+    window.history.pushState(null, '', '/')
+
+    renderWithModal(<App />)
+
+    await screen.findByRole('heading', { name: 'Choose an organization' })
+    fireEvent.click(
+      within(screen.getByTestId('organizations-page'))
+        .getByText(/Org B/)
+        .closest('li')!
+        .querySelector('button') as HTMLButtonElement
+    )
+
+    await waitFor(() => expect(listChatCourses).toHaveBeenCalledWith('org-b'))
+    expect(window.location.pathname).toBe('/o/org-b/chat')
+  })
+})
+
 describe('App — /invitations/:secret (ENRL-10)', () => {
   it('signed out, renders the invitation screen own sign-in prompt rather than the ordinary shell', async () => {
     fetchMe.mockResolvedValue({ account: null })
@@ -1096,6 +1211,72 @@ describe('App — /invitations/:secret (ENRL-10)', () => {
     expect(
       screen.queryByRole('combobox', { name: 'Organization' })
     ).not.toBeInTheDocument()
+  })
+
+  // WEB-55 (code review, note 6) — the identical race `'join-link'`'s own
+  // module comment (above, `describe('App — / home resolution')`) already
+  // documents and fixes for join links, now proven for an invitation too:
+  // `onRedeemed` awaits `refreshSession()` before navigating home, so
+  // `resolveHomeRoute` reads the membership this invitation just granted,
+  // not the stale, single-organization session redemption started with.
+  // Reverting that one hunk in `App.tsx`'s own `'invitation'` branch leaves
+  // this test failing — landing straight on the stale personal
+  // organization's own Projects screen instead of WEB-55's own arrival
+  // list, exactly the defect a real colleague hit (this file's own sibling,
+  // `e2e/membership-invitation-panel.spec.ts`, is where it was actually
+  // found).
+  it('a redeemed invitation lands on the arrival list once the fresh session reflects the granted membership, not the stale one it started with', async () => {
+    redeemMembershipInvitation.mockResolvedValue(undefined)
+    fetchMe
+      // The mount's own refreshSession() — stale, one organization only,
+      // exactly what this account looked like before the invitation this
+      // test redeems ever granted a second membership.
+      .mockResolvedValueOnce({
+        account: {
+          id: 'account-1',
+          email: 'colleague@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Colleague',
+              role: 'owner',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+      // The refreshSession() `onRedeemed` awaits — fresh, now carrying the
+      // membership the invitation just granted. Every call after the first
+      // resolves this same way — `mockResolvedValueOnce` then
+      // `mockResolvedValue`, the same "one stale answer, then the settled
+      // one" device this file's own cross-account race tests already use.
+      .mockResolvedValue({
+        account: {
+          id: 'account-1',
+          email: 'colleague@example.edu',
+          memberships: [
+            {
+              organizationId: 'personal-org',
+              organizationName: 'Colleague',
+              role: 'owner',
+            },
+            {
+              organizationId: 'institution-org',
+              organizationName: 'A University',
+              role: 'instructor',
+            },
+          ],
+          connectedOrganizations: [],
+        },
+      })
+    window.history.pushState(null, '', '/invitations/secret-abc')
+
+    renderWithModal(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Choose an organization' })
+    ).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/choose-organization')
   })
 
   // AUTH-6, rework — found in review: this used to be the one entry point

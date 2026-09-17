@@ -447,4 +447,4 @@ has not yet spoken on Discord is listed by an internal id. This phase keeps the 
 Google already sends at sign-in, and has the People tab show a person's name, email, Discord name
 and how and when they joined, rather than one field or an id.
 
-**In scope:** AUTH-7, WEB-52
+**In scope:** AUTH-7, WEB-52, ROST-18

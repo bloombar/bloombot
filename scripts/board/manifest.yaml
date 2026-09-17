@@ -4371,7 +4371,7 @@
   section: §41 Course Approval
   family: ADMIN
   phase: 36
-  status: In review
+  status: Done
   review: false
 - id: COST-8
   title: A course answers only once a platform administrator has approved it

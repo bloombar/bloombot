@@ -807,6 +807,132 @@ describe('courses.save', () => {
   })
 })
 
+describe('courses.save (COST-8): a new course is approved automatically only when it is an administrator’s', () => {
+  it('approves a course created by a platform administrator actor', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const admin = accounts.createAccount(
+      organizationId,
+      { email: 'admin@example.edu', displayName: 'Admin', role: 'instructor' },
+      testDb.db
+    )
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId),
+      {
+        organizationId,
+        db: testDb.db,
+        accountId: admin.id,
+        isPlatformAdministratorEmail: (email) => email === admin.email,
+      }
+    )
+
+    expect(course.aiApprovedAt).not.toBeNull()
+    expect(course.aiApprovedByAccountId).toBeNull()
+  })
+
+  it('leaves a course created by a non-administrator in a non-administrator-owned organization pending', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      {
+        email: 'instructor@example.edu',
+        displayName: 'Instructor',
+        role: 'owner',
+      },
+      testDb.db
+    )
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId),
+      {
+        organizationId,
+        db: testDb.db,
+        accountId: instructor.id,
+        // No email here is an administrator's — the same "safe default"
+        // `answer.ts`'s own `NO_ADMINISTRATOR` takes when nothing is wired.
+        isPlatformAdministratorEmail: () => false,
+      }
+    )
+
+    expect(course.aiApprovedAt).toBeNull()
+  })
+
+  it('approves a course landing in an organization a platform administrator owns, even when the actor creating it is not one', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+      testDb.db
+    )
+    const assistant = accounts.createAccount(
+      organizationId,
+      { email: 'assistant@example.edu', displayName: 'TA', role: 'assistant' },
+      testDb.db
+    )
+
+    const course = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId),
+      {
+        organizationId,
+        db: testDb.db,
+        accountId: assistant.id,
+        isPlatformAdministratorEmail: (email) => email === owner.email,
+      }
+    )
+
+    expect(course.aiApprovedAt).not.toBeNull()
+  })
+
+  it('never accepts an approval field on courses.save — the input schema does not declare one', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+
+    const attempt = dispatch(
+      saveCourseAction,
+      { ...courseSaveInput(projectId), aiApprovedAt: Date.now() },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionInputError)
+  })
+
+  it('does not auto-approve on an update, even when the actor is a platform administrator', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const admin = accounts.createAccount(
+      organizationId,
+      { email: 'admin@example.edu', displayName: 'Admin', role: 'instructor' },
+      testDb.db
+    )
+    // Created with no administrator predicate wired — stays pending.
+    const created = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId),
+      { organizationId, db: testDb.db }
+    )
+    expect(created.aiApprovedAt).toBeNull()
+
+    const updated = await dispatch(
+      saveCourseAction,
+      courseSaveInput(projectId, { id: created.id, title: 'Renamed' }),
+      {
+        organizationId,
+        db: testDb.db,
+        accountId: admin.id,
+        isPlatformAdministratorEmail: (email) => email === admin.email,
+      }
+    )
+
+    expect(updated.aiApprovedAt).toBeNull()
+  })
+})
+
 describe('courses.updateSettings (ACT-7)', () => {
   // The central test of this requirement: a settings-only change must never
   // replace a course's categories or channels — this must fail if
@@ -981,6 +1107,29 @@ describe('courses.updateSettings (ACT-7)', () => {
     )
 
     await expect(attempt).rejects.toThrow(ActionRefusedError)
+  })
+
+  // COST-8 — no course owner can set approval through any action; the input
+  // schema simply does not declare the field (`courses.ts`'s own
+  // `updateSettingsInputSchema`, `z.strictObject`), the same enforcement
+  // `courses.save`'s own identical test already gives.
+  it('never accepts an approval field — the input schema does not declare one', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const created = courses.createCourse(
+      organizationId,
+      courseSaveInput(projectId),
+      testDb.db
+    )
+    if (!created.ok) throw new Error('setup failed: unexpected conflict')
+
+    const attempt = dispatch(
+      updateSettingsCourseAction,
+      { id: created.course.id, aiApprovedAt: Date.now() },
+      { organizationId, db: testDb.db }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionInputError)
   })
 })
 

@@ -9,6 +9,7 @@
 import {
   accounts,
   conversations,
+  courseApproval,
   courseInstructionRevisions,
   courseAttachments,
   courses,
@@ -160,6 +161,32 @@ describe('courses.export', () => {
         { name: 'Intro to CS - STUDENTS', channels: [] },
       ],
     })
+  })
+
+  // COST-8 — an export never emits approval, even for a course a platform
+  // administrator approved: `CourseExportFile`'s own shape has no field for
+  // it at all, so this is a "no such key anywhere in the file" assertion,
+  // not merely "the value is falsy".
+  it('never carries approval (COST-8) — the export file has no such field', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, projectId } = seedOrganizationWithProject(testDb.db)
+    const course = seedFullCourse(organizationId, projectId, testDb.db)
+    const admin = accountId(organizationId)
+    courseApproval.approveCourse(
+      organizationId,
+      course.id,
+      admin,
+      'approve',
+      Date.now(),
+      testDb.db
+    )
+
+    const text = await exportText(organizationId, course.id, testDb.db)
+
+    expect(text).not.toMatch(/approv/i)
+    const file = parseYaml(text) as Record<string, unknown>
+    expect(file['course']).not.toHaveProperty('aiApprovedAt')
+    expect(file['course']).not.toHaveProperty('aiApprovedByAccountId')
   })
 
   it('carries nothing about a person (PORT-2)', async () => {
@@ -364,6 +391,98 @@ describe('courses.import', () => {
 
     expect(result.course.adminsRole).toBeNull()
     expect(result.course.studentsRole).toBeNull()
+  })
+
+  // COST-8 — an import creates a course exactly as `courses.save` does, so
+  // it gets the identical automatic-approval treatment.
+  it('COST-8: approves an imported course when the actor is a platform administrator', async () => {
+    testDb = createTestDatabase()
+    const source = seedOrganizationWithProject(testDb.db, 'Fall 2026')
+    const course = seedFullCourse(
+      source.organizationId,
+      source.projectId,
+      testDb.db
+    )
+    const text = await exportText(source.organizationId, course.id, testDb.db)
+    const destination = seedOrganizationWithProject(testDb.db, 'Spring 2027')
+    const admin = accounts.createAccount(
+      destination.organizationId,
+      { email: 'admin@example.edu', displayName: 'Admin', role: 'owner' },
+      testDb.db
+    )
+
+    const result = await dispatch(
+      importCourseAction,
+      { projectId: destination.projectId, content: text },
+      {
+        organizationId: destination.organizationId,
+        db: testDb.db,
+        accountId: admin.id,
+        isPlatformAdministratorEmail: (email) => email === admin.email,
+      }
+    )
+
+    expect(result.course.aiApprovedAt).not.toBeNull()
+  })
+
+  // No approval predicate wired — the safe default: an import into a
+  // non-administrator-owned organization stays pending, same as
+  // `courses.save`.
+  it('COST-8: leaves an imported course pending when nothing is administrator-owned', async () => {
+    testDb = createTestDatabase()
+    const source = seedOrganizationWithProject(testDb.db, 'Fall 2026')
+    const course = seedFullCourse(
+      source.organizationId,
+      source.projectId,
+      testDb.db
+    )
+    const text = await exportText(source.organizationId, course.id, testDb.db)
+    const destination = seedOrganizationWithProject(testDb.db, 'Spring 2027')
+
+    const result = await dispatch(
+      importCourseAction,
+      { projectId: destination.projectId, content: text },
+      {
+        organizationId: destination.organizationId,
+        db: testDb.db,
+        accountId: accountId(destination.organizationId),
+      }
+    )
+
+    expect(result.course.aiApprovedAt).toBeNull()
+  })
+
+  // COST-8 — no course owner can set approval through an import: the file
+  // format has no such field at all (the export test's own assertion above
+  // has why), so a hand-edited file naming one is not silently ignored —
+  // `readCourseExport` (`@bloombot/schemas`) refuses the whole file as
+  // unrecognised, exactly as it would refuse any other unknown key.
+  it('COST-8: a hand-edited file naming an approval field is refused outright, not silently accepted', async () => {
+    testDb = createTestDatabase()
+    const source = seedOrganizationWithProject(testDb.db, 'Fall 2026')
+    const course = seedFullCourse(
+      source.organizationId,
+      source.projectId,
+      testDb.db
+    )
+    const text = await exportText(source.organizationId, course.id, testDb.db)
+    const tampered = text.replace(
+      'course:',
+      'course:\n  aiApprovedAt: 1700000000000'
+    )
+    const destination = seedOrganizationWithProject(testDb.db, 'Spring 2027')
+
+    const attempt = dispatch(
+      importCourseAction,
+      { projectId: destination.projectId, content: tampered },
+      {
+        organizationId: destination.organizationId,
+        db: testDb.db,
+        accountId: accountId(destination.organizationId),
+      }
+    )
+
+    await expect(attempt).rejects.toThrow(ActionInputError)
   })
 
   // The other half: an export written before PROJ-7 existed always named

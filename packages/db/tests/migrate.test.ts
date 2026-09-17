@@ -65,6 +65,7 @@ describe('runMigrations', () => {
       'content_deletions',
       'conversations',
       'cost_ledger_entries',
+      'course_approval_events',
       'course_attachments',
       'course_categories',
       'course_channels',
@@ -180,6 +181,9 @@ describe('runMigrations', () => {
     // by this slice.
     expect(schema.courses).toEqual([
       'admins_role',
+      'ai_approval_decided_at',
+      'ai_approved_at',
+      'ai_approved_by_account_id',
       'answer_unenrolled',
       'conversation_scope',
       'created_at',

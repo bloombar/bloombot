@@ -6,6 +6,7 @@ import {
   accounts,
   conversations,
   costLedger,
+  courseApproval,
   courseAttachments,
   courseInstructionRevisions,
   courseJoinLinks,
@@ -38,8 +39,9 @@ afterEach(() => {
  * message, a cost-ledger entry, a course attachment, an instruction
  * revision, an enrolment, a join link, a self-enrolment intent, a web
  * source, a remembered roster channel, and a transcript access-log row plus
- * a pending export — so `deleteCourse` (PROJ-8) is exercised against the
- * same shape a real course would leave behind. Synthetic data only (QA-3).
+ * a pending export, and a COST-8 approval event — so `deleteCourse`
+ * (PROJ-8) is exercised against the same shape a real course would leave
+ * behind. Synthetic data only (QA-3).
  */
 function seedFullCourse(testDatabase: TestDatabase) {
   const organizationId = randomUUID()
@@ -206,6 +208,15 @@ function seedFullCourse(testDatabase: TestDatabase) {
     testDatabase.db
   )
 
+  courseApproval.approveCourse(
+    organizationId,
+    course.id,
+    instructor.id,
+    'approve',
+    Date.now(),
+    testDatabase.db
+  )
+
   return {
     ...organization,
     project,
@@ -315,6 +326,16 @@ describe('deletions.deleteCourse (PROJ-8)', () => {
       testDb.db
         .select()
         .from(schema.usageCounters)
+        .all()
+        .filter((row) => row.courseId === course.id)
+    ).toHaveLength(0)
+    // COST-8 — the approval event `seedFullCourse` recorded is gone too,
+    // read raw the same way `usage_counters` above is (no id-keyed lookup
+    // convenient for a single-row check once the course itself is deleted).
+    expect(
+      testDb.db
+        .select()
+        .from(schema.courseApprovalEvents)
         .all()
         .filter((row) => row.courseId === course.id)
     ).toHaveLength(0)

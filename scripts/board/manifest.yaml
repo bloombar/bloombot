@@ -4470,7 +4470,7 @@
   section: §42 Choosing and Managing an Organization
   family: WEB
   phase: 37
-  status: Backlog
+  status: In progress
   review: false
 - id: WEB-58
   title: A member leaves an organization that is not their own
@@ -4484,5 +4484,5 @@
   section: §42 Choosing and Managing an Organization
   family: WEB
   phase: 37
-  status: Backlog
+  status: In progress
   review: false

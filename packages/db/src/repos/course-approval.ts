@@ -248,6 +248,19 @@ export interface CourseForApproval {
   aiApprovedByAccountId: string | null
   /** The approving account's email — WEB-53's "who acted" — `null` under the same conditions as `aiApprovedByAccountId`. */
   aiApprovedByEmail: string | null
+  /**
+   * `courses.aiApprovalDecidedAt` (`schema.ts`'s own comment on the three
+   * columns), passed through so a caller can tell "never decided at all" —
+   * a course created before COST-8 shipped, or one that predates any
+   * approval action — from "decided pending", the state a deliberate
+   * revoke leaves behind. `routes/admin.ts`'s own unapprove route is
+   * exactly that caller: idempotence must not skip *recording* a decision
+   * merely because the course is already unapproved-looking
+   * (`aiApprovedAt === null`) — only once it is already *decided* pending
+   * too, or the administrator's own explicit "off" silently reverts to
+   * "on" the moment `answerQuestion`'s lazy auto-approval next sees it.
+   */
+  aiApprovalDecidedAt: number | null
 }
 
 /**
@@ -269,6 +282,7 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
       createdAt: courses.createdAt,
       aiApprovedAt: courses.aiApprovedAt,
       aiApprovedByAccountId: courses.aiApprovedByAccountId,
+      aiApprovalDecidedAt: courses.aiApprovalDecidedAt,
     })
     .from(courses)
     .innerJoin(projects, eq(projects.id, courses.projectId))
@@ -333,6 +347,7 @@ export function listCoursesForApproval(db: Database): CourseForApproval[] {
     ownerEmails: ownerEmailsByOrganizationId.get(row.organizationId) ?? [],
     createdAt: row.createdAt,
     aiApprovedAt: row.aiApprovedAt,
+    aiApprovalDecidedAt: row.aiApprovalDecidedAt,
     aiApprovedByAccountId: row.aiApprovedByAccountId,
     aiApprovedByEmail:
       row.aiApprovedByAccountId === null

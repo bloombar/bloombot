@@ -465,10 +465,24 @@ describe('ADMIN-5 — deleting a tenant’s data is explicit, confirmed and audi
 })
 
 describe('WEB-53 — a platform administrator approves and unapproves courses', () => {
-  it('refuses a non-administrator and a signed-out caller on GET /courses, approve and unapprove', async () => {
+  it('refuses a non-administrator, a signed-out caller and a disabled administrator on GET /courses, approve and unapprove', async () => {
     testDb = createTestDatabase()
     const caller = seedSignedInCaller(testDb.db)
     const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
+    // `isRequestFromPlatformAdministrator`'s own `account.disabledAt !== null`
+    // check (`routes/admin.ts`) — a disabled account whose session token
+    // still validated would fail that check, but in practice
+    // `@bloombot/db`'s `sessions.validateSession` already excludes a
+    // disabled account's own sessions (its own doc comment: "one whose
+    // account is disabled"), and `accounts.disableAccount` revokes every
+    // session the account held on top of that — so this admin's own cookie
+    // is refused at the session layer, the identical 401
+    // `auth-flow.spec.ts`'s own "its session cookie no longer
+    // authenticates" test already proves for an ordinary account. Still
+    // worth asserting here, on this router specifically: a disabled
+    // platform administrator gets no special path back in.
+    const disabledAdmin = seedPlatformAdministrator(testDb.db)
+    accounts.disableAccount(disabledAdmin.accountId, testDb.db)
     const app = await buildTestApp(testDb.db)
 
     const attempts: (() => request.Test)[] = [
@@ -486,6 +500,11 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
         .set('Origin', TEST_PUBLIC_APP_URL)
       expect(notAdmin.status).toBe(403)
       expect(notAdmin.body).toEqual({ error: 'not_platform_administrator' })
+
+      const disabled = await attempt()
+        .set('Cookie', disabledAdmin.cookieHeader)
+        .set('Origin', TEST_PUBLIC_APP_URL)
+      expect(disabled.status).toBe(401)
     }
 
     // Refused, not merely unauthorized — the approve/unapprove attempts
@@ -621,26 +640,74 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
     })
   })
 
-  it('unapproving an already-pending course is a no-op success, not an error', async () => {
+  // Must-fix, first review round: a course that has *never been decided*
+  // (every course seeded here predates any approval action, the same state
+  // every course that predates COST-8 is actually in) still looks
+  // "unapproved" by `aiApprovedAt` alone — the same shape as a course a
+  // previous revoke already decided pending. The old version of this test
+  // asserted zero audit events on the *first* unapprove of a never-decided
+  // course, which is exactly the missing-decision bug: skipping the write
+  // there left `aiApprovalDecidedAt` unset, so an administrator-owned
+  // organization's next question silently re-approved the course through
+  // `answerQuestion`'s own lazy path, reverting the "off" this route just
+  // claimed to record. The fix records the decision on the first call
+  // (this route's own doc comment) — proven here — and only the *second*
+  // call, once the course is genuinely already decided pending, is the
+  // true no-op.
+  it('unapproving a never-decided pending course records the decision; a second unapprove is the true no-op', async () => {
     testDb = createTestDatabase()
     const admin = seedPlatformAdministrator(testDb.db)
     const { organizationId, courseId } = seedTenantWithTranscript(testDb.db)
     const app = await buildTestApp(testDb.db)
 
-    const response = await request(app)
+    // Never decided at all — the state this test's own name describes.
+    const before = coursesRepo.getCourse(organizationId, courseId, testDb.db)
+    expect(before?.aiApprovedAt).toBeNull()
+    expect(before?.aiApprovalDecidedAt).toBeNull()
+
+    const first = await request(app)
       .post(`/admin/courses/${courseId}/unapprove`)
       .set('Cookie', admin.cookieHeader)
       .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(first.status).toBe(200)
+    expect(first.body).toEqual({ approved: false })
 
-    expect(response.status).toBe(200)
-    expect(response.body).toEqual({ approved: false })
+    // The decision is now recorded — `aiApprovalDecidedAt` is set, and a
+    // `revoke` event named the administrator, so a future lazy
+    // auto-approval (COST-8) will not silently undo this.
+    const afterFirst = coursesRepo.getCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    )
+    expect(afterFirst?.aiApprovedAt).toBeNull()
+    expect(afterFirst?.aiApprovalDecidedAt).not.toBeNull()
+    const eventsAfterFirst = courseApproval.listApprovalEventsForCourse(
+      organizationId,
+      courseId,
+      testDb.db
+    )
+    expect(eventsAfterFirst).toHaveLength(1)
+    expect(eventsAfterFirst[0]).toMatchObject({
+      action: 'revoke',
+      accountId: admin.accountId,
+    })
+
+    // Now the course is already decided pending — a second unapprove is a
+    // genuine no-op: 200, no further event.
+    const second = await request(app)
+      .post(`/admin/courses/${courseId}/unapprove`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(second.status).toBe(200)
+    expect(second.body).toEqual({ approved: false })
     expect(
       courseApproval.listApprovalEventsForCourse(
         organizationId,
         courseId,
         testDb.db
       )
-    ).toHaveLength(0)
+    ).toHaveLength(1)
   })
 
   it('404s on approve and unapprove for a course id that does not exist', async () => {

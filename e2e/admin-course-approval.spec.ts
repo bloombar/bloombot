@@ -155,7 +155,13 @@ test('a platform administrator approves a pending course, it answers, then unapp
     const pendingRow = adminPage.getByTestId(`admin-course-${courseId}`)
     await expect(pendingRow).toBeVisible()
     await expect(pendingRow).toContainText(courseTitle)
-    await pendingRow.getByRole('button', { name: 'Approve' }).click()
+    // `exact: true` — a plain `{ name: 'Approve' }` matches "Unapprove" too
+    // (a case-insensitive substring by default, and "Unapprove" contains
+    // "approve"), the same trap this file's own `projectName, exact: true`
+    // above (`:73`) already guards against for a different pair of names.
+    await pendingRow
+      .getByRole('button', { name: 'Approve', exact: true })
+      .click()
     // The row moves out of "Pending approval" once the read refreshes —
     // proven by the Approve button itself being replaced with Unapprove,
     // rather than asserting on which `<ul>` it sits under.
@@ -181,7 +187,7 @@ test('a platform administrator approves a pending course, it answers, then unapp
     await expect(dialog).toContainText(courseTitle)
     await dialog.getByRole('button', { name: 'Unapprove' }).click()
     await expect(
-      pendingRow.getByRole('button', { name: 'Approve' })
+      pendingRow.getByRole('button', { name: 'Approve', exact: true })
     ).toBeVisible()
   } finally {
     await adminContext.close()

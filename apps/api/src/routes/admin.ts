@@ -22,13 +22,20 @@
  * "never a self-granted role or a database flag").
  *
  * **ADMIN-4's own boundary, enforced by what this file does not import**:
- * nothing here reaches `transcriptAccess`, `conversations` or `messages` —
- * an administrator sees organizations, their usage and their health, never
- * a course, a person or a message. `tests/routes/admin.test.ts` proves
- * this by attempting a transcript read through this router and asserting
- * it is refused, not merely by asserting the absence of a route (a route
- * that does not exist today says nothing about one that might be added
- * tomorrow without anyone noticing it crossed this boundary).
+ * nothing here reaches `transcriptAccess`, `conversations`, `messages` or
+ * `people`. Since WEB-53, that boundary is narrower than "never a course" —
+ * `GET /courses` (below) lists every course's own identity (its title, its
+ * project, its organization, its owner's email) and its approval state,
+ * because deciding COST-8's approval is the one thing ADMIN-4 explicitly
+ * admits this console to (the amended requirement, `docs/SPEC.md` §26: "the
+ * one exception is ADMIN-6 … an administrator may read a course's settings
+ * read-only — never its people, transcripts or join links"). A person, a
+ * conversation, a message, a transcript or a join link stays out of reach
+ * regardless. `tests/routes/admin.test.ts` proves this by attempting a
+ * transcript read through this router and asserting it is refused, not
+ * merely by asserting the absence of a route (a route that does not exist
+ * today says nothing about one that might be added tomorrow without anyone
+ * noticing it crossed this boundary).
  */
 
 import { Router } from 'express'
@@ -278,8 +285,25 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
    * (`courseApproval.revokeCourseApproval`'s own doc comment), which also
    * sets `aiApprovalDecidedAt` so `answerQuestion`'s lazy auto-approval
    * cannot silently re-approve the course afterwards (COST-8). Idempotent
-   * the same way approve is: unapproving an already-pending course
-   * succeeds without a second audit event.
+   * the same way approve is: unapproving a course that is already *decided*
+   * pending (a previous revoke already ran) succeeds without a second audit
+   * event.
+   *
+   * **Must-fix, first review round**: idempotence used to skip the write
+   * for any course with `aiApprovedAt === null`, which also covers a course
+   * that has *never been decided at all* — every course that predates
+   * COST-8, and any freshly created one nobody has acted on yet
+   * (`aiApprovalDecidedAt` also `null`). Skipping the write there left
+   * `aiApprovalDecidedAt` unset, so the administrator's own explicit "off"
+   * was indistinguishable from "nobody has ever decided" — the next
+   * student question in an administrator-owned organization silently
+   * re-approved it through `answerQuestion`'s own lazy path
+   * (`courseApproval.isAdministratorOwnedOrganization`), reverting the
+   * decision this route just claimed to have made. The skip now checks
+   * `aiApprovalDecidedAt`, not `aiApprovedAt` alone: only a course already
+   * *decided* pending (a prior revoke) is a true no-op; a never-decided
+   * pending course still calls `revokeCourseApproval` so the decision is
+   * actually recorded.
    */
   router.post<{ courseId: string }>(
     '/courses/:courseId/unapprove',
@@ -301,11 +325,11 @@ export function buildAdminRouter(deps: AdminRouterDependencies): Router {
         return
       }
 
-      // Already pending — a no-op, not an error (this route's own doc
-      // comment); `revokeCourseApproval` itself always writes (unlike
-      // `approveCourse`, it has no early "already in this state" return),
-      // so that idempotence is enforced here instead.
-      if (found.aiApprovedAt === null) {
+      // Already decided pending — a genuine no-op, not an error (this
+      // route's own doc comment above). Not `found.aiApprovedAt === null`
+      // alone: see that comment for why a never-decided course must still
+      // fall through to `revokeCourseApproval` below.
+      if (found.aiApprovedAt === null && found.aiApprovalDecidedAt !== null) {
         res.status(200).json({ approved: false })
         return
       }

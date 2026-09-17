@@ -52,6 +52,7 @@
 
 import {
   answerQuestion,
+  courseNotApprovedNotice,
   routeMessage,
   type AnswerDependencies,
   type ModelClient,
@@ -117,6 +118,27 @@ export interface HandleMentionDependencies {
    * crosses this boundary under.
    */
   connectUrl: string
+  /**
+   * SURF-10 — named in `courseNotApprovedNotice`'s own reply for
+   * `declined-not-approved` (COST-8), below. `CONFIG.SUPPORT_CONTACT`
+   * (`packages/config/src/env.ts`), threaded in rather than read here — the
+   * same D-29 "packages/core/packages/discord never read CONFIG" discipline
+   * `connectUrl` above already holds itself to. Defaults to `''` when
+   * omitted, matching that variable's own unset default — the notice then
+   * drops the "at <contact>" clause entirely.
+   */
+  supportContact?: string
+  /**
+   * COST-8's lazy auto-approval, passed straight through to `answerQuestion`'s
+   * own `AnswerDependencies.isPlatformAdministratorEmail` (that field's own
+   * doc comment has the full "dependency, not an import" reasoning) —
+   * `apps/bot`'s own `main()` builds the real predicate (`@bloombot/auth`'s
+   * `isPlatformAdministrator`) and passes it here, the same "read `CONFIG`/
+   * the environment once, thread it through" discipline `connectUrl` above
+   * already follows. Omitted, an unapproved course simply never
+   * auto-approves lazily (`answerQuestion`'s own safe default).
+   */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
 }
 
 /**
@@ -139,6 +161,7 @@ export type HandleMentionResult =
     }
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
+  | { kind: 'declined-not-approved' }
   | { kind: 'invited-to-connect' }
   | { kind: 'enrolment-ended' }
   | { kind: 'not-enrolled' }
@@ -666,6 +689,9 @@ export async function handleMention(
     addressPerson: addressPersonForDiscord,
     ...(deps.admission ? { admission: deps.admission } : {}),
     ...(deps.pricing ? { pricing: deps.pricing } : {}),
+    ...(deps.isPlatformAdministratorEmail
+      ? { isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail }
+      : {}),
   }
   const result = await answerQuestion(
     {
@@ -765,6 +791,21 @@ export async function handleMention(
       )
       await sendReply(reply, notConfiguredReplyText())
       return { kind: 'not-configured' }
+    }
+    case 'declined-not-approved': {
+      // COST-8/SURF-10 — the same "gets a reply, not silence" treatment
+      // `not-configured` above already gives a misconfigured course: an
+      // unapproved one is not `response_bot.py`'s own "silently ignored"
+      // category (BOT-5) either — the course owner needs to know AI use
+      // needs approval, not just see nothing happen. Logged before the
+      // reply, for the identical "the reply is what is most likely to fail"
+      // reason `not-configured`'s own comment gives.
+      logger.info(
+        { organizationId, courseId, personId: person.id, kind: result.kind },
+        'handleMention: declined, course is not approved for AI use'
+      )
+      await sendReply(reply, courseNotApprovedNotice(deps.supportContact ?? ''))
+      return { kind: 'declined-not-approved' }
     }
     case 'not-connected': {
       // LINK-1/LINK-2 — the invitation reaches the student (unlike

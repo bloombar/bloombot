@@ -1072,7 +1072,7 @@ describe('memberships.leave (WEB-58)', () => {
     ).toBeUndefined()
   })
 
-  it('refuses an owner', async () => {
+  it('refuses the sole owner', async () => {
     testDb = createTestDatabase()
     const organizationId = seedOrganization(testDb.db)
     const owner = accounts.createAccount(
@@ -1093,6 +1093,45 @@ describe('memberships.leave (WEB-58)', () => {
     // revoked anyway.
     expect(
       memberships.getMembership(organizationId, owner.id, testDb.db)
+    ).toMatchObject({ role: 'owner' })
+  })
+
+  // WEB-58's own rule is "an owner is offered no leave", full stop — not
+  // "the *last* owner". A sole owner (the test immediately above) is
+  // refused either way: `execute`'s own `role === 'owner'` check, or, were
+  // that check ever deleted, `revokeMembership`'s own last-owner invariant
+  // (`repos/memberships.ts`) refusing the write underneath it — so that
+  // test alone cannot tell the two guards apart, and passed unchanged in
+  // review when the `role === 'owner'` guard was deleted from
+  // `leaveMembershipAction` (`memberships.ts`). Two owners here, one of
+  // them leaving, is what forces the distinction: `revokeMembership`'s own
+  // invariant only refuses dropping *below* one active owner, so with two,
+  // it would happily let the first leave — only `execute`'s own owner
+  // check stands in the way.
+  it('refuses an owner even when the organization has more than one', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const ownerA = accounts.createAccount(
+      organizationId,
+      { email: 'ownerA@example.edu', displayName: 'Owner A', role: 'owner' },
+      testDb.db
+    )
+    accounts.createAccount(
+      organizationId,
+      { email: 'ownerB@example.edu', displayName: 'Owner B', role: 'owner' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        leaveMembershipAction,
+        {},
+        { organizationId, db: testDb.db, accountId: ownerA.id }
+      )
+    ).rejects.toThrow(ActionRefusedError)
+
+    expect(
+      memberships.getMembership(organizationId, ownerA.id, testDb.db)
     ).toMatchObject({ role: 'owner' })
   })
 
@@ -1188,5 +1227,41 @@ describe('memberships.leave (WEB-58)', () => {
         { organizationId, db: testDb.db, accountId: instructor.id }
       )
     ).rejects.toThrow(ActionRefusedError)
+  })
+
+  // `leaveInputSchema` (`memberships.ts`) is `z.strictObject({})` — this is
+  // the one thing that makes "leave can only ever target the caller" true
+  // at the input boundary, before `execute` ever runs: an `accountId` in
+  // the body is not silently ignored (which would make it look, to a
+  // careless future reader, like a parameter this action accepts and
+  // simply does not use), it is refused outright as an unknown field, the
+  // same discipline `grantInputSchema`/`revokeInputSchema`'s own comments
+  // already hold themselves to.
+  it('refuses an accountId in the body — leave can never name a target', async () => {
+    testDb = createTestDatabase()
+    const organizationId = seedOrganization(testDb.db)
+    const instructor = accounts.createAccount(
+      organizationId,
+      { email: 'instructor@example.edu', displayName: 'I', role: 'instructor' },
+      testDb.db
+    )
+    const other = accounts.createAccount(
+      organizationId,
+      { email: 'other@example.edu', displayName: 'O', role: 'instructor' },
+      testDb.db
+    )
+
+    await expect(
+      dispatch(
+        leaveMembershipAction,
+        { accountId: other.id },
+        { organizationId, db: testDb.db, accountId: instructor.id }
+      )
+    ).rejects.toThrow(ActionInputError)
+
+    // Untouched — the call never reached `execute` at all.
+    expect(
+      memberships.getMembership(organizationId, other.id, testDb.db)
+    ).toMatchObject({ role: 'instructor' })
   })
 })

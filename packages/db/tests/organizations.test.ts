@@ -57,4 +57,36 @@ describe('organizations repo', () => {
       organizations.getOrganizationById(randomUUID(), testDb.db)
     ).toBeUndefined()
   })
+
+  // WEB-57: `renameOrganization` changes only `name`, and a later,
+  // independent read sees it — not merely the value this one call echoes
+  // back.
+  it('renames an organization, and a later read returns the new name', () => {
+    testDb = createTestDatabase()
+    const id = randomUUID()
+    organizations.createOrganization(
+      id,
+      { name: 'Old Name', isPersonal: false },
+      testDb.db
+    )
+
+    const renamed = organizations.renameOrganization(id, 'New Name', testDb.db)
+    expect(renamed).toMatchObject({ id, name: 'New Name' })
+
+    expect(organizations.getOrganizationById(id, testDb.db)).toMatchObject({
+      name: 'New Name',
+    })
+  })
+
+  // `renameOrganization`'s own doc comment: `undefined` when the id does
+  // not exist — the same "cannot tell you" refusal `getOrganizationById`
+  // above already gives, and what `actions/organizations.ts`'s own
+  // `if (!renamed) throw new ActionRefusedError()` guard depends on.
+  it('returns undefined when renaming an organization that does not exist', () => {
+    testDb = createTestDatabase()
+
+    expect(
+      organizations.renameOrganization(randomUUID(), 'New Name', testDb.db)
+    ).toBeUndefined()
+  })
 })

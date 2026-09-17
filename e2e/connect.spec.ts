@@ -269,9 +269,19 @@ test('a completed Discord connect shows the connected status on a later visit, n
   // `App.tsx` makes right after OAuth — still shows "connected": LINK-7's
   // own durability requirement, answered by the server rather than a
   // transient flag.
+  //
+  // WEB-56 rework — the identity this test just connected also makes this
+  // account a member of one organization *and* connected to another, so the
+  // header's own organization control (`components/OrganizationSwitcher.tsx`)
+  // is a real `<button>` now, not a `<select>` — and its own accessible
+  // name (the active organization's own auto-generated name, which happens
+  // to start with this test's own `email` local part, capitalized) is a
+  // substring match for `'Connect Discord'` too. `exact: true` disambiguates
+  // it from this page's own "Connect Discord" button, the same way it
+  // always would have needed to for two *unrelated* same-named controls.
   await page.reload()
   await expect(page.getByText(/Discord connected/)).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Connect Discord' })
+    page.getByRole('button', { name: 'Connect Discord', exact: true })
   ).toHaveCount(0)
 })

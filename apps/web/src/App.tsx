@@ -45,6 +45,13 @@
  *    destination there resolves to the account's own default organization
  *    instead, since the reason is a stale delivery, not a person's own
  *    typed address.
+ *  - `route.kind === 'organizations'` — WEB-55's own arrival list
+ *    (`pages/Organizations.tsx`), reached at its own address and rendered
+ *    the same way `NotFound` is (`renderOrganizationsList`, below): wrapped
+ *    in `SignedInChrome`, acting in the account's own default organization
+ *    for the header's sake, since this address itself names none.
+ *    `resolveHomeRoute` (below) is what lands `/` here for an account with
+ *    more than one organization and no other destination in play.
  *  - `route.kind === 'home'` — resolved, once the session is known, to the
  *    account's own canonical landing address and replaced (WEB-34) rather
  *    than rendered directly.
@@ -82,6 +89,7 @@ import { DiscordCallback } from './pages/DiscordCallback.js'
 import { Invitation } from './pages/Invitation.js'
 import { JoinLink } from './pages/JoinLink.js'
 import { NotFound } from './pages/NotFound.js'
+import { Organizations } from './pages/Organizations.js'
 import { RedeemLink } from './pages/RedeemLink.js'
 import { Shell } from './pages/Shell.js'
 import { SignIn } from './pages/SignIn.js'
@@ -145,14 +153,30 @@ type SessionState =
  * organization (TEN-8), though never its own tab — an install still lands
  * on Projects, the ordinary default, exactly as it did before this slice.
  *
+ * WEB-55 — checked next, once neither of those already named a
+ * destination: an account belonging to (a member of, or connected to) more
+ * than one organization lands on the arrival list (`pages/Organizations.tsx`)
+ * instead of guessing which one it meant — before this slice, this function
+ * fell straight through to the fallback below, which always picked
+ * `account.memberships[0]`, insertion order, almost always the empty
+ * personal organization TEN-1 creates on first sign-in rather than the one
+ * the account actually joined a course through. An account with exactly one
+ * relationship is unaffected — the count below is never greater than one for
+ * it, so it still falls through to the fallback exactly as before this
+ * slice.
+ *
  * Falling back to `account.connectedOrganizations[0]` when there is no
- * membership at all is new in this slice, not carried over: the code this
- * replaces defaulted straight to `account.memberships[0]?.organizationId ?? ''`,
- * which named no real organization at all for a connected-only account with
- * no membership anywhere — survivable there only because `activeTab` was
- * component state nothing depended on being a real address. A canonical URL
- * cannot name `''`, so this slice's own judgement call (recorded in
- * `docs/DECISIONS.md`) is to fall back one step further for that one case.
+ * membership at all is new since the LINK-11 slice, not carried over: the
+ * code before it defaulted straight to
+ * `account.memberships[0]?.organizationId ?? ''`, which named no real
+ * organization at all for a connected-only account with no membership
+ * anywhere — survivable there only because `activeTab` was component state
+ * nothing depended on being a real address. A canonical URL cannot name
+ * `''`, so that slice's own judgement call (recorded in `docs/DECISIONS.md`)
+ * is to fall back one step further for that one case; only ever reached now
+ * with at most one relationship in play (WEB-55, above), so it can no
+ * longer disagree with the arrival list about which organization "the
+ * fallback" means.
  */
 // WEB-44 — the one reachability rule both call sites below need: whether a
 // signed-in account has *any* relationship (a membership or a connected
@@ -204,6 +228,24 @@ function resolveHomeRoute(
     }
   }
 
+  // TEN-8 — a just-completed Discord install picks its own organization,
+  // still ahead of WEB-55's own arrival list below: an instructor who just
+  // finished the OAuth round trip for a specific organization lands there
+  // directly, never shown a list to choose from a moment later. Projects,
+  // never its own tab — an install still lands on the ordinary default,
+  // exactly as it did before this slice.
+  if (justInstalled && isMemberOf(justInstalled.organizationId)) {
+    return { kind: 'projects', organizationId: justInstalled.organizationId }
+  }
+
+  // WEB-55 — more than one organization, and nothing above already named a
+  // destination: the arrival list (`pages/Organizations.tsx`'s own module
+  // comment has the full reasoning), not a guess at which one this account
+  // meant.
+  if (account.memberships.length + account.connectedOrganizations.length > 1) {
+    return { kind: 'organizations' }
+  }
+
   // LINK-11 — the fallback below is now `resolveDefaultOrganization`
   // (`account-default-organization.ts`), pulled out of this function so
   // `components/SignedInChrome.tsx`'s own standalone-page header can reuse
@@ -211,10 +253,7 @@ function resolveHomeRoute(
   // the same "a membership, then a connected organization" fallback this
   // function always computed inline.
   const fallback = resolveDefaultOrganization(account)
-  const organizationId =
-    justInstalled && isMemberOf(justInstalled.organizationId)
-      ? justInstalled.organizationId
-      : (fallback?.organizationId ?? '')
+  const organizationId = fallback?.organizationId ?? ''
 
   // No membership and no connected organization at all — should not happen
   // (TEN-1 gives every account its own personal organization on first sign
@@ -252,6 +291,47 @@ function renderSignedInNotFound(
       onSignedOut={onSignedOut}
     >
       <NotFound onHome={() => navigate({ kind: 'home' }, { replace: true })} />
+    </SignedInChrome>
+  )
+}
+
+/**
+ * WEB-55 — `pages/Organizations.tsx`'s own arrival list, wrapped in
+ * `SignedInChrome` the identical way `renderSignedInNotFound` (above) wraps
+ * `NotFound`, but with **no** active organization — unlike every other
+ * caller of `SignedInChrome`, this one deliberately does not resolve
+ * `resolveDefaultOrganization` and pass its result through.
+ *
+ * Code review, must-fix 2: it used to. Passing a guessed default organization
+ * here contradicted the one screen whose whole purpose is choosing one — the
+ * header's own switcher (and the drawer's copy) showed that guess as
+ * `aria-current`/active, `OrganizationSwitcher.tsx`'s own `!isActive` guard
+ * made clicking it a no-op, and the drawer's nav navigated into it — the
+ * guessed organization was the one entry you could not actually pick from
+ * the header. `activeOrganizationId={undefined}` is `SignedInChrome`'s own
+ * existing "no organization at all" case (its own module comment: no
+ * organization switcher and no organization-scoped nav) — the identical
+ * treatment a genuinely relationship-less account already gets on every
+ * other standalone page, applied here on purpose rather than only by
+ * accident of having none: nothing in the header claims to already be
+ * acting anywhere, and the page body's own `OrganizationList` (which never
+ * received an `activeOrganizationId` either) is the one place to choose, in
+ * this render, exactly as intended.
+ */
+function renderOrganizationsList(
+  account: AccountSummary,
+  navigate: (route: Route, options?: { replace?: boolean }) => void,
+  onSignedOut: () => void
+) {
+  return (
+    <SignedInChrome
+      account={account}
+      activeOrganizationId={undefined}
+      isMember={false}
+      navigate={navigate}
+      onSignedOut={onSignedOut}
+    >
+      <Organizations account={account} navigate={navigate} />
     </SignedInChrome>
   )
 }
@@ -542,9 +622,10 @@ export function App() {
   // already has a session: `JoinLink.tsx` itself renders `SignIn` when
   // `account` is `null`, the same split `Connect.tsx` already draws above.
   //
-  // WEB-25 — `onRedeemed` is not `returnToShell` directly (unlike
-  // `Invitation`'s own, below): a redemption resolves which organization and
-  // course to open, not merely "go back to where this page was" — recorded
+  // WEB-25 — `onRedeemed` is not `returnToShell` directly (`Invitation`'s
+  // own, below, now matches this shape too, for the identical reason WEB-55
+  // exposed there): a redemption resolves which organization and course to
+  // open, not merely "go back to where this page was" — recorded
   // in `joinedCourse` (this file's own module comment on why that mirrors
   // `justInstalled`) and then handed to the shell the same way an install
   // does, navigating to the root path rather than staying on `/join/:secret`
@@ -585,13 +666,30 @@ export function App() {
   // browser already has a session, the identical reason `'join-link'` is
   // above: `Invitation.tsx` itself renders `SignIn` when `account` is
   // `null`.
+  //
+  // WEB-55 — `onRedeemed` is no longer bare `returnToShell`: the identical
+  // race `'join-link'`'s own module comment (above) already describes and
+  // fixes — `refreshSession()` awaited *before* navigating to `/`, so
+  // `resolveHomeRoute` reads the membership this invitation just granted,
+  // not a stale `session` still holding only the account's own personal
+  // organization. Invisible before this slice (`resolveHomeRoute`'s own
+  // fallback always picked `memberships[0]` regardless of which session it
+  // read), and reproduced end to end
+  // (`e2e/membership-invitation-panel.spec.ts`) once WEB-55 made the two
+  // outcomes actually differ: a stale session landed the just-invited
+  // colleague straight on their own empty personal organization instead of
+  // WEB-55's own arrival list, exactly where two real relationships belong.
   if (route.kind === 'invitation') {
     return (
       <Invitation
         secret={route.secret}
         account={session.kind === 'signed-in' ? session.account : null}
         onSignedIn={refreshSession}
-        onRedeemed={returnToShell}
+        onRedeemed={() => {
+          refreshSession().then(() => {
+            navigate({ kind: 'home' }, { replace: true })
+          })
+        }}
         navigate={navigate}
       />
     )
@@ -618,6 +716,12 @@ export function App() {
     // way `isShellRoute` does for `Shell`, just below.
     if (isAdminRoute(route)) {
       return <Admin route={route} navigate={navigate} onBack={returnToShell} />
+    }
+
+    // WEB-55 — the arrival list's own address, reached either directly
+    // (a bookmark, Back) or by `resolveHomeRoute` landing `/` here.
+    if (route.kind === 'organizations') {
+      return renderOrganizationsList(session.account, navigate, refreshSession)
     }
 
     // WEB-34: `/` resolves and replaces before this ever renders anything

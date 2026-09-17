@@ -139,17 +139,23 @@ test('an owner invites a colleague with no prior membership; a real second accou
     // `pages/Invitation.tsx`) — which redeems automatically and lands on
     // the ordinary shell once it succeeds.
     await colleaguePage.goto(`/sign-in/${colleagueToken}`)
-    await expect(
-      colleaguePage.getByTestId('organization-switcher')
-    ).toBeVisible()
 
     // A brand-new account starts with only its own personal organization —
-    // redeeming the invitation gave it a *second* membership, so the
-    // switcher now offers a real choice (`OrganizationSwitcher.tsx`'s own
-    // "a single option is the common case" branch, no longer taken).
+    // redeeming the invitation gave it a *second* membership, so it lands
+    // on WEB-55's own arrival list rather than a guess at which one it
+    // meant, not directly in either.
+    await expect(
+      colleaguePage.getByRole('heading', { name: 'Choose an organization' })
+    ).toBeVisible()
     await colleaguePage
-      .getByRole('combobox', { name: 'Organization' })
-      .selectOption({ label: `${institutionName} (instructor)` })
+      .getByTestId('organizations-page')
+      .locator('li')
+      .filter({ hasText: institutionName })
+      .getByRole('button', { name: 'Choose' })
+      .click()
+    await expect(
+      colleaguePage.getByTestId('organization-switcher')
+    ).toContainText(institutionName)
     // WEB-29: Team is offered inside the drawer now, not the header row —
     // opened here only to prove it is reachable at all, the same "a real
     // choice, not a UUID" proof this test already gives the switcher
@@ -294,14 +300,22 @@ test('a sign-in that completes in a different browsing context than the one that
   const otherTab = await context.newPage()
   await otherTab.goto(`/sign-in/${token}`)
 
-  // Redeemed in tab B, and tab B lands with the granted membership visible
-  // on the switcher — carried entirely on the token the server issued,
-  // never on anything tab A's own `sessionStorage` wrote (tab B never
-  // touched it).
-  await expect(otherTab.getByTestId('organization-switcher')).toBeVisible()
+  // Redeemed in tab B, and tab B lands on WEB-55's own arrival list — the
+  // granted membership is one of two relationships now, carried entirely on
+  // the token the server issued, never on anything tab A's own
+  // `sessionStorage` wrote (tab B never touched it).
+  await expect(
+    otherTab.getByRole('heading', { name: 'Choose an organization' })
+  ).toBeVisible()
   await otherTab
-    .getByRole('combobox', { name: 'Organization' })
-    .selectOption({ label: `${institutionName} (instructor)` })
+    .getByTestId('organizations-page')
+    .locator('li')
+    .filter({ hasText: institutionName })
+    .getByRole('button', { name: 'Choose' })
+    .click()
+  await expect(otherTab.getByTestId('organization-switcher')).toContainText(
+    institutionName
+  )
   // WEB-29: Team is offered inside the drawer now, not the header row.
   await openDrawer(otherTab)
   await expect(otherTab.getByRole('button', { name: 'Team' })).toBeVisible()

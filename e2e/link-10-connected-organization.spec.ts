@@ -190,15 +190,19 @@ test('a student connected into an institution the account does not administer re
   }
 
   // 4. The browser's own part — reload so `GET /auth/me` reflects the
-  //    connect this spec's setup just wrote.
+  //    connect this spec's setup just wrote. The reload holds the same
+  //    address (this account's own personal organization, still active),
+  //    so the switcher's own trigger still names it — WEB-56's own real
+  //    menu, opened, is where the newly connected organization actually
+  //    shows.
   await page.reload()
   const switcher = page.getByTestId('organization-switcher')
-  await expect(switcher).toContainText('A University')
-  await expect(switcher).toContainText('connected')
+  await switcher.getByRole('button').click()
+  const menu = page.getByRole('group', { name: 'Organizations' })
+  await expect(menu).toContainText('A University')
+  await expect(menu).toContainText('connected')
 
-  await page
-    .getByRole('combobox', { name: 'Organization' })
-    .selectOption({ label: 'A University (connected)' })
+  await menu.getByRole('button', { name: 'A University (connected)' }).click()
 
   // LINK-10's own withholding, proven in a real browser: nothing this
   // account's every click against would refuse is offered.

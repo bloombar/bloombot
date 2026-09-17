@@ -29,7 +29,13 @@ import { randomUUID } from 'node:crypto'
 
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
-import { closeDatabase, openDatabase, organizations } from '@bloombot/db'
+import {
+  accounts,
+  closeDatabase,
+  memberships,
+  openDatabase,
+  organizations,
+} from '@bloombot/db'
 
 import { E2E_ADMIN_EMAIL, E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
@@ -180,6 +186,76 @@ test('the panel is readable on a phone: no screen overflows sideways, and no fie
   await navigateTo(page, 'Team')
   await expect(page.getByTestId('team-panel')).toBeVisible()
   await assertNoHorizontalOverflow(page, 'the Team panel')
+})
+
+/**
+ * WEB-55/WEB-56, on a phone: the arrival list a multi-organization account
+ * lands on, and the header's own organization menu (opened, not merely
+ * closed) both hold at this viewport's own ~400px-and-narrower width — a
+ * real menu popup, and a list of rows each carrying a name, a role and a
+ * button, are exactly the kind of content that risks overflowing a phone
+ * screen the plain-text/`<select>` shapes this replaces never did.
+ */
+test('the arrival list and the header’s own organization menu hold at a phone width, with no sideways scroll (WEB-55, WEB-56)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `web55-mobile-${suffix}@example.edu`
+  const firstOrganizationId = randomUUID()
+  const secondOrganizationId = randomUUID()
+  const firstName = `Mobile First — ${suffix}`
+  const secondName = `Mobile Second — ${suffix}`
+
+  const seedDb = openDatabase(E2E_DATABASE_PATH)
+  try {
+    organizations.createOrganization(
+      firstOrganizationId,
+      { name: firstName, isPersonal: false },
+      seedDb
+    )
+    organizations.createOrganization(
+      secondOrganizationId,
+      { name: secondName, isPersonal: false },
+      seedDb
+    )
+    const account = accounts.createAccount(
+      firstOrganizationId,
+      { email, displayName: 'Instructor', role: 'owner' },
+      seedDb
+    )
+    memberships.createMembership(
+      secondOrganizationId,
+      account.id,
+      'assistant',
+      seedDb
+    )
+  } finally {
+    closeDatabase(seedDb)
+  }
+
+  await signIn(page, email)
+
+  // The arrival list itself.
+  await expect(page).toHaveURL('/choose-organization')
+  await expect(page.getByTestId('organizations-page')).toBeVisible()
+  await assertNoHorizontalOverflow(page, 'the arrival list')
+
+  await page
+    .getByTestId('organizations-page')
+    .locator('li')
+    .filter({ hasText: secondName })
+    .getByRole('button', { name: 'Choose' })
+    .click()
+  await expect(page.getByTestId('organization-switcher')).toContainText(
+    secondName
+  )
+
+  // The header's own organization menu, opened — the popup itself is what
+  // risks overflowing, not merely the closed trigger the first test in
+  // this file already covers.
+  await page.getByTestId('organization-switcher').getByRole('button').click()
+  await expect(page.getByRole('group', { name: 'Organizations' })).toBeVisible()
+  await assertNoHorizontalOverflow(page, 'the header’s organization menu, open')
 })
 
 /**

@@ -39,14 +39,39 @@
  * thing HTML has. Same classes as before either way (this file's own
  * "no design change" — WEB-41's brief states this explicitly for the
  * header).
+ *
+ * WEB-56 — the multi-organization case is a real menu now, not a
+ * `<select>`: a native select cannot mark which option is "current" beyond
+ * its own selected value, and gives this app no room to add a rename or a
+ * leave control next to each row (the very next slice on this same list).
+ * Built as a hand-rolled popup, the same device — and the same keyboard,
+ * focus and dismissal discipline — `components/KebabMenu.tsx` already gets
+ * right (that file's own module comment has the full reasoning this one
+ * does not repeat): `Escape` closes it and returns focus to the trigger, a
+ * click outside closes it too, and only one instance is ever open at once,
+ * broadcast through `ORGANIZATION_MENU_OPEN_EVENT` below — a distinct event
+ * name from `KebabMenu`'s own, since the two widgets have no reason to
+ * close one another. Deliberately not `role="menu"`/`role="menuitem"`, the
+ * identical reasoning `KebabMenu.tsx`'s own module comment gives: every
+ * item here is an ordinary, independently-focusable `<button>`, reached by
+ * `Tab` like any other run of buttons, not a widget promising arrow-key
+ * navigation it does not implement. This same control now also renders
+ * above the drawer's own links (`components/SignedInChrome.tsx`), with a
+ * distinct `data-testid` there so the two copies are never ambiguous to a
+ * test or to `getByTestId` — the header's own keeps `organization-switcher`
+ * unchanged.
  */
+
+import { useEffect, useId, useRef, useState } from 'react'
 
 import type {
   ConnectedOrganizationSummary,
   MembershipSummary,
 } from '../api/types.js'
+import { ExpandIcon } from '../icons.js'
 import { routeForTab, type Route } from '../routing/route.js'
 import { AppLink } from './AppLink.js'
+import { Button } from './Button.js'
 
 export interface OrganizationSwitcherProps {
   memberships: MembershipSummary[]
@@ -55,6 +80,8 @@ export interface OrganizationSwitcherProps {
   onChange: (organizationId: string) => void
   /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, already wrapped in `pages/Shell.tsx`'s own `guardedNavigate` (WEB-16) before it reaches here — the same guarding `changeActiveOrganization`'s own call to this component's `onChange` already gets, so a dirty form elsewhere in the tree gets the same say before this link is honoured that it gets before every other navigation this shell starts. Only the single-organization plain-text case (below) uses it. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
+  /** WEB-56 — `components/SignedInChrome.tsx`'s own drawer copy of this control passes a distinct id, so `data-testid="organization-switcher"` never matches two elements at once. Defaults to the header's own long-standing id, unchanged for every existing caller. */
+  testId?: string
 }
 
 /** One organization this switcher can offer — a membership's own role, or `undefined` for a connected-only relationship (this file's own module comment). */
@@ -64,12 +91,16 @@ interface Option {
   role?: string
 }
 
+/** WEB-56 — broadcast the instant this menu opens, the identical device `KebabMenu.tsx` already uses for the same reason (that file's own module comment) — a distinct event name from `KebabMenu`'s own, since the two widgets have no reason to close one another, but this one still has to close its *own* other copy (the header's and the drawer's both render one). */
+const ORGANIZATION_MENU_OPEN_EVENT = 'bloombot:organization-menu-open'
+
 export function OrganizationSwitcher({
   memberships,
   connectedOrganizations,
   activeOrganizationId,
   onChange,
   navigate,
+  testId = 'organization-switcher',
 }: OrganizationSwitcherProps) {
   const options: Option[] = [
     ...memberships.map((membership) => ({
@@ -86,9 +117,61 @@ export function OrganizationSwitcher({
     (option) => option.organizationId === activeOrganizationId
   )
 
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const id = useId()
+
+  // WEB-56 — only one copy of this menu open at a time, the same "a second
+  // one opening (even by keyboard) closes any other" discipline
+  // `KebabMenu.tsx`'s own module comment describes, needed here too since
+  // the header and the drawer each render their own instance.
+  useEffect(() => {
+    function handleOtherMenuOpened(event: Event) {
+      const openedId = (event as CustomEvent<string>).detail
+      if (openedId !== id) setOpen(false)
+    }
+    window.addEventListener(ORGANIZATION_MENU_OPEN_EVENT, handleOtherMenuOpened)
+    return () =>
+      window.removeEventListener(
+        ORGANIZATION_MENU_OPEN_EVENT,
+        handleOtherMenuOpened
+      )
+  }, [id])
+
+  // WEB-56 — `Escape` and "click away" both close the menu, the identical
+  // pair `KebabMenu.tsx` already wires for the identical reason (neither is
+  // a browser default for a hand-built popup).
+  useEffect(() => {
+    if (!open) return
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
+  }, [open])
+
   // A single option is the common case (TEN-1's personal organization,
   // created on first sign-in) — shown plainly rather than as a one-item
-  // dropdown nobody needs to operate. WEB-30: no "Acting in" prose anymore
+  // menu nobody needs to operate. WEB-30: no "Acting in" prose anymore
   // (this file's own module comment) — just the name, and the role/
   // "connected" label LINK-10 already required.
   if (options.length <= 1) {
@@ -110,10 +193,7 @@ export function OrganizationSwitcher({
         )
       : undefined
     return (
-      <p
-        className="text-sm font-medium text-neutral-900"
-        data-testid="organization-switcher"
-      >
+      <p className="text-sm font-medium text-neutral-900" data-testid={testId}>
         {/* WEB-41 — a link to this organization's main page. No classes of
             its own: Tailwind's Preflight already resets an anchor's color
             and text-decoration to `inherit`, and font-size/weight are
@@ -121,9 +201,8 @@ export function OrganizationSwitcher({
             the plain text it replaces (the brief's own "same font, size,
             weight, color, spacing" — no underline, no brand color to
             resist adding here). The role label stays outside the link
-            (`Account.tsx`'s own rows now match this, WEB-41 rework) — one
-            clickable name, one non-clickable label, not a link whose
-            accessible name announces the account's own relationship. */}
+            (`Account.tsx`'s rows now match this too), so the accessible
+            name is the organization's name alone, not "Acme U (owner)". */}
         {active && activeRoute ? (
           <AppLink to={activeRoute} navigate={navigate}>
             {active.organizationName}
@@ -143,23 +222,81 @@ export function OrganizationSwitcher({
     )
   }
 
-  // WEB-30: no wrapping "Acting in" label either — the select's own current
-  // value already reads as the active organization's name, and
-  // `aria-label` still names the control for anyone not reading it
-  // visually.
   return (
-    <select
-      aria-label="Organization"
-      data-testid="organization-switcher"
-      value={activeOrganizationId}
-      onChange={(event) => onChange(event.target.value)}
-      className="rounded-md border border-neutral-300 py-1 pl-2 pr-7 text-base sm:text-sm font-medium text-neutral-900 focus:border-brand-500"
+    <div
+      ref={containerRef}
+      className="relative inline-block text-left"
+      data-testid={testId}
     >
-      {options.map((option) => (
-        <option key={option.organizationId} value={option.organizationId}>
-          {option.organizationName} ({option.role ?? 'connected'})
-        </option>
-      ))}
-    </select>
+      <Button
+        ref={triggerRef}
+        variant="ghost"
+        aria-expanded={open}
+        icon={<ExpandIcon aria-hidden="true" className="size-4" />}
+        onClick={() => {
+          setOpen((current) => {
+            const next = !current
+            // Only announced on the way *open* — the identical
+            // "no sibling to tell anything to on the way closed"
+            // reasoning `KebabMenu.tsx`'s own trigger already follows.
+            if (next) {
+              window.dispatchEvent(
+                new CustomEvent(ORGANIZATION_MENU_OPEN_EVENT, { detail: id })
+              )
+            }
+            return next
+          })
+        }}
+      >
+        {active ? active.organizationName : activeOrganizationId}
+        {active ? (
+          <>
+            {' '}
+            <span className="font-normal text-neutral-500">
+              ({active.role ?? 'connected'})
+            </span>
+          </>
+        ) : (
+          ''
+        )}
+      </Button>
+      {open && (
+        <div
+          role="group"
+          aria-label="Organizations"
+          className="absolute left-0 z-10 mt-1 flex min-w-48 flex-col gap-0.5 rounded-md border border-neutral-200 bg-white p-1 shadow-lg"
+        >
+          {options.map((option) => {
+            const isActive = option.organizationId === activeOrganizationId
+            return (
+              <button
+                key={option.organizationId}
+                type="button"
+                aria-current={isActive ? 'true' : undefined}
+                onClick={() => {
+                  setOpen(false)
+                  // WEB-56 — focus returns to this menu's own trigger
+                  // before the switch itself runs, the same "never leave
+                  // focus stranded" discipline `KebabMenu.tsx`'s own item
+                  // click already holds itself to.
+                  triggerRef.current?.focus()
+                  if (!isActive) onChange(option.organizationId)
+                }}
+                className={`rounded px-2 py-1.5 text-left text-sm transition-colors ${
+                  isActive
+                    ? 'bg-brand-50 text-brand-700'
+                    : 'text-neutral-800 hover:bg-neutral-100'
+                }`}
+              >
+                {option.organizationName}{' '}
+                <span className="font-normal text-neutral-500">
+                  ({option.role ?? 'connected'})
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

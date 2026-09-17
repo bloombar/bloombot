@@ -37,6 +37,7 @@ import request from 'supertest'
 import type { ModelAnswer, ModelClient, ModelRequest } from '@bloombot/core'
 import {
   conversations,
+  courseApproval,
   courses,
   enrolments,
   organizations,
@@ -115,6 +116,19 @@ function seedEnrolledCourse(
   )
   if (!created.ok) throw new Error('test setup: course creation refused')
   const courseId = created.course.id
+
+  // COST-8 — this helper exists to exercise WEB-10's own chat route, not
+  // the approval gate, so the seeded course is approved by default the same
+  // way `packages/core`/`packages/discord`'s own seed helpers approve
+  // theirs.
+  courseApproval.approveCourse(
+    caller.organizationId,
+    courseId,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
 
   const discordPerson = people.resolvePersonByIdentity(
     caller.organizationId,
@@ -661,6 +675,47 @@ describe('routes/chat.ts (WEB-10)', () => {
 
     expect(response.status).toBe(200)
     expect(model.calls).toHaveLength(1)
+  })
+
+  // COST-8/SURF-10 — an unapproved course's decline reaches the browser
+  // with the rendered notice text attached, naming the configured support
+  // contact, so `Chat.tsx` never has to read `SUPPORT_CONTACT` itself.
+  it('replies with declined-not-approved and the rendered notice, naming the configured support contact', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId, discordPersonId } = seedEnrolledCourse(testDb.db, caller)
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    courseApproval.revokeCourseApproval(
+      caller.organizationId,
+      courseId,
+      caller.accountId,
+      Date.now(),
+      testDb.db
+    )
+    const model = new FakeModelClient('# Welcome\n\nAsk away.')
+
+    const app = await buildTestApp(testDb.db, {
+      model,
+      supportContact: 'support@bloombot.example.edu',
+    })
+
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+
+    expect(response.status).toBe(200)
+    const body = response.body as {
+      result: { kind: string; notice: string }
+    }
+    expect(body.result.kind).toBe('declined-not-approved')
+    expect(body.result.notice).toBe(
+      "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
+    )
+    expect(model.calls).toHaveLength(0)
   })
 
   // COST-3, end to end through this same pipeline — proves the cap is real,

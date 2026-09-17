@@ -72,6 +72,7 @@ import { z } from 'zod'
 
 import {
   answerQuestion,
+  courseNotApprovedNotice,
   type ModelClient,
   type PricingTable,
 } from '@bloombot/core'
@@ -91,6 +92,16 @@ export interface ChatRouterDependencies {
   model: ModelClient
   admission?: AdmissionGate
   pricing?: PricingTable
+  /**
+   * SURF-10 — `CONFIG.SUPPORT_CONTACT`, named in `courseNotApprovedNotice`'s
+   * own rendered text below for `declined-not-approved` (COST-8). Threaded
+   * in rather than read here — this app's own D-29-style boundary against
+   * reading `@bloombot/config` inside a router body, the same reason
+   * `admission`/`pricing` above are threaded from `src/index.ts` rather
+   * than read from `CONFIG` in this file. Defaults to `''` when omitted,
+   * matching that variable's own unset default.
+   */
+  supportContact?: string
 }
 
 /** `YYYY-MM-DD`, in the process's own local time zone — the same "read the clock once, at the edge" shape `apps/bot`'s own `today.ts` follows, and CORE-3's own "never read from a clock inside the pipeline" discipline that file's doc comment describes. Duplicated rather than imported: `apps/bot` and this app are on opposite sides of the app/app boundary this repo does not cross for a five-line helper neither owns — the same convention `apps/worker`'s own `roster-import.ts` already holds itself to for its own small duplicated helpers. */
@@ -419,7 +430,20 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
           ...(deps.pricing ? { pricing: deps.pricing } : {}),
         }
       )
-        .then((result) => res.status(200).json({ result }))
+        .then((result) => {
+          // COST-8/SURF-10 — the browser gets the fully rendered notice
+          // text, not just the bare kind, so it never has to read
+          // `SUPPORT_CONTACT` itself (`ChatRouterDependencies.supportContact`'s
+          // own doc comment).
+          const payload =
+            result.kind === 'declined-not-approved'
+              ? {
+                  ...result,
+                  notice: courseNotApprovedNotice(deps.supportContact ?? ''),
+                }
+              : result
+          res.status(200).json({ result: payload })
+        })
         .catch(next)
     }
   )

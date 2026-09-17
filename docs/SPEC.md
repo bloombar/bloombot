@@ -1618,7 +1618,9 @@ read.
 
 The platform-administrator console shows organizations, their usage and their health. It does not
 grant a route into a tenant's transcripts: administering the platform is not the same as reading
-a student's questions, and AUTH-4's allowlist is not a master key.
+a student's questions, and AUTH-4's allowlist is not a master key. The one exception is ADMIN-6: to
+decide an approval (COST-8), an administrator may read a course's settings read-only — never its
+people, transcripts or join links.
 
 #### ADMIN-5 Deleting a tenant's data is explicit, confirmed and audited
 
@@ -3174,3 +3176,38 @@ already existed before the import, a non-empty first name or last name in the ro
 person's own. An empty cell changes nothing and never clears a name. Email and GitHub handle keep
 ROST-10's fill-only rule, and a later Google sign-in (AUTH-7) only fills a name that is still empty,
 so it never undoes the roster's.
+
+### 41. Course Approval
+
+#### COST-8 A course answers only once a platform administrator has approved it
+
+Anyone may create an account, an organization, projects and courses and configure every setting a
+course has, but no course asks the model until a platform administrator (AUTH-4) has approved it for
+AI use. Approval is recorded on the course with who approved it and when, and is checked before
+admission, the spending cap and the daily allowance, so a refused request costs nothing and counts
+against nothing. A course belonging to an administrator — one created by a platform administrator, or
+one in an organization an administrator owns — is approved automatically, whether it is new or
+already existed when this requirement shipped; every other course starts pending. No course owner can
+set approval through any action, import, export or assistant tool. A platform administrator may
+revoke an approval, after which the course is pending again and is not re-approved automatically. An
+administrator asking a question in an unapproved course is refused like anyone else.
+
+#### SURF-10 An unapproved course says so on every surface
+
+A question asked in a course that is not approved is answered, on the web, in Discord and through MCP
+alike, with a notice that the course must be approved before it can respond and that the course owner
+should contact Bloombot support for approval, naming the support contact the deployment configures
+(`SUPPORT_CONTACT`). The course editor shows its owner the same pending state, so it is not discovered
+only by asking.
+
+#### WEB-53 The administrator console lists courses pending approval and approves or revokes them
+
+The platform-administrator console has a Courses screen listing pending courses — title, project,
+organization, owner and when created — each with an Approve button, and approved courses with an
+Unapprove button. Approving and revoking are recorded with who acted and when.
+
+#### ADMIN-6 A platform administrator can read a course's settings, read-only
+
+Clicking a course on the approval screen shows its settings as the owner sees them — general, AI and
+knowledge (instructions, files and web sources) — with nothing editable. The People tab, transcripts,
+join links and anything identifying a student stay out of reach, as ADMIN-4 requires.

@@ -24,7 +24,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 import {
   accounts,
@@ -36,6 +36,26 @@ import {
 
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { signIn } from './support/sign-in.js'
+
+/**
+ * `window`/`document` — the same narrow, inline `as` cast
+ * `e2e/chat-scroll.spec.ts`'s own module comment explains (this repo's
+ * `tsconfig.base.json` carries no `dom` lib), needed here for the identical
+ * reason: the mobile-viewport test below asserts no sideways scroll, not
+ * merely that a dialog is present in the DOM.
+ */
+type BrowserWindow = {
+  innerWidth: number
+  document: { documentElement: { scrollWidth: number } }
+}
+
+async function hasNoHorizontalOverflow(page: Page): Promise<boolean> {
+  const overflows = await page.evaluate(() => {
+    const win = globalThis as unknown as BrowserWindow
+    return win.document.documentElement.scrollWidth > win.innerWidth
+  })
+  return !overflows
+}
 
 test('an account belonging to two organizations signs in, sees the arrival list, picks the second, and lands in it; then switches back through the header menu (WEB-55, WEB-56)', async ({
   page,
@@ -371,9 +391,13 @@ test('the organization kebab and its Rename/Leave dialogs work at a mobile viewp
 
   await signIn(page, email)
   await expect(page).toHaveURL('/choose-organization')
+  // WEB-24/`e2e/chat-scroll.spec.ts`'s own device — resized before either
+  // dialog opens, not mid-interaction, the same discipline that file's own
+  // module comment holds itself to.
   await page.setViewportSize({ width: 400, height: 800 })
   const list = page.getByTestId('organizations-page')
   await expect(list.getByText(firstName)).toBeVisible()
+  expect(await hasNoHorizontalOverflow(page)).toBe(true)
 
   // Rename the owned row.
   const ownedRow = list.locator('li').filter({ hasText: firstName })
@@ -386,9 +410,20 @@ test('the organization kebab and its Rename/Leave dialogs work at a mobile viewp
     .click()
   const renameDialog = page.getByRole('dialog')
   await expect(renameDialog).toBeVisible()
+  // A real assertion this dialog is actually usable at this width, not
+  // merely present in the DOM — its own confirm button sits inside the
+  // viewport's own bounds, reachable by a tap rather than clipped off the
+  // right edge the way a fixed-width dialog wider than 400px would leave
+  // it.
+  const renameConfirmBox = await renameDialog
+    .getByRole('button', { name: 'Rename' })
+    .boundingBox()
+  expect(renameConfirmBox).not.toBeNull()
+  expect(renameConfirmBox!.x + renameConfirmBox!.width).toBeLessThanOrEqual(400)
   await renameDialog.getByLabel('Organization name').fill(renamedName)
   await renameDialog.getByRole('button', { name: 'Rename' }).click()
   await expect(list.getByText(renamedName)).toBeVisible()
+  expect(await hasNoHorizontalOverflow(page)).toBe(true)
 
   // Leave the non-owner membership row.
   const memberRow = list.locator('li').filter({ hasText: secondName })
@@ -402,10 +437,16 @@ test('the organization kebab and its Rename/Leave dialogs work at a mobile viewp
   const leaveDialog = page.getByRole('dialog')
   await expect(leaveDialog).toBeVisible()
   await expect(leaveDialog).toContainText(secondName)
+  const leaveConfirmBox = await leaveDialog
+    .getByRole('button', { name: 'Leave' })
+    .boundingBox()
+  expect(leaveConfirmBox).not.toBeNull()
+  expect(leaveConfirmBox!.x + leaveConfirmBox!.width).toBeLessThanOrEqual(400)
   await leaveDialog.getByRole('button', { name: 'Leave' }).click()
 
   await expect(page).toHaveURL(new RegExp(`/o/${firstOrganizationId}/`))
   await expect(page.getByTestId('organization-switcher')).toContainText(
     renamedName
   )
+  expect(await hasNoHorizontalOverflow(page)).toBe(true)
 })

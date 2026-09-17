@@ -12884,29 +12884,73 @@ different: it renders eight other tabs that never touch this feature, and `tests
 directly, not through `App.tsx`, at roughly forty call sites that supply no such prop. Making `refreshAccount`
 required there would have meant editing every one of them for a feature none of them exercises — real scope
 creep for a slice the brief scoped to "the UI that calls [the existing actions]." `refreshAccount?: () =>
-Promise<unknown>`, defaulting to `() => Promise.resolve()` in `ShellInner`'s own destructuring (the identical
-shape `supportContact = ''` already uses one prop above it), is the judgment call: `App.tsx`'s own real
-`<Shell>` render passes the genuine `refreshSession`, and every test that does not care about this feature is
-untouched.
+Promise<AccountSummary | undefined>`, defaulting to `() => Promise.resolve(undefined)` in `ShellInner`'s own
+destructuring (the identical shape `supportContact = ''` already uses one prop above it), is the judgment
+call: `App.tsx`'s own real `<Shell>` render passes the genuine adapter (below), and every test that does not
+care about this feature is untouched. Code review (round 2) confirmed this is not a repeat of the COST-8
+mistake that optional-prop shortcut is normally a proxy for — its worst case, an un-refreshed name or a stale
+remembered organization on the eight tabs that never call it, is never an authorization change; the server
+refuses regardless.
+
+**`refreshAccount` resolves the fresh account itself, not a bare acknowledgement — code review (round 2),
+must-fix 1.** The first version of this slice typed it `() => Promise<unknown>` and discarded whatever
+`App.tsx#refreshSession` resolved with, on the reasoning that `handleLeave`'s own fallback destination could
+be picked from `OrganizationList`'s own `rows` prop instead (below). That reasoning covered the _state
+update_ landing in a later render, correctly, but missed that `rows` itself is a value the fallback closed
+over at the moment a row's own kebab opened — stale the instant a _different_ row's own Leave, confirmed
+first, actually lands. Concrete failure this produced: on `/account` with rows `[B (member), A (personal
+owner), C (member, active)]`, confirming Leave on `B` and then, before its own refresh resolves — nothing
+disables a _different_ row's own kebab while one is busy, only the busy row's own — confirming Leave on `C`
+too, closed `C`'s own handler over the pre-`B` `rows`, picked `B` as the fallback, and navigated to an
+organization the account had already left, landing on `NotFound`. Fixed by giving `refreshAccount` the real
+signature it should have had from the start: `() => Promise<AccountSummary | undefined>` — `App.tsx` builds
+this as a small adapter over `refreshSession` (`session.kind === 'signed-in' ? session.account : undefined`),
+rather than exporting `SessionState` itself for `OrganizationList.tsx` to narrow — that type is App.tsx's own
+local concern (`'loading'`/`'signed-out'`/`'unreachable'` besides `'signed-in'`), and a bare object type with
+only an optional `account` field turned out not to be structurally assignable to it in `--strict
+--exactOptionalPropertyTypes` (TS's own "no properties in common" weak-type rule), confirmed by hand before
+picking the adapter over that shortcut. `handleLeave`'s own fallback is now built from this fresh account
+(`rowsFromAccount`, mirroring the mapping `Account.tsx`/`Organizations.tsx` each already build their own
+`rows` prop from), never from `rows` itself — the two-Leaves-in-flight race above is pinned by
+`tests/organization-list.test.tsx`'s own test of that exact sequence.
 
 **Leaving the organization currently active is resolved inside `OrganizationList` itself, not by threading a
 second navigation decision through `Account.tsx`/`Shell.tsx`.** The brief requires that leaving the active
 organization not strand the app there. The alternative — having `Account.tsx` decide where to send a reader
 who just left it, the way `changeActiveOrganization` already picks a _target_ organization for an ordinary
-switch — needs a fresh, post-leave account to choose from, and the caller that dispatched the leave has no
-way to get one synchronously: `refreshAccount()`'s own state update lands in a _later_ render, not in the
-still-running async handler that awaited it. `OrganizationList#handleLeave` instead picks from its own
-`rows` prop, filtered to drop the row just left — data it already has, at the moment it needs it — preferring
-a remaining membership over a remaining connected organization (the same order `resolveDefaultOrganization`
-already uses), falling back to `{ kind: 'account' }` when nothing is left. `pages/Organizations.tsx`'s own
-arrival list never sets `activeOrganizationId`, so this branch can never fire there — a leave from that
-screen is corrected entirely by its own existing `relationshipCount <= 1` redirect (D-121's cheap-fix 3) once
-the refreshed `account` propagates, exactly as the brief's own out-of-scope note ("no changes to
-`resolveHomeRoute`'s landing logic") implies it should be.
+switch — needs the same fresh, post-leave account `refreshAccount` now resolves; threading it through
+`Account.tsx` too, for a decision `OrganizationList` already has everything it needs to make itself once
+`refreshAccount` is awaited, would only be a second place this logic could drift from the arrival list's own
+version of it. `OrganizationList#handleLeave` picks from `rowsFromAccount(freshAccount)`, filtered to drop the
+row just left — preferring a remaining membership over a remaining connected organization, the same order
+`resolveDefaultOrganization` already uses — falling back to `{ kind: 'account' }` when nothing is left (or
+when the refresh itself found this browser signed out or `apps/api` unreachable, `freshAccount` being
+`undefined` then too). `pages/Organizations.tsx`'s own arrival list never sets `activeOrganizationId`, so this
+branch can never fire there — a leave from that screen is corrected entirely by its own existing
+`relationshipCount <= 1` redirect (D-121's cheap-fix 3) once the refreshed `account` propagates, exactly as
+the brief's own out-of-scope note ("no changes to `resolveHomeRoute`'s landing logic") implies it should be.
+
+**The `{ kind: 'account' }` fallback needed a second, independent fix — code review (round 2), must-fix 3.**
+`navigate({ kind: 'account' })` is a no-op whenever the caller was already on `/account`, which
+`OrganizationList`'s own `activeOrganizationId` guarantees it always is (only `Account.tsx` ever sets that
+prop — this file's own module comment). The actual leak this left open: `pages/Shell.tsx`'s own
+`rememberedOrganizationId` — what the header shows while `/account` is open, this state's own module comment
+— was set only from `route`, never corrected against `account` itself, so leaving the remembered organization
+left it naming one this account no longer belonged to, and `OrganizationSwitcher.tsx`'s own single-organization
+branch, finding no option matching that stale id, fell back to rendering the raw id — precisely the leak
+`components/SignedInChrome.tsx`'s own module comment says must never happen. The real fix is in
+`pages/Shell.tsx`, not `OrganizationList.tsx`: a second effect, keyed on `account` (not `route`), that
+recomputes `rememberedOrganizationId` whenever it no longer names a relationship the current `account` holds —
+the identical membership-then-connected fallback the state's own initializer already uses. This makes
+`OrganizationList`'s own `navigate({ kind: 'account' })` call harmless rather than load-bearing for this case:
+the header self-corrects regardless of what any particular caller's navigation does once its own `account`
+prop changes. Pinned directly in `tests/shell.test.tsx`, by rerendering `<Shell>` with a fresh `account` prop
+that no longer includes the remembered organization while `route` stays `{ kind: 'account' }` throughout — the
+same shape a `refreshAccount()` after a Leave produces, without needing a real Leave dispatch to reach it.
 
 **`renameOrganization`/`leaveOrganization` are new thin wrappers in `api/client.ts`**, the same
 `dispatchAction`-over-`organizations.rename`/`memberships.leave` shape every other action wrapper in that
 file already takes (`renameProject`/`archiveProject`, immediately above where these were added). Neither
-caller reads the resolved value — both re-read `GET /auth/me` instead (this file's own module comment on
-why) — so `renameOrganization`'s own return type is the minimal `{ id: string; name: string }` rather than a
-full `Organization` type this bundle has never needed to declare before.
+caller reads `renameOrganization`'s own resolved value — both re-read `GET /auth/me` instead (this file's own
+module comment on why) — so its return type is the minimal `{ id: string; name: string }` rather than a full
+`Organization` type this bundle has never needed to declare before.

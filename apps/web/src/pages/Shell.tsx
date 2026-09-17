@@ -163,8 +163,8 @@ export interface ShellProps {
     alreadyEnrolled: boolean
   }
   onSignedOut: () => void
-  /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, threaded straight to `pages/Account.tsx`'s own `OrganizationList` so a rename or a leave re-reads `GET /auth/me` (that file's own module comment on why). Optional, defaulting to a no-op below: most of this file's own tests never reach `/account`'s own kebab and do not care. */
-  refreshAccount?: () => Promise<unknown>
+  /** WEB-57/WEB-58 — `App.tsx`'s own `refreshAccount` adapter, threaded straight to `pages/Account.tsx`'s own `OrganizationList` so a rename or a leave re-reads `GET /auth/me` (that file's own module comment on why, and on why this resolves the fresh account itself, not a bare acknowledgement). Optional, defaulting to a no-op below: most of this file's own tests never reach `/account`'s own kebab and do not care. */
+  refreshAccount?: () => Promise<AccountSummary | undefined>
 }
 
 /**
@@ -212,7 +212,7 @@ function ShellInner({
   onSignedOut,
   // WEB-57/WEB-58 — `ShellProps`'s own doc comment on why this defaults to
   // a no-op rather than being required.
-  refreshAccount = () => Promise.resolve(),
+  refreshAccount = () => Promise.resolve(undefined),
 }: ShellProps) {
   const { guardedNavigate } = useNavigationGuard()
   // WEB-32/WEB-34 — `route.organizationId` is the source of truth for every
@@ -239,6 +239,38 @@ function ShellInner({
     if (route.kind !== 'account')
       setRememberedOrganizationId(route.organizationId)
   }, [route])
+  // Code review (round 2), must-fix 3 — `rememberedOrganizationId` above is
+  // only ever *set* from `route`, never corrected against `account` itself,
+  // so leaving the remembered organization while `/account` is open (WEB-58,
+  // `pages/Account.tsx`'s own `OrganizationList`) left it naming an
+  // organization this account no longer belongs to: `navigate({ kind:
+  // 'account' })` — `OrganizationList.tsx`'s own fallback when nothing else
+  // is left to switch to — is a no-op here, since `route.kind` was already
+  // `'account'`, so the effect above never runs. `OrganizationSwitcher.tsx`
+  // then found no option matching the stale id and fell back to rendering
+  // the raw UUID, exactly the leak `components/SignedInChrome.tsx`'s own
+  // module comment says must never happen. This effect is the actual fix,
+  // independent of which navigation (if any) a caller made: whenever
+  // `account` changes while `/account` is open and the remembered id no
+  // longer names a relationship this account still has, it is recomputed
+  // the same way the initializer above picks one — a membership, then a
+  // connected organization, in whichever order `account` itself lists them.
+  useEffect(() => {
+    if (route.kind !== 'account') return
+    const stillValid =
+      account.memberships.some(
+        (membership) => membership.organizationId === rememberedOrganizationId
+      ) ||
+      account.connectedOrganizations.some(
+        (connection) => connection.organizationId === rememberedOrganizationId
+      )
+    if (stillValid) return
+    setRememberedOrganizationId(
+      account.memberships[0]?.organizationId ??
+        account.connectedOrganizations[0]?.organizationId ??
+        ''
+    )
+  }, [account, route.kind, rememberedOrganizationId])
   const activeOrganizationId =
     route.kind === 'account' ? rememberedOrganizationId : route.organizationId
   // TEN-8: the server-truth read this file's own module comment describes —

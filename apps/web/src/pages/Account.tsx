@@ -65,7 +65,7 @@ export interface AccountProps {
   /** WEB-41 — `routing/useRoute.ts`'s own `navigate`, threaded down the same way `pages/Shell.tsx` already threads it to every other screen it renders. */
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, threaded through `pages/Shell.tsx` unchanged; passed straight to `OrganizationList` (this file's own module comment on why). */
-  refreshAccount: () => Promise<unknown>
+  refreshAccount: () => Promise<AccountSummary | undefined>
 }
 
 export function Account({

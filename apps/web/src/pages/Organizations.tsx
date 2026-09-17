@@ -56,7 +56,7 @@ export interface OrganizationsProps {
   account: AccountSummary
   navigate: (route: Route, options?: { replace?: boolean }) => void
   /** WEB-57/WEB-58 — `App.tsx`'s own `refreshSession`, passed straight to `OrganizationList` (that file's own module comment on why Rename/Leave need it). Leaving from this screen never triggers `OrganizationList`'s own "move off the active organization" branch — this screen never sets `activeOrganizationId` (this file's own module comment above) — so a leave here is corrected entirely by the effect above, once the refreshed `account` drops this screen's own `relationshipCount` to one. */
-  refreshAccount: () => Promise<unknown>
+  refreshAccount: () => Promise<AccountSummary | undefined>
 }
 
 export function Organizations({

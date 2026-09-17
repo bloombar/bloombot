@@ -610,6 +610,119 @@ describe('Admin — WEB-53’s Courses screen', () => {
   })
 })
 
+// WEB-54 — the console's own secondary navigation and the platform-health
+// footer, on every one of the console's five screens.
+describe('Admin — WEB-54’s console navigation and health footer', () => {
+  beforeEach(() => {
+    fetchAdminOrganizations.mockResolvedValue({
+      organizations: [],
+      platformHealth: PLATFORM_HEALTH,
+    })
+    fetchAdminCourses.mockResolvedValue({ courses: [] })
+    fetchAdminCourse.mockResolvedValue({
+      courseId: 'course-1',
+      courseTitle: 'Web Design',
+      enabled: true,
+      projectId: 'proj-1',
+      projectName: 'Fall 2026',
+      organizationId: 'org-1',
+      organizationName: 'A Real Tenant',
+      adminsRole: null,
+      studentsRole: null,
+      categories: [],
+      conversationScope: 'course',
+      model: null,
+      promptId: null,
+      instructions: null,
+      maxRequestsPerDay: null,
+      selfEnrolFromDiscord: false,
+      answerUnenrolled: true,
+      attachments: [],
+      webSources: [],
+      aiApprovedAt: null,
+      aiApprovedByAccountId: null,
+      aiApprovedByEmail: null,
+      aiApprovalDecidedAt: null,
+    })
+  })
+
+  it.each([
+    ['admin-organizations', { kind: 'admin-organizations' }, 'Organizations'],
+    [
+      'admin-organization',
+      { kind: 'admin-organization', organizationId: 'org-1' },
+      'Organizations',
+    ],
+    ['admin-courses', { kind: 'admin-courses' }, 'Courses'],
+    ['admin-course', { kind: 'admin-course', courseId: 'course-1' }, 'Courses'],
+    ['admin-deletions', { kind: 'admin-deletions' }, 'Deletion history'],
+  ] as const)(
+    'renders the nav and health footer on the %s screen, with %s marked current',
+    async (_name, route, currentLabel) => {
+      renderAdmin({ route })
+
+      const nav = await screen.findByRole('navigation', { name: 'Console' })
+      const current = within(nav).getByText(currentLabel)
+      expect(current).toHaveAttribute('aria-current', 'page')
+
+      // The other two destinations are present but not current.
+      for (const label of ['Organizations', 'Courses', 'Deletion history']) {
+        if (label === currentLabel) continue
+        expect(within(nav).getByText(label)).not.toHaveAttribute(
+          'aria-current',
+          'page'
+        )
+      }
+
+      // The health footer — a `contentinfo` landmark — renders on every
+      // screen, reading the one `fetchAdminOrganizations` response `Admin`
+      // already holds.
+      const footer = screen.getByRole('contentinfo')
+      expect(within(footer).getByText('Bot')).toBeInTheDocument()
+      expect(within(footer).getByText('Worker')).toBeInTheDocument()
+      expect(within(footer).getByText('API')).toBeInTheDocument()
+    }
+  )
+
+  it('clicking each nav destination navigates to the right screen', async () => {
+    renderAdmin({ route: { kind: 'admin-organizations' } })
+
+    const nav = await screen.findByRole('navigation', { name: 'Console' })
+    fireEvent.click(within(nav).getByRole('link', { name: 'Courses' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Pending approval' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Console' })).getByRole(
+        'link',
+        { name: 'Deletion history' }
+      )
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Deletion history' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Console' })).getByRole(
+        'link',
+        { name: 'Organizations' }
+      )
+    )
+    expect(await screen.findByText('No organizations yet.')).toBeInTheDocument()
+  })
+
+  // The footer used to render inline on the organizations screen alone —
+  // proven gone from there by checking it appears exactly once (the fixed
+  // footer), not a leftover second copy.
+  it('the health footer no longer appears inline on the organizations screen — one copy, not two', async () => {
+    renderAdmin({ route: { kind: 'admin-organizations' } })
+
+    await screen.findByRole('navigation', { name: 'Console' })
+    expect(screen.getAllByText('Bot')).toHaveLength(1)
+  })
+})
+
 describe('Admin — ADMIN-6’s read-only course settings screen', () => {
   const COURSE_DETAIL = {
     courseId: 'course-1',

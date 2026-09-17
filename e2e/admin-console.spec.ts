@@ -365,3 +365,54 @@ test('the admin console’s own screens are addressable — a cold deep link, pa
   )
   await expect(page.getByTestId('not-found-page')).toBeVisible()
 })
+
+test('an administrator moves Organizations → Courses → Deletion history entirely through the console’s own navigation, with the health footer visible throughout (WEB-54)', async ({
+  page,
+}) => {
+  await signIn(page, E2E_ADMIN_EMAIL)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await page.goto('/platform-admin')
+  await expect(page).toHaveURL('/platform-admin/organizations')
+
+  const nav = page.getByRole('navigation', { name: 'Console' })
+  const footer = page.getByRole('contentinfo')
+
+  // Organizations — the console's own landing screen — is current, and the
+  // health footer is already visible, with no organizations-list read of
+  // its own left to wait on (`Admin.tsx`'s own module comment on WEB-54's
+  // one shared read).
+  await expect(
+    nav.getByRole('link', { name: 'Organizations' })
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(footer).toBeVisible()
+  await expect(footer.getByText('Bot')).toBeVisible()
+
+  // Organizations -> Courses, through the nav rather than a typed address.
+  await nav.getByRole('link', { name: 'Courses' }).click()
+  await expect(page).toHaveURL('/platform-admin/courses')
+  await expect(
+    page.getByRole('heading', { name: 'Pending approval' })
+  ).toBeVisible()
+  await expect(nav.getByRole('link', { name: 'Courses' })).toHaveAttribute(
+    'aria-current',
+    'page'
+  )
+  await expect(footer).toBeVisible()
+
+  // Courses -> Deletion history.
+  await nav.getByRole('link', { name: 'Deletion history' }).click()
+  await expect(page).toHaveURL('/platform-admin/deletions')
+  await expect(
+    page.getByRole('heading', { name: 'Deletion history' })
+  ).toBeVisible()
+  await expect(
+    nav.getByRole('link', { name: 'Deletion history' })
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(footer).toBeVisible()
+
+  // Deletion history -> Organizations, closing the loop.
+  await nav.getByRole('link', { name: 'Organizations' }).click()
+  await expect(page).toHaveURL('/platform-admin/organizations')
+  await expect(footer).toBeVisible()
+})

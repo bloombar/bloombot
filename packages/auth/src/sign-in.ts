@@ -608,11 +608,14 @@ export function signInWithGoogle(
 
     // AUTH-7 — fills the account's own stored names and every person its web
     // identity is already connected to, fill-only. Run for both branches
-    // above: a brand-new account has a fresh, unconnected person from
-    // `tryCreateAccountForEmail` (nothing to fill on it yet, but the
-    // account's own names still need recording for a *later* person to fill
-    // from); a returning account may already have one or more connected
-    // people (LINK-10) with roster or earlier-Google names to leave alone.
+    // above: a brand-new account already has a connected person by this
+    // point (`tryCreateAccountForEmail` → `createConnectedWebPerson`), but
+    // that person's own fill ran *before* the account had any name to give
+    // it — this call is what actually lands the names on it, a moment
+    // later, through `listConnectedOrganizationsForAccount`'s own loop
+    // (below), once the account's names are recorded first; a returning
+    // account may already have one or more connected people (LINK-10) with
+    // roster or earlier-Google names to leave alone.
     fillNamesFromGoogleIdentity(identity, account.id, tx)
 
     const session = createSession(account.id, tx)

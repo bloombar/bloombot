@@ -394,8 +394,10 @@ test('clicking a person’s name in the People panel opens their transcript, alr
   // line, email and how/when they joined on the secondary line.
   const namedRow = page.getByRole('link', { name: `Jane Doe ${suffix}` })
   await expect(namedRow).toBeVisible()
+  // Rework round 1, must-fix 1 — every secondary-line fact is labelled now
+  // (`Email: …`, `Joined: <source> — <date>`).
   const namedSecondaryLine = page.getByText(
-    new RegExp(`jane-${suffix}@example\\.edu.*Roster import — admitted`)
+    new RegExp(`Email: jane-${suffix}@example\\.edu.*Joined: Roster import`)
   )
   await expect(namedSecondaryLine).toBeVisible()
 

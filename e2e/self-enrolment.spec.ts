@@ -254,5 +254,7 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
   await page.getByRole('tab', { name: 'People' }).click()
   await expect(page.getByRole('heading', { name: 'People' })).toBeVisible()
   await expect(page.getByText('Enrolled (1)')).toBeVisible()
-  await expect(page.getByText(/Self-enrolled — admitted/)).toBeVisible()
+  // Rework round 1, must-fix 1 — every secondary-line fact is labelled now,
+  // including how/when the person joined (`Joined: <source> — <date>`).
+  await expect(page.getByText(/Joined: Self-enrolled/)).toBeVisible()
 })

@@ -144,6 +144,75 @@ describe('CoursePeople (WEB-22)', () => {
     )
 
     expect(await screen.findByText('person-42')).toBeInTheDocument()
+    // Rework round 1, must-fix 1 — even the last-resort fallback carries a
+    // label, the same as every other identifier this screen can show.
+    expect(screen.getByText('ID')).toBeInTheDocument()
+  })
+
+  // Rework round 1, must-fix 1 — "each is labelled": before this fix, only
+  // the secondary line's own `Discord: …` prefix was labelled at all; a
+  // bare name or email on the primary line, and a bare date on the
+  // secondary one, carried no label. Fails without the fix: the primary
+  // line's own label (`Name`) and the secondary line's own `Email:`/
+  // `Joined:` prefixes would not exist.
+  it('labels every detail on the row: the primary line and each secondary fact', async () => {
+    const createdAt = new Date('2026-09-16T14:03:00Z').getTime()
+    listCourseEnrolments.mockResolvedValue([
+      entry({
+        id: 'e1',
+        displayName: 'janed',
+        email: 'jane@x.edu',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        source: 'join_link',
+        createdAt,
+      }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Jane Doe')
+    // The primary line's own label — the name is known, so this reads
+    // "Name", sitting just above the link.
+    expect(screen.getByText('Name')).toBeInTheDocument()
+    const secondary = screen.getByText(/Email:/)
+    expect(secondary).toHaveTextContent('Email: jane@x.edu')
+    expect(secondary).toHaveTextContent('Discord: janed')
+    expect(secondary).toHaveTextContent(/Joined: Join link/)
+  })
+
+  // Rework round 1, must-fix 1 — the label must track *whichever* field
+  // ends up on the primary line, not just the name: when no name is known
+  // and email becomes the link text, the label above it must read "Email",
+  // not "Name" (which would misdescribe what the link text actually is).
+  it("labels the primary line 'Email' when email is used as the primary line because no name is known", async () => {
+    listCourseEnrolments.mockResolvedValue([
+      entry({
+        id: 'e1',
+        displayName: 'janed',
+        email: 'jane@x.edu',
+        firstName: null,
+        lastName: null,
+      }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    await screen.findByRole('link', { name: 'jane@x.edu' })
+    expect(screen.getByText('Email')).toBeInTheDocument()
+    expect(screen.queryByText('Name')).not.toBeInTheDocument()
   })
 
   // WEB-52: a full name is the primary line, and the secondary line shows
@@ -204,6 +273,33 @@ describe('CoursePeople (WEB-22)', () => {
     const secondary = screen.getByText(/Roster import/)
     expect(secondary).not.toHaveTextContent('jane@x.edu')
     expect(secondary).toHaveTextContent('Discord: janed')
+  })
+
+  // Rework round 1, must-fix 2 — an ended row used to show only "… — ended
+  // <endedAt>", with no way to tell how or when the person had originally
+  // joined. Fails without the fix: `Joined: …` would be entirely absent
+  // from an ended row's own secondary line.
+  it('shows both how/when a person joined and when their enrolment ended, on an ended row', async () => {
+    const createdAt = new Date('2026-01-10T09:00:00Z').getTime()
+    const endedAt = new Date('2026-09-16T14:03:00Z').getTime()
+    listCourseEnrolments.mockResolvedValue([
+      entry({ id: 'e1', source: 'discord_role', createdAt, endedAt }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Ada Lovelace')
+    const secondary = screen.getByText(/Joined:/)
+    expect(secondary).toHaveTextContent(/Joined: Discord role/)
+    expect(secondary).toHaveTextContent(new Date(createdAt).toLocaleString())
+    expect(secondary).toHaveTextContent('Ended:')
+    expect(secondary).toHaveTextContent(new Date(endedAt).toLocaleString())
   })
 
   it('ending confirms first, stating both halves of ENRL-6 — cancelling calls nothing', async () => {

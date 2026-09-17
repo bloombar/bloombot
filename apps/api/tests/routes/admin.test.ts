@@ -21,6 +21,9 @@ import { createSession } from '@bloombot/auth'
 import {
   accounts,
   courseApproval,
+  courseAttachments,
+  courseJoinLinks,
+  courseWebSources,
   createFilesystemAttachmentStorage,
   memberships,
   organizations,
@@ -117,6 +120,105 @@ function seedTenantWithTranscript(db: import('@bloombot/db').Database) {
   )
   if (!courseResult.ok) throw new Error('seed course creation failed')
   return { organizationId, courseId: courseResult.course.id }
+}
+
+/**
+ * ADMIN-6's own tenant: a course carrying every settings group the route
+ * reads back — a category with a channel (Discord category/role names), a
+ * model, instructions and a max-requests-per-day (AI), one ready knowledge
+ * file and one website (Knowledge) — plus a person and a join link
+ * (`joinLinkSecretHash`) the boundary test below proves stay unreachable
+ * through this route regardless.
+ */
+function seedCourseWithSettings(db: import('@bloombot/db').Database) {
+  const organizationId = randomUUID()
+  organizations.createOrganization(
+    organizationId,
+    { name: 'Settings Tenant', isPersonal: false },
+    db
+  )
+  const project = projectsRepo.createProject(
+    organizationId,
+    { name: 'Spring 2027' },
+    db
+  )
+  const courseResult = coursesRepo.createCourse(
+    organizationId,
+    {
+      projectId: project.id,
+      title: 'Intro to Botany',
+      enabled: true,
+      adminsRole: 'admins-botany',
+      studentsRole: 'students-botany',
+      model: 'gpt-5',
+      instructions: 'Answer only from the syllabus.',
+      maxRequestsPerDay: 20,
+      conversationScope: 'course',
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
+      categories: [
+        {
+          name: 'Botany 101',
+          channels: [{ name: 'general', adminsOnly: false }],
+        },
+      ],
+    },
+    db
+  )
+  if (!courseResult.ok) throw new Error('seed course creation failed')
+  const courseId = courseResult.course.id
+
+  const attachment = courseAttachments.createPendingAttachment(
+    organizationId,
+    {
+      courseId,
+      filename: 'syllabus.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 4096,
+    },
+    db
+  )
+  courseAttachments.markAttachmentReady(
+    organizationId,
+    attachment.id,
+    'provider-file-1',
+    db
+  )
+  courseWebSources.addWebSource(
+    organizationId,
+    { courseId, domain: 'botany.example.edu' },
+    db
+  )
+
+  const person = people.createPerson(
+    organizationId,
+    { displayName: 'A Secret Student' },
+    db
+  )
+  // A real account, not a bare `randomUUID()` — `course_join_links.created_by_account_id`
+  // references `accounts.id` (`schema.ts`), the same "an owning account" this
+  // course's own organization needs anyway for the join link to be valid.
+  const owner = accounts.createAccount(
+    organizationId,
+    {
+      email: `owner-${randomUUID()}@example.edu`,
+      displayName: 'Owner',
+      role: 'owner',
+    },
+    db
+  )
+  const joinLinkSecretHash = 'a'.repeat(64)
+  courseJoinLinks.createJoinLink(
+    organizationId,
+    {
+      courseId,
+      secretHash: joinLinkSecretHash,
+      createdByAccountId: owner.id,
+    },
+    db
+  )
+
+  return { organizationId, courseId, personId: person.id, joinLinkSecretHash }
 }
 
 describe('ADMIN-4 — a platform administrator sees tenants, not conversations', () => {
@@ -729,5 +831,123 @@ describe('WEB-53 — a platform administrator approves and unapproves courses', 
       .set('Origin', TEST_PUBLIC_APP_URL)
     expect(unapproveResponse.status).toBe(404)
     expect(unapproveResponse.body).toEqual({ error: 'course_not_found' })
+  })
+})
+
+describe('ADMIN-6 — a platform administrator reads a course’s settings, read-only', () => {
+  it('returns the course’s general, AI and knowledge settings, plus its approval state', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { organizationId, courseId } = seedCourseWithSettings(testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      courseId,
+      courseTitle: 'Intro to Botany',
+      enabled: true,
+      organizationId,
+      organizationName: 'Settings Tenant',
+      projectName: 'Spring 2027',
+      adminsRole: 'admins-botany',
+      studentsRole: 'students-botany',
+      categories: [
+        {
+          name: 'Botany 101',
+          channels: [{ name: 'general', adminsOnly: false }],
+        },
+      ],
+      conversationScope: 'course',
+      model: 'gpt-5',
+      promptId: null,
+      instructions: 'Answer only from the syllabus.',
+      maxRequestsPerDay: 20,
+      selfEnrolFromDiscord: true,
+      answerUnenrolled: false,
+      attachments: [
+        { filename: 'syllabus.pdf', sizeBytes: 4096, status: 'ready' },
+      ],
+      webSources: [{ domain: 'botany.example.edu' }],
+      aiApprovedAt: null,
+      aiApprovedByAccountId: null,
+      aiApprovedByEmail: null,
+    })
+  })
+
+  // The boundary this whole console exists to hold (this file's own module
+  // comment, and `routes/admin.ts`'s own): a course's settings are in
+  // bounds, ADMIN-6's own exception, but the *person* and the *join link*
+  // `seedCourseWithSettings` deliberately seeds alongside them are not.
+  // Checked structurally, the same pattern the existing ADMIN-4 boundary
+  // tests above already use (`JSON.stringify` plus a field-name/value
+  // check), rather than a new one — proven by the actual seeded values
+  // being genuinely absent, not merely by the response having no field
+  // that could carry them.
+  it('never names the course’s person or its join link’s secret', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const { courseId, personId, joinLinkSecretHash } = seedCourseWithSettings(
+      testDb.db
+    )
+    const app = await buildTestApp(testDb.db)
+
+    const response = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(200)
+    const serialized = JSON.stringify(response.body)
+    expect(serialized).not.toMatch(/personId|conversationId|messageId/i)
+    expect(serialized).not.toContain(personId)
+    expect(serialized).not.toContain('A Secret Student')
+    expect(serialized).not.toContain(joinLinkSecretHash)
+  })
+
+  it('refuses a signed-out caller (401), a non-administrator (403) and a disabled administrator (401)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const { courseId } = seedCourseWithSettings(testDb.db)
+    const disabledAdmin = seedPlatformAdministrator(testDb.db)
+    accounts.disableAccount(disabledAdmin.accountId, testDb.db)
+    const app = await buildTestApp(testDb.db)
+
+    const signedOut = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(signedOut.status).toBe(401)
+
+    const notAdmin = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(notAdmin.status).toBe(403)
+    expect(notAdmin.body).toEqual({ error: 'not_platform_administrator' })
+
+    const disabled = await request(app)
+      .get(`/admin/courses/${courseId}`)
+      .set('Cookie', disabledAdmin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+    expect(disabled.status).toBe(401)
+  })
+
+  it('404s on a course id that does not exist', async () => {
+    testDb = createTestDatabase()
+    const admin = seedPlatformAdministrator(testDb.db)
+    const app = await buildTestApp(testDb.db)
+    const missingCourseId = randomUUID()
+
+    const response = await request(app)
+      .get(`/admin/courses/${missingCourseId}`)
+      .set('Cookie', admin.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'course_not_found' })
   })
 })

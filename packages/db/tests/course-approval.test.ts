@@ -19,8 +19,19 @@ afterEach(() => {
   testDb.cleanup()
 })
 
-/** One organization, one project, one pending course, synthetic data only (QA-3). */
-function seedOrganizationWithCourse(testDatabase: TestDatabase) {
+/**
+ * One organization, one project, one pending course, synthetic data only
+ * (QA-3). `ownerEmail` defaults to a fixed address — every existing caller
+ * in this file only ever seeds one organization per test, so the default
+ * never collides; `accounts.email` is globally unique (`schema.ts`), so a
+ * test that seeds *two* organizations in the same run (ADMIN-6's own
+ * `findCourseOrganizationId` suite, below) has to supply a distinct one for
+ * the second call.
+ */
+function seedOrganizationWithCourse(
+  testDatabase: TestDatabase,
+  ownerEmail = 'owner@example.edu'
+) {
   const organizationId = randomUUID()
   organizations.createOrganization(
     organizationId,
@@ -29,7 +40,7 @@ function seedOrganizationWithCourse(testDatabase: TestDatabase) {
   )
   const owner = accounts.createAccount(
     organizationId,
-    { email: 'owner@example.edu', displayName: 'Owner', role: 'owner' },
+    { email: ownerEmail, displayName: 'Owner', role: 'owner' },
     testDatabase.db
   )
   const project = projects.createProject(
@@ -469,5 +480,37 @@ describe('courseApproval.listApprovalEventsForCourse (WEB-53)', () => {
         testDb.db
       )
     ).toEqual([])
+  })
+})
+
+describe('courseApproval.findCourseOrganizationId (ADMIN-6, second review round)', () => {
+  it('resolves an existing course id to its own organization id', () => {
+    testDb = createTestDatabase()
+    const { organizationId, course } = seedOrganizationWithCourse(testDb)
+
+    expect(courseApproval.findCourseOrganizationId(course.id, testDb.db)).toBe(
+      organizationId
+    )
+  })
+
+  it('is undefined for a course id that does not exist', () => {
+    testDb = createTestDatabase()
+
+    expect(
+      courseApproval.findCourseOrganizationId(randomUUID(), testDb.db)
+    ).toBeUndefined()
+  })
+
+  it('is a scoped point lookup, not the listCoursesForApproval scan — resolves correctly across several organizations', () => {
+    testDb = createTestDatabase()
+    const first = seedOrganizationWithCourse(testDb)
+    const second = seedOrganizationWithCourse(testDb, 'owner-2@example.edu')
+
+    expect(
+      courseApproval.findCourseOrganizationId(first.course.id, testDb.db)
+    ).toBe(first.organizationId)
+    expect(
+      courseApproval.findCourseOrganizationId(second.course.id, testDb.db)
+    ).toBe(second.organizationId)
   })
 })

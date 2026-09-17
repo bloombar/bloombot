@@ -32,6 +32,39 @@ import {
 export type CourseApprovalEvent = typeof courseApprovalEvents.$inferSelect
 
 /**
+ * ADMIN-6, must-fix (second review round): a scoped, indexed point lookup —
+ * `courses.id` is that table's own primary key — for the one thing
+ * `routes/admin.ts#GET /courses/:courseId` actually needs before it can
+ * call anything else in this file or `repos/courses.ts` at all: which
+ * organization a course id belongs to. `undefined` when the id does not
+ * exist.
+ *
+ * Deliberately *not* `listCoursesForApproval(db).find(...)` — the pattern
+ * `approveCourse`/`revokeCourseApproval`'s own two callers in
+ * `routes/admin.ts` use (`docs/DECISIONS.md` D-117), and the pattern this
+ * function's own first version copied for `GET /courses/:courseId` before a
+ * review caught it. That scan is a full `courses`/`projects`/`organizations`
+ * join plus the owner-email and approver-email batches, every row of it
+ * discarded but one — an acceptable trade behind a rare, deliberate button
+ * click (D-117's own words), but not behind an interactive page load, which
+ * `GET /courses/:courseId` is. `GET /courses` itself still needs the full
+ * scan (it lists every course), and approve/revoke still resolve through it
+ * too (D-117's own reasoning for those two still holds — see D-118's
+ * update); this is for the one caller that only ever wants a single course's
+ * organization id and nothing else `listCoursesForApproval` computes.
+ */
+export function findCourseOrganizationId(
+  courseId: string,
+  db: Database
+): string | undefined {
+  return db
+    .select({ organizationId: courses.organizationId })
+    .from(courses)
+    .where(eq(courses.id, courseId))
+    .get()?.organizationId
+}
+
+/**
  * `courseId`'s own audit trail (WEB-53's "recorded with who acted and
  * when"), newest first — the same shape `transcript-access.ts#listAccessLogForCourse`
  * already reads back ADMIN-2's audit trail in. Scoped by `organizationId`

@@ -28,6 +28,8 @@ const ROUTES: Route[] = [
   { kind: 'admin-organization', organizationId: 'org-1' },
   { kind: 'admin-deletions' },
   { kind: 'admin-courses' },
+  // ADMIN-6 — one course's own read-only settings, reached from the list.
+  { kind: 'admin-course', courseId: 'course-1' },
   { kind: 'discord-callback' },
   { kind: 'sign-in', token: 'tok_abc123' },
   { kind: 'connect', organizationId: 'org-1' },
@@ -123,6 +125,7 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/platform-admin/organizations/org-1',
     '/platform-admin/deletions',
     '/platform-admin/courses',
+    '/platform-admin/courses/course-1',
   ])('parses the exact literal path %s', (path) => {
     expect(parseRoute(path).kind).not.toBe('not-found')
   })
@@ -200,7 +203,10 @@ describe('routing/route.ts (WEB-32, WEB-34)', () => {
     '/platform-admin/sub',
     '/platform-admin/organizations/org-1/extra',
     '/platform-admin/deletions/extra',
-    '/platform-admin/courses/extra',
+    // ADMIN-6 — `/platform-admin/courses/:courseId` (above) takes one
+    // segment; a second is one too many, the same "no slot for it" rule
+    // every other over-long path here already falls through on.
+    '/platform-admin/courses/course-1/extra',
   ])('malformed or unknown path %s lands on not-found', (path) => {
     expect(parseRoute(path)).toEqual({ kind: 'not-found' })
   })

@@ -724,6 +724,59 @@ export interface AdminCoursesResponse {
   courses: AdminCourseSummary[]
 }
 
+/** ADMIN-6 — a Discord category a course routes on, as `GET /admin/courses/:courseId` reads it back: names only, mirroring `apps/api`'s own `AdminCourseCategory` by hand. */
+export interface AdminCourseCategory {
+  name: string
+  channels: { name: string; adminsOnly: boolean }[]
+}
+
+/** ADMIN-6 — one of a course's knowledge files, metadata only — mirrors `apps/api`'s own `AdminCourseAttachment` by hand (`routes/admin.ts`'s own doc comment on why never `contentType`, `providerFileId` or `failureReason`). */
+export interface AdminCourseAttachment {
+  filename: string
+  sizeBytes: number
+  status: 'pending' | 'ready' | 'failed'
+}
+
+/** ADMIN-6 — one of a course's websites: the domain it is grounded in, nothing else. */
+export interface AdminCourseWebSource {
+  domain: string
+}
+
+/**
+ * ADMIN-6 — `GET /admin/courses/:courseId`'s own shape: one course's
+ * settings, read-only, grouped by `pages/Admin.tsx` into General, AI and
+ * Knowledge the same way `pages/CourseEditor.tsx` groups them for the
+ * course's own owner. Mirrors `apps/api`'s own `AdminCourseDetail` by hand,
+ * the same boundary discipline this file's own module comment already
+ * explains for every other admin-console type here — never a person, an
+ * enrolment, a conversation, a message, a transcript or a join link.
+ */
+export interface AdminCourseDetail {
+  courseId: string
+  courseTitle: string
+  enabled: boolean
+  projectId: string
+  projectName: string
+  organizationId: string
+  organizationName: string
+  adminsRole: string | null
+  studentsRole: string | null
+  categories: AdminCourseCategory[]
+  conversationScope: 'course' | 'course_surface'
+  model: string | null
+  promptId: string | null
+  instructions: string | null
+  maxRequestsPerDay: number | null
+  selfEnrolFromDiscord: boolean
+  answerUnenrolled: boolean
+  attachments: AdminCourseAttachment[]
+  webSources: AdminCourseWebSource[]
+  aiApprovedAt: number | null
+  aiApprovedByAccountId: string | null
+  aiApprovedByEmail: string | null
+  aiApprovalDecidedAt: number | null
+}
+
 /** ADMIN-5's own "names exactly what will be deleted before it happens". */
 export interface OrganizationDeletionPreview {
   organizationId: string

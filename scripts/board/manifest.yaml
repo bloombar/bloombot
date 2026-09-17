@@ -4388,7 +4388,7 @@
   section: §41 Course Approval
   family: COST
   phase: 36
-  status: In progress
+  status: In review
   review: false
 - id: SURF-10
   title: An unapproved course says so on every surface
@@ -4401,7 +4401,7 @@
   section: §41 Course Approval
   family: SURF
   phase: 36
-  status: Backlog
+  status: In review
   review: false
 - id: WEB-53
   title: The administrator console lists courses pending approval and approves or

@@ -234,6 +234,12 @@ export function seedEnrolledCourse(
     selfEnrolFromDiscord?: boolean
     title?: string
     maxRequestsPerDay?: number
+    // COST-8 — approved by default (see below); `false` for a test that
+    // specifically wants a pending, *undecided* course (lazy auto-approval
+    // tests — `courseApproval.revokeCourseApproval` would set
+    // `aiApprovalDecidedAt`, so approving and then revoking is not the
+    // same seed).
+    approve?: boolean
   } = {}
 ): { courseId: string; projectId: string; discordPersonId: string } {
   const project = projects.createProject(
@@ -268,14 +274,16 @@ export function seedEnrolledCourse(
   const courseId = created.course.id
 
   // COST-8 — see `seedCourse`'s own identical comment, above.
-  courseApproval.approveCourse(
-    organizationId,
-    courseId,
-    null,
-    'approve',
-    Date.now(),
-    db
-  )
+  if (options.approve ?? true) {
+    courseApproval.approveCourse(
+      organizationId,
+      courseId,
+      null,
+      'approve',
+      Date.now(),
+      db
+    )
+  }
 
   const discordPerson = people.resolvePersonByIdentity(
     organizationId,

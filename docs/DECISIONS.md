@@ -12488,10 +12488,38 @@ applied to configuration rather than SQL dialect), and `packages/core`/`packages
   `course-attachments.ts` use for a *credential* dependency) — every other action, and every existing caller
   of `dispatch`, is unaffected by the new field's existence.
 
-Every real deployment builds the actual predicate once (`apps/api/src/index.ts`, `apps/bot/src/index.ts`) and
-threads it down through the same "read `CONFIG`/the environment once in `main()`" discipline `admission`/
-`pricing` already follow — `apps/mcp` does not: `chat.ask` never creates a course, only answers in one, so it
-only needs `courseNotApprovedNotice`'s own `supportContact`, never the administrator predicate.
+Every real deployment builds the actual predicate once (`apps/api/src/index.ts`, `apps/bot/src/index.ts`,
+`apps/mcp/src/index.ts`) and threads it down through the same "read `CONFIG`/the environment once in `main()`"
+discipline `admission`/`pricing` already follow. `apps/mcp` needs it exactly as much as the other two: `chat.ask`
+answers through the identical `answerQuestion` gate as every other surface, so the same course a Discord message
+would lazily rescue must be rescuable through an MCP client too, and `courses.save` is a registered MCP tool
+(`tool-surface.ts`), so a platform administrator creating a course through an MCP client needs the identical
+auto-approval-on-create `courses.save` gets everywhere else — an earlier version of this paragraph claimed
+`chat.ask` "never creates a course, only answers in one" and concluded MCP needed no predicate at all, which is
+simply wrong on both counts (answering is exactly where lazy approval happens, and `courses.save` does create a
+course) and was corrected only after a review found `apps/api/src/routes/chat.ts`, `apps/mcp/src/chat-tools.ts`
+and `apps/mcp/src/call-tool.ts` all omitting the predicate from their own `answerQuestion`/`dispatch` calls —
+three real gaps this paragraph's own earlier wrong reasoning helped miss.
+
+**The optional-dependency shape above is right for `@bloombot/core`/`@bloombot/actions` (library-level seams
+many unrelated callers never touch) but was wrong for each app's own wiring layer, and is now fixed there.**
+`ChatRouterDependencies.isPlatformAdministratorEmail` (`apps/api/src/routes/chat.ts`),
+`ServerDependencies.isPlatformAdministratorEmail` (`apps/api/src/server.ts`),
+`ChatToolDependencies.isPlatformAdministratorEmail` (`apps/mcp/src/chat-tools.ts`),
+`ServerDependencies.isPlatformAdministratorEmail` (`apps/mcp/src/server.ts`) and
+`CallToolContext.isPlatformAdministratorEmail` (`apps/mcp/src/call-tool.ts`) are all **required**, not optional
+— a rework finding, not the original design: every one of the three gaps above compiled cleanly precisely
+because the field was optional at the exact seam a production entry point builds these objects by hand, so
+"forgot to pass it" produced no error, only a course that answers on one surface and stays refused forever on
+another. A required field turns that same mistake into a compile error at the call site instead — every test
+helper in `apps/api/tests`/`apps/mcp/tests` that builds one of these objects directly now passes an explicit
+`() => false` (`admin-tools-server.test.ts`, `chat-tools-server.test.ts`, `server.test.ts`, `mcp-e2e.test.ts`,
+`oauth-http.test.ts`, `build-test-app.ts`), the same safe default `@bloombot/core`'s own `NO_ADMINISTRATOR`
+already uses, so "nobody cares about this field" is now a value a test writes down rather than a key it leaves
+out. `apps/bot`'s own `HandleMentionDependencies.isPlatformAdministratorEmail` (`packages/discord`) stays
+optional — its one production caller (`apps/bot/src/index.ts`) already wires the real predicate correctly on
+both the live and catch-up paths, so there is no discovered gap there to close this way, and widening the
+required-field fix to a file with no bug would only be churn.
 
 **`courseNotApprovedNotice` (`@bloombot/core`) is the one wording function shared by all three surfaces**,
 unlike every other `AnswerResult` kind, whose text stays local to each surface's own module (`answer.ts`'s own

@@ -96,8 +96,22 @@ export interface ServerDependencies {
   pricing?: PricingTable
   /** SURF-10 — `CONFIG.SUPPORT_CONTACT`, threaded to `routes/chat.ts`'s own `ChatRouterDependencies.supportContact` the same way `admission`/`pricing` above are. Omitted, the notice drops the "at <contact>" clause entirely (that dependency's own doc comment). */
   supportContact?: string
-  /** COST-8 — threaded to `routes/actions.ts`'s own `buildActionsRouter` (that parameter's own doc comment). `@bloombot/auth`'s `isPlatformAdministrator` in production (`src/index.ts`); a test that wants `courses.save`/`courses.import` to auto-approve supplies its own. */
-  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
+  /**
+   * COST-8 — threaded to *both* `routes/actions.ts`'s `buildActionsRouter`
+   * (courses.save/import's own auto-approval on create) and
+   * `routes/chat.ts`'s `ChatRouterDependencies.isPlatformAdministratorEmail`
+   * (answerQuestion's own lazy auto-approval) — rework finding: an earlier
+   * version of this file forwarded this to the actions router only, so an
+   * administrator-owned course created before this slice shipped could
+   * never be rescued through the chat route at all, on this surface,
+   * regardless of who asked. Required here for the identical reason
+   * `ChatRouterDependencies`'s own field is required now: a production
+   * entry point that can forget to forward an optional field silently did,
+   * twice, in the same slice — a required field turns the next such
+   * omission into a compile error instead. `@bloombot/auth`'s
+   * `isPlatformAdministrator` in production (`src/index.ts`).
+   */
+  isPlatformAdministratorEmail: (email: string | null | undefined) => boolean
   /** ADMIN-4/COST-5 — where `routes/admin.ts` reaches each process's own loopback health endpoint. `CONFIG.BOT_HEALTH_PORT`/`WORKER_HEALTH_PORT`/`API_PORT` on `127.0.0.1` in production (`src/index.ts`, mirroring `docs/DECISIONS.md` D-33's own accounting of who has to know these three ports). Required, the same way `discordOauthBase` is — a test supplies its own fixed (unreachable, or faked via `adminHealthFetch`) URLs rather than this file inventing a default port nothing configured. */
   botHealthUrl: string
   workerHealthUrl: string
@@ -168,6 +182,9 @@ export function buildApp(deps: ServerDependencies): Express {
       emailSender: deps.emailSender,
       buildSignInLink: deps.buildSignInLink,
       googleVerifier: deps.googleVerifier,
+      ...(deps.supportContact !== undefined
+        ? { supportContact: deps.supportContact }
+        : {}),
     })
   )
   // ENRL-8 — unscoped, like `/auth` (`routes/join-links.ts`'s own module
@@ -190,6 +207,7 @@ export function buildApp(deps: ServerDependencies): Express {
       db: deps.db,
       logger: deps.logger,
       model: deps.model,
+      isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail,
       ...(deps.admission ? { admission: deps.admission } : {}),
       ...(deps.pricing ? { pricing: deps.pricing } : {}),
       ...(deps.supportContact !== undefined

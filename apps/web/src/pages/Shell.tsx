@@ -148,6 +148,8 @@ import { Usage } from './Usage.js'
 
 export interface ShellProps {
   account: AccountSummary
+  /** COST-8/SURF-10 — `GET /auth/me`'s own `supportContact` (`App.tsx`'s own module comment on why it travels alongside `account` rather than inside it), threaded straight to `ProjectsPanel`/`CourseEditor` so the pending-approval banner can name it. Optional, defaulting to `''` (no contact named) — most of this file's own tests do not care. */
+  supportContact?: string
   /** WEB-32 — the address this shell is currently rendering; `pages/Shell.tsx` is the one place a `ShellRoute` is ever rendered, the same way it was the one place `activeTab`/`activeOrganizationId` local state used to live before this slice. */
   route: ShellRoute
   /** WEB-32/WEB-34 — `routing/useRoute.ts`'s own `navigate`, threaded down from `App.tsx`; every navigation this shell starts (a drawer item, the home control, an organization switch) calls this rather than setting local state. */
@@ -200,6 +202,7 @@ export function Shell(props: ShellProps) {
 
 function ShellInner({
   account,
+  supportContact = '',
   route,
   navigate,
   justInstalled,
@@ -701,6 +704,7 @@ function ShellInner({
         <ProjectsPanel
           key={activeOrganizationId}
           organizationId={activeOrganizationId}
+          supportContact={supportContact}
           route={route}
           navigate={navigate}
           onOpenChat={(courseId) => openChatForCourse(courseId)}

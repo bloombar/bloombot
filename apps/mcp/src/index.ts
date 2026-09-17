@@ -11,6 +11,7 @@
 import { createServer } from 'node:http'
 
 import { createPlatformRegistry } from '@bloombot/actions'
+import { isPlatformAdministrator } from '@bloombot/auth'
 import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import type { ModelClient } from '@bloombot/core'
 import {
@@ -145,6 +146,11 @@ async function main(): Promise<void> {
       admission,
       pricing,
       supportContact,
+      // COST-8 — the real predicate, read live from `ADMIN_EMAILS` on
+      // every check (`isPlatformAdministrator`'s own module comment) —
+      // never cached here, the same discipline `apps/api/src/index.ts`'s
+      // own identical wiring already holds itself to.
+      isPlatformAdministratorEmail: isPlatformAdministrator,
     },
     undefined,
     () => shuttingDown

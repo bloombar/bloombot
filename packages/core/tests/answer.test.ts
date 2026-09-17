@@ -1484,6 +1484,40 @@ describe('answerQuestion (COST-8): a course answers only once approved for AI us
     expect(result).toEqual({ kind: 'declined-not-approved' })
     expect(model.calls).toHaveLength(0)
   })
+
+  // Rework finding: pins the gate's order against `not-connected` (LINK-1)
+  // directly — the two are adjacent checks in `answerQuestion`'s own body,
+  // and a reorder that moved the approval gate after the connect check
+  // would pass every other test in this block (they all seed a connected
+  // person) while silently letting an unconnected person's message reach
+  // `not-connected` instead of `declined-not-approved` for an unapproved
+  // course. An unconnected person carries no email `isAdministratorOwnedOrganization`
+  // could check either, so this also proves the gate needs no person
+  // resolution at all to refuse.
+  it('an unconnected person in an unapproved course still gets declined-not-approved, not not-connected — pins the gate ahead of LINK-1', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false, connect: false }
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
+  })
 })
 
 describe('answerQuestion (LINK-1): an unconnected person is declined before admission, the allowance or the model', () => {

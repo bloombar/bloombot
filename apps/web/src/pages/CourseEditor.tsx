@@ -159,6 +159,8 @@ import { AddIcon, DeleteIcon, ErrorIcon, WarningIcon } from '../icons.js'
 export interface CourseEditorProps {
   organizationId: string
   project: Project
+  /** COST-8/SURF-10 — named in the pending-approval banner below, the same contact every decline notice already names (`App.tsx`'s own module comment on where this originates, `GET /auth/me`). Optional and defaults to `''` (banner shows with no contact clause) — most of `tests/course-editor.test.tsx` does not care. */
+  supportContact?: string
   /** `undefined` — define a new course. A string — edit the course with that id. */
   courseId: string | undefined
   /**
@@ -417,6 +419,7 @@ type FormState = ReturnType<typeof blankForm>
 export function CourseEditor({
   organizationId,
   project,
+  supportContact = '',
   courseId,
   tab,
   onNavigateTab,
@@ -1823,6 +1826,11 @@ export function CourseEditor({
           <WarningIcon aria-hidden="true" className="size-4 shrink-0" />
           Pending approval — this course won&apos;t answer questions until
           Bloombot support approves it.
+          {/* COST-8/SURF-10 — the owner is exactly who a decline notice
+              already tells a student to have contact support, so this
+              banner names the same address when the deployment has
+              configured one (`supportContact`'s own doc comment). */}
+          {supportContact && <> Contact {supportContact} for help.</>}
         </p>
       )}
 

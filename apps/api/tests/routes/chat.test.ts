@@ -36,6 +36,7 @@ import request from 'supertest'
 
 import type { ModelAnswer, ModelClient, ModelRequest } from '@bloombot/core'
 import {
+  accounts,
   conversations,
   courseApproval,
   courses,
@@ -80,6 +81,12 @@ function seedEnrolledCourse(
     // ENRL-16's own two settings, use these, with a comment saying why.
     answerUnenrolled?: boolean
     selfEnrolFromDiscord?: boolean
+    // COST-8 — approved by default (see below); `false` for a test that
+    // specifically wants a pending, *undecided* course (the lazy
+    // auto-approval tests, which need `aiApprovalDecidedAt` to still be
+    // `null` — `courseApproval.revokeCourseApproval` would set it, so
+    // approving and then revoking is not the same seed).
+    approve?: boolean
   } = {}
 ): { courseId: string; discordPersonId: string } {
   // A fresh project name per call — this app's own PROJ-1 constraint is
@@ -121,14 +128,16 @@ function seedEnrolledCourse(
   // the approval gate, so the seeded course is approved by default the same
   // way `packages/core`/`packages/discord`'s own seed helpers approve
   // theirs.
-  courseApproval.approveCourse(
-    caller.organizationId,
-    courseId,
-    null,
-    'approve',
-    Date.now(),
-    db
-  )
+  if (options.approve ?? true) {
+    courseApproval.approveCourse(
+      caller.organizationId,
+      courseId,
+      null,
+      'approve',
+      Date.now(),
+      db
+    )
+  }
 
   const discordPerson = people.resolvePersonByIdentity(
     caller.organizationId,
@@ -716,6 +725,55 @@ describe('routes/chat.ts (WEB-10)', () => {
       "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
     )
     expect(model.calls).toHaveLength(0)
+  })
+
+  // Must-fix (rework): `buildChatRouter`'s own `ChatRouterDependencies.isPlatformAdministratorEmail`
+  // used to be built without this field at all — `routes/chat.ts`'s own
+  // `answerQuestion` call never saw it, and `src/server.ts` forwarded the
+  // predicate to `buildActionsRouter` only, never to `buildChatRouter`. An
+  // administrator-owned organization's own pre-existing, never-decided
+  // course could therefore auto-approve and answer on Discord
+  // (`apps/bot`'s own wiring) but never through this route — including a
+  // deployment with no Discord at all, where nothing could ever rescue it
+  // until WEB-53 ships. Fails without the fix: `buildTestApp`'s own default
+  // `isPlatformAdministratorEmail: () => false` never rescues this course
+  // either, but the whole point here is proving the *wiring*, so this test
+  // supplies a real predicate the same way `src/index.ts` does and checks
+  // the course actually answers.
+  it('an administrator-owned organization’s undecided course auto-approves and answers through the chat route (COST-8, must-fix)', async () => {
+    testDb = createTestDatabase()
+    const caller = seedSignedInCaller(testDb.db)
+    const ownerAccount = accounts.getAccountById(caller.accountId, testDb.db)
+    if (!ownerAccount) throw new Error('setup failed: owner account not found')
+    const { courseId, discordPersonId } = seedEnrolledCourse(
+      testDb.db,
+      caller,
+      { approve: false }
+    )
+    connectCallerTo(testDb.db, caller, discordPersonId)
+    const model = new FakeModelClient('# Welcome\n\nAsk away.')
+
+    const app = await buildTestApp(testDb.db, {
+      model,
+      isPlatformAdministratorEmail: (email) => email === ownerAccount.email,
+    })
+
+    const response = await request(app)
+      .post(
+        `/organizations/${caller.organizationId}/chat/courses/${courseId}/messages`
+      )
+      .set('Cookie', caller.cookieHeader)
+      .set('Origin', TEST_PUBLIC_APP_URL)
+      .send({ text: 'Anybody there?' })
+
+    expect(response.status).toBe(200)
+    const body = response.body as { result: { kind: string } }
+    expect(body.result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+    expect(
+      courses.getCourse(caller.organizationId, courseId, testDb.db)
+        ?.aiApprovedAt
+    ).not.toBeNull()
   })
 
   // COST-3, end to end through this same pipeline — proves the cap is real,

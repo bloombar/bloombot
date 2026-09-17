@@ -9,7 +9,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { conversations, courseApproval, enrolments } from '@bloombot/db'
+import {
+  accounts,
+  conversations,
+  courseApproval,
+  enrolments,
+} from '@bloombot/db'
 import type { Logger } from '@bloombot/logger'
 
 import {
@@ -123,7 +128,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('unlinked')
@@ -162,6 +172,7 @@ describe('chat-tools.ts (MCP-8)', () => {
           db: testDb.db,
           model,
           logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
           supportContact: 'support@bloombot.example.edu',
         }
       )
@@ -175,6 +186,49 @@ describe('chat-tools.ts (MCP-8)', () => {
       )
       expect(result.course.courseId).toBe(courseId)
       expect(model.calls).toHaveLength(0)
+    })
+
+    // Must-fix (rework): `askChatQuestion`'s own `answerQuestion` call used
+    // to omit `isPlatformAdministratorEmail` entirely (not merely make it
+    // conditional) — an administrator-owned organization's pre-existing,
+    // never-decided course could never answer through MCP at all, however
+    // long it waited, the identical gap `apps/api/src/routes/chat.ts` had
+    // on a different surface. Fails without the fix: `ChatToolDependencies`
+    // supplies a real predicate here, the same way `apps/mcp/src/index.ts`
+    // does in production, and checks the course actually answers.
+    it('an administrator-owned organization’s undecided course auto-approves and answers through chat.ask (COST-8, must-fix)', async () => {
+      testDb = createTestDatabase()
+      const caller = seedSignedInAccount(testDb.db)
+      const ownerAccount = accounts.getAccountById(caller.accountId, testDb.db)
+      if (!ownerAccount) {
+        throw new Error('setup failed: owner account not found')
+      }
+      const { courseId, discordPersonId } = seedEnrolledCourse(
+        testDb.db,
+        caller.organizationId,
+        { approve: false }
+      )
+      connectAccountTo(
+        testDb.db,
+        caller.organizationId,
+        caller.accountId,
+        discordPersonId
+      )
+      const model = new FakeModelClient('# Welcome\n\nAsk away.')
+
+      const result = await askChatQuestion(
+        caller.accountId,
+        { courseId, text: 'Anybody there?' },
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: (email) => email === ownerAccount.email,
+        }
+      )
+
+      expect(result.kind).toBe('answered')
+      expect(model.calls).toHaveLength(1)
     })
 
     it('asking in an admitted course returns an answer and records a surface: mcp conversation', async () => {
@@ -195,7 +249,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'What is on the syllabus?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('answered')
@@ -231,7 +290,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('answered')
@@ -264,7 +328,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('needs-course-selection')
@@ -307,7 +376,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { courseId: refused.courseId, text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('needs-course-selection')
@@ -351,12 +425,22 @@ describe('chat-tools.ts (MCP-8)', () => {
       const refusedResult = await askChatQuestion(
         caller.accountId,
         { courseId: refused.courseId, text: 'x' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
       const nonexistentResult = await askChatQuestion(
         caller.accountId,
         { courseId: 'course-does-not-exist', text: 'x' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(refusedResult.kind).toBe('needs-course-selection')
@@ -390,7 +474,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('needs-course-selection')
@@ -419,7 +508,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       expect(result.kind).toBe('answered')
@@ -459,7 +553,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const result = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
 
       spy.mockRestore()
@@ -500,7 +599,12 @@ describe('chat-tools.ts (MCP-8)', () => {
         const result = await askChatQuestion(
           caller.accountId,
           { courseId, text: 'Anybody there?' },
-          { db: testDb.db, model, logger: fakeLogger() }
+          {
+            db: testDb.db,
+            model,
+            logger: fakeLogger(),
+            isPlatformAdministratorEmail: () => false,
+          }
         )
         expect(result.kind).toBe('answered')
       }
@@ -509,7 +613,12 @@ describe('chat-tools.ts (MCP-8)', () => {
       const refusedResult = await askChatQuestion(
         caller.accountId,
         { courseId: refused.courseId, text: 'Anybody there?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
       expect(refusedResult.kind).toBe('needs-course-selection')
     })
@@ -534,14 +643,24 @@ describe('chat-tools.ts (MCP-8)', () => {
       const first = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'One?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
       expect(first.kind).toBe('answered-last-request')
 
       const second = await askChatQuestion(
         caller.accountId,
         { courseId, text: 'Two?' },
-        { db: testDb.db, model, logger: fakeLogger() }
+        {
+          db: testDb.db,
+          model,
+          logger: fakeLogger(),
+          isPlatformAdministratorEmail: () => false,
+        }
       )
       expect(second.kind).toBe('declined-over-limit')
       expect(model.calls).toHaveLength(1)

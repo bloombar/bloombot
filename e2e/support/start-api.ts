@@ -17,7 +17,10 @@ import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 
-import { createGoogleIdTokenVerifier } from '@bloombot/auth'
+import {
+  createGoogleIdTokenVerifier,
+  isPlatformAdministrator,
+} from '@bloombot/auth'
 import { getModelPricingTable } from '@bloombot/config'
 import { closeDatabase, openDatabase, runMigrations } from '@bloombot/db'
 import { createDiscordRestClient } from '@bloombot/discord-rest'
@@ -126,6 +129,13 @@ const app = buildApp({
   // (`courseNotApprovedNotice`, `@bloombot/core`) rather than merely that
   // some text showed up.
   supportContact: 'e2e-support@bloombot.test',
+  // COST-8 — the real predicate, not a stand-in: `playwright.config.ts`
+  // already sets this process's own `ADMIN_EMAILS` to `E2E_ADMIN_EMAIL`
+  // (`admin-console.spec.ts`'s own module comment), so wiring the real
+  // `isPlatformAdministrator` here — rather than a hardcoded `() => false`
+  // — is what actually lets that address's own courses.save/answerQuestion
+  // calls auto-approve in this harness, exactly as production would.
+  isPlatformAdministratorEmail: isPlatformAdministrator,
   // ADMIN-4 — no bot/worker process runs in this harness (this file's own
   // module comment: one Playwright project at a time, `apps/web` and this
   // process only), so these are loopback, unreachable placeholders, the

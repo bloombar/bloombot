@@ -55,6 +55,12 @@ export interface AccountSummary {
 
 export interface MeResponse {
   account: AccountSummary | null
+  // COST-8/SURF-10 — `CONFIG.SUPPORT_CONTACT`, deployment-wide rather than
+  // account-specific (present whether or not `account` is), so
+  // `pages/CourseEditor.tsx`'s own pending-approval banner can name it —
+  // the same contact `routes/chat.ts`'s own decline notice already names.
+  // `''` when the deployment has not configured one.
+  supportContact: string
 }
 
 /** `POST /auth/redeem`, `POST /auth/google`. */

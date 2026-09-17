@@ -11,6 +11,7 @@
 import { createServer } from 'node:http'
 
 import { createPlatformRegistry } from '@bloombot/actions'
+import { isPlatformAdministrator } from '@bloombot/auth'
 import { CONFIG, getModelPricingTable, loadDotEnv } from '@bloombot/config'
 import type { ModelClient } from '@bloombot/core'
 import {
@@ -79,6 +80,10 @@ async function main(): Promise<void> {
   // (`ServerDependencies`'s own doc comment on why `chat.ask` needs them).
   const admissionLimit = CONFIG.MODEL_ADMISSION_LIMIT
   const admissionWaitMs = CONFIG.MODEL_ADMISSION_WAIT_MS
+  // SURF-10 — named in `chat.ask`'s own not-approved notice (COST-8), read
+  // once here alongside every other `CONFIG` value this process reads at
+  // startup.
+  const supportContact = CONFIG.SUPPORT_CONTACT
   // Not `requireEnv` — `createUnconfiguredModelClient`'s own doc comment
   // just above has why a missing key degrades `chat.ask` rather than
   // stopping this whole process from starting.
@@ -140,6 +145,12 @@ async function main(): Promise<void> {
       model,
       admission,
       pricing,
+      supportContact,
+      // COST-8 — the real predicate, read live from `ADMIN_EMAILS` on
+      // every check (`isPlatformAdministrator`'s own module comment) —
+      // never cached here, the same discipline `apps/api/src/index.ts`'s
+      // own identical wiring already holds itself to.
+      isPlatformAdministratorEmail: isPlatformAdministrator,
     },
     undefined,
     () => shuttingDown

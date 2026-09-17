@@ -63,6 +63,7 @@ import {
 } from '@bloombot/db'
 import { handleMention, type InboundMention } from '@bloombot/discord'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { createFakeLogger } from './support/fake-logger.js'
@@ -150,6 +151,14 @@ test('a student who messages a self-enrolling course, then connects, ends up enr
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
     expect(course.selfEnrolFromDiscord).toBe(true)
+
+    // COST-8 — `answerQuestion`'s own approval gate runs before LINK-1's
+    // `not-connected` check, so an unapproved course here would return
+    // `declined-not-approved` instead of the `invited-to-connect` this
+    // spec is actually about (ENRL-13), not the approval gate itself; the
+    // course the panel just created is otherwise pending by default
+    // (`support/approve-course.ts`'s own module comment).
+    approveCourseForE2e(db, organizationId, course.id)
 
     // Bind a Discord server directly — `course-configuration.spec.ts`'s
     // own module comment on why TEN-4's real OAuth consent screen cannot

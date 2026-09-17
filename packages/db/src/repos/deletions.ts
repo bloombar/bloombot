@@ -35,6 +35,7 @@ import {
   contentDeletions,
   conversations,
   costLedgerEntries,
+  courseApprovalEvents,
   courseAttachments,
   courseCategories,
   courseChannels,
@@ -97,9 +98,10 @@ export interface CourseByteRemoval {
  * "deliberately not exhaustive" reasoning `OrganizationDeletionPreview`'s own
  * doc comment gives (`repos/organizations.ts`): `usage_counters`,
  * `course_join_links`, `course_self_enrolment_intents`, `course_web_sources`,
- * `course_instruction_revisions`, `transcript_access_log` and
- * `roster_channel_assignments` are all emptied by `deleteCourse` below with
- * no count here — this is a confirmation an instructor reads and acts on,
+ * `course_instruction_revisions`, `transcript_access_log`,
+ * `roster_channel_assignments` and `course_approval_events` are all emptied
+ * by `deleteCourse` below with no count here — this is a confirmation an
+ * instructor reads and acts on,
  * not a schema dump. `undefined` when `courseId` does not exist, or does not
  * belong to `organizationId` (TEN-2/TEN-5) — there is nothing to preview
  * deleting.
@@ -371,6 +373,19 @@ function emptyCourse(
       and(
         eq(rosterChannelAssignments.organizationId, organizationId),
         eq(rosterChannelAssignments.courseId, courseId)
+      )
+    )
+    .run()
+  // COST-8 — a course's own approval history is a fact about the course, not
+  // about money already spent (`cost_ledger_entries`' own carve-out, above),
+  // so it does not outlive the course the same way that table does — this
+  // must not block the delete either (`foreign_keys = ON`, this file's own
+  // module comment).
+  tx.delete(courseApprovalEvents)
+    .where(
+      and(
+        eq(courseApprovalEvents.organizationId, organizationId),
+        eq(courseApprovalEvents.courseId, courseId)
       )
     )
     .run()

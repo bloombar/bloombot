@@ -24,6 +24,9 @@ describe('parseEnv', () => {
     expect(env.API_PORT).toBe(3000)
     expect(env.BOT_HEALTH_PORT).toBe(3001)
     expect(env.ADMIN_EMAILS).toBe('')
+    // SURF-10/COST-8 — parsed with a default, so a deployment that has not
+    // set a support contact yet still starts.
+    expect(env.SUPPORT_CONTACT).toBe('')
   })
 
   it('defaults every upstream base URL to the real service (QA-2)', () => {

@@ -202,6 +202,11 @@ async function setUp(options: {
     issuerUrl: new URL('http://127.0.0.1:1'),
     elicitationTimeoutMs:
       options.elicitationTimeoutMs ?? ELICITATION_TIMEOUT_MS,
+    // COST-8 — `ServerDependencies.isPlatformAdministratorEmail` is
+    // required now (that field's own doc comment has why); nobody is an
+    // administrator by default, the same safe default this file's own
+    // tests never need to override.
+    isPlatformAdministratorEmail: () => false,
   })
 
   const realFetch = globalThis.fetch

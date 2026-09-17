@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { createSession } from '@bloombot/auth'
 import {
   accounts,
+  courseApproval,
   courseAttachments,
   courses,
   enrolments,
@@ -91,6 +92,18 @@ export function seedCourse(
     db
   )
   if (!result.ok) throw new Error('setup failed: unexpected conflict')
+  // COST-8 — this helper exists to exercise MCP tools other than the
+  // approval gate, so the seeded course is approved by default (the same
+  // reasoning `apps/api/tests/routes/chat.test.ts#seedEnrolledCourse`'s own
+  // identical comment gives).
+  courseApproval.approveCourse(
+    organizationId,
+    result.course.id,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
   return { courseId: result.course.id, projectId: project.id }
 }
 
@@ -221,6 +234,12 @@ export function seedEnrolledCourse(
     selfEnrolFromDiscord?: boolean
     title?: string
     maxRequestsPerDay?: number
+    // COST-8 — approved by default (see below); `false` for a test that
+    // specifically wants a pending, *undecided* course (lazy auto-approval
+    // tests — `courseApproval.revokeCourseApproval` would set
+    // `aiApprovalDecidedAt`, so approving and then revoking is not the
+    // same seed).
+    approve?: boolean
   } = {}
 ): { courseId: string; projectId: string; discordPersonId: string } {
   const project = projects.createProject(
@@ -253,6 +272,18 @@ export function seedEnrolledCourse(
   )
   if (!created.ok) throw new Error('test setup: course creation refused')
   const courseId = created.course.id
+
+  // COST-8 — see `seedCourse`'s own identical comment, above.
+  if (options.approve ?? true) {
+    courseApproval.approveCourse(
+      organizationId,
+      courseId,
+      null,
+      'approve',
+      Date.now(),
+      db
+    )
+  }
 
   const discordPerson = people.resolvePersonByIdentity(
     organizationId,

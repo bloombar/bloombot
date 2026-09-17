@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  courseApproval,
   courses,
   organizations,
   people,
@@ -29,6 +30,12 @@ export interface SeedOptions {
   vectorStoreId?: string | null
   /** LINK-1 — connect the seeded person by default (see below); `false` for a test that specifically wants an unconnected person. */
   connect?: boolean
+  /**
+   * COST-8 — approve the seeded course by default (see below); `false` for
+   * a test that specifically wants a pending course, the way `connect`
+   * above lets a test specifically want an unconnected person.
+   */
+  approve?: boolean
 }
 
 /** One organization, one project, one enabled course and one person — enough for `answerQuestion` to run against. */
@@ -79,6 +86,22 @@ export function seedCourseAndPerson(
   if (!courseResult.ok) {
     throw new Error(
       `seedCourseAndPerson: failed to create course: ${courseResult.conflict.message}`
+    )
+  }
+
+  // COST-8 — this helper's whole reason to exist (this file's own module
+  // comment) is exercising `answer.ts`'s own answering pipeline, not the
+  // approval gate itself, so the seeded course is approved by default the
+  // same way a connected person is above. Tests that want a *pending*
+  // course for COST-8 itself pass `approve: false`.
+  if (options.approve ?? true) {
+    courseApproval.approveCourse(
+      organizationId,
+      courseResult.course.id,
+      null,
+      'approve',
+      Date.now(),
+      db
     )
   }
 

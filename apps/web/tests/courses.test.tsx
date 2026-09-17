@@ -72,6 +72,7 @@ const COURSE: CourseSummary = {
   answerUnenrolled: true,
   discordServerId: null,
   createdAt: 0,
+  aiApprovedAt: 1000,
 }
 
 /** Opens a course row's own kebab menu, by its own `aria-label` (WEB-26) — every menu item test below goes through this rather than reaching the item directly, so it also proves the item is actually reachable behind the row's own control. */

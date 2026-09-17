@@ -30,3 +30,5 @@ export {
   type CountingModelClient,
   type ModelCallStats,
 } from './model-stats.js'
+
+export { courseNotApprovedNotice } from './notices.js'

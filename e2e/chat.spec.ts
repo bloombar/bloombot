@@ -59,6 +59,7 @@ import {
   projects,
 } from '@bloombot/db'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
@@ -133,6 +134,12 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
       .listCourses(organizationId, db, { projectId: project.id })
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
+
+    // COST-8 — this spec is about WEB-10's own chat surface, not the
+    // approval gate; the course the panel just created is otherwise
+    // pending by default (`support/approve-course.ts`'s own module
+    // comment).
+    approveCourseForE2e(db, organizationId, course.id)
 
     // WEB-10 rework — `@bloombot/auth`'s `sign-in.ts` already created and
     // *connected* this account's own web person the moment sign-in itself
@@ -212,4 +219,120 @@ test('a signed-in account holds a conversation with an enrolled course, rendered
   const threadText = await thread.innerText()
   expect(threadText).not.toContain('<@')
   expect(threadText).not.toContain(accountId)
+})
+
+// COST-8/SURF-10, end to end: a course nobody has approved for AI use
+// answers with the shared not-approved notice, naming the deployment's own
+// configured support contact — through the real `apps/api` chat route and
+// the real `@bloombot/core#answerQuestion` pipeline, the same "real API,
+// real database, fake model, fake network" shape this file's own module
+// comment describes for the answered case above. Unlike that test, this
+// one deliberately never calls `support/approve-course.ts`'s own helper —
+// the course the panel just created stays pending, exactly as a real one
+// would.
+test('an unapproved course shows the SURF-10 notice, naming the support contact, instead of answering (COST-8)', async ({
+  page,
+}) => {
+  const suffix = randomUUID().slice(0, 8)
+  const email = `surf10-${suffix}@example.edu`
+  const projectName = `Fall 2026 — ${suffix}`
+  const courseTitle = `Intro to Testing — ${suffix}`
+  const studentsRole = `students-${suffix}`
+  const adminsRole = `admins-${suffix}`
+
+  // 1. Sign in, then define and enable a course through the panel alone —
+  //    the same steps the answered case above drives.
+  await signIn(page, email)
+  await expect(page.getByTestId('organization-switcher')).toBeVisible()
+
+  await navigateTo(page, 'Projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const newProjectDialog = page.getByRole('dialog', { name: 'New project' })
+  await newProjectDialog.getByLabel('Project name').fill(projectName)
+  await newProjectDialog.getByRole('button', { name: 'Create' }).click()
+  await page.getByRole('button', { name: projectName, exact: true }).click()
+
+  await page.getByRole('button', { name: 'New course' }).click()
+  await page.getByLabel('Title').fill(courseTitle)
+  await page.getByLabel('Admins role').fill(adminsRole)
+  await page.getByLabel('Students role').fill(studentsRole)
+  await page.getByLabel('Enabled').check()
+  await page.getByRole('button', { name: 'Save course' }).click()
+  await expect(page.getByRole('tab', { name: 'General' })).toBeVisible()
+
+  // COST-8 — the course editor's own pending-approval banner, right where
+  // its owner would actually see it (not discovered only by asking,
+  // SURF-10's own text).
+  await expect(page.getByText('Pending approval')).toBeVisible()
+
+  await page.getByRole('tab', { name: 'AI' }).click()
+  await page
+    .getByLabel('Instructions')
+    .fill('Answer student questions about the course clearly.')
+  await page.getByRole('button', { name: 'Save instructions' }).click()
+  await page.getByRole('button', { name: /Show history/ }).click()
+  await expect(page.getByText('Current')).toBeVisible()
+
+  // 2. Seed this account's own enrolment — the same harness stand-in the
+  //    answered case above uses — but never approve the course: this test
+  //    is exactly the "pending" case that helper exists to opt out of.
+  const db = openDatabase(E2E_DATABASE_PATH)
+  try {
+    const account = accounts.getAccountByEmail(email, db)
+    if (!account) throw new Error('setup failed: account not found')
+    const [membership] = memberships.listMembershipsForAccount(account.id, db)
+    if (!membership) throw new Error('setup failed: membership not found')
+    const organizationId = membership.organizationId
+
+    const project = projects
+      .listProjects(organizationId, db)
+      .find((candidate) => candidate.name === projectName)
+    if (!project) throw new Error('setup failed: project not found')
+    const course = courses
+      .listCourses(organizationId, db, { projectId: project.id })
+      .find((candidate) => candidate.title === courseTitle)
+    if (!course) throw new Error('setup failed: course not found')
+    // Never approved — the fact this whole test is about.
+    expect(course.aiApprovedAt).toBeNull()
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: account.id },
+      db
+    )
+    if (!person) throw new Error('setup failed: no connected web person')
+    const enrolled = enrolments.enrolViaRoster(
+      organizationId,
+      { courseId: course.id, personId: person.id },
+      db
+    )
+    if (!enrolled) throw new Error('setup failed: enrolment refused')
+  } finally {
+    closeDatabase(db)
+  }
+
+  // 3. Ask a question — no answer arrives; the shared SURF-10 notice does,
+  //    naming `start-api.ts`'s own configured support contact
+  //    (`e2e-support@bloombot.test`), rendered server-side
+  //    (`routes/chat.ts`) and shown verbatim by `pages/Chat.tsx`.
+  await navigateTo(page, 'Chat')
+  await expect(page.getByText(courseTitle)).toBeVisible()
+
+  await page
+    .getByLabel('Ask a question')
+    .fill('When is the midterm, and what should I read first?')
+  await page.getByRole('button', { name: 'Send' }).click()
+
+  await expect(page.getByRole('status')).toHaveText(
+    "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at e2e-support@bloombot.test to request approval."
+  )
+  // No reply bubble — the student's own message is on the thread, nothing
+  // answered it.
+  const thread = page.getByTestId('chat-thread')
+  await expect(thread).toContainText(
+    'When is the midterm, and what should I read first?'
+  )
+  await expect(
+    thread.getByRole('heading', { level: 1, name: 'Bloombot' })
+  ).not.toBeVisible()
 })

@@ -54,6 +54,7 @@ import {
 } from '@bloombot/db'
 import {
   answerQuestion,
+  courseNotApprovedNotice,
   type AnswerResult,
   type ModelClient,
   type PricingTable,
@@ -68,6 +69,20 @@ export interface ChatToolDependencies {
   logger: Logger
   admission?: AdmissionGate
   pricing?: PricingTable
+  /** SURF-10 — `CONFIG.SUPPORT_CONTACT`, named in `courseNotApprovedNotice`'s own rendered text below for `declined-not-approved` (COST-8) — the same "threaded in, never read here" seam `admission`/`pricing` above already are. Defaults to `''` when omitted, matching that variable's own unset default. */
+  supportContact?: string
+  /**
+   * COST-8's lazy auto-approval — threaded straight to `answerQuestion`'s
+   * own `AnswerDependencies.isPlatformAdministratorEmail`. **Required, not
+   * optional** (rework finding): this file used to omit it from the
+   * `answerQuestion` call entirely, so an administrator-owned course
+   * created before this slice shipped could never answer through MCP at
+   * all, however long it waited — the identical gap `apps/api/src/routes/chat.ts`
+   * had, on a different surface (`docs/DECISIONS.md` D-116). A required
+   * field turns the next such omission into a compile error, here and at
+   * `server.ts`'s own `ServerDependencies`, instead of a silent gap.
+   */
+  isPlatformAdministratorEmail: (email: string | null | undefined) => boolean
 }
 
 /** `YYYY-MM-DD`, in this process's own local time zone — duplicated from `routes/chat.ts`'s own identical helper rather than imported across the app/app boundary this repo does not cross for a five-line helper neither app owns (that file's own module comment gives the same reasoning `apps/worker`'s `roster-import.ts` already follows). */
@@ -313,7 +328,14 @@ export type AskChatResult =
       reason: 'no-course-id' | 'not-admitted' | 'none-admitted'
       choices: CourseChoice[]
     }
-  | ({ course: CourseChoice } & AnswerResult)
+  | ({ course: CourseChoice } & Exclude<
+      AnswerResult,
+      { kind: 'declined-not-approved' }
+    >)
+  // COST-8/SURF-10 — the one `AnswerResult` kind whose text is not local to
+  // a surface (`courseNotApprovedNotice`'s own module comment) carries the
+  // fully rendered `notice` too, not just its bare kind.
+  | { course: CourseChoice; kind: 'declined-not-approved'; notice: string }
 
 /**
  * `chat.ask`: resolve which course is meant (this slice's own brief has the
@@ -425,8 +447,26 @@ export async function askChatQuestion(
       addressPerson: addressPersonForMcp,
       ...(deps.admission ? { admission: deps.admission } : {}),
       ...(deps.pricing ? { pricing: deps.pricing } : {}),
+      // COST-8 — must-fix (rework): this call used to omit
+      // `isPlatformAdministratorEmail` entirely, not merely make it
+      // conditional — `ChatToolDependencies`'s own doc comment has the
+      // full "an administrator-owned course could never answer through
+      // MCP" gap this closes.
+      isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail,
     }
   )
+
+  // COST-8/SURF-10 — the tool result carries the fully rendered notice,
+  // naming the deployment's own support contact, the same "attach it here
+  // rather than make a surface's own client re-derive it" shape
+  // `routes/chat.ts` already gives the web chat route.
+  if (result.kind === 'declined-not-approved') {
+    return {
+      course: toCourseChoice(resolved, deps.db),
+      ...result,
+      notice: courseNotApprovedNotice(deps.supportContact ?? ''),
+    }
+  }
 
   return { course: toCourseChoice(resolved, deps.db), ...result }
 }

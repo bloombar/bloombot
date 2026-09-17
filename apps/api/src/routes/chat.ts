@@ -72,6 +72,7 @@ import { z } from 'zod'
 
 import {
   answerQuestion,
+  courseNotApprovedNotice,
   type ModelClient,
   type PricingTable,
 } from '@bloombot/core'
@@ -91,6 +92,35 @@ export interface ChatRouterDependencies {
   model: ModelClient
   admission?: AdmissionGate
   pricing?: PricingTable
+  /**
+   * SURF-10 — `CONFIG.SUPPORT_CONTACT`, named in `courseNotApprovedNotice`'s
+   * own rendered text below for `declined-not-approved` (COST-8). Threaded
+   * in rather than read here — this app's own D-29-style boundary against
+   * reading `@bloombot/config` inside a router body, the same reason
+   * `admission`/`pricing` above are threaded from `src/index.ts` rather
+   * than read from `CONFIG` in this file. Defaults to `''` when omitted,
+   * matching that variable's own unset default.
+   */
+  supportContact?: string
+  /**
+   * COST-8's lazy auto-approval — threaded straight to `answerQuestion`'s
+   * own `AnswerDependencies.isPlatformAdministratorEmail`. **Required, not
+   * optional, on purpose** (rework finding): this field started optional,
+   * and this router's own `buildApp` call simply omitted it — an
+   * administrator-owned course created before this slice shipped answered
+   * on Discord (`apps/bot`'s own wiring got it right) but was refused
+   * forever here, on the one surface that has no other way to reach
+   * pre-existing pending courses until WEB-53 ships. A required field turns
+   * that same omission into a compile error at every call site
+   * (`src/server.ts`, and this file's own tests) instead of a silent gap
+   * only a reader who already knows to look for it would catch — the same
+   * reasoning `docs/DECISIONS.md` D-116 gives for making this required at
+   * every app's own wiring boundary, even though `@bloombot/core`'s own
+   * `AnswerDependencies.isPlatformAdministratorEmail` stays optional (a
+   * library default many unrelated callers have no reason to supply, not a
+   * production entry point that can forget it silently).
+   */
+  isPlatformAdministratorEmail: (email: string | null | undefined) => boolean
 }
 
 /** `YYYY-MM-DD`, in the process's own local time zone — the same "read the clock once, at the edge" shape `apps/bot`'s own `today.ts` follows, and CORE-3's own "never read from a clock inside the pipeline" discipline that file's doc comment describes. Duplicated rather than imported: `apps/bot` and this app are on opposite sides of the app/app boundary this repo does not cross for a five-line helper neither owns — the same convention `apps/worker`'s own `roster-import.ts` already holds itself to for its own small duplicated helpers. */
@@ -417,9 +447,28 @@ export function buildChatRouter(deps: ChatRouterDependencies): Router {
           addressPerson: addressPersonForWeb,
           ...(deps.admission ? { admission: deps.admission } : {}),
           ...(deps.pricing ? { pricing: deps.pricing } : {}),
+          // COST-8 — must-fix (rework): this used to be conditional on
+          // `deps.isPlatformAdministratorEmail`, the same shape
+          // `admission`/`pricing` still take — but that field is required
+          // now (`ChatRouterDependencies`'s own doc comment has why),
+          // so it is always passed straight through.
+          isPlatformAdministratorEmail: deps.isPlatformAdministratorEmail,
         }
       )
-        .then((result) => res.status(200).json({ result }))
+        .then((result) => {
+          // COST-8/SURF-10 — the browser gets the fully rendered notice
+          // text, not just the bare kind, so it never has to read
+          // `SUPPORT_CONTACT` itself (`ChatRouterDependencies.supportContact`'s
+          // own doc comment).
+          const payload =
+            result.kind === 'declined-not-approved'
+              ? {
+                  ...result,
+                  notice: courseNotApprovedNotice(deps.supportContact ?? ''),
+                }
+              : result
+          res.status(200).json({ result: payload })
+        })
         .catch(next)
     }
   )

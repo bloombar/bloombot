@@ -232,6 +232,13 @@
       "when": 1789610161952,
       "tag": "0032_third_kitty_pryde",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1789663776219,
+      "tag": "0033_deep_next_avengers",
+      "breakpoints": true
     }
   ]
 }

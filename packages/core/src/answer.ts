@@ -70,6 +70,7 @@
 import {
   conversations,
   costLedger,
+  courseApproval,
   courses,
   courseWebSources,
   people,
@@ -143,6 +144,27 @@ const NO_PRICING_CONFIGURED: PricingTable = {
  */
 const NO_ADDRESS: NonNullable<AnswerDependencies['addressPerson']> = () => null
 
+/**
+ * `deps.isPlatformAdministratorEmail`'s default when a caller omits it
+ * (COST-8's own lazy auto-approval, this file's own `answerQuestion`
+ * comment below) — the same "expose the seam, default to the *safe* choice"
+ * discipline `NO_ADMISSION_LIMIT`/`NO_PRICING_CONFIGURED`/`NO_ADDRESS` above
+ * already hold themselves to: nobody is ever an administrator, so a caller
+ * that forgets to wire the real predicate simply never gets free lazy
+ * approval, rather than silently answering an unapproved course. This
+ * package holds no dependency on `@bloombot/auth` (an env-reading package)
+ * at all — the identical "dependencies as arguments" reasoning D-29 already
+ * gives `deps.admission`/`deps.pricing` — so the real predicate
+ * (`@bloombot/auth`'s `isPlatformAdministrator`) is built once by whichever
+ * process actually answers questions (`apps/bot`'s own `main()`,
+ * `apps/api`'s `routes/chat.ts`, `apps/mcp`'s `chat-tools.ts`) and threaded
+ * down, the same way `model`/`admission`/`pricing` already are. See
+ * `docs/DECISIONS.md` D-116.
+ */
+const NO_ADMINISTRATOR: NonNullable<
+  AnswerDependencies['isPlatformAdministratorEmail']
+> = () => false
+
 /** What one call to `answerQuestion` needs — the organization, course, person, surface and text CORE-1 names. */
 export interface AnswerQuestionInput {
   organizationId: string
@@ -192,6 +214,15 @@ export interface AnswerDependencies {
     person: people.Person,
     identity: people.PersonIdentity | undefined
   ) => string | null
+  /**
+   * COST-8's lazy auto-approval — is this email a platform administrator's?
+   * Used only to decide `isAdministratorOwnedOrganization`
+   * (`@bloombot/db`'s `courseApproval`) for a course that has never had an
+   * approval decision recorded (`NO_ADMINISTRATOR`'s own comment has the
+   * full reasoning for why this is a dependency rather than an import).
+   * Defaults to `NO_ADMINISTRATOR` when omitted.
+   */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
 }
 
 /**
@@ -223,6 +254,16 @@ export interface AnswerDependencies {
  *    (it must stay byte-identical to `response_bot.py`'s), but a provider
  *    outage on a student's last request of the day must not leave them
  *    apologised-to *and* silently locked out with no notice at all.
+ *  - `declined-not-approved` — COST-8: no platform administrator has
+ *    approved this course for AI use yet (and it is not — or is no longer —
+ *    administrator-owned, this file's own `answerQuestion` comment has the
+ *    lazy auto-approval this checks first); no model call, no admission, no
+ *    allowance and no spending cap touched, and no conversation written —
+ *    the same "costs nothing" shape `not-connected` below already takes,
+ *    checked even earlier (before admission, the cap and the allowance,
+ *    COST-8's own text). No bypass for an administrator asking in an
+ *    unapproved course — COST-8 refuses them exactly as it refuses anyone
+ *    else.
  *  - `course-disabled` — the course exists but is not enabled; ignored, the
  *    same as CORE-2's "no enabled course matched" (finding 1).
  *  - `not-configured` — the course has neither a `promptId` nor
@@ -252,6 +293,7 @@ export type AnswerResult =
   | { kind: 'course-disabled' }
   | { kind: 'not-configured' }
   | { kind: 'not-connected' }
+  | { kind: 'declined-not-approved' }
 
 /** CORE-5's apology, matching `response_bot.py`'s own wording — a plain statement, not a stack trace. */
 function apologyText(courseTitle: string): string {
@@ -371,6 +413,58 @@ export async function answerQuestion(
       'answerQuestion: declined, course has neither a promptId nor instructions configured'
     )
     return { kind: 'not-configured' }
+  }
+
+  // COST-8 — a course answers only once approved for AI use. Checked here,
+  // right after `course-disabled`/`not-configured` and before every other
+  // gate (`not-connected`, admission, the spending cap, `reserveUsageSlot`)
+  // — a refusal here is the cheapest one this pipeline has: it needs
+  // neither `person` nor an admission slot, and spends, counts and writes
+  // nothing, the same "costs nothing" shape `declined-over-limit`/
+  // `declined-busy` below already take. No bypass for a platform
+  // administrator asking in an unapproved course — COST-8's own text is
+  // explicit that they are refused exactly like anyone else.
+  //
+  // Lazy auto-approval (D-116): a course that has never had an approval
+  // decision recorded (`course.aiApprovalDecidedAt === null`) and whose
+  // organization is administrator-owned
+  // (`courseApproval.isAdministratorOwnedOrganization`) is approved right
+  // here, on its very first question, rather than by a startup job that
+  // would have to walk every course the platform has ever created. A course
+  // a platform administrator has already decided on — including one they
+  // revoked — is never re-approved this way: `aiApprovalDecidedAt`, once
+  // set, is exactly what tells the two cases apart (`schema.ts`'s own
+  // comment on that column). `deps.isPlatformAdministratorEmail` defaults
+  // to `NO_ADMINISTRATOR` (this file's own module comment) when the caller
+  // has not wired one.
+  if (course.aiApprovedAt === null) {
+    let approvedCourse: courses.Course | undefined
+    if (course.aiApprovalDecidedAt === null) {
+      const isAdminEmail = deps.isPlatformAdministratorEmail ?? NO_ADMINISTRATOR
+      if (
+        courseApproval.isAdministratorOwnedOrganization(
+          organizationId,
+          isAdminEmail,
+          db
+        )
+      ) {
+        approvedCourse = courseApproval.approveCourse(
+          organizationId,
+          courseId,
+          null,
+          'auto-approve',
+          Date.now(),
+          db
+        )
+      }
+    }
+    if (!approvedCourse) {
+      logger.info(
+        { organizationId, courseId, personId },
+        'answerQuestion: declined, course is not approved for AI use'
+      )
+      return { kind: 'declined-not-approved' }
+    }
   }
 
   // Resolved once, here, rather than only later for the model's opening item

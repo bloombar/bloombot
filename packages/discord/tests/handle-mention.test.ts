@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   accounts,
   conversations,
+  courseApproval,
   courses,
   discordServers,
   enrolments,
@@ -111,6 +112,17 @@ function createExtraCourse(
       `createExtraCourse: failed to create course: ${result.conflict.message}`
     )
   }
+  // COST-8 — approved by default, the same reasoning
+  // `helpers/seed.ts#seedBoundServerWithCourse`'s own `approve` option gives:
+  // this helper exists to exercise routing, not the approval gate.
+  courseApproval.approveCourse(
+    organizationId,
+    result.course.id,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
   return { courseId: result.course.id, projectId: project.id }
 }
 
@@ -1332,6 +1344,60 @@ describe('handleMention — SURF-6: every outcome reaches the student or the log
         (call) => (call[0] as { kind?: string }).kind === 'not-configured'
       )
     ).toBe(true)
+  })
+
+  // COST-8/SURF-10 — the identical "gets a reply, not silence" treatment
+  // `not-configured` above gets: a course pending approval reaches the
+  // student with a notice, not just the log.
+  it('replies once with the not-approved notice, naming the configured support contact, for a pending course (COST-8/SURF-10)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, guildId, courseId } = seedBoundServerWithCourse(
+      testDb.db,
+      { approve: false }
+    )
+    const { deps, model, reply, logger } = makeDeps(testDb, {
+      supportContact: 'support@bloombot.example.edu',
+    })
+
+    const result = await handleMention(inboundMention({ guildId }), deps)
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
+    expect(reply.sent).toHaveLength(1)
+    expect(reply.sent[0]).toBe(
+      "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support at support@bloombot.example.edu to request approval."
+    )
+    expect(logger.infoCalls.length).toBeGreaterThan(0)
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'discord', externalId: DEFAULT_AUTHOR_ID },
+      testDb.db
+    )
+    if (!person) throw new Error('setup failed')
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        person.id,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+  })
+
+  it('omits the "at <contact>" clause when no support contact is configured', async () => {
+    testDb = createTestDatabase()
+    const { guildId } = seedBoundServerWithCourse(testDb.db, {
+      approve: false,
+    })
+    const { deps, reply } = makeDeps(testDb)
+
+    await handleMention(inboundMention({ guildId }), deps)
+
+    expect(reply.sent[0]).toBe(
+      "This course hasn't been approved to answer questions yet. The course owner should contact Bloombot support to request approval."
+    )
   })
 
   // `answerQuestion`'s own `course-disabled` result exists for a caller that

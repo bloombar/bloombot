@@ -10,8 +10,10 @@ import BetterSqlite3 from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accounts,
   conversations,
   costLedger,
+  courseApproval,
   courses,
   courseWebSources,
   organizations,
@@ -1288,6 +1290,233 @@ describe('answerQuestion (finding 3 of the CORE-1 rework): a course with neither
 
     expect(result.kind).toBe('answered')
     expect(model.calls).toHaveLength(1)
+  })
+})
+
+describe('answerQuestion (COST-8): a course answers only once approved for AI use', () => {
+  it('declines an unapproved course with declined-not-approved, calls no model, and writes no usage, ledger row or conversation', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false }
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
+    expect(
+      usage.getUsageCount(
+        organizationId,
+        courseId,
+        personId,
+        '2026-01-01',
+        testDb.db
+      )
+    ).toBe(0)
+    expect(
+      costLedger.getOrganizationSpentMicros(organizationId, testDb.db)
+    ).toBe(0)
+    expect(
+      conversations.listConversationsForCourse(
+        organizationId,
+        courseId,
+        testDb.db
+      )
+    ).toHaveLength(0)
+  })
+
+  it('answers an approved course exactly as before (this file’s own seed helper approves by default)', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db
+    )
+    const model = new FakeModelClient({ answerText: 'approved answer' })
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+  })
+
+  it('lazily auto-approves an administrator-owned course that has never had a decision recorded, and answers', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false }
+    )
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'admin@example.edu', displayName: 'Admin', role: 'owner' },
+      testDb.db
+    )
+    const model = new FakeModelClient({ answerText: 'auto-approved answer' })
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      {
+        db: testDb.db,
+        model,
+        logger,
+        isPlatformAdministratorEmail: (email) => email === owner.email,
+      }
+    )
+
+    expect(result.kind).toBe('answered')
+    expect(model.calls).toHaveLength(1)
+    const course = courses.getCourse(organizationId, courseId, testDb.db)
+    expect(course?.aiApprovedAt).not.toBeNull()
+    expect(course?.aiApprovedByAccountId).toBeNull()
+  })
+
+  it('never re-approves a revoked (decided) administrator-owned course, even though it is still administrator-owned', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false }
+    )
+    const owner = accounts.createAccount(
+      organizationId,
+      { email: 'admin@example.edu', displayName: 'Admin', role: 'owner' },
+      testDb.db
+    )
+    courseApproval.approveCourse(
+      organizationId,
+      courseId,
+      owner.id,
+      'approve',
+      Date.now(),
+      testDb.db
+    )
+    courseApproval.revokeCourseApproval(
+      organizationId,
+      courseId,
+      owner.id,
+      Date.now(),
+      testDb.db
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      {
+        db: testDb.db,
+        model,
+        logger,
+        isPlatformAdministratorEmail: (email) => email === owner.email,
+      }
+    )
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
+  })
+
+  it('refuses a question in an unapproved, non-administrator-owned course even when the caller believes itself an administrator — no bypass', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false }
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    // `isPlatformAdministratorEmail` always says yes here — but this
+    // organization has no `owner` membership at all (`seedCourseAndPerson`
+    // creates no account), so `isAdministratorOwnedOrganization` is still
+    // `false`: an administrator asking in a course they do not own is
+    // refused exactly like anyone else (COST-8's own text).
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      {
+        db: testDb.db,
+        model,
+        logger,
+        isPlatformAdministratorEmail: () => true,
+      }
+    )
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
+  })
+
+  // Rework finding: pins the gate's order against `not-connected` (LINK-1)
+  // directly — the two are adjacent checks in `answerQuestion`'s own body,
+  // and a reorder that moved the approval gate after the connect check
+  // would pass every other test in this block (they all seed a connected
+  // person) while silently letting an unconnected person's message reach
+  // `not-connected` instead of `declined-not-approved` for an unapproved
+  // course. An unconnected person carries no email `isAdministratorOwnedOrganization`
+  // could check either, so this also proves the gate needs no person
+  // resolution at all to refuse.
+  it('an unconnected person in an unapproved course still gets declined-not-approved, not not-connected — pins the gate ahead of LINK-1', async () => {
+    testDb = createTestDatabase()
+    const { organizationId, courseId, personId } = seedCourseAndPerson(
+      testDb.db,
+      { approve: false, connect: false }
+    )
+    const model = new FakeModelClient()
+    const logger = createFakeLogger()
+
+    const result = await answerQuestion(
+      {
+        organizationId,
+        courseId,
+        personId,
+        surface: 'discord',
+        text: 'q',
+        day: '2026-01-01',
+      },
+      { db: testDb.db, model, logger }
+    )
+
+    expect(result).toEqual({ kind: 'declined-not-approved' })
+    expect(model.calls).toHaveLength(0)
   })
 })
 

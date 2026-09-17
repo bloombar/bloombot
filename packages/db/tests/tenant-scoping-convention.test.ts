@@ -143,6 +143,9 @@ const REPOS_DIR = fileURLToPath(new URL('../src/repos', import.meta.url))
 //    all, it names the whole process's own last-known-connected moment,
 //    which is a property of the gateway connection `apps/bot` holds, not of
 //    any one organization.
+//  - course-approval.ts#listCoursesForApproval: COST-8/WEB-53, the same
+//    class `cost-ledger.ts#listOrganizationTotals` already is — a platform
+//    administrator's own read, spanning every organization by definition.
 const ALLOWLIST: Record<string, string[]> = {
   'accounts.ts': [
     'getAccountByEmail',
@@ -151,6 +154,7 @@ const ALLOWLIST: Record<string, string[]> = {
     'setAccountNames',
   ],
   'cost-ledger.ts': ['listOrganizationTotals'],
+  'course-approval.ts': ['listCoursesForApproval'],
   'discord-handled-messages.ts': [
     'recordHandledMessage',
     'listHandledMessageIds',
@@ -291,7 +295,7 @@ function exportedFunctions(source: string): ExportedFunction[] {
 describe('TEN-2 — repo functions are scoped by organization id, structurally', () => {
   const files = readdirSync(REPOS_DIR).filter((name) => name.endsWith('.ts'))
 
-  it('found the twenty-nine repo files this test is written against', () => {
+  it('found the thirty repo files this test is written against', () => {
     // A guard on the guard: if a new repo file appears and this list is not
     // updated, the loop below silently would not check it either.
     expect(files.sort()).toEqual(
@@ -299,6 +303,7 @@ describe('TEN-2 — repo functions are scoped by organization id, structurally',
         'accounts.ts',
         'conversations.ts',
         'cost-ledger.ts',
+        'course-approval.ts',
         'course-attachments.ts',
         'course-instruction-revisions.ts',
         'course-join-links.ts',

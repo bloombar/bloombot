@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  courseApproval,
   courses,
   organizations,
   people,
@@ -74,6 +75,19 @@ export function seedCourseAndPerson(
       `seedCourseAndPerson: failed to create course: ${courseResult.conflict.message}`
     )
   }
+
+  // COST-8 — this helper exists to exercise the real adapter's own
+  // request/response shape, not the approval gate, so the seeded course is
+  // approved by default (`packages/core/tests/helpers/seed.ts`'s own
+  // identical comment).
+  courseApproval.approveCourse(
+    organizationId,
+    courseResult.course.id,
+    null,
+    'approve',
+    Date.now(),
+    db
+  )
 
   const person = people.createPerson(
     organizationId,

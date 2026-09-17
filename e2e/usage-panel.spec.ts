@@ -56,6 +56,7 @@ import {
   projects,
 } from '@bloombot/db'
 
+import { approveCourseForE2e } from './support/approve-course.js'
 import { E2E_DATABASE_PATH } from './support/env.js'
 import { navigateTo } from './support/navigate.js'
 import { signIn } from './support/sign-in.js'
@@ -158,6 +159,12 @@ test("an instructor sees their course's spend and a student approaching its dail
       .listCourses(organizationId, db, { projectId: project.id })
       .find((candidate) => candidate.title === courseTitle)
     if (!course) throw new Error('setup failed: course not found')
+
+    // COST-8 — this spec is about COST-4/COST-6's own usage panel, not the
+    // approval gate; the course the panel just created is otherwise
+    // pending by default (`support/approve-course.ts`'s own module
+    // comment).
+    approveCourseForE2e(db, organizationId, course.id)
 
     const person = people.resolveIdentity(
       organizationId,

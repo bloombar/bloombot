@@ -40,6 +40,19 @@ export interface DispatchContext {
    * forgeable audit trail).
    */
   accountId?: string
+  /**
+   * COST-8 — is this email a platform administrator's? This package holds
+   * no dependency on `@bloombot/auth` (an env-reading package) at all, the
+   * same "dependencies as arguments" discipline `@bloombot/core`'s own
+   * `answer.ts` holds itself to for the identical predicate (D-29, and see
+   * `docs/DECISIONS.md` D-116) — so `courses.save`/`courses.import` (the
+   * only two actions that read this) never decide administrator status
+   * themselves. Whichever surface authorizes the caller
+   * (`apps/api`'s own `routes/actions.ts`) builds the real predicate from
+   * `@bloombot/auth`'s `isPlatformAdministrator` and threads it through
+   * here; omitted, those two actions simply never auto-approve on create.
+   */
+  isPlatformAdministratorEmail?: (email: string | null | undefined) => boolean
 }
 
 /**
@@ -92,6 +105,9 @@ export async function dispatch<Name extends string, Input, Entity, Output>(
     db: context.db,
     ...(context.accountId !== undefined
       ? { accountId: context.accountId }
+      : {}),
+    ...(context.isPlatformAdministratorEmail !== undefined
+      ? { isPlatformAdministratorEmail: context.isPlatformAdministratorEmail }
       : {}),
   })
 }

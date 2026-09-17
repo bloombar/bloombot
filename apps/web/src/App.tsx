@@ -258,6 +258,13 @@ function renderSignedInNotFound(
 
 export function App() {
   const [session, setSession] = useState<SessionState>({ kind: 'loading' })
+  // COST-8/SURF-10 — `GET /auth/me`'s own `supportContact` (deployment-wide,
+  // not account-specific — carried alongside `account` rather than inside
+  // it), threaded down to `Shell` so `pages/CourseEditor.tsx`'s own
+  // pending-approval banner can name it, the same contact every decline
+  // notice already names. `''` (the unset default `SUPPORT_CONTACT` itself
+  // takes) until the first `/auth/me` response lands.
+  const [supportContact, setSupportContact] = useState('')
   const { route, navigate } = useRoute()
   const [justInstalled, setJustInstalled] = useState<
     { organizationId: string; serverId: string } | undefined
@@ -290,6 +297,7 @@ export function App() {
           ? { kind: 'signed-in', account: response.account }
           : { kind: 'signed-out' }
         setSession(next)
+        setSupportContact(response.supportContact)
         return next
       },
       (caught: unknown): SessionState => {
@@ -641,6 +649,7 @@ export function App() {
       return (
         <Shell
           account={session.account}
+          supportContact={supportContact}
           route={route}
           navigate={navigate}
           {...(justInstalled ? { justInstalled } : {})}

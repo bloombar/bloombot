@@ -3211,3 +3211,11 @@ Unapprove button. Approving and revoking are recorded with who acted and when.
 Clicking a course on the approval screen shows its settings as the owner sees them — general, AI and
 knowledge (instructions, files and web sources) — with nothing editable. The People tab, transcripts,
 join links and anything identifying a student stay out of reach, as ADMIN-4 requires.
+
+#### WEB-54 The administrator console carries its own navigation, and process health sits at the foot of every screen
+
+Every screen of the platform-administrator console opens with the same secondary navigation — Organizations,
+Courses, Deletion history — with the current screen marked as such, so moving between them never requires the
+browser's Back button or a typed address. The health of the platform's processes, until now shown only on the
+organizations screen, moves to a footer fixed to the bottom of every console screen, so an operator sees at a
+glance whether the platform is up no matter which screen they are on.

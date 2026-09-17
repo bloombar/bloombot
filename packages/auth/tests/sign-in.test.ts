@@ -395,6 +395,115 @@ describe('signInWithGoogle (AUTH-2)', () => {
     expect(person?.connectedAt).not.toBeNull()
   })
 
+  // AUTH-7 — a brand-new account's own web person gets the Google identity's
+  // names, not merely a connected-but-nameless person.
+  it("fills the account's own names and the new web person's, for a brand-new account", () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'new-with-name@example.edu',
+        givenName: 'Jane',
+        familyName: 'Doe',
+      }),
+      testDb.db
+    )
+    expect(result?.createdAccount).toBe(true)
+
+    const account = accounts.getAccountById(result!.account.id, testDb.db)
+    expect(account).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
+
+    const membershipRows = testDb.db.select().from(schema.memberships).all()
+    const organizationId = membershipRows[0]!.organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: result!.account.id },
+      testDb.db
+    )
+    expect(person).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
+  })
+
+  // AUTH-7 — a returning account whose connected person already has roster
+  // names must keep them: Google's own claims never overwrite a name a
+  // roster import already supplied.
+  it("does not overwrite a returning person's existing roster first/last names", () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('rostered@example.edu', testDb.db)
+    const existing = redeemSignInLink(token, testDb.db)!
+    const organizationId = testDb.db.select().from(schema.memberships).all()[0]!
+      .organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: existing.account.id },
+      testDb.db
+    )!
+    people.mergeRosterFields(
+      organizationId,
+      person.id,
+      { firstName: 'Roster', lastName: 'Name' },
+      testDb.db
+    )
+
+    signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'rostered@example.edu',
+        givenName: 'Google',
+        familyName: 'Identity',
+      }),
+      testDb.db
+    )
+
+    const after = people.getPerson(organizationId, person.id, testDb.db)
+    expect(after).toMatchObject({ firstName: 'Roster', lastName: 'Name' })
+  })
+
+  // AUTH-7 — a person with only `lastName` already set (say, from a partial
+  // roster row) gets `firstName` filled by Google while `lastName` is kept.
+  it('fills only the missing half of a name, keeping an already-set lastName', () => {
+    testDb = createTestDatabase()
+    const { token } = issueSignInToken('half-named@example.edu', testDb.db)
+    const existing = redeemSignInLink(token, testDb.db)!
+    const organizationId = testDb.db.select().from(schema.memberships).all()[0]!
+      .organizationId
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: existing.account.id },
+      testDb.db
+    )!
+    people.mergeRosterFields(
+      organizationId,
+      person.id,
+      { lastName: 'Existing' },
+      testDb.db
+    )
+
+    signInWithGoogle(
+      verifiedGoogleIdentity({
+        email: 'half-named@example.edu',
+        givenName: 'Filled',
+        familyName: 'FromGoogle',
+      }),
+      testDb.db
+    )
+
+    const after = people.getPerson(organizationId, person.id, testDb.db)
+    expect(after).toMatchObject({ firstName: 'Filled', lastName: 'Existing' })
+  })
+
+  // AUTH-7 — a token carrying neither name claim writes nothing: no account
+  // update, no person update.
+  it('writes no names when the Google token carries neither claim', () => {
+    testDb = createTestDatabase()
+
+    const result = signInWithGoogle(
+      verifiedGoogleIdentity({ email: 'no-names@example.edu' }),
+      testDb.db
+    )
+
+    const account = accounts.getAccountById(result!.account.id, testDb.db)
+    expect(account).toMatchObject({ firstName: null, lastName: null })
+  })
+
   // AUTH-2's own attack sentence, exercised end to end: an unverified email
   // that matches an existing account must never sign the caller into that
   // account. Refusing outright (finding 2 of the AUTH-1..4 rework) rather

@@ -535,6 +535,50 @@ describe('course-join-links repo — redeemJoinLinkForWebAccount (ENRL-8)', () =
     ).toMatchObject({ id: result?.enrolment.id })
   })
 
+  // AUTH-7 — an account that already has names stored (a prior Google
+  // sign-in) gets them filled onto the brand-new person this redemption
+  // creates, the same fill-only call `sign-in.ts#createConnectedWebPerson`
+  // makes for its identical shape.
+  it("fills the new person's names from the account's own stored ones", () => {
+    testDb = createTestDatabase()
+    const { organizationId, course, ownerId } =
+      seedOrganizationWithCourse(testDb)
+    const account = accounts.createAccount(
+      organizationId,
+      { email: `${randomUUID()}@example.edu`, displayName: 'A', role: 'owner' },
+      testDb.db
+    )
+    accounts.setAccountNames(
+      account.id,
+      { firstName: 'Jane', lastName: 'Doe' },
+      testDb.db
+    )
+
+    courseJoinLinks.createJoinLink(
+      organizationId,
+      {
+        courseId: course.id,
+        secretHash: 'hash-named',
+        createdByAccountId: ownerId,
+      },
+      testDb.db
+    )
+
+    courseJoinLinks.redeemJoinLinkForWebAccount(
+      'hash-named',
+      account.id,
+      Date.now(),
+      testDb.db
+    )
+
+    const person = people.resolveIdentity(
+      organizationId,
+      { surface: 'web', externalId: account.id },
+      testDb.db
+    )
+    expect(person).toMatchObject({ firstName: 'Jane', lastName: 'Doe' })
+  })
+
   // A second redemption by the same account must not mint a second person —
   // idempotent the same way `enrolViaJoinLink`'s own idempotence already is.
   // WEB-25: also fails without the fix on `alreadyEnrolled` alone — before

@@ -138,7 +138,7 @@ function Footer() {
           </a>
         ))}
         <a
-          href="mailto:support@bloombot.example"
+          href="mailto:bloombot@wonkledge.com"
           className="hover:text-neutral-700 hover:underline"
         >
           Support

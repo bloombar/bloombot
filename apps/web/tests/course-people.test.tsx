@@ -1,10 +1,12 @@
 /**
- * `components/CoursePeople.tsx` (WEB-22): the screen a course's people were
- * missing entirely. Every case below is what that component's own module
- * comment promises: two distinct lists (never one status column), how each
- * person was admitted, ending behind a confirmation stating both halves of
- * ENRL-6, reinstating (ENRL-9) with no confirmation at all, and never a
- * person's email.
+ * `components/CoursePeople.tsx` (WEB-22, WEB-52): the screen a course's
+ * people were missing entirely. Every case below is what that component's
+ * own module comment promises: two distinct lists (never one status
+ * column), how each person was admitted, ending behind a confirmation
+ * stating both halves of ENRL-6, reinstating (ENRL-9) with no confirmation
+ * at all, and — since WEB-52 — a name, an email and a Discord display name
+ * shown wherever known, falling back to the bare person id only when all
+ * three are unknown.
  */
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
@@ -40,6 +42,9 @@ function entry(overrides: Partial<CourseEnrolment> = {}): CourseEnrolment {
     id: 'enrolment-1',
     personId: 'person-1',
     displayName: 'Ada Lovelace',
+    email: null,
+    firstName: null,
+    lastName: null,
     source: 'roster',
     createdAt: Date.now(),
     endedAt: null,
@@ -123,11 +128,9 @@ describe('CoursePeople (WEB-22)', () => {
     ).not.toBeInTheDocument()
   })
 
-  // WEB-22: "do not display a person's email unless the screen genuinely
-  // needs it to disambiguate" — a `null` displayName falls back to
-  // `personId`, never to `entry.email` (which this component's own props
-  // never even carry).
-  it('falls back to the person id, never an email, when displayName is null', async () => {
+  // WEB-52: the bare person id is the very last resort — shown only when
+  // name, email and Discord name are all unknown.
+  it('falls back to the person id only when name, email and Discord name are all null', async () => {
     listCourseEnrolments.mockResolvedValue([
       entry({ id: 'e1', personId: 'person-42', displayName: null }),
     ])
@@ -141,6 +144,66 @@ describe('CoursePeople (WEB-22)', () => {
     )
 
     expect(await screen.findByText('person-42')).toBeInTheDocument()
+  })
+
+  // WEB-52: a full name is the primary line, and the secondary line shows
+  // email, Discord name and how/when the person joined — each labelled,
+  // nothing repeated between the two lines.
+  it('shows a full name as the primary line, and email/Discord/source-and-time on the secondary line', async () => {
+    const createdAt = new Date('2026-09-16T14:03:00Z').getTime()
+    listCourseEnrolments.mockResolvedValue([
+      entry({
+        id: 'e1',
+        displayName: 'janed',
+        email: 'jane@x.edu',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        source: 'join_link',
+        createdAt,
+      }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Jane Doe')).toBeInTheDocument()
+    const secondary = screen.getByText(/Join link/)
+    expect(secondary).toHaveTextContent('jane@x.edu')
+    expect(secondary).toHaveTextContent('Discord: janed')
+    expect(secondary).toHaveTextContent('Join link')
+  })
+
+  // WEB-52: when no name is known, email becomes the primary line — and is
+  // then omitted from the secondary line rather than repeated.
+  it('uses email as the primary line when no name is known, without repeating it on the secondary line', async () => {
+    listCourseEnrolments.mockResolvedValue([
+      entry({
+        id: 'e1',
+        displayName: 'janed',
+        email: 'jane@x.edu',
+        firstName: null,
+        lastName: null,
+      }),
+    ])
+
+    renderWithModal(
+      <CoursePeople
+        organizationId="org-1"
+        courseId="course-1"
+        navigate={vi.fn()}
+      />
+    )
+
+    const link = await screen.findByRole('link', { name: 'jane@x.edu' })
+    expect(link).toBeInTheDocument()
+    const secondary = screen.getByText(/Roster import/)
+    expect(secondary).not.toHaveTextContent('jane@x.edu')
+    expect(secondary).toHaveTextContent('Discord: janed')
   })
 
   it('ending confirms first, stating both halves of ENRL-6 — cancelling calls nothing', async () => {

@@ -24,13 +24,19 @@
  * immediately, the same "no confirmation for a grant" choice this app makes
  * nowhere else needs stating twice.
  *
- * **No email.** `CourseEnrolment.displayName` is nullable — a person PPL-3
- * created on first contact and never named since — and this screen falls
- * back to `personId` for that row, not the person's own email
- * (`api/types.ts#CourseEnrolment`'s own doc comment): a `null` display name
- * is already told apart from another by a distinct id, and these are real
- * students' addresses, shown only where a screen genuinely cannot tell two
- * people apart without one, which is not the case here.
+ * **WEB-52 reverses this screen's earlier "no email" choice.** Every row now
+ * shows whichever of a full name (`firstName`/`lastName`), an email, and a
+ * Discord display name (`displayName`) are known, omitting the rest — a
+ * name (or the first of these that is known) as the primary line linking to
+ * the transcript, then a smaller secondary line naming whichever of the
+ * others are known, followed by how the person joined and when
+ * (`SOURCE_LABELS`, date *and* time). `personId` — the bare UUID — is shown
+ * only when all three identifiers are unknown, the same "nothing left to
+ * fall back to" case this screen has always had, just pushed one identifier
+ * further out now that email and Discord name are also tried first. This is
+ * an instructor-only view of their own course's enrolments
+ * (`docs/DECISIONS.md`), which is why showing email here does not reopen the
+ * concern the original "no email" choice was guarding against.
  *
  * WEB-36: every row's own name is also a real link to that person's
  * transcript for this course (`routing/route.ts#TranscriptsRoute`) — a
@@ -92,9 +98,40 @@ const SOURCE_LABELS: Record<CourseEnrolment['source'], string> = {
   self_enrolment: 'Self-enrolled',
 }
 
-/** What a row shows in place of a name — `displayName` when the person has one, `personId` otherwise (this file's own module comment on why never email). */
+/** `firstName`/`lastName` joined, whichever exists — `undefined` when neither is known, not an empty string, so callers can tell "no name" apart from a name that happens to be blank. */
+function fullName(entry: CourseEnrolment): string | undefined {
+  const parts = [entry.firstName, entry.lastName].filter(
+    (part): part is string => part !== null && part !== ''
+  )
+  return parts.length > 0 ? parts.join(' ') : undefined
+}
+
+/**
+ * WEB-52 — what a row's primary line (and every confirmation/aria-label that
+ * names the row) shows: a full name first, then email, then the Discord
+ * display name, and only `personId` when none of the three is known — this
+ * file's own module comment has the full ordering.
+ */
 function label(entry: CourseEnrolment): string {
-  return entry.displayName ?? entry.personId
+  return fullName(entry) ?? entry.email ?? entry.displayName ?? entry.personId
+}
+
+/**
+ * The secondary line's own contents — whichever of email/Discord name were
+ * *not* already used as the primary `label` above, so nothing repeats, plus
+ * how and when the person joined (always present). `·`-separated, the same
+ * device `JoinLinks.tsx` uses for a row with more than one fact on one line.
+ */
+function secondaryLine(entry: CourseEnrolment): string {
+  const primary = label(entry)
+  const parts: string[] = []
+  if (entry.email !== null && entry.email !== primary) {
+    parts.push(entry.email)
+  }
+  if (entry.displayName !== null && entry.displayName !== primary) {
+    parts.push(`Discord: ${entry.displayName}`)
+  }
+  return parts.join(' · ')
 }
 
 /**
@@ -290,8 +327,12 @@ export function CoursePeople({
                     {label(entry)}
                   </TranscriptLink>
                   <p className="text-sm text-neutral-500">
-                    {SOURCE_LABELS[entry.source]} — admitted{' '}
-                    {new Date(entry.createdAt).toLocaleString()}
+                    {[
+                      secondaryLine(entry),
+                      `${SOURCE_LABELS[entry.source]} — admitted ${new Date(entry.createdAt).toLocaleString()}`,
+                    ]
+                      .filter((part) => part.length > 0)
+                      .join(' · ')}
                   </p>
                 </div>
                 <Button
@@ -339,10 +380,16 @@ export function CoursePeople({
                     {label(entry)}
                   </TranscriptLink>
                   <p className="text-sm text-neutral-500">
-                    {SOURCE_LABELS[entry.source]} — ended{' '}
-                    {entry.endedAt !== null
-                      ? new Date(entry.endedAt).toLocaleString()
-                      : ''}
+                    {[
+                      secondaryLine(entry),
+                      `${SOURCE_LABELS[entry.source]} — ended ${
+                        entry.endedAt !== null
+                          ? new Date(entry.endedAt).toLocaleString()
+                          : ''
+                      }`,
+                    ]
+                      .filter((part) => part.length > 0)
+                      .join(' · ')}
                   </p>
                 </div>
                 <Button

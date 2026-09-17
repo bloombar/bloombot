@@ -18,7 +18,11 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
-import type { Database, TransactingExecutor } from '../client.js'
+import type {
+  Database,
+  Executor as ClientExecutor,
+  TransactingExecutor,
+} from '../client.js'
 import { writeTransaction } from '../client.js'
 import {
   conversations,
@@ -31,6 +35,7 @@ import {
   usageCounters,
   type Surface,
 } from '../schema.js'
+import { getAccountById } from './accounts.js'
 import * as personLinkChallenges from './person-link-challenges.js'
 
 export type Person = typeof people.$inferSelect
@@ -427,12 +432,23 @@ export function resolvePersonByIdentity(
  * when `personId` does not exist or does not belong to `organizationId`
  * (TEN-2), matching `updateCourse`'s refusal shape. A person that already
  * has every field the roster supplies is left untouched and returned as-is.
+ *
+ * ROST-18: `apps/worker`'s `roster-import.ts` no longer calls this for
+ * `firstName`/`lastName` on a person who already existed before the import —
+ * the maintainer's own call that the roster is the authoritative source for
+ * a name, so that caller uses `overwriteRosterFields` for those two fields
+ * instead, and reserves this fill-only function for `email`/`githubHandle`
+ * (always) and for a *brand-new* person's name (nothing yet to overwrite).
+ * This function's own behaviour is unchanged — it still only ever fills a
+ * `null` field, for any caller and any field named in `RosterFields` — that
+ * caller's own choice of *which* function to call for which field is what
+ * changed, not this one.
  */
 export function mergeRosterFields(
   organizationId: string,
   personId: string,
   fields: RosterFields,
-  db: Database
+  db: Executor
 ): Person | undefined {
   const existing = getPerson(organizationId, personId, db)
   if (!existing) return undefined
@@ -465,6 +481,40 @@ export function mergeRosterFields(
     )
     .returning()
     .get()
+}
+
+/**
+ * AUTH-7 — fill a person's `firstName`/`lastName` from the names stored on
+ * `accountId`'s own account row (`accounts.firstName`/`lastName`, set only
+ * from a Google ID token's claims — `@bloombot/auth`'s `sign-in.ts`'s own
+ * `fillNamesFromGoogleIdentity`), fill-only via `mergeRosterFields` above: a
+ * no-op when the account has no stored names, or the person already has its
+ * own. A plain read-then-`mergeRosterFields`, not a new merge rule of its
+ * own — reused everywhere a person ends up holding this account's `web`
+ * identity for the first time: `course-join-links.ts#redeemJoinLinkForWebAccount`,
+ * and `@bloombot/auth`'s own `createConnectedWebPerson`/
+ * `ensureWebPersonForAccount` — none of which see a Google identity
+ * themselves, only an already-signed-in account, so this is the only way
+ * those places have to give a freshly connected person the same names a
+ * previous Google sign-in already recorded. Silently does nothing when
+ * `accountId` does not exist — every caller has just used it to create or
+ * resolve an account in the same transaction, so this is a belt-and-braces
+ * guard, not a real refusal path.
+ */
+export function fillPersonNamesFromAccount(
+  organizationId: string,
+  personId: string,
+  accountId: string,
+  db: ClientExecutor
+): void {
+  const account = getAccountById(accountId, db)
+  if (!account) return
+  mergeRosterFields(
+    organizationId,
+    personId,
+    { firstName: account.firstName, lastName: account.lastName },
+    db
+  )
 }
 
 /**

@@ -405,7 +405,16 @@ function attachWebIdentityOrMerge(
     identity,
     db
   )
-  if (attached) return survivorId
+  if (attached) {
+    // AUTH-7 — `survivorId` has just been given this account's `web`
+    // identity for the first time; fill in whatever names an earlier Google
+    // sign-in already recorded on the account, the same fill-only call
+    // `@bloombot/db`'s `course-join-links.ts#redeemJoinLinkForWebAccount`
+    // and `@bloombot/auth`'s `sign-in.ts` already make for their own
+    // identical shape.
+    people.fillPersonNamesFromAccount(organizationId, survivorId, accountId, db)
+    return survivorId
+  }
   const existingOwner = people.resolveIdentity(organizationId, identity, db)
   if (!existingOwner || existingOwner.id === survivorId) return survivorId
   people.mergePeople(organizationId, existingOwner.id, survivorId, db)

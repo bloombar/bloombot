@@ -26,6 +26,11 @@ export interface FakeGoogleIdentityClaims {
   sub: string
   email: string
   email_verified: boolean
+  // AUTH-7 — optional, the same way Google itself sends them: omitted
+  // entirely for account configurations that carry no name, present only
+  // when this fake is asked to include one.
+  given_name?: string
+  family_name?: string
 }
 
 export class FakeGoogleServer {

@@ -4323,7 +4323,7 @@
   section: §40 Knowing Who Is Enrolled
   family: AUTH
   phase: 35
-  status: In progress
+  status: In review
   review: false
 - id: ROST-18
   title: A roster's first and last name are authoritative for a student already on
@@ -4341,7 +4341,7 @@
   section: §40 Knowing Who Is Enrolled
   family: ROST
   phase: 35
-  status: In progress
+  status: In review
   review: false
 - id: WEB-52
   title: A course's People list shows who each person is, not an id
@@ -4358,5 +4358,5 @@
   section: §40 Knowing Who Is Enrolled
   family: WEB
   phase: 35
-  status: In progress
+  status: In review
   review: false

@@ -4308,3 +4308,37 @@
   phase: 34
   status: Done
   review: false
+- id: AUTH-7
+  title: Google sign-in supplies a person's first and last name where nothing else has
+  full: Google's ID token carries the signed-in person's given_name and
+    family_name, and until now both were discarded — so a student who signed in
+    with Google and joined a course by link was listed by an internal id. Each
+    Google sign-in, for a new account or an existing one, records the token's
+    given_name and family_name against the account whenever they are present,
+    and fills firstName and lastName from them on every person that account's
+    web identity is connected to — but only where that field is still empty. A
+    person later created or connected for the account, including by redeeming a
+    join link after signing in with Google, is filled the same way. A name a
+    roster import supplied is never…
+  section: §40 Knowing Who Is Enrolled
+  family: AUTH
+  phase: 35
+  status: In progress
+  review: false
+- id: WEB-52
+  title: A course's People list shows who each person is, not an id
+  full: "Each row in a course's People tab — active and ended alike — shows every
+    one of the following that is known for that person, and omits any that is
+    not: their full name (first and last name, joined by a space, or whichever
+    of the two exists), their email address, their Discord display name, and how
+    they joined the course (join link, Discord role, roster import or
+    self-enrolment) with the date and time. The details are laid out compactly,
+    so a row stays a row rather than a card, but each is labelled and legible at
+    a glance. The person's internal id is shown only when none of the name,
+    email or Discord name is known. The row's link to the person's transcript
+    (WEB-36) stays on whatever…"
+  section: §40 Knowing Who Is Enrolled
+  family: WEB
+  phase: 35
+  status: In progress
+  review: false

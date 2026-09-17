@@ -3138,3 +3138,28 @@ in the server already uses the name is shown on the offending category field its
 invalid, with the message naming the other course and project, announced to assistive technology,
 and the field focused — rather than only as a generic error, and the error clears once the name is
 edited.
+
+### 40. Knowing Who Is Enrolled
+
+#### AUTH-7 Google sign-in supplies a person's first and last name where nothing else has
+
+Google's ID token carries the signed-in person's `given_name` and `family_name`, and until now both
+were discarded — so a student who signed in with Google and joined a course by link was listed by an
+internal id. Each Google sign-in, for a new account or an existing one, records the token's
+`given_name` and `family_name` against the account whenever they are present, and fills
+`firstName` and `lastName` from them on every person that account's web identity is connected to —
+but only where that field is still empty. A person later created or connected for the account,
+including by redeeming a join link after signing in with Google, is filled the same way. A name a
+roster import supplied is never overwritten, and a roster import that arrives afterwards still
+fills whatever remains empty, as PPL-3 already describes. A claim Google omits changes nothing.
+
+#### WEB-52 A course's People list shows who each person is, not an id
+
+Each row in a course's People tab — active and ended alike — shows every one of the following that
+is known for that person, and omits any that is not: their full name (first and last name, joined by
+a space, or whichever of the two exists), their email address, their Discord display name, and how
+they joined the course (join link, Discord role, roster import or self-enrolment) with the date and
+time. The details are laid out compactly, so a row stays a row rather than a card, but each is
+labelled and legible at a glance. The person's internal id is shown only when none of the name,
+email or Discord name is known. The row's link to the person's transcript (WEB-36) stays on
+whatever identifies them first.
